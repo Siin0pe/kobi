@@ -71,5 +71,8 @@ synthétisée et horodatée séparément.
 
 * Voix de synthèse : pas de chevauchement de parole, pas de bruit de fond, pas
   d'hésitations. Le WER mesuré ici sera plus bas que sur de vraies réunions.
+* Les voix anglaises lisent « Kobi » « Ko-bye » : le moteur reçoit « Koby »
+  en anglais (`PRONUNCIATION` dans `bench/tts/kobitts.py`), la référence
+  garde « Kobi ».
 * Dans `mixte`, un même interlocuteur change de voix quand il change de
   langue : les voix Piper sont monolingues.
