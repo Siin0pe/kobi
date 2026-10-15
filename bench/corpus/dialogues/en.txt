@@ -1,0 +1,56 @@
+# Product sync, all in English.
+# Format: see bench/corpus/README.md.
+@lang en
+
+moi: Hi Emma, thanks for joining. Let's go through the release plan and the open questions from the customer call.
+eux: Hi. Sure, I have my notes here. The short version is that the customer is happy, but they want the reporting module earlier than planned.
+moi: How much earlier are we talking about?
+eux: They asked for the end of next month instead of the end of the quarter. So roughly six weeks earlier.
+moi: That's a big ask. The reporting module depends on the new data pipeline, and the pipeline is still in review.
+eux: I know. I told them we would come back with an answer by Friday, not a promise.
+moi: Good. Let's look at what the pipeline still needs before we commit to anything.
+moi@kobi: Kobi, how many open issues do we have in the data pipeline project?
+eux: While it looks that up, I can tell you that two of them are about the retry logic, and those are the scary ones.
+moi: Okay, so seventeen open issues, and four of them are marked as high priority. That's more than I expected.
+eux: Most of the high priority ones are small, though. The retry logic is the only one that really worries me.
+moi: What exactly is the problem with the retry logic?
+eux: When the upstream service times out, we retry immediately, without any backoff. Under load, we end up hammering the service and making things worse.
+moi: Right. That needs exponential backoff and a cap on the number of retries. It's not a huge change, but it needs proper testing.
+eux: Daniel said he could do it in three days, including the load test.
+moi: Three days is fine. Let's make that the first priority for the pipeline team this week.
+eux@kobi: Kobi, create an issue for exponential backoff in the pipeline retry logic and assign it to Daniel.
+moi: I'll approve that one. Next, what else did the customer bring up?
+eux: They want to export reports as spreadsheets, not only as PDF files. Their finance team works in spreadsheets all day.
+moi: That one is easy. We already have a CSV export in the admin panel, we can reuse most of it.
+eux: That's what I thought. I'd say two days of work, maybe less.
+moi: Agreed. And the third point?
+eux: The third point is single sign-on. They use a provider we haven't integrated yet, and their security team won't approve the rollout without it.
+moi: Which provider?
+eux: They didn't say on the call. I sent an email this morning and I'm waiting for an answer.
+moi: Okay. If it supports the standard protocol, it should be a configuration change. If not, it becomes a real project.
+eux: Exactly. That's why I didn't want to give them a date on the call.
+moi@kobi: Kobi, what did we decide about single sign-on in the last architecture review?
+eux: I remember that discussion. We said we would support the standard protocol only, and no custom integrations before next year.
+moi: Yes, that matches the notes. So if their provider is standard, we're fine. If not, we politely say no for now.
+eux: That sounds fair. I'll wait for their answer before we plan anything.
+moi: Now, back to the main question. Can we deliver reporting six weeks early?
+eux: Honestly, I think we can deliver a first version. Not everything, but the three reports they actually use.
+moi: Which three?
+eux: The monthly revenue report, the active users report, and the churn report. The other reports are nice to have.
+moi: That's a much smaller scope. If we drop the custom report builder for now, I think it's realistic.
+eux: The report builder was the most expensive part anyway. Maybe four weeks on its own.
+moi: Then here's my proposal. We ship the three standard reports at the end of next month, and the report builder at the end of the quarter, as originally planned.
+eux: I like that. It gives them something useful early, and we don't burn out the team.
+moi: Let's also be clear about the risk. If the pipeline fix takes longer than three days, the early date moves.
+eux: Agreed. I'll put that in writing when I send them the plan.
+moi@kobi: Kobi, draft a short email to the customer with the proposal and the risk on the pipeline.
+eux: The draft looks good to me. Maybe we should add a sentence about the spreadsheet export, since it's a quick win.
+moi: Good idea. I'll add it before sending. Anything else on your side?
+eux: One last thing. The support team asked if they could get access to the staging environment to prepare their training material.
+moi: Yes, but only with read-only accounts. Last time someone deleted test data by mistake and we lost half a day.
+eux: I remember. I'll ask the platform team to create read-only accounts for them.
+eux@kobi: Kobi, how long did the staging outage last last time?
+moi: About five hours, that sounds right. So read-only accounts, and we tell them clearly what they can and can't do.
+eux: Perfect. I think that covers everything.
+moi: Great. Thanks Emma. Send me the email draft once you've added the spreadsheet part, and I'll review it tonight.
+eux: Will do. Talk to you tomorrow.

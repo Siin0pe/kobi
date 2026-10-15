@@ -1,0 +1,55 @@
+# Réunion mixte : moi parle surtout français, eux surtout anglais.
+# Les tours marqués [en] ou [fr] changent de langue (et donc de voix Piper).
+# Format : voir bench/corpus/README.md.
+@lang fr
+
+moi: Salut Mark, on peut commencer. On a la revue de l'incident de mardi et le planning de la release.
+eux [en]: Hi, yes. Let's start with the incident, I've written a short timeline.
+moi: Vas-y, je t'écoute.
+eux [en]: So on Tuesday at around ten in the morning, the login service started returning errors. It lasted about forty minutes before we rolled back.
+moi: Et la cause, on la connaît maintenant ?
+eux [en]: Yes. A configuration change removed the cache for user sessions. Every login went straight to the database, and the database couldn't keep up.
+moi: D'accord. Donc ce n'était pas un bug dans le code, c'était la configuration du déploiement.
+eux [en]: Exactly. And the change wasn't reviewed, because configuration files were not covered by the review rules.
+moi: Ça, c'est le vrai problème. Il faut que les fichiers de configuration passent en revue comme le reste.
+eux [en]: I agree. I can update the repository rules today.
+moi@kobi: Kobi, est-ce qu'on a déjà un ticket pour la revue obligatoire des fichiers de configuration ?
+eux [en]: If there isn't one, we should create it now, so it doesn't get lost.
+moi: Il n'y en a pas, donc on le crée.
+moi@kobi: Kobi, crée un ticket pour rendre la revue obligatoire sur les fichiers de configuration, assigné à Mark.
+eux [en]: Thanks, I see the card. I'll take it.
+moi: Ensuite, l'alerte. Pourquoi on a mis quarante minutes à réagir ?
+eux [en]: The alert fired after five minutes, but it went to a channel nobody was watching. Someone noticed because customers complained.
+moi: Ah, c'est pas génial. Il faut que l'alerte arrive sur le téléphone de la personne d'astreinte.
+eux [fr]: Oui, je suis d'accord. Je vais corriger la règle d'alerte cet après-midi.
+moi: Merci. Ton français progresse, d'ailleurs.
+eux [en]: Thanks, I'm practicing. But let's stay in English for the technical part, it's easier for me.
+moi [en]: Sure, no problem. So, the post-mortem document. Who writes it?
+eux [en]: I can write it, since I handled the rollback. I'd like you to review it before we share it with the whole team.
+moi [en]: Of course. Send it to me when it's ready.
+eux@kobi [en]: Kobi, summarize the timeline of the incident in three sentences.
+moi: C'est un bon résumé. On le met en introduction du post-mortem.
+eux [en]: Good idea. Now, the release planning. We're supposed to ship version two point four next Wednesday.
+moi: Oui. Qu'est-ce qui manque encore ?
+eux [en]: Two features are done, one is still in testing. The new search filters have a performance issue on large accounts.
+moi: Quelle taille de compte ?
+eux [en]: Accounts with more than fifty thousand items. The search takes about eight seconds, and our target is under one second.
+moi: Huit secondes, c'est beaucoup trop. Est-ce qu'il manque un index sur la base ?
+eux [en]: That's our first guess. Priya is checking the query plan right now.
+moi: D'accord. Si l'index ne suffit pas, on sort les filtres de la release et on les livre dans la version suivante.
+eux [en]: I'd rather do that than ship something slow. Our biggest customers have exactly those large accounts.
+moi: On est d'accord. On se donne jusqu'à vendredi midi pour décider.
+eux@kobi [en]: Kobi, remind me which customers have more than fifty thousand items.
+moi: Il y en a quatre. Ce sont nos plus gros clients, donc il ne faut vraiment pas leur livrer quelque chose de lent.
+eux [en]: Right. Also, the release notes. Do we write them in French and English this time?
+moi: Oui, les deux. La moitié de nos utilisateurs sont en France, l'autre moitié est aux États-Unis.
+eux [en]: Okay. I'll write the English version, and you translate it?
+moi: Ça marche. Envoie-moi le texte lundi, je fais la traduction dans la journée.
+eux [en]: Perfect. One last thing: the on-call schedule for next week. I'm on vacation from Thursday.
+moi: Pas de souci. Je prends l'astreinte jeudi et vendredi, et Priya prend le week-end.
+eux [en]: Did you check with Priya?
+moi: Pas encore, je lui demande juste après.
+moi@kobi: Kobi, fais-moi la liste des actions de cette réunion avec les responsables.
+eux [en]: That looks complete. Config review rules for me, the alert rule for me, the post-mortem for me, and the search decision on Friday.
+moi: Et la traduction des notes de version pour moi. Merci Mark, bonnes vacances en avance.
+eux [fr]: Merci, à bientôt.
