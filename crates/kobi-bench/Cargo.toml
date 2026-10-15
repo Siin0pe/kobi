@@ -13,4 +13,5 @@ hound = "3.5.1"
 kobi-audio = { version = "0.1.0", path = "../kobi-audio" }
 kobi-stt = { version = "0.1.0", path = "../kobi-stt" }
 serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1"
 sysinfo = "0.39.6"
