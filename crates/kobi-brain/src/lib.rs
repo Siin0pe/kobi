@@ -7,4 +7,4 @@
 
 pub mod claude_code;
 
-pub use claude_code::{ClaudeCode, ClaudeOptions, Error, Event, TurnResult};
+pub use claude_code::{ClaudeCode, ClaudeOptions, Error, Event, TurnResult, Usage};
