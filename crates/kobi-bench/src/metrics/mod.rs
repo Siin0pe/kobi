@@ -121,6 +121,7 @@ mod tests {
             start,
             end,
             text: text.into(),
+            lang: None,
             words: None,
         }
     }

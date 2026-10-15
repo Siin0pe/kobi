@@ -489,6 +489,7 @@ dependencies = [
  "kobi-audio",
  "kobi-stt",
  "serde",
+ "serde_json",
  "sysinfo",
 ]
 
