@@ -31,6 +31,15 @@ pub struct SystemEvent {
     pub session_id: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    /// Serveurs MCP et leur état (`connected`, `failed`, `pending`…), dans `init`.
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServerStatus>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct McpServerStatus {
+    pub name: String,
+    pub status: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -120,7 +129,7 @@ mod tests {
     #[test]
     fn analyse_init() {
         let e = Event::parse(
-            r#"{"type":"system","subtype":"init","cwd":"C:\\x","session_id":"abc","model":"claude-opus-5-5","tools":[]}"#,
+            r#"{"type":"system","subtype":"init","cwd":"C:\\x","session_id":"abc","model":"claude-opus-5-5","tools":[],"mcp_servers":[{"name":"linear","status":"connected"}]}"#,
         )
         .unwrap();
         assert_eq!(
@@ -129,6 +138,10 @@ mod tests {
                 subtype: "init".into(),
                 session_id: Some("abc".into()),
                 model: Some("claude-opus-5-5".into()),
+                mcp_servers: vec![McpServerStatus {
+                    name: "linear".into(),
+                    status: "connected".into(),
+                }],
             })
         );
     }
