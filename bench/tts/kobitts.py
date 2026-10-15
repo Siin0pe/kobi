@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -39,6 +40,7 @@ TOOLS_DIR = BENCH_HOME / "tools"
 VOICES_DIR = BENCH_HOME / "voices"
 
 PIPER_RELEASE = "2023.11.14-2"
+PIPER_ATTEMPTS = 3
 PIPER_ARCHIVES = {
     # plate-forme Python -> (archive, sha256)
     "win32": (
@@ -103,6 +105,20 @@ VOICES = {
         "b471dc60d2d8335e819c393d196d6fbf792817f40051257b269878505bc9afb3",
     ),
 }
+
+
+# Graphies données au moteur pour qu'il prononce bien « Kobi » (/kobi/). Les
+# voix anglaises lisent « Kobi » « Ko-bye » ; « Koby » donne le bon son.
+PRONUNCIATION = {
+    "en": [(re.compile(r"\bKobi\b"), "Koby")],
+}
+
+
+def spoken(text: str, lang: str) -> str:
+    """Texte à donner au moteur ; la référence garde le texte d'origine."""
+    for pattern, repl in PRONUNCIATION.get(lang, []):
+        text = pattern.sub(repl, text)
+    return text
 
 
 @dataclass(frozen=True)
@@ -182,17 +198,20 @@ def resample(x: np.ndarray, sr_in: int, sr_out: int = SAMPLE_RATE, taps: int = 3
     ratio = sr_in / sr_out
     cutoff = min(1.0, 1.0 / ratio) * 0.95  # garde une marge sous Nyquist
     n_out = int(np.floor(len(x) / ratio))
-    t = np.arange(n_out) * ratio  # position de chaque sortie dans l'entrée
-    base = np.floor(t).astype(np.int64)
+    window = np.kaiser(2 * taps + 1, 8.6)
     offsets = np.arange(-taps + 1, taps + 1)
-    idx = base[:, None] + offsets[None, :]
-    d = t[:, None] - idx  # distance en échantillons d'entrée
-    kernel = cutoff * np.sinc(cutoff * d) * np.kaiser(2 * taps + 1, 8.6)[
-        np.clip(np.round(d + taps).astype(np.int64), 0, 2 * taps)
-    ]
-    kernel[np.abs(d) > taps] = 0.0
     padded = np.concatenate([np.zeros(taps), x.astype(np.float64), np.zeros(taps + 1)])
-    return (padded[idx + taps] * kernel).sum(axis=1)
+    out = np.empty(n_out)
+    for lo in range(0, n_out, 8192):  # par blocs pour borner la mémoire
+        t = np.arange(lo, min(lo + 8192, n_out)) * ratio  # positions dans l'entrée
+        idx = np.floor(t).astype(np.int64)[:, None] + offsets[None, :]
+        d = t[:, None] - idx  # distance en échantillons d'entrée
+        kernel = cutoff * np.sinc(cutoff * d) * window[
+            np.clip(np.round(d + taps).astype(np.int64), 0, 2 * taps)
+        ]
+        kernel[np.abs(d) > taps] = 0.0
+        out[lo : lo + len(t)] = (padded[idx + taps] * kernel).sum(axis=1)
+    return out
 
 
 def _to_16k(src: Path) -> bytes:
@@ -220,23 +239,43 @@ def synthesize(utterances: list[Utterance]) -> list[bytes]:
     with tempfile.TemporaryDirectory(prefix="kobitts-") as tmp:
         for (voice, length_scale), indices in groups.items():
             model = voice_model(voice)
-            lines = []
-            for i in indices:
-                u = utterances[i]
-                line = {"text": u.text, "output_file": str(Path(tmp) / f"{i}.wav")}
-                if u.speaker is not None:
-                    # Piper plante si on passe speaker_id à une voix mono-locuteur.
-                    line["speaker_id"] = u.speaker
-                lines.append(json.dumps(line, ensure_ascii=False))
-            subprocess.run(
-                [str(exe), "-m", str(model), "--json-input", "-q",
-                 "--noise_scale", "0", "--noise_w", "0",
-                 "--length_scale", str(length_scale), "--sentence_silence", "0"],
-                input="\n".join(lines) + "\n",
-                encoding="utf-8",
-                check=True,
-                capture_output=True,
-            )
+            todo = indices
+            for attempt in range(PIPER_ATTEMPTS):
+                lines = []
+                for i in todo:
+                    u = utterances[i]
+                    line = {"text": u.text, "output_file": str(Path(tmp) / f"{i}.wav")}
+                    if u.speaker is not None:
+                        # Piper plante si on passe speaker_id à une voix mono-locuteur.
+                        line["speaker_id"] = u.speaker
+                    lines.append(json.dumps(line, ensure_ascii=False))
+                proc = subprocess.run(
+                    [str(exe), "-m", str(model), "--json-input", "-q",
+                     "--noise_scale", "0", "--noise_w", "0",
+                     "--length_scale", str(length_scale), "--sentence_silence", "0"],
+                    input="\n".join(lines) + "\n",
+                    encoding="utf-8",
+                    capture_output=True,
+                )
+                if proc.returncode == 0:
+                    break
+                # Piper plante parfois sous Windows (0xC0000409) sans raison
+                # reproductible. Les phrases sont écrites dans l'ordre : on
+                # garde les fichiers finis, on jette le dernier (peut-être
+                # tronqué) et on relance sur le reste. La sortie étant
+                # déterministe, le résultat ne change pas.
+                done = [i for i in todo if (Path(tmp) / f"{i}.wav").exists()]
+                if done:
+                    (Path(tmp) / f"{done[-1]}.wav").unlink()
+                    done.pop()
+                todo = [i for i in todo if i not in set(done)]
+                print(
+                    f"piper {voice} : code {proc.returncode:#x}, nouvelle tentative "
+                    f"pour {len(todo)} phrases",
+                    file=sys.stderr,
+                )
+            else:
+                raise RuntimeError(f"piper {voice} : échec après {PIPER_ATTEMPTS} tentatives")
             for i in indices:
                 results[i] = _to_16k(Path(tmp) / f"{i}.wav")
     assert all(r is not None for r in results)

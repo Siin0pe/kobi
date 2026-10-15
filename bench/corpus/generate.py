@@ -98,7 +98,8 @@ def trim(pcm: bytes, threshold: int = 200, margin: float = 0.03, fade: float = 0
 def build(name: str, out_dir: Path) -> dict:
     sentences = parse(DIALOGUES_DIR / f"{name}.txt")
     clips = kobitts.synthesize([
-        kobitts.Utterance(s.text, VOICES[(s.track, s.lang)]) for s in sentences
+        kobitts.Utterance(kobitts.spoken(s.text, s.lang), VOICES[(s.track, s.lang)])
+        for s in sentences
     ])
     rng = random.Random(name)  # pauses pseudo-aléatoires mais reproductibles
 
