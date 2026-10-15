@@ -4,7 +4,16 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+# Adaptateur Nemotron 3.5 ASR Streaming via sherpa-onnx. `nemotron` : CPU,
+# bibliothèques statiques téléchargées au build. `nemotron-shared` :
+# bibliothèques partagées, par exemple la version CUDA désignée par
+# SHERPA_ONNX_LIB_DIR. Les deux sont exclusives.
+nemotron = ["dep:sherpa-onnx", "sherpa-onnx/static"]
+nemotron-shared = ["dep:sherpa-onnx", "sherpa-onnx/shared"]
+
 [dependencies]
 hound = "3.5"
 serde = { version = "1", features = ["derive"] }
+sherpa-onnx = { version = "=1.13.8", optional = true, default-features = false }
 thiserror = "2"

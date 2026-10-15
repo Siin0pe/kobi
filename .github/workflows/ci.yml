@@ -42,3 +42,10 @@ jobs:
 
       - name: Tests
         run: cargo test --workspace
+
+      # Moteurs optionnels : bibliothèques natives téléchargées au build, sans
+      # modèle (les tests qui en demandent un sont ignorés).
+      - name: Moteur Nemotron (sherpa-onnx)
+        run: |
+          cargo clippy -p kobi-stt -p kobi-bench --features kobi-stt/nemotron,kobi-bench/nemotron --all-targets -- -D warnings
+          cargo test -p kobi-stt -p kobi-bench --features kobi-stt/nemotron,kobi-bench/nemotron

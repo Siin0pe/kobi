@@ -7,6 +7,7 @@ use std::time::Duration;
 use anyhow::{bail, Context};
 use clap::{Args, ValueEnum};
 use kobi_bench::metrics::evaluate;
+use kobi_bench::metrics::normalize::Lang;
 use kobi_bench::metrics::reference::{common_lang, load_jsonl, timed_words, RefUtterance};
 use kobi_bench::metrics::resources::ResourceMonitor;
 use kobi_bench::report::{now_rfc3339, Report, ReportRow};
@@ -72,8 +73,13 @@ pub struct SttArgs {
     machine: Option<String>,
 }
 
-/// Moteurs compilés dans ce binaire.
-pub const ENGINES: &[&str] = &["fake"];
+/// Moteurs compilés dans ce binaire : le factice et les moteurs natifs des
+/// features actives.
+pub fn engines() -> Vec<&'static str> {
+    let mut names = vec!["fake"];
+    names.extend_from_slice(kobi_bench::engines::NATIVE);
+    names
+}
 
 struct Meeting {
     name: String,
@@ -83,10 +89,10 @@ struct Meeting {
 
 pub fn run(args: SttArgs) -> anyhow::Result<()> {
     for e in &args.engines {
-        if !ENGINES.contains(&e.as_str()) {
+        if !engines().contains(&e.as_str()) {
             bail!(
                 "moteur inconnu « {e} » ; disponibles : {}",
-                ENGINES.join(", ")
+                engines().join(", ")
             );
         }
     }
@@ -150,7 +156,7 @@ pub fn run(args: SttArgs) -> anyhow::Result<()> {
 /// Instancie un moteur ; renvoie aussi le matériel réellement utilisé.
 fn build_engine(
     name: &str,
-    _models: &Path,
+    models: &Path,
     device: Device,
     reference: &[RefUtterance],
 ) -> anyhow::Result<(Box<dyn SttEngine>, String)> {
@@ -163,7 +169,24 @@ fn build_engine(
                 Device::Cpu.label().to_string(),
             ))
         }
-        _ => bail!("moteur inconnu « {name} »"),
+        // Langue forcée quand toute la réunion est dans une langue,
+        // détection automatique sinon (réunion mixte).
+        _ => {
+            let opts = kobi_bench::engines::EngineOptions {
+                models: models.to_path_buf(),
+                language: common_lang(reference).map(|l| {
+                    match l {
+                        Lang::Fr => "fr",
+                        Lang::En => "en",
+                    }
+                    .to_string()
+                }),
+                device: device.label().to_string(),
+                ..Default::default()
+            };
+            let engine = kobi_bench::engines::build(name, &opts).map_err(anyhow::Error::msg)?;
+            Ok((engine, device.label().to_string()))
+        }
     }
 }
 
