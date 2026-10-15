@@ -5,3 +5,17 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
+
+[[bin]]
+name = "claude-essai"
+path = "src/bin/claude-essai.rs"
+
+# Faux `claude` utilisé par les tests d'intégration : rejoue un flux stream-json.
+[[bin]]
+name = "fake-claude"
+path = "src/bin/fake-claude.rs"
+test = false
