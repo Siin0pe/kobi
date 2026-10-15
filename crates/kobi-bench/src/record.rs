@@ -21,9 +21,16 @@ pub struct RecordArgs {
     /// Dossier de sortie [défaut : ~/Kobi-bench/enregistrements/AAAA-MM-JJ_HHhMMmSS]
     #[arg(long)]
     dossier: Option<PathBuf>,
-    /// Morceau du nom du micro à utiliser [défaut : micro par défaut du système]
+    /// Liste les micros et les sorties disponibles, puis quitte
     #[arg(long)]
-    micro: Option<String>,
+    list_devices: bool,
+    /// Micro à enregistrer dans moi.wav, nom exact ou morceau unique [défaut : micro par défaut]
+    #[arg(long, value_name = "NOM")]
+    mic: Option<String>,
+    /// Sortie à capturer en loopback dans eux.wav, nom exact ou morceau unique
+    /// (le casque de la visio, par exemple) [défaut : sortie par défaut]
+    #[arg(long, value_name = "NOM")]
+    output: Option<String>,
     /// Arrêt automatique après ce nombre de secondes [défaut : Ctrl+C]
     #[arg(long)]
     duree: Option<f64>,
@@ -91,11 +98,9 @@ struct TrackSummary {
 }
 
 pub fn run(args: RecordArgs) -> Result<()> {
-    let dir = match args.dossier {
-        Some(dir) => dir,
-        None => default_dir()?,
-    };
-    std::fs::create_dir_all(&dir).with_context(|| format!("création de {}", dir.display()))?;
+    if args.list_devices {
+        return print_devices();
+    }
 
     let stop = Arc::new(AtomicBool::new(false));
     {
@@ -105,15 +110,22 @@ pub fn run(args: RecordArgs) -> Result<()> {
     }
 
     let options = CaptureOptions {
-        micro: args.micro,
+        mic: args.mic,
+        output: args.output,
         ..CaptureOptions::default()
     };
+    // Périphériques ouverts avant de créer les fichiers : un nom erroné ne laisse rien sur le disque.
+    let capture = Capture::start(&options)?;
+
+    let dir = match args.dossier {
+        Some(dir) => dir,
+        None => default_dir()?,
+    };
+    std::fs::create_dir_all(&dir).with_context(|| format!("création de {}", dir.display()))?;
     let mut tracks = HashMap::new();
     for &source in &options.sources {
         tracks.insert(source, Track::create(&dir, source)?);
     }
-
-    let capture = Capture::start(&options)?;
     for info in capture.sources() {
         println!(
             "{} : {} ({} Hz, {} canaux, {:?})",
@@ -131,18 +143,24 @@ pub fn run(args: RecordArgs) -> Result<()> {
 
     let limit = args.duree.map(Duration::from_secs_f64);
     let mut last_status = Instant::now();
+    let mut xruns: HashMap<Source, u32> = HashMap::new();
     while !stop.load(Ordering::SeqCst) && limit.is_none_or(|l| capture.elapsed() < l) {
         match capture.frames().recv_timeout(Duration::from_millis(50)) {
             Ok(frame) => write_frame(&mut tracks, &frame)?,
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
         }
-        for (source, error) in capture.errors().try_iter() {
-            eprintln!(
-                "\n{} à {} : {error}",
-                source.label(),
-                format_duration(capture.elapsed())
-            );
+        for error in capture.errors().try_iter() {
+            if error.xrun {
+                *xruns.entry(error.source).or_insert(0) += 1;
+            } else {
+                eprintln!(
+                    "\n{} à {} : {}",
+                    error.source.label(),
+                    format_duration(capture.elapsed()),
+                    error.message
+                );
+            }
         }
         if last_status.elapsed() >= Duration::from_secs(1) {
             last_status = Instant::now();
@@ -163,16 +181,40 @@ pub fn run(args: RecordArgs) -> Result<()> {
     println!("\nDurée : {}", format_duration(end));
     let mut sources: Vec<_> = tracks.into_iter().collect();
     sources.sort_by_key(|(s, _)| s.label());
-    for (_, track) in sources {
+    for (source, track) in sources {
         let s = track.finish(end)?;
         println!(
-            "{} : {} (silence comblé {:.1} ms, écarté {:.1} ms, écart d'horodatage max {:.1} ms)",
+            "{} : {} (silence comblé {:.1} ms, écarté {:.1} ms, écart d'horodatage max {:.1} ms, \
+             discontinuités du pilote {})",
             s.path.display(),
             format_duration(s.aligner.duration()),
             millis(s.aligner.padded),
             millis(s.aligner.dropped),
             millis(s.aligner.max_gap),
+            xruns.get(&source).copied().unwrap_or(0),
         );
+    }
+    Ok(())
+}
+
+fn print_devices() -> Result<()> {
+    let list = kobi_audio::list_devices()?;
+    for (title, devices) in [
+        ("Micros (--mic)", &list.inputs),
+        ("Sorties capturables en loopback (--output)", &list.outputs),
+    ] {
+        println!("{title} :");
+        if devices.is_empty() {
+            println!("  (aucun)");
+        }
+        for d in devices {
+            let format = d
+                .format
+                .map(|(rate, channels)| format!("{rate} Hz, {channels} canaux"))
+                .unwrap_or_else(|| "format inconnu".into());
+            let default = if d.is_default { "  [défaut]" } else { "" };
+            println!("  {}  ({format}){default}", d.name);
+        }
     }
     Ok(())
 }
