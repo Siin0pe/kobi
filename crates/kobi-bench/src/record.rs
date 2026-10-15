@@ -143,18 +143,24 @@ pub fn run(args: RecordArgs) -> Result<()> {
 
     let limit = args.duree.map(Duration::from_secs_f64);
     let mut last_status = Instant::now();
+    let mut xruns: HashMap<Source, u32> = HashMap::new();
     while !stop.load(Ordering::SeqCst) && limit.is_none_or(|l| capture.elapsed() < l) {
         match capture.frames().recv_timeout(Duration::from_millis(50)) {
             Ok(frame) => write_frame(&mut tracks, &frame)?,
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
         }
-        for (source, error) in capture.errors().try_iter() {
-            eprintln!(
-                "\n{} à {} : {error}",
-                source.label(),
-                format_duration(capture.elapsed())
-            );
+        for error in capture.errors().try_iter() {
+            if error.xrun {
+                *xruns.entry(error.source).or_insert(0) += 1;
+            } else {
+                eprintln!(
+                    "\n{} à {} : {}",
+                    error.source.label(),
+                    format_duration(capture.elapsed()),
+                    error.message
+                );
+            }
         }
         if last_status.elapsed() >= Duration::from_secs(1) {
             last_status = Instant::now();
@@ -175,15 +181,17 @@ pub fn run(args: RecordArgs) -> Result<()> {
     println!("\nDurée : {}", format_duration(end));
     let mut sources: Vec<_> = tracks.into_iter().collect();
     sources.sort_by_key(|(s, _)| s.label());
-    for (_, track) in sources {
+    for (source, track) in sources {
         let s = track.finish(end)?;
         println!(
-            "{} : {} (silence comblé {:.1} ms, écarté {:.1} ms, écart d'horodatage max {:.1} ms)",
+            "{} : {} (silence comblé {:.1} ms, écarté {:.1} ms, écart d'horodatage max {:.1} ms, \
+             discontinuités du pilote {})",
             s.path.display(),
             format_duration(s.aligner.duration()),
             millis(s.aligner.padded),
             millis(s.aligner.dropped),
             millis(s.aligner.max_gap),
+            xruns.get(&source).copied().unwrap_or(0),
         );
     }
     Ok(())

@@ -8,7 +8,9 @@ mod resample;
 use std::time::Duration;
 
 pub use align::{Placement, TrackAligner};
-pub use capture::{list_devices, Capture, CaptureOptions, DeviceInfo, DeviceList, SourceInfo};
+pub use capture::{
+    list_devices, Capture, CaptureOptions, DeviceInfo, DeviceList, SourceInfo, StreamError,
+};
 pub use resample::{downmix, Resampler};
 
 /// Fréquence d'échantillonnage de tout l'audio produit par ce crate.

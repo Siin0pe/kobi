@@ -5,14 +5,13 @@
 //! de capture fourni par le pilote : sous Windows, la position QPC du premier
 //! échantillon, commune à tous les périphériques.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{ErrorKind, FromSample, InputCallbackInfo, SampleFormat, SizedSample, StreamInstant};
+use cpal::{FromSample, InputCallbackInfo, SampleFormat, SizedSample, StreamInstant};
 
 use crate::{downmix, AudioFrame, Resampler, Source, SAMPLE_RATE};
 
@@ -36,6 +35,16 @@ impl Default for CaptureOptions {
     }
 }
 
+/// Erreur signalée par un flux en cours.
+#[derive(Debug, Clone)]
+pub struct StreamError {
+    pub source: Source,
+    /// Discontinuité du flux (paquets perdus) : sans gravité pour les pistes, que
+    /// l'horodatage recale ; le pilote WASAPI en signale souvent au démarrage.
+    pub xrun: bool,
+    pub message: String,
+}
+
 /// Périphérique et format natif d'une source.
 #[derive(Debug, Clone)]
 pub struct SourceInfo {
@@ -56,7 +65,7 @@ pub struct Capture {
     running: Vec<Running>,
     infos: Vec<SourceInfo>,
     frames: Receiver<AudioFrame>,
-    errors: Receiver<(Source, String)>,
+    errors: Receiver<StreamError>,
 }
 
 impl Capture {
@@ -119,7 +128,7 @@ impl Capture {
     }
 
     /// Erreurs signalées par les flux (périphérique perdu, sous-alimentation…).
-    pub fn errors(&self) -> &Receiver<(Source, String)> {
+    pub fn errors(&self) -> &Receiver<StreamError> {
         &self.errors
     }
 
@@ -305,7 +314,7 @@ fn build_stream(
     source: Source,
     origin: Arc<OnceLock<StreamInstant>>,
     frames: Sender<AudioFrame>,
-    errors: Sender<(Source, String)>,
+    errors: Sender<StreamError>,
 ) -> Result<cpal::Stream> {
     let args = (device, config, source, origin, frames, errors);
     match config.sample_format() {
@@ -326,7 +335,7 @@ type StreamArgs<'a> = (
     Source,
     Arc<OnceLock<StreamInstant>>,
     Sender<AudioFrame>,
-    Sender<(Source, String)>,
+    Sender<StreamError>,
 );
 
 fn typed<T>((device, config, source, origin, frames, errors): StreamArgs) -> Result<cpal::Stream>
@@ -338,8 +347,6 @@ where
     let in_rate = config.sample_rate();
     let mut resampler = Resampler::new(in_rate, SAMPLE_RATE);
     let mut converted = Vec::new();
-    let delivering = Arc::new(AtomicBool::new(false));
-    let delivering_err = delivering.clone();
 
     let on_data = move |data: &[T], info: &InputCallbackInfo| {
         let Some(origin) = origin.get() else {
@@ -366,7 +373,6 @@ where
                 return;
             }
         }
-        delivering.store(true, Ordering::Relaxed);
         let _ = frames.send(AudioFrame {
             source,
             samples,
@@ -374,11 +380,11 @@ where
         });
     };
     let on_error = move |e: cpal::Error| {
-        // WASAPI signale une discontinuité sur les premiers paquets, avant tout son utile.
-        if e.kind() == ErrorKind::Xrun && !delivering_err.load(Ordering::Relaxed) {
-            return;
-        }
-        let _ = errors.send((source, e.to_string()));
+        let _ = errors.send(StreamError {
+            source,
+            xrun: e.kind() == cpal::ErrorKind::Xrun,
+            message: e.to_string(),
+        });
     };
 
     Ok(device.build_input_stream::<T, _, _>(config.config(), on_data, on_error, None)?)
