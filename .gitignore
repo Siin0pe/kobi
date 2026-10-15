@@ -1,0 +1,26 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Node / webview
+node_modules/
+dist/
+
+# Modèles, corpus audio et sorties de benchmark (jamais dans le dépôt)
+/models/
+*.wav
+*.onnx
+*.gguf
+*.bin
+/bench/out/
+
+# Éditeurs et OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Secrets
+.env
+*.pem
+*.p12
