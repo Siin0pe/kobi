@@ -2,15 +2,19 @@
 //!
 //! ```text
 //! cargo run --release -p kobi-brain --bin claude-latence -- \
-//!     --mode froid|persistant [--mcp-config fichier.json] [--n 20] [--model haiku]
+//!     --mode froid|persistant [--config isolee|perso] [--mcp-config fichier.json] //!     [--n 20] [--model haiku]
 //! ```
 //!
 //! * `froid` : un process par question ; chrono lancé avant le spawn.
 //! * `persistant` : un seul process ; une question de chauffe non comptée,
 //!   puis chrono lancé à l'écriture de chaque question sur stdin.
 //!
-//! Le premier token est le premier delta de texte reçu. Sans `--mcp-config`,
-//! aucun serveur MCP (`--strict-mcp-config` est toujours passé).
+//! * `isolee` (défaut) : `--setting-sources project --strict-mcp-config`,
+//!   seuls les serveurs de `--mcp-config` sont chargés, sans réglages, hooks
+//!   ni plugins de l'utilisateur.
+//! * `perso` : la config de l'utilisateur telle quelle, plus `--mcp-config`.
+//!
+//! Le premier token est le premier delta de texte reçu.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -27,6 +31,7 @@ enum Mode {
 
 struct Args {
     mode: Mode,
+    perso: bool,
     mcp_config: Option<String>,
     n: usize,
     model: Option<String>,
@@ -35,6 +40,7 @@ struct Args {
 fn parse_args() -> Result<Args, String> {
     let mut args = Args {
         mode: Mode::Persistant,
+        perso: false,
         mcp_config: None,
         n: 20,
         model: None,
@@ -48,6 +54,13 @@ fn parse_args() -> Result<Args, String> {
                     "froid" => Mode::Froid,
                     "persistant" => Mode::Persistant,
                     m => return Err(format!("mode inconnu : {m}")),
+                }
+            }
+            "--config" => {
+                args.perso = match value()?.as_str() {
+                    "isolee" => false,
+                    "perso" => true,
+                    c => return Err(format!("config inconnue : {c}")),
                 }
             }
             "--mcp-config" => args.mcp_config = Some(value()?),
@@ -144,10 +157,11 @@ async fn measure(args: &Args, opts: &ClaudeOptions) -> Result<Vec<Duration>, Str
 #[tokio::main]
 async fn main() -> Result<(), String> {
     let args = parse_args()?;
-    let mut opts = ClaudeOptions {
-        args: vec!["--strict-mcp-config".into()],
-        ..Default::default()
-    };
+    let mut opts = ClaudeOptions::default();
+    if !args.perso {
+        opts.args
+            .extend(["--setting-sources", "project", "--strict-mcp-config"].map(String::from));
+    }
     if let Some(program) = std::env::var_os("KOBI_CLAUDE") {
         opts.program = PathBuf::from(program);
     }
@@ -165,8 +179,9 @@ async fn main() -> Result<(), String> {
         .map(|d| format!("{:.3}", d.as_secs_f64()))
         .collect();
     println!(
-        "mode={:?} mcp={} n={} mediane={median:.2}s p90={p90:.2}s mesures=[{}]",
+        "mode={:?} config={} mcp={} n={} mediane={median:.2}s p90={p90:.2}s mesures=[{}]",
         args.mode,
+        if args.perso { "perso" } else { "isolee" },
         args.mcp_config.as_deref().unwrap_or("aucun"),
         samples.len(),
         all.join(" "),
