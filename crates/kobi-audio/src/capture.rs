@@ -20,15 +20,18 @@ use crate::{downmix, AudioFrame, Resampler, Source, SAMPLE_RATE};
 #[derive(Debug, Clone)]
 pub struct CaptureOptions {
     pub sources: Vec<Source>,
-    /// Morceau du nom du micro à utiliser ; micro par défaut sinon.
-    pub micro: Option<String>,
+    /// Nom (ou morceau de nom) du micro ; micro par défaut sinon.
+    pub mic: Option<String>,
+    /// Nom (ou morceau de nom) de la sortie capturée en loopback ; sortie par défaut sinon.
+    pub output: Option<String>,
 }
 
 impl Default for CaptureOptions {
     fn default() -> Self {
         Self {
             sources: vec![Source::Moi, Source::Eux],
-            micro: None,
+            mic: None,
+            output: None,
         }
     }
 }
@@ -66,8 +69,8 @@ impl Capture {
 
         for &source in &options.sources {
             let (device, config) = match source {
-                Source::Moi => micro(&host, options.micro.as_deref())?,
-                Source::Eux => loopback(&host)?,
+                Source::Moi => select(&host, Direction::Input, options.mic.as_deref())?,
+                Source::Eux => loopback(&host, options.output.as_deref())?,
             };
             let info = SourceInfo {
                 source,
@@ -147,42 +150,152 @@ fn device_name(device: &cpal::Device) -> String {
         .unwrap_or_else(|_| "périphérique inconnu".into())
 }
 
-fn micro(
+/// Choisit le périphérique demandé par nom, ou celui par défaut.
+fn select(
     host: &cpal::Host,
+    direction: Direction,
     name: Option<&str>,
 ) -> Result<(cpal::Device, cpal::SupportedStreamConfig)> {
+    let label = direction.label();
     let device = match name {
-        None => host
-            .default_input_device()
-            .ok_or_else(|| anyhow!("aucun micro par défaut"))?,
+        None => direction
+            .default_device(host)
+            .ok_or_else(|| anyhow!("aucun {label} par défaut"))?,
         Some(name) => {
-            let wanted = name.to_lowercase();
-            host.input_devices()
-                .context("liste des micros")?
-                .find(|d| device_name(d).to_lowercase().contains(&wanted))
-                .ok_or_else(|| anyhow!("aucun micro ne contient « {name} »"))?
+            let mut devices: Vec<cpal::Device> = direction
+                .devices(host)
+                .with_context(|| format!("liste des {label}s"))?;
+            let names: Vec<String> = devices.iter().map(device_name).collect();
+            let index = pick(&names, name).map_err(|e| anyhow!("{label} : {e}"))?;
+            devices.swap_remove(index)
         }
     };
-    let config = device
-        .default_input_config()
-        .context("format par défaut du micro")?;
+    let config = direction
+        .default_config(&device)
+        .with_context(|| format!("format par défaut du {label} « {} »", device_name(&device)))?;
     Ok((device, config))
+}
+
+/// Indice du nom qui correspond à `wanted` : égalité exacte (sans casse) d'abord,
+/// sinon un unique nom qui le contient.
+fn pick(names: &[String], wanted: &str) -> Result<usize, String> {
+    let wanted_lc = wanted.to_lowercase();
+    if let Some(i) = names.iter().position(|n| n.to_lowercase() == wanted_lc) {
+        return Ok(i);
+    }
+    let matches: Vec<usize> = (0..names.len())
+        .filter(|&i| names[i].to_lowercase().contains(&wanted_lc))
+        .collect();
+    match matches.as_slice() {
+        [i] => Ok(*i),
+        [] => Err(format!(
+            "aucun périphérique ne contient « {wanted} » (voir --list-devices)"
+        )),
+        _ => Err(format!(
+            "« {wanted} » est ambigu : {}",
+            matches
+                .iter()
+                .map(|&i| format!("« {} »", names[i]))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Direction {
+    Input,
+    Output,
+}
+
+impl Direction {
+    fn label(self) -> &'static str {
+        match self {
+            Direction::Input => "micro",
+            Direction::Output => "sortie",
+        }
+    }
+
+    fn default_device(self, host: &cpal::Host) -> Option<cpal::Device> {
+        match self {
+            Direction::Input => host.default_input_device(),
+            Direction::Output => host.default_output_device(),
+        }
+    }
+
+    fn devices(self, host: &cpal::Host) -> Result<Vec<cpal::Device>> {
+        Ok(match self {
+            Direction::Input => host.input_devices()?.collect(),
+            Direction::Output => host.output_devices()?.collect(),
+        })
+    }
+
+    fn default_config(self, device: &cpal::Device) -> Result<cpal::SupportedStreamConfig> {
+        Ok(match self {
+            Direction::Input => device.default_input_config()?,
+            Direction::Output => device.default_output_config()?,
+        })
+    }
+}
+
+/// Un périphérique tel que présenté par `--list-devices`.
+#[derive(Debug, Clone)]
+pub struct DeviceInfo {
+    pub name: String,
+    pub is_default: bool,
+    /// Format natif (`fréquence`, `canaux`), si le pilote le donne.
+    pub format: Option<(u32, u16)>,
+}
+
+/// Micros et sorties disponibles (les sorties sont capturables en loopback).
+#[derive(Debug, Clone)]
+pub struct DeviceList {
+    pub inputs: Vec<DeviceInfo>,
+    pub outputs: Vec<DeviceInfo>,
+}
+
+/// Liste les micros et les sorties de l'hôte audio par défaut.
+pub fn list_devices() -> Result<DeviceList> {
+    let host = cpal::default_host();
+    let describe = |direction: Direction| -> Result<Vec<DeviceInfo>> {
+        let default = direction.default_device(&host).map(|d| device_name(&d));
+        Ok(direction
+            .devices(&host)
+            .with_context(|| format!("liste des {}s", direction.label()))?
+            .iter()
+            .map(|d| {
+                let name = device_name(d);
+                DeviceInfo {
+                    is_default: default.as_deref() == Some(name.as_str()),
+                    format: direction
+                        .default_config(d)
+                        .ok()
+                        .map(|c| (c.sample_rate(), c.channels())),
+                    name,
+                }
+            })
+            .collect())
+    };
+    Ok(DeviceList {
+        inputs: describe(Direction::Input)?,
+        outputs: describe(Direction::Output)?,
+    })
 }
 
 #[cfg(windows)]
-fn loopback(host: &cpal::Host) -> Result<(cpal::Device, cpal::SupportedStreamConfig)> {
+fn loopback(
+    host: &cpal::Host,
+    name: Option<&str>,
+) -> Result<(cpal::Device, cpal::SupportedStreamConfig)> {
     // Un flux d'entrée ouvert sur une sortie WASAPI active le mode loopback.
-    let device = host
-        .default_output_device()
-        .ok_or_else(|| anyhow!("aucune sortie audio par défaut"))?;
-    let config = device
-        .default_output_config()
-        .context("format par défaut de la sortie audio")?;
-    Ok((device, config))
+    select(host, Direction::Output, name)
 }
 
 #[cfg(not(windows))]
-fn loopback(_host: &cpal::Host) -> Result<(cpal::Device, cpal::SupportedStreamConfig)> {
+fn loopback(
+    _host: &cpal::Host,
+    _name: Option<&str>,
+) -> Result<(cpal::Device, cpal::SupportedStreamConfig)> {
     bail!("la capture de l'audio système n'est disponible que sous Windows pour l'instant")
 }
 
@@ -269,4 +382,46 @@ where
     };
 
     Ok(device.build_input_stream::<T, _, _>(config.config(), on_data, on_error, None)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pick;
+
+    fn names() -> Vec<String> {
+        [
+            "Haut-parleurs (High Definition Audio Device)",
+            "Casque (Jabra Evolve2 65)",
+            "Casque (Jabra Link 380)",
+            "Speakers",
+            "Speakers (USB Audio)",
+        ]
+        .map(String::from)
+        .to_vec()
+    }
+
+    #[test]
+    fn egalite_exacte_prioritaire() {
+        // « speakers » est contenu dans deux noms, mais l'un lui est égal (casse ignorée).
+        assert_eq!(pick(&names(), "SPEAKERS"), Ok(3));
+    }
+
+    #[test]
+    fn morceau_de_nom_unique() {
+        assert_eq!(pick(&names(), "evolve2"), Ok(1));
+        assert_eq!(pick(&names(), "haut-parleurs"), Ok(0));
+    }
+
+    #[test]
+    fn morceau_ambigu_refuse() {
+        let err = pick(&names(), "jabra").unwrap_err();
+        assert!(err.contains("ambigu"), "{err}");
+        assert!(err.contains("Evolve2") && err.contains("Link 380"), "{err}");
+    }
+
+    #[test]
+    fn nom_inconnu_refuse() {
+        let err = pick(&names(), "bluetooth").unwrap_err();
+        assert!(err.contains("--list-devices"), "{err}");
+    }
 }
