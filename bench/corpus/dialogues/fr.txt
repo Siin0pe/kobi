@@ -1,0 +1,52 @@
+# Réunion de sprint, tout en français.
+# Format : voir bench/corpus/README.md.
+@lang fr
+
+moi: Bonjour Claire, merci d'être là. On a une demi-heure pour faire le point sur le sprint et préparer la démo de vendredi.
+eux: Bonjour. Oui, j'ai regardé le tableau ce matin. Il nous reste onze tickets ouverts, dont trois qui bloquent la démo.
+moi: D'accord. On commence par ceux qui bloquent. Le premier, c'est la synchronisation des calendriers, non ?
+eux: C'est ça. La synchronisation marche bien avec Google, mais avec Outlook on perd les réunions récurrentes. Julien pense que c'est un problème de fuseau horaire.
+moi@kobi: Kobi, est-ce qu'on a un ticket ouvert sur les réunions récurrentes Outlook ?
+eux: Pendant qu'il cherche, je précise que le bug n'arrive que pour les séries créées avant le changement d'heure.
+moi: C'est noté. Donc on a bien un ticket, il date de deux semaines et personne ne l'a pris. Je propose que Julien le prenne dès demain matin.
+eux: Ça me va. Je le préviens après la réunion. Il faudra peut-être lui laisser deux jours, le code du fuseau horaire n'est pas simple.
+moi: Deux jours, c'est jouable. La démo est vendredi à quatorze heures, il aura le temps de livrer jeudi soir.
+eux: Le deuxième ticket bloquant, c'est la page de paiement. Le bouton de validation reste grisé sur certains navigateurs mobiles.
+moi: Sur lesquels exactement ?
+eux: Surtout Safari sur les anciens iPhone. On a reproduit le problème sur trois appareils de test, mais pas sur les modèles récents.
+moi: Est-ce que ça touche beaucoup d'utilisateurs ?
+eux: D'après les statistiques du mois dernier, à peu près huit pour cent des paiements passent par ces appareils. Ce n'est pas énorme, mais pour un client c'est bloquant.
+moi: Oui, on ne peut pas montrer une démo où le paiement échoue. Qui travaille sur le module de paiement en ce moment ?
+eux: Personne à temps plein. Sarah l'a écrit, mais elle est sur la refonte du tableau de bord jusqu'à la fin du mois.
+moi: Bon. Je vais lui demander une heure pour qu'elle regarde avec Thomas. Elle connaît le code par cœur, ça ira plus vite.
+eux@kobi: Kobi, crée un ticket pour le bouton de paiement grisé sur Safari et assigne-le à Thomas, priorité haute.
+moi: Très bien, je valide la carte. Le troisième ticket, c'est quoi ?
+eux: Le troisième, c'est l'export en PDF des comptes rendus. Les accents sont remplacés par des points d'interrogation quand le titre est trop long.
+moi: Ah, celui-là je l'ai vu passer. C'est un problème d'encodage dans la bibliothèque qu'on utilise pour générer les fichiers.
+eux: Exactement. On a deux options : mettre à jour la bibliothèque, ou couper les titres à quatre-vingts caractères en attendant.
+moi: La mise à jour, c'est risqué à trois jours de la démo. On coupe les titres pour vendredi, et on fait la mise à jour au prochain sprint.
+eux: D'accord. Je note la décision. Il faudra quand même prévenir le support, au cas où des clients poseraient la question.
+moi: Oui, bonne idée. Je leur écrirai un petit message cet après-midi.
+moi@kobi: Kobi, rappelle-moi ce qu'on avait décidé la semaine dernière pour la bibliothèque PDF.
+eux: Si je me souviens bien, on avait dit qu'on attendait la version deux, qui devait sortir à la fin du mois.
+moi: Oui, c'est ce qu'il dit aussi. Elle n'est toujours pas sortie, donc la décision tient. On passe à la suite.
+eux: Pour les huit autres tickets, la plupart sont des petites corrections d'interface. Je pense qu'on peut en fermer cinq d'ici jeudi.
+moi: Lesquels restent en dehors ?
+eux: Il y a la traduction en allemand, qui attend les textes du prestataire, l'optimisation des images sur la page d'accueil, et le nouveau formulaire de contact.
+moi: La traduction, on ne la maîtrise pas, donc on la repousse. Les images, c'est rapide, je peux m'en occuper moi-même demain.
+eux: Et le formulaire de contact ?
+moi: Le formulaire, on attend la validation du service juridique sur la case de consentement. Tant qu'on n'a pas leur accord, on ne le met pas en ligne.
+eux: D'accord. Tu veux que je relance le service juridique ?
+moi: Oui, s'il te plaît. Ça fait déjà dix jours qu'on attend leur retour.
+eux: Je leur envoie un message aujourd'hui. Pour la démo elle-même, qui fait la présentation ?
+moi: Je pensais la faire avec toi. Je montre le parcours d'inscription et la synchronisation, et toi tu présentes le tableau de bord et les exports.
+eux: Ça me va. On fait une répétition jeudi après-midi ?
+moi: Jeudi à seize heures, ça te convient ?
+eux: Parfait. Je bloque le créneau dans les agendas. Il faudra aussi un jeu de données propre, l'environnement de test est rempli de comptes bidons.
+moi: Bien vu. Thomas avait écrit un script pour remettre la base à zéro avec des données réalistes. Je lui demanderai de le lancer mercredi soir.
+eux@kobi: Kobi, combien de comptes de test y a-t-il dans l'environnement de démonstration ?
+moi: Plus de quatre cents comptes, ça confirme qu'il faut nettoyer. On garde une dizaine de comptes bien remplis et on supprime le reste.
+moi@kobi: Kobi, fais-moi un résumé des décisions de cette réunion en trois points.
+eux: Je pense qu'il a bien tout repris. La coupure des titres, le ticket pour Thomas et la répétition jeudi.
+moi: Oui, et j'ajouterais le nettoyage des comptes de test. Merci Claire, bonne fin de journée.
+eux: Merci, à jeudi pour la répétition.
