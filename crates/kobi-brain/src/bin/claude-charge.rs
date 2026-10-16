@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! claude-charge --corpus ~/Kobi-bench/corpus --codebase <dossier> --model haiku \
-//!     [--points 5,15,30,60] [--n 10] [--mcp-n 10] [--out mesures.jsonl]
+//!     [--points 5,15,30,60] [--n 10] [--mcp-n 10] [--out mesures.jsonl] [--threads 3]
 //! ```
 //!
 //! Une session persistante isolée reçoit la réunion simulée : un message de
@@ -380,6 +380,7 @@ struct Args {
     corpus: PathBuf,
     codebase: PathBuf,
     model: String,
+    threads: usize,
     points: Vec<u32>,
     n: usize,
     mcp_n: usize,
@@ -398,6 +399,7 @@ fn parse_args() -> Result<Args, String> {
         corpus: home().join("Kobi-bench").join("corpus"),
         codebase: PathBuf::new(),
         model: "haiku".into(),
+        threads: 3,
         points: vec![5, 15, 30, 60],
         n: 10,
         mcp_n: 10,
@@ -410,6 +412,7 @@ fn parse_args() -> Result<Args, String> {
             "--corpus" => a.corpus = value()?.into(),
             "--codebase" => a.codebase = value()?.into(),
             "--model" => a.model = value()?,
+            "--threads" => a.threads = value()?.parse().map_err(|e| format!("--threads : {e}"))?,
             "--points" => {
                 a.points = value()?
                     .split(',')
@@ -473,9 +476,19 @@ fn options(a: &Args) -> ClaudeOptions {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<(), String> {
+fn main() -> Result<(), String> {
     let a = parse_args()?;
+    // Le client attend surtout le réseau ; on borne quand même ses threads
+    // (règle de mesure : 3 threads au plus par défaut).
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(a.threads)
+        .enable_all()
+        .build()
+        .map_err(|e| e.to_string())?
+        .block_on(run(a))
+}
+
+async fn run(a: Args) -> Result<(), String> {
     let last_point = *a.points.last().ok_or("--points vide")?;
     let lines = transcript(&a.corpus, f64::from(last_point) * 60.0)?;
     let mut out = File::create(&a.out).map_err(|e| format!("{} : {e}", a.out.display()))?;
