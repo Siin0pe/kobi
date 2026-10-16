@@ -16,6 +16,10 @@ nemotron-shared = ["dep:sherpa-onnx", "sherpa-onnx/shared"]
 # `voxtral-cuda` : backend CUDA (nvcc requis).
 voxtral = ["dep:transcribe-cpp"]
 voxtral-cuda = ["voxtral", "transcribe-cpp/cuda"]
+# Adaptateur Whisper (whisper.cpp) ; demande cmake et libclang.
+whisper = ["dep:whisper-rs"]
+# Whisper sur GPU NVIDIA ; demande le toolkit CUDA (nvcc).
+whisper-cuda = ["whisper", "whisper-rs/cuda"]
 
 [dependencies]
 hound = "3.5"
@@ -23,3 +27,4 @@ serde = { version = "1", features = ["derive"] }
 sherpa-onnx = { version = "=1.13.8", optional = true, default-features = false }
 thiserror = "2"
 transcribe-cpp = { version = "0.4.0", default-features = false, optional = true }
+whisper-rs = { version = "0.16", optional = true }

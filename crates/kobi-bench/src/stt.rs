@@ -10,8 +10,8 @@ use kobi_bench::metrics::evaluate;
 use kobi_bench::metrics::normalize::Lang;
 use kobi_bench::metrics::reference::{common_lang, load_jsonl, timed_words, RefUtterance};
 use kobi_bench::metrics::resources::ResourceMonitor;
-use kobi_bench::protocol::{lower_priority, BenchLock};
-use kobi_bench::report::{now_rfc3339, Report, ReportRow};
+use kobi_bench::protocol::{limit_threads, lower_priority, BenchLock, DEFAULT_THREADS};
+use kobi_bench::report::{now_rfc3339, rust_build_info, Report, ReportRow};
 use kobi_stt::fake::FakeEngine;
 use kobi_stt::replay::{Track, WavReplayer};
 use kobi_stt::wav::read_wav_16k_mono;
@@ -63,7 +63,7 @@ pub struct SttArgs {
     /// Fils d'inférence accordés au moteur, noté dans le rapport. 3 par
     /// défaut : la moitié des 12 threads du poste de référence, pour laisser
     /// la machine utilisable.
-    #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u32).range(1..))]
+    #[arg(long, default_value_t = DEFAULT_THREADS, value_parser = clap::value_parser!(u32).range(1..))]
     threads: u32,
 
     /// Dossier des modèles (défaut : ~/Kobi-bench/models).
@@ -115,11 +115,7 @@ pub fn run(args: SttArgs) -> anyhow::Result<()> {
     let machine = args.machine.clone().unwrap_or_else(machine_label);
     // Même plafond pour les bibliothèques qui lisent leurs propres variables
     // (rayon pour candle, OpenMP), sauf si l'appelant les a fixées.
-    for var in ["RAYON_NUM_THREADS", "OMP_NUM_THREADS"] {
-        if std::env::var_os(var).is_none() {
-            std::env::set_var(var, args.threads.to_string());
-        }
-    }
+    limit_threads(args.threads);
 
     let meetings = load_corpus(&args.corpus, &args.meetings, args.limit)?;
 
@@ -163,12 +159,17 @@ pub fn run(args: SttArgs) -> anyhow::Result<()> {
                 metrics.segments,
                 metrics.wall_duration
             );
+            let build = match engine.build_info() {
+                info if info.is_empty() => rust_build_info().to_string(),
+                info => format!("{info} · {}", rust_build_info()),
+            };
             report.upsert(ReportRow {
                 engine: name.clone(),
                 meeting: meeting.name.clone(),
                 machine: machine.clone(),
                 device,
                 threads: Some(args.threads),
+                build,
                 date: now_rfc3339(),
                 metrics,
             });

@@ -2,7 +2,8 @@
 //!
 //! Ils ne sont compilés qu'avec leur feature (`nemotron` pour le CPU,
 //! `nemotron-shared` pour les bibliothèques sherpa-onnx CUDA, `voxtral` et
-//! `voxtral-cuda` pour transcribe.cpp) ; [`native`] liste ceux du binaire.
+//! `voxtral-cuda` pour transcribe.cpp,
+//! `whisper` et `whisper-cuda` pour whisper.cpp) ; [`native`] liste ceux du binaire.
 
 use std::path::{Path, PathBuf};
 
@@ -20,9 +21,14 @@ const VOXTRAL: &[&str] = &["voxtral", "voxtral-d3", "voxtral-d12"];
 #[cfg(not(feature = "voxtral"))]
 const VOXTRAL: &[&str] = &[];
 
+#[cfg(feature = "whisper")]
+const WHISPER: &[&str] = &["whisper"];
+#[cfg(not(feature = "whisper"))]
+const WHISPER: &[&str] = &[];
+
 /// Moteurs natifs compilés dans ce binaire.
 pub fn native() -> Vec<&'static str> {
-    [NEMOTRON, VOXTRAL].concat()
+    [NEMOTRON, VOXTRAL, WHISPER].concat()
 }
 
 /// Délai en tokens de 80 ms d'un nom `voxtral` ou `voxtral-dN`.
@@ -88,7 +94,12 @@ pub fn nemotron_package(models: &Path, chunk: &str, device: &str) -> Result<Path
 
 /// Construit le moteur natif `name` (`nemotron-160ms`…).
 #[cfg_attr(
-    not(any(feature = "nemotron", feature = "nemotron-shared", feature = "voxtral")),
+    not(any(
+        feature = "nemotron",
+        feature = "nemotron-shared",
+        feature = "voxtral",
+        feature = "whisper"
+    )),
     allow(unused_variables)
 )]
 pub fn build(name: &str, opts: &EngineOptions) -> Result<Box<dyn SttEngine>, String> {
@@ -106,6 +117,23 @@ pub fn build(name: &str, opts: &EngineOptions) -> Result<Box<dyn SttEngine>, Str
         return Ok(Box::new(
             NemotronEngine::new(config).map_err(|e| e.to_string())?,
         ));
+    }
+    // Whisper large-v3-turbo, fenêtre glissante de 5 s, pas de 1 s.
+    #[cfg(feature = "whisper")]
+    if name == "whisper" {
+        use kobi_stt::whisper::{whisper_engine, WhisperConfig};
+        if opts.device == "cuda" && !cfg!(feature = "whisper-cuda") {
+            return Err("whisper sur cuda : compiler avec la feature whisper-cuda".into());
+        }
+        let mut config = WhisperConfig::new(match &opts.model {
+            Some(model) => model.clone(),
+            None => opts.models.join("whisper").join("ggml-large-v3-turbo.bin"),
+        });
+        config.language = opts.language.clone();
+        config.gpu = opts.device == "cuda";
+        config.threads = opts.threads;
+        let (engine, _) = whisper_engine(&config).map_err(|e| e.to_string())?;
+        return Ok(Box::new(engine));
     }
     #[cfg(feature = "voxtral")]
     if let Some(delay) = voxtral_delay(name) {
