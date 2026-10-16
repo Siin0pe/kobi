@@ -1,0 +1,10 @@
+/* Recursive (SIL OFL 1.1, voir src/fonts/OFL-Recursive.txt), embarquée :
+   jamais chargée depuis Internet. Fichier variable complet (wght, CASL, slnt,
+   MONO, CRSV), jeu de caractères latin. */
+@font-face {
+  font-family: 'Recursive';
+  font-style: oblique 0deg 15deg;
+  font-weight: 300 1000;
+  font-display: block;
+  src: url('../fonts/recursive-latin-full.woff2') format('woff2-variations');
+}
