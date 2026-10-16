@@ -1267,6 +1267,7 @@ dependencies = [
 name = "kobi-brain"
 version = "0.1.0"
 dependencies = [
+ "kobi-perms",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

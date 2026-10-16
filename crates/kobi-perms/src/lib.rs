@@ -54,6 +54,14 @@ pub struct ApprovalRequest {
 }
 
 impl ApprovalRequest {
+    /// Demande hors serveur MCP (backend clé API, doublures de test) : la
+    /// décision arrive sur le récepteur renvoyé ; abandonner la demande
+    /// ferme ce récepteur, ce qui vaut refus.
+    pub fn new(request: PermissionRequest) -> (Self, oneshot::Receiver<Decision>) {
+        let (reply, answer) = oneshot::channel();
+        (Self { request, reply }, answer)
+    }
+
     pub fn decide(self, decision: Decision) {
         // Si l'appel a déjà expiré, la décision n'a plus d'effet.
         let _ = self.reply.send(decision);
@@ -96,13 +104,8 @@ impl Approver {
     }
 
     async fn decision(&self, request: PermissionRequest) -> Decision {
-        let (reply, answer) = oneshot::channel();
-        if self
-            .requests
-            .send(ApprovalRequest { request, reply })
-            .await
-            .is_err()
-        {
+        let (pending, answer) = ApprovalRequest::new(request);
+        if self.requests.send(pending).await.is_err() {
             return Decision::Deny("Kobi ne peut pas demander de confirmation.".into());
         }
         match tokio::time::timeout(self.timeout, answer).await {
