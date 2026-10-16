@@ -13,8 +13,8 @@ python bench/wake/generate.py --out DIR       # ailleurs que ~/Kobi-bench/wake
 ```
 
 Mêmes prérequis que `bench/corpus/` (Python 3.10+, numpy ; Piper et les voix
-sont téléchargés dans `~/Kobi-bench/`). `--threads` (défaut 3) limite le
-process et ses enfants à 3 processeurs logiques, en priorité basse.
+sont téléchargés dans `~/Kobi-bench/`). `--threads` (défaut 4) limite le
+process et ses enfants à 4 processeurs logiques, en priorité basse.
 
 ## Contenu
 
@@ -88,7 +88,7 @@ Chaîne openWakeWord : mel (`melspectrogram.onnx`) puis embeddings
 (`embedding_model.onnx`), tous deux de la release v0.5.1, téléchargés dans
 `~/Kobi-bench/models/openwakeword/` ; seul le petit modèle final (16 vecteurs
 de 96 valeurs, soit environ 2 s d'audio → score) est entraîné, sur GPU si
-disponible. Les features sont calculées sur CPU (`--threads`, défaut 3, en
+disponible. Les features sont calculées sur CPU (`--threads`, défaut 4, en
 priorité basse).
 
 Augmentation, tirée à chaque passage (3 par positif, 2 par négatif) :
@@ -107,9 +107,12 @@ de validation d'openWakeWord (10,7 h de features précalculées, téléchargées
 depuis `davidscripka/openwakeword_features`, utilisées pour l'évaluation
 seulement).
 
-Le même modèle tourne en Rust dans `kobi-wake` (`oww::OpenWakeWord`) ;
+Le même modèle tourne en Rust dans `kobi-wake` (`oww::OpenWakeWord`), sur
+CPU : la machine cible n'a pas de GPU (le GPU ne sert qu'à l'entraînement).
 `cargo run --release -p kobi-wake --example wake_eval` rejoue la partition
-`test` en flux pour comparer avec Python.
+`test` en flux pour comparer avec Python ; `--example wake_cpu` mesure la
+charge au repos (audio en temps réel par blocs de 80 ms, 1 thread ONNX par
+modèle) : CPU du process en % d'un cœur, calcul par bloc, mémoire.
 
 ## Limites
 

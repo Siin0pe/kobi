@@ -20,7 +20,7 @@ Sortie dans `<out>/` : `kobi.onnx` (entrée `x` [n, 16, 96], sortie `score`
 [n, 1]), `metrics.json`, `card.json` (données, voix et licences, empreintes).
 
 Dépendances (hors dépôt) : numpy, onnxruntime, onnx, torch.
-Usage : python bench/wake/train_oww.py [--data DIR] [--out DIR] [--device cuda|cpu] [--threads 3]
+Usage : python bench/wake/train_oww.py [--data DIR] [--out DIR] [--device cuda|cpu] [--threads 4]
 """
 
 from __future__ import annotations
@@ -390,7 +390,7 @@ def main() -> None:
     parser.add_argument("--data", type=Path, default=kobitts.BENCH_HOME / "wake")
     parser.add_argument("--out", type=Path, default=kobitts.BENCH_HOME / "models" / "kobi-oww")
     parser.add_argument("--device", default="cuda")
-    parser.add_argument("--threads", type=int, default=3)
+    parser.add_argument("--threads", type=int, default=4)
     parser.add_argument("--epochs", type=int, default=40)
     parser.add_argument("--aug-pos", type=int, default=3, help="passages augmentés par positif")
     parser.add_argument("--aug-neg", type=int, default=2, help="passages augmentés par négatif")

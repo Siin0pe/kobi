@@ -95,7 +95,8 @@ impl OpenWakeWord {
     }
 
     fn melspectrogram(&mut self, window: &[f32]) -> Result<Vec<[f32; MEL_BINS]>, WakeError> {
-        let input = TensorRef::from_array_view(([1usize, window.len()], window)).map_err(ort_err)?;
+        let input =
+            TensorRef::from_array_view(([1usize, window.len()], window)).map_err(ort_err)?;
         let outputs = self.mel.run(ort::inputs![input]).map_err(ort_err)?;
         let (_, data) = outputs[0].try_extract_tensor::<f32>().map_err(ort_err)?;
         if data.len() != MEL_FRAMES_PER_CHUNK * MEL_BINS {
@@ -112,8 +113,8 @@ impl OpenWakeWord {
     }
 
     fn embed(&mut self, frames: &[f32]) -> Result<[f32; EMB_DIM], WakeError> {
-        let input =
-            TensorRef::from_array_view(([1usize, MEL_WINDOW, MEL_BINS, 1], frames)).map_err(ort_err)?;
+        let input = TensorRef::from_array_view(([1usize, MEL_WINDOW, MEL_BINS, 1], frames))
+            .map_err(ort_err)?;
         let outputs = self.emb.run(ort::inputs![input]).map_err(ort_err)?;
         let (_, data) = outputs[0].try_extract_tensor::<f32>().map_err(ort_err)?;
         <[f32; EMB_DIM]>::try_from(data).map_err(|_| bad_output("embedding", data.len()))
@@ -121,7 +122,8 @@ impl OpenWakeWord {
 
     fn score(&mut self) -> Result<f32, WakeError> {
         let x: Vec<f32> = self.embeddings.iter().flatten().copied().collect();
-        let input = TensorRef::from_array_view(([1usize, MODEL_FRAMES, EMB_DIM], &x[..])).map_err(ort_err)?;
+        let input = TensorRef::from_array_view(([1usize, MODEL_FRAMES, EMB_DIM], &x[..]))
+            .map_err(ort_err)?;
         let outputs = self.model.run(ort::inputs![input]).map_err(ort_err)?;
         let (_, data) = outputs[0].try_extract_tensor::<f32>().map_err(ort_err)?;
         data.first().copied().ok_or_else(|| bad_output("kobi", 0))
@@ -252,11 +254,17 @@ mod tests {
         f.push(&samples[1000..]);
         let w1 = f.next_window().unwrap();
         assert_eq!(w1.len(), CONTEXT + CHUNK);
-        assert!(w1[..CONTEXT].iter().all(|&s| s == 0.0), "silence avant le flux");
+        assert!(
+            w1[..CONTEXT].iter().all(|&s| s == 0.0),
+            "silence avant le flux"
+        );
         assert_eq!(w1[CONTEXT], 0.0);
         assert_eq!(w1[CONTEXT + CHUNK - 1], 1279.0);
         let w2 = f.next_window().unwrap();
-        assert_eq!(w2[0], 800.0, "les 480 derniers échantillons du bloc précédent");
+        assert_eq!(
+            w2[0], 800.0,
+            "les 480 derniers échantillons du bloc précédent"
+        );
         assert_eq!(w2[CONTEXT], 1280.0);
         assert!(f.next_window().is_none(), "reste 440 échantillons");
         assert_eq!(f.consumed, 2560);
@@ -277,6 +285,9 @@ mod tests {
     #[test]
     fn missing_model_is_reported() {
         let cfg = OwwConfig::new(Path::new("introuvable"), Path::new("introuvable/kobi.onnx"));
-        assert!(matches!(OpenWakeWord::new(&cfg), Err(WakeError::MissingModel(_))));
+        assert!(matches!(
+            OpenWakeWord::new(&cfg),
+            Err(WakeError::MissingModel(_))
+        ));
     }
 }

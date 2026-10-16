@@ -185,7 +185,7 @@ class Utterance:
     noise_w: float = 0.0
 
 
-def limit_cpu(threads: int = 3) -> None:
+def limit_cpu(threads: int = 4) -> None:
     """Limite ce process et ses enfants (Piper, SAPI) à `threads` processeurs
     logiques, en priorité basse : le poste est partagé et ces outils ne
     doivent pas prendre plus de la moitié du CPU. Sans effet hors Windows."""

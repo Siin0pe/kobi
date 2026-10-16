@@ -343,8 +343,8 @@ def main() -> None:
     parser.add_argument("--phrases", type=int, default=300, help="phrases de réunion par langue")
     parser.add_argument("--batch", type=int, default=400, help="clips synthétisés par lot")
     parser.add_argument(
-        "--threads", type=int, default=3,
-        help="processeurs logiques utilisables, en priorité basse (défaut 3)",
+        "--threads", type=int, default=4,
+        help="processeurs logiques utilisables, en priorité basse (défaut 4)",
     )
     args = parser.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")

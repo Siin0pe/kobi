@@ -82,7 +82,11 @@ fn main() -> Result<()> {
         let mut reader = hound::WavReader::open(data.join(&c.file))?;
         let clip: Vec<i16> = reader.samples::<i16>().collect::<Result<_, _>>()?;
         let mut audio = hiss(40_000, &mut seed); // 2,5 s avant
-        audio.extend(clip.iter().zip(hiss(clip.len(), &mut seed)).map(|(a, b)| a.saturating_add(b)));
+        audio.extend(
+            clip.iter()
+                .zip(hiss(clip.len(), &mut seed))
+                .map(|(a, b)| a.saturating_add(b)),
+        );
         audio.extend(hiss(8_000, &mut seed)); // 0,5 s après
         audio_s += audio.len() as f64 / 16_000.0;
         det.reset();
@@ -92,11 +96,18 @@ fn main() -> Result<()> {
                 best = best.max(s);
             }
         }
-        maxima.entry((c.label.clone(), c.lang.clone())).or_default().push(best);
+        maxima
+            .entry((c.label.clone(), c.lang.clone()))
+            .or_default()
+            .push(best);
     }
     let elapsed = start.elapsed().as_secs_f64();
 
-    println!("détecteur : {} (Rust, {} thread(s) par modèle)", det.name(), threads);
+    println!(
+        "détecteur : {} (Rust, {} thread(s) par modèle)",
+        det.name(),
+        threads
+    );
     for ((label, lang), scores) in &maxima {
         let rates: Vec<String> = THRESHOLDS
             .iter()
@@ -105,7 +116,11 @@ fn main() -> Result<()> {
                 format!("{t} : {:.1} %", 100.0 * n as f64 / scores.len() as f64)
             })
             .collect();
-        println!("{label:8} {lang} ({} clips) déclenchés à {}", scores.len(), rates.join(", "));
+        println!(
+            "{label:8} {lang} ({} clips) déclenchés à {}",
+            scores.len(),
+            rates.join(", ")
+        );
     }
     println!(
         "{audio_s:.0} s d'audio traités en {elapsed:.1} s, facteur temps réel {:.3}",
