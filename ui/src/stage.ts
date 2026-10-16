@@ -82,6 +82,7 @@ export class Stage {
       this.cleanups.push(() => this.motionQuery.removeEventListener('change', onMotion));
     }
     this.root.classList.toggle('reduced-motion', this.reducedMotion);
+    this.bubbles.setReducedMotion(this.reducedMotion);
     this.setState('idle');
   }
 

@@ -212,3 +212,15 @@
 .bubbles.reduced-motion .caret {
   animation: none;
 }
+
+/* Carte remplacée : elle s'efface pendant que la suivante arrive. */
+@keyframes leave {
+  to {
+    opacity: 0;
+    transform: translateY(-10px) rotate(var(--r)) scale(0.97);
+  }
+}
+.bubbles .card.leaving {
+  pointer-events: none;
+  animation: leave 0.18s ease-in forwards;
+}

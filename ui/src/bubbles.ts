@@ -3,6 +3,7 @@
 // couleurs et la police du thème du skin (variables CSS posées par la scène).
 
 import type { ActionCard, MascotData, MascotState } from './contract';
+import { Typewriter } from './typewriter';
 
 export interface ActionDecision {
   id: string;
@@ -10,6 +11,12 @@ export interface ActionDecision {
 }
 
 type Kind = 'question' | 'sources' | 'notes' | 'answer' | 'action' | 'error';
+
+/** Vitesses de frappe du prototype, en caractères par seconde. */
+const TYPING_CPS: Partial<Record<Kind, number>> = { question: 18, notes: 22, answer: 25 };
+
+/** Durée de la sortie d'une carte remplacée (voir `.leaving` dans bubbles.css). */
+const LEAVE_MS = 180;
 
 /** Carte visible pour un état donné, ou rien. */
 export function cardKind(state: MascotState, data: MascotData): Kind | null {
@@ -45,6 +52,8 @@ export class Bubbles {
   private kind: Kind | null = null;
   private card: HTMLElement | null = null;
   private actionKey = '';
+  private typer: Typewriter | null = null;
+  private reduced = false;
 
   constructor() {
     this.root = el('div', 'bubbles');
@@ -53,7 +62,9 @@ export class Bubbles {
   render(state: MascotState, data: MascotData): void {
     const kind = cardKind(state, data);
     if (kind !== this.kind) {
-      this.card?.remove();
+      if (this.card) this.leave(this.card);
+      this.typer?.stop();
+      this.typer = null;
       this.card = kind ? this.create(kind) : null;
       this.kind = kind;
       this.actionKey = '';
@@ -67,7 +78,31 @@ export class Bubbles {
   }
 
   setReducedMotion(reduced: boolean): void {
+    this.reduced = reduced;
     this.root.classList.toggle('reduced-motion', reduced);
+    this.typer?.setInstant(reduced);
+  }
+
+  /** La carte remplacée s'efface (sans bloquer la nouvelle) puis disparaît du DOM. */
+  private leave(card: HTMLElement): void {
+    delete card.dataset.card;
+    if (this.reduced) {
+      card.remove();
+      return;
+    }
+    card.classList.add('leaving');
+    window.setTimeout(() => card.remove(), LEAVE_MS);
+  }
+
+  private typed(card: HTMLElement, kind: Kind, text: string): void {
+    if (!this.typer) {
+      const node = card.querySelector('.text')!;
+      card.dataset.typing = '1';
+      this.typer = new Typewriter(node, TYPING_CPS[kind] ?? 25, () => (card.dataset.typing = '0'));
+      this.typer.setInstant(this.reduced);
+    }
+    if (text.length > (card.querySelector('.text')!.textContent ?? '').length) card.dataset.typing = '1';
+    this.typer.set(text);
   }
 
   private create(kind: Kind): HTMLElement {
@@ -98,13 +133,13 @@ export class Bubbles {
   private fill(kind: Kind, card: HTMLElement, data: MascotData): void {
     switch (kind) {
       case 'question':
-        setText(card.querySelector('.text')!, data.question ?? '');
+        this.typed(card, kind, data.question ?? '');
         break;
       case 'notes':
-        setText(card.querySelector('.text')!, data.notes ?? '');
+        this.typed(card, kind, data.notes ?? '');
         break;
       case 'answer': {
-        setText(card.querySelector('.text')!, data.answer ?? '');
+        this.typed(card, kind, data.answer ?? '');
         const tags = card.querySelector<HTMLElement>('.tags')!;
         const wanted = (data.answerTags ?? []).join('\u0000');
         if (tags.dataset.key !== wanted) {
