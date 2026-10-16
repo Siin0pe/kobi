@@ -34,3 +34,4 @@ Thumbs.db
 ui/test-results/
 ui/playwright-report/
 ui/captures/
+crates/kobi-app/gen/
