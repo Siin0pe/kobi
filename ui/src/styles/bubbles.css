@@ -1,0 +1,214 @@
+/* Bulles et cartes communes, reprises du prototype Glyphe
+   (docs/design/mascotte/Glyphe.dc.html) ; couleurs et police du thème. */
+
+@keyframes deal {
+  0% {
+    opacity: 0;
+    transform: translateY(16px) rotate(var(--r));
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) rotate(var(--r));
+  }
+}
+@keyframes caret {
+  50% {
+    opacity: 0;
+  }
+}
+
+.bubbles .card {
+  --r: 0deg;
+  position: absolute;
+  left: 40px;
+  top: 170px;
+  box-sizing: border-box;
+  transform: rotate(var(--r));
+  animation: deal 0.35s cubic-bezier(0.3, 1.4, 0.5, 1) both;
+}
+.bubbles .caret {
+  display: inline-block;
+  width: 0.55em;
+  height: 1em;
+  vertical-align: -3px;
+  background: currentColor;
+  animation: caret 0.8s steps(1) infinite;
+}
+.bubbles .kicker {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-variation-settings: 'MONO' 1, 'wght' 700;
+}
+
+/* Question (Écoute). */
+.card-question {
+  --r: -2deg;
+  width: 330px;
+  padding: 18px 20px;
+  border-radius: 22px 22px 22px 6px;
+  background: var(--ink);
+  color: var(--accent);
+  font-size: 19px;
+  line-height: 1.4;
+  font-variation-settings: 'CASL' 1, 'wght' 500;
+}
+.card-question .lead {
+  font-variation-settings: 'CASL' 1, 'wght' 1000;
+}
+
+/* Sources consultées (Réfléchit). */
+.bubbles .card-sources {
+  top: 330px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  animation: none;
+}
+.bubbles .card-sources .source {
+  position: static;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-radius: 999px;
+  border: 2px solid var(--ink);
+  background: transparent;
+  color: var(--ink);
+  font-size: 15px;
+  font-variation-settings: 'MONO' 1, 'wght' 600;
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease;
+}
+.bubbles .card-sources .source.found {
+  background: var(--ink);
+  color: var(--accent);
+}
+
+/* Fiche de notes (Note). */
+.card-notes {
+  --r: -2.5deg;
+  width: 340px;
+  padding: 20px 22px;
+  border-radius: 10px;
+  background: var(--paper);
+  border: 2.5px solid var(--ink);
+  box-shadow: 8px 8px 0 var(--ink);
+}
+.card-notes .kicker {
+  margin-bottom: 10px;
+}
+.card-notes .body {
+  font-size: 17px;
+  line-height: 1.55;
+  white-space: pre-line;
+  font-variation-settings: 'MONO' 1, 'wght' 500;
+}
+
+/* Réponse en flux (Répond). */
+.card-answer {
+  --r: 1.5deg;
+  width: 360px;
+  padding: 20px 22px;
+  border-radius: 24px 24px 6px 24px;
+  background: var(--ink);
+  color: var(--paper);
+  font-size: 18px;
+  line-height: 1.5;
+  font-variation-settings: 'CASL' 1, 'wght' 450;
+}
+.card-answer .tags {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+  font-size: 12px;
+  font-variation-settings: 'MONO' 1, 'wght' 600;
+}
+.card-answer .tags:empty {
+  display: none;
+}
+.card-answer .tag {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--ink);
+}
+
+/* Carte d'action (Propose, Fait). */
+.card-action {
+  --r: -1.5deg;
+  width: 350px;
+  padding: 20px 22px;
+  border-radius: 10px;
+  background: var(--paper);
+  border: 2.5px solid var(--ink);
+  box-shadow: 8px 8px 0 var(--ink);
+}
+.card-action .title {
+  margin-top: 8px;
+  font-size: 24px;
+  line-height: 1.15;
+  font-variation-settings: 'CASL' 1, 'wght' 900;
+}
+.card-action .meta {
+  margin-top: 6px;
+  font-size: 14px;
+  color: var(--muted);
+  font-variation-settings: 'wght' 450;
+}
+.card-action .buttons {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+}
+.card-action .btn {
+  min-height: 46px;
+  padding: 0 18px;
+  border-radius: 999px;
+  border: 2.5px solid var(--ink);
+  background: transparent;
+  color: var(--ink);
+  font: 800 15px var(--font);
+  cursor: pointer;
+}
+.card-action .btn-primary {
+  padding: 0 20px;
+  background: var(--ink);
+  color: var(--accent);
+}
+.card-action .btn:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Carte d'erreur (Oups). */
+.card-error {
+  --r: 2deg;
+  width: 330px;
+  padding: 20px 22px;
+  border-radius: 10px;
+  background: var(--ink);
+  color: var(--paper);
+  box-shadow: 8px 8px 0 var(--danger);
+}
+.card-error .kicker {
+  color: color-mix(in srgb, var(--danger) 60%, white);
+}
+.card-error .message {
+  margin-top: 8px;
+  font-size: 20px;
+  line-height: 1.3;
+  font-variation-settings: 'CASL' 1, 'wght' 700;
+}
+
+/* Réduire les animations : les cartes apparaissent sans mouvement, le curseur reste fixe. */
+.reduced-motion .bubbles .card,
+.bubbles.reduced-motion .card {
+  animation: none;
+}
+.reduced-motion .bubbles .caret,
+.bubbles.reduced-motion .caret {
+  animation: none;
+}

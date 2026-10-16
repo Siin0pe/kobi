@@ -1,0 +1,62 @@
+:root {
+  color-scheme: light;
+}
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+}
+
+.stage {
+  --scale: 1;
+  position: fixed;
+  inset: 0;
+  font-family: var(--font);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+.stage.with-backdrop {
+  background: var(--backdrop);
+}
+.scene {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 820px;
+  height: 560px;
+  transform: translate(-50%, -50%) scale(var(--scale));
+  overflow: hidden;
+}
+.skin-host,
+.bubbles {
+  position: absolute;
+  inset: 0;
+}
+.bubbles {
+  pointer-events: none;
+  z-index: 5;
+}
+.bubbles .card {
+  pointer-events: auto;
+}
+
+/* Pause (fenêtre masquée) et « réduire les animations » : tout s'arrête. */
+.stage.paused *,
+.stage.paused *::before,
+.stage.paused *::after {
+  animation-play-state: paused !important;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}

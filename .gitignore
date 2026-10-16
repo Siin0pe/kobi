@@ -29,3 +29,8 @@ Thumbs.db
 .env
 *.pem
 *.p12
+
+# Interface : sorties de tests et captures
+ui/test-results/
+ui/playwright-report/
+ui/captures/
