@@ -67,6 +67,37 @@ pub struct ResultEvent {
     pub total_cost_usd: Option<f64>,
     #[serde(default)]
     pub num_turns: Option<u32>,
+    #[serde(default)]
+    pub usage: Option<Usage>,
+}
+
+/// Tokens du tour (somme des appels à l'API).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize)]
+pub struct Usage {
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub cache_creation_input_tokens: u64,
+    #[serde(default)]
+    pub cache_read_input_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub output_tokens_details: OutputTokensDetails,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize)]
+pub struct OutputTokensDetails {
+    /// Tokens de réflexion, compris dans `output_tokens`.
+    #[serde(default)]
+    pub thinking_tokens: u64,
+}
+
+impl Usage {
+    /// Tokens d'entrée au total, servis en cache ou non.
+    pub fn total_input(&self) -> u64 {
+        self.input_tokens + self.cache_creation_input_tokens + self.cache_read_input_tokens
+    }
 }
 
 /// Résumé d'un tour complet renvoyé par [`crate::ClaudeCode::ask`].
@@ -167,7 +198,7 @@ mod tests {
     #[test]
     fn analyse_result_quel_que_soit_l_ordre_des_champs() {
         let e = Event::parse(
-            r#"{"duration_api_ms":1452,"stop_reason":"end_turn","session_id":"abc","total_cost_usd":0.1,"type":"result","subtype":"success","is_error":false,"result":"un","num_turns":1}"#,
+            r#"{"duration_api_ms":1452,"stop_reason":"end_turn","session_id":"abc","total_cost_usd":0.1,"type":"result","subtype":"success","is_error":false,"result":"un","num_turns":1,"usage":{"input_tokens":2,"cache_creation_input_tokens":10,"cache_read_input_tokens":30,"output_tokens":3,"output_tokens_details":{"thinking_tokens":1},"service_tier":"standard"}}"#,
         )
         .unwrap();
         let Event::Result(r) = e else {
@@ -177,6 +208,10 @@ mod tests {
         assert_eq!(r.subtype.as_deref(), Some("success"));
         assert!(!r.is_error);
         assert_eq!(r.duration_api_ms, Some(1452));
+        let usage = r.usage.unwrap();
+        assert_eq!(usage.total_input(), 42);
+        assert_eq!(usage.cache_read_input_tokens, 30);
+        assert_eq!(usage.output_tokens_details.thinking_tokens, 1);
     }
 
     #[test]

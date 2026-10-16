@@ -2,7 +2,8 @@
 //!
 //! ```text
 //! cargo run --release -p kobi-brain --bin claude-latence -- \
-//!     --mode froid|persistant [--config isolee|perso] [--mcp-config fichier.json] //!     [--n 20] [--model haiku]
+//!     --mode froid|persistant [--config isolee|perso] [--mcp-config fichier.json] \
+//!     [--n 20] [--model haiku] [--threads 3]
 //! ```
 //!
 //! * `froid` : un process par question ; chrono lancé avant le spawn.
@@ -35,6 +36,7 @@ struct Args {
     mcp_config: Option<String>,
     n: usize,
     model: Option<String>,
+    threads: usize,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -44,6 +46,7 @@ fn parse_args() -> Result<Args, String> {
         mcp_config: None,
         n: 20,
         model: None,
+        threads: 3,
     };
     let mut it = std::env::args().skip(1);
     while let Some(flag) = it.next() {
@@ -66,6 +69,9 @@ fn parse_args() -> Result<Args, String> {
             "--mcp-config" => args.mcp_config = Some(value()?),
             "--n" => args.n = value()?.parse().map_err(|e| format!("--n : {e}"))?,
             "--model" => args.model = Some(value()?),
+            "--threads" => {
+                args.threads = value()?.parse().map_err(|e| format!("--threads : {e}"))?
+            }
             f => return Err(format!("argument inconnu : {f}")),
         }
     }
@@ -154,9 +160,19 @@ async fn measure(args: &Args, opts: &ClaudeOptions) -> Result<Vec<Duration>, Str
     Ok(samples)
 }
 
-#[tokio::main]
-async fn main() -> Result<(), String> {
+fn main() -> Result<(), String> {
     let args = parse_args()?;
+    // Le client attend surtout le réseau ; on borne quand même ses threads
+    // (règle de mesure : 3 threads au plus par défaut).
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(args.threads)
+        .enable_all()
+        .build()
+        .map_err(|e| e.to_string())?
+        .block_on(run(args))
+}
+
+async fn run(args: Args) -> Result<(), String> {
     let mut opts = ClaudeOptions::default();
     if !args.perso {
         opts.args
