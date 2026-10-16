@@ -82,8 +82,13 @@ async function record(browser, name, url, script) {
 }
 
 mkdirSync(out, { recursive: true });
-const server = spawn('npx', ['vite', 'preview', '--port', String(PORT), '--strictPort', '--host', '127.0.0.1'], {
+// Un ancien serveur sur le port servirait un autre build : on refuse.
+if (await fetch(`http://127.0.0.1:${PORT}/`).then(() => true, () => false)) {
+  throw new Error(`port ${PORT} déjà occupé : arrêter l'ancien serveur`);
+}
+const server = spawn('node', ['node_modules/vite/bin/vite.js', 'preview', '--port', String(PORT), '--strictPort', '--host', '127.0.0.1'], {
   stdio: 'ignore',
+  detached: true,
 });
 const base = `http://127.0.0.1:${PORT}/?skin=${skin}&backdrop=1${extra ? `&${extra}` : ''}`;
 
@@ -112,5 +117,5 @@ try {
   }
   await browser.close();
 } finally {
-  server.kill();
+  process.kill(-server.pid);
 }
