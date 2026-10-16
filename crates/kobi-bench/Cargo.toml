@@ -11,6 +11,8 @@ nemotron-shared = ["kobi-stt/nemotron-shared"]
 # Voxtral Realtime via transcribe.cpp ; TRANSCRIBE_DIR évite de recompiler le C++.
 voxtral = ["kobi-stt/voxtral"]
 voxtral-cuda = ["kobi-stt/voxtral-cuda"]
+whisper = ["kobi-stt/whisper"]
+whisper-cuda = ["whisper", "kobi-stt/whisper-cuda"]
 
 [dependencies]
 anyhow = "1"

@@ -1,0 +1,12 @@
+# Moteurs de transcription basés sur ggml (whisper.cpp, et tout autre moteur
+# ggml) : instructions AVX/AVX2/FMA/F16C imposées. Sous MSVC, GGML_NATIVE ne
+# détecte pas le processeur et ggml retombe en code scalaire, ce qui fausse
+# les mesures CPU. Ces variables ne servent qu'aux builds de ggml ; une valeur
+# déjà présente dans l'environnement est conservée (processeur sans AVX2 :
+# exporter GGML_AVX2=OFF…). Sur ARM, ggml ignore les options x86.
+[env]
+GGML_NATIVE = "OFF"
+GGML_AVX = "ON"
+GGML_AVX2 = "ON"
+GGML_FMA = "ON"
+GGML_F16C = "ON"

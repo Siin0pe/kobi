@@ -56,5 +56,6 @@ fn fake_engine_report_is_written_and_readable() {
 
     let md = std::fs::read_to_string(out.join("rapport.md")).unwrap();
     assert!(md.contains("| fake | fr | ci | cpu | 3 | 0,0 % |"), "{md}");
+    assert!(md.contains("| Rust "), "{md}");
     std::fs::remove_dir_all(&root).ok();
 }

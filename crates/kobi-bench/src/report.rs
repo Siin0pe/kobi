@@ -24,6 +24,11 @@ pub struct ReportRow {
     /// antérieurs à l'option `--threads`.
     #[serde(default)]
     pub threads: Option<u32>,
+    /// Options de compilation du moteur et du code Rust (instructions CPU,
+    /// accélérateur), pour comparer à armes égales ; vide dans les rapports
+    /// antérieurs.
+    #[serde(default)]
+    pub build: String,
     /// Date de la mesure (UTC, RFC 3339).
     pub date: String,
     pub metrics: SttMetrics,
@@ -83,10 +88,10 @@ impl Report {
         md.push_str(
             "| Moteur | Réunion | Machine | Matériel | Threads | WER | WER moi | WER eux \
              | 1er mot méd. / p90 | Final méd. / p90 | Fin de phrase méd. / p90 \
-             | Vitesse | RTF | CPU moy. / pic | RAM pic |\n",
+             | Vitesse | RTF | CPU moy. / pic | RAM pic | Compilation |\n",
         );
         md.push_str(
-            "| -- | -- | -- | -- | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: |\n",
+            "| -- | -- | -- | -- | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | -- |\n",
         );
         for r in &self.rows {
             let m = &r.metrics;
@@ -99,7 +104,7 @@ impl Report {
             let delays = m.delays.as_ref();
             let _ = writeln!(
                 md,
-                "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} / {} | {} Mo |",
+                "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} / {} | {} Mo | {} |",
                 r.engine,
                 r.meeting,
                 r.machine,
@@ -122,6 +127,7 @@ impl Report {
                 pct_raw(m.resources.cpu_mean_pct),
                 pct_raw(m.resources.cpu_peak_pct),
                 num(m.resources.rss_peak_mb, 0),
+                if r.build.is_empty() { "—" } else { &r.build },
             );
         }
         md.push_str(
@@ -130,6 +136,19 @@ impl Report {
              CPU en % d'un cœur logique. RTF = durée de traitement / durée de l'audio.\n",
         );
         md
+    }
+}
+
+/// Niveau d'instructions du code Rust de ce binaire (`-C target-cpu`).
+pub fn rust_build_info() -> &'static str {
+    if cfg!(target_feature = "avx512f") {
+        "Rust AVX-512"
+    } else if cfg!(all(target_feature = "avx2", target_feature = "fma")) {
+        "Rust AVX2 FMA"
+    } else if cfg!(target_arch = "x86_64") {
+        "Rust x86-64"
+    } else {
+        "Rust"
     }
 }
 
@@ -170,6 +189,7 @@ mod tests {
             machine: "poste".into(),
             device: "cpu".into(),
             threads: Some(3),
+            build: "Rust x86-64".into(),
             date: "2026-10-15T21:00:00Z".into(),
             metrics: SttMetrics {
                 engine: engine.into(),
@@ -207,6 +227,7 @@ mod tests {
         let table: Vec<_> = md.lines().filter(|l| l.starts_with('|')).collect();
         assert_eq!(table.len(), 3);
         assert!(table[2].starts_with("| fake | fr | poste | cpu | 3 | 12,3 % | — | — | — |"));
+        assert!(table[2].ends_with(" Mo | Rust x86-64 |"));
     }
 
     #[test]

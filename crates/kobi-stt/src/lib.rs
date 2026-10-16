@@ -12,6 +12,9 @@ pub mod replay;
 #[cfg(feature = "voxtral")]
 pub mod voxtral;
 pub mod wav;
+#[cfg(feature = "whisper")]
+pub mod whisper;
+pub mod window;
 
 use serde::{Deserialize, Serialize};
 
@@ -83,6 +86,12 @@ pub trait SttEngine {
 
     /// Fin du flux : renvoie les derniers segments, tous finaux.
     fn finish(&mut self) -> Result<Vec<Segment>>;
+
+    /// Options de compilation qui comptent pour la vitesse (instructions
+    /// CPU, accélérateur), reprises dans les rapports. Vide par défaut.
+    fn build_info(&self) -> String {
+        String::new()
+    }
 }
 
 impl<E: SttEngine + ?Sized> SttEngine for Box<E> {
@@ -96,5 +105,9 @@ impl<E: SttEngine + ?Sized> SttEngine for Box<E> {
 
     fn finish(&mut self) -> Result<Vec<Segment>> {
         (**self).finish()
+    }
+
+    fn build_info(&self) -> String {
+        (**self).build_info()
     }
 }
