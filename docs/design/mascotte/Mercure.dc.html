@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Mercure, goutte de métal liquide</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#08080A}
+a{color:#8FB0FF}a:hover{color:#C3D3FF}
+@keyframes morph{0%,100%{border-radius:52% 48% 46% 54%/50% 54% 46% 50%}33%{border-radius:44% 56% 55% 45%/56% 44% 56% 44%}66%{border-radius:56% 44% 48% 52%/45% 52% 48% 55%}}
+@keyframes swirl{to{transform:rotate(360deg)}}
+@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
+@keyframes stretch{0%,100%{transform:scale(1,1)}50%{transform:scale(.94,1.1) translateY(-8px)}}
+@keyframes speak{0%,100%{transform:scale(1)}25%{transform:scale(1.06,.95)}50%{transform:scale(.97,1.04)}75%{transform:scale(1.04,.97)}}
+@keyframes ring{0%{transform:scale(.8);opacity:.7}100%{transform:scale(1.9);opacity:0}}
+@keyframes orbit{to{transform:rotate(360deg)}}
+@keyframes drip{0%{transform:translate(-50%,0) scale(.3);opacity:0}20%{transform:translate(-50%,0) scale(1);opacity:1}100%{transform:translate(-50%,120px) scale(.6);opacity:0}}
+@keyframes rise{0%{transform:translate(-50%,40px) scale(.2);opacity:0}40%{transform:translate(-50%,-6px) scale(1.1);opacity:1}60%,100%{transform:translate(-50%,0) scale(1);opacity:1}}
+@keyframes blink{0%,90%,100%{transform:scaleY(1)}94%{transform:scaleY(.1)}}
+@keyframes glint{0%,100%{opacity:.5}50%{opacity:1}}
+
+.stage{position:relative;width:300px;height:320px;display:flex;align-items:center;justify-content:center}
+.float{animation:float 4s ease-in-out infinite}
+.m-listen .float{animation:stretch 1.2s ease-in-out infinite}
+.m-answer .float{animation:speak .5s ease-in-out infinite}
+.m-idle .float{animation:float 6s ease-in-out infinite}
+.drop{position:relative;width:190px;height:190px;overflow:hidden;animation:morph 6s ease-in-out infinite;box-shadow:inset -18px -22px 40px rgba(0,0,0,.55),inset 14px 16px 30px rgba(255,255,255,.65),0 30px 60px rgba(0,0,0,.6);background:#9CA1AB}
+.m-idle .drop{animation-duration:10s;transform:scale(1,.9)}
+.m-think .drop{animation-duration:1.6s}
+.chrome{position:absolute;inset:-40%;background:conic-gradient(from 0deg,#F7F8FA,#7C818B,#FFFFFF,#2E3138,#E6E8EC,#5F646E,#C9CCD2,#1D1F24,#F7F8FA);animation:swirl 9s linear infinite;filter:blur(6px)}
+.m-think .chrome{animation-duration:1.4s}
+.m-listen .chrome{animation-duration:4s}
+.hl{position:absolute;top:22px;left:38px;width:60px;height:28px;border-radius:50%;background:rgba(255,255,255,.9);filter:blur(5px);transform:rotate(-28deg)}
+.tint{position:absolute;inset:0;mix-blend-mode:color;opacity:0;transition:opacity .4s}
+.m-listen .tint,.m-suggest .tint{opacity:.55}
+.face{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;gap:30px;transition:transform .5s cubic-bezier(.3,1.5,.5,1)}
+.m-think .face{transform:translate(14px,-18px)}
+.m-write .face{transform:translate(-10px,18px)}
+.m-suggest .face{transform:translate(0,-8px)}
+.eye{position:relative;width:20px;height:38px;border-radius:12px;background:#0A0A0C;box-shadow:0 0 0 3px rgba(255,255,255,.25);transition:height .3s,border-radius .3s;animation:blink 4.4s infinite}
+.eye::after{content:"";position:absolute;top:6px;left:5px;width:6px;height:6px;border-radius:50%;background:#fff}
+.m-idle .eye{height:6px;animation:none}
+.m-idle .eye::after{display:none}
+.m-listen .eye{height:46px;width:24px}
+.m-answer .eye{height:14px;border-radius:14px 14px 4px 4px;animation:none}
+.m-answer .eye::after{display:none}
+.m-suggest .eye{height:44px}
+.rings,.sat,.drip,.bub{display:none}
+.m-listen .rings{display:block}
+.ring{position:absolute;inset:60px 55px;border-radius:50%;border:2px solid rgba(220,226,238,.6);animation:ring 1.5s ease-out infinite}
+.ring.r2{animation-delay:.75s}
+.m-think .sat{display:block}
+.sat{position:absolute;inset:30px;animation:orbit 1.5s linear infinite}
+.sat i{position:absolute;width:18px;height:18px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#fff,#9CA1AB 50%,#2E3138);box-shadow:0 4px 10px rgba(0,0,0,.5)}
+.sat i:nth-child(1){top:0;left:50%}
+.sat i:nth-child(2){bottom:20px;left:6px;width:12px;height:12px}
+.sat i:nth-child(3){bottom:30px;right:0;width:14px;height:14px}
+.m-write .drip{display:block}
+.drip{position:absolute;top:248px;left:50%;width:16px;height:20px;border-radius:50% 50% 50% 50%/60% 60% 40% 40%;background:radial-gradient(circle at 35% 30%,#fff,#9CA1AB 50%,#2E3138);animation:drip 1.2s ease-in infinite}
+.m-suggest .bub{display:flex}
+.bub{position:absolute;top:-6px;left:50%;width:46px;height:46px;border-radius:50%;align-items:center;justify-content:center;background:radial-gradient(circle at 35% 30%,#fff,#B9C7FF 45%,#3B5BDB);box-shadow:0 0 30px rgba(77,124,255,.8);color:#08080A;font:700 26px 'Unbounded',sans-serif;animation:rise 1s cubic-bezier(.3,1.4,.5,1) both}
+.shadow{width:150px;height:18px;border-radius:50%;background:radial-gradient(closest-side,rgba(160,170,190,.35),transparent);margin-top:-6px}
+.chip:hover{border-color:#5A5F6A}
+</style>
+</helmet>
+<div style="width: 600px; height: 680px; box-sizing: border-box; padding: 32px; display: flex; flex-direction: column; gap: 12px; background: radial-gradient(circle at 50% 42%, #1A1B20 0%, #08080A 60%); color: #E9EBEF; font-family: 'JetBrains Mono', monospace;">
+  <div style="display: flex; justify-content: space-between; align-items: baseline;">
+    <h2 style="margin: 0; font-family: 'Unbounded', sans-serif; font-weight: 700; font-size: 30px; letter-spacing: -.02em;">Mercure</h2>
+    <span style="font-size: 12px; color: #8A8F99;">01 / métal liquide</span>
+  </div>
+  <p style="margin: 0; font-size: 13px; line-height: 1.5; color: #A3A8B2;">Une goutte de chrome vivante qui coule, s'étire et se dédouble. Un seul accent : bleu électrique.</p>
+  <div style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;">
+    <div class="{{ cls }}">
+      <div class="stage">
+        <div class="rings"><div class="ring"></div><div class="ring r2"></div></div>
+        <div class="sat"><i></i><i></i><i></i></div>
+        <div class="float">
+          <div class="drop">
+            <div class="chrome"></div>
+            <div class="tint" style="background: #4D7CFF;"></div>
+            <div class="hl"></div>
+            <div class="face"><div class="eye"></div><div class="eye"></div></div>
+          </div>
+        </div>
+        <div class="drip"></div>
+        <div class="bub">+</div>
+      </div>
+    </div>
+    <div class="shadow"></div>
+    <div style="margin-top: 14px; font-size: 13px; letter-spacing: .14em; text-transform: uppercase; color: #C9CDD5;">{{ status }}</div>
+  </div>
+  <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+    <sc-for list="{{ chips }}" as="c" hint-placeholder-count="6">
+      <button type="button" class="chip" onClick="{{ c.pick }}" style="min-height: 44px; padding: 0 14px; border-radius: 999px; border: 1px solid {{ c.border }}; background: {{ c.bg }}; color: {{ c.fg }}; font: 500 12px 'JetBrains Mono', monospace; cursor: pointer;">{{ c.label }}</button>
+    </sc-for>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":600,"height":680}}'>
+var ORDER = ['idle', 'listen', 'think', 'write', 'answer', 'suggest'];
+var LABEL = { idle: 'Veille', listen: 'Écoute', think: 'Réfléchit', write: 'Note', answer: 'Répond', suggest: 'Propose' };
+var STATUS = { idle: 'en veille', listen: 'écoute', think: 'réfléchit', write: 'prend des notes', answer: 'répond', suggest: 'a une idée' };
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { mode: 'idle', auto: true }; }
+  componentDidMount() {
+    var self = this;
+    this.iv = setInterval(function () {
+      if (!self.state.auto) return;
+      self.setState({ mode: ORDER[(ORDER.indexOf(self.state.mode) + 1) % ORDER.length] });
+    }, 3200);
+  }
+  componentWillUnmount() { clearInterval(this.iv); }
+  renderVals() {
+    var self = this, st = this.state;
+    return {
+      cls: 'm-' + st.mode,
+      status: STATUS[st.mode],
+      chips: ORDER.map(function (k) {
+        var on = k === st.mode;
+        return { label: LABEL[k], bg: on ? '#E9EBEF' : 'transparent', fg: on ? '#08080A' : '#C9CDD5', border: on ? '#E9EBEF' : '#2C2F36',
+          pick: function () { self.setState({ mode: k, auto: false }); } };
+      })
+    };
+  }
+}
+</script>
+</body>
+</html>

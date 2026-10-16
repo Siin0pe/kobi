@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Gribouille, la mascotte</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Martian+Mono:wght@400;600&amp;family=Caveat:wght@500;700&amp;family=Atkinson+Hyperlegible:wght@400;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0E0E11}
+a{color:#FF8A6E}a:hover{color:#FFB3A1}
+
+@keyframes breathe{0%,100%{transform:scale(1,1)}50%{transform:scale(1.03,.97)}}
+@keyframes hop{0%,100%{transform:translateY(0)}40%{transform:translateY(-10px)}60%{transform:translateY(-10px)}}
+@keyframes bighop{0%,100%{transform:translateY(0) rotate(0)}35%{transform:translateY(-22px) rotate(-5deg)}55%{transform:translateY(-16px) rotate(4deg)}}
+@keyframes sway{0%,100%{transform:rotate(-3deg)}50%{transform:rotate(3deg)}}
+@keyframes jiggle{0%,100%{transform:translateX(0)}50%{transform:translateX(3px)}}
+@keyframes nod{0%,100%{transform:translateY(0)}50%{transform:translateY(4px)}}
+@keyframes blink{0%,88%,100%{transform:scaleY(1)}92%{transform:scaleY(.1)}}
+@keyframes talk{0%{transform:scaleY(.35)}100%{transform:scaleY(1)}}
+@keyframes draw{0%{stroke-dashoffset:140}70%,100%{stroke-dashoffset:0}}
+@keyframes scrib{0%,100%{transform:translate(0,0) rotate(0)}25%{transform:translate(-6px,2px) rotate(-6deg)}50%{transform:translate(-12px,0) rotate(0)}75%{transform:translate(-6px,3px) rotate(5deg)}}
+@keyframes flick{0%,100%{opacity:1}50%{opacity:.15}}
+@keyframes floatz{0%{transform:translate(0,6px);opacity:0}40%{opacity:1}100%{transform:translate(6px,-8px);opacity:0}}
+@keyframes antwig{0%,100%{transform:rotate(-10deg)}50%{transform:rotate(12deg)}}
+@keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.5)}}
+@keyframes deal{0%{transform:translateY(14px) rotate(var(--r));opacity:0}100%{transform:translateY(0) rotate(var(--r));opacity:1}}
+@keyframes caret{50%{opacity:0}}
+
+.gb *{transform-box:fill-box}
+.hop{transform-origin:50% 100%}
+.m-idle .hop{animation:breathe 2.4s steps(4) infinite}
+.m-listen .hop{animation:hop .9s steps(5) infinite}
+.m-think .hop{animation:sway 1.6s steps(6) infinite}
+.m-write .hop{animation:jiggle .5s steps(2) infinite}
+.m-answer .hop{animation:nod .6s steps(3) infinite}
+.m-suggest .hop{animation:bighop 1.2s steps(7) infinite}
+
+.ant{transform-origin:0% 100%}
+.m-think .ant,.m-suggest .ant{animation:antwig .5s steps(3) infinite}
+.bulb{transform-origin:50% 50%}
+.m-listen .bulb,.m-suggest .bulb{animation:pulse .7s steps(3) infinite}
+.m-idle .bulb{animation:flick 3s steps(2) infinite}
+
+.eye{transform-origin:50% 50%;transition:transform .2s steps(3);animation:blink 3.8s steps(2) infinite}
+.m-idle .eye{transform:scaleY(.15);animation:none}
+.m-listen .eye{transform:scale(1.3)}
+.m-think .eye{transform:translate(-6px,-6px)}
+.m-write .eye{transform:translate(2px,6px)}
+.m-suggest .eye{transform:translate(5px,-2px) scale(1.35)}
+.m-answer .eye{display:none}
+.happy{display:none}
+.m-answer .happy{display:inline}
+
+.brow{transform-origin:50% 50%;transition:transform .2s steps(3)}
+.m-idle .brow{transform:translateY(3px)}
+.m-listen .brow{transform:translateY(-4px)}
+.m-think .br{transform:translateY(-7px) rotate(-10deg)}
+.m-think .bl{transform:translateY(2px) rotate(6deg)}
+.m-write .bl{transform:translateY(2px) rotate(10deg)}
+.m-write .br{transform:translateY(2px) rotate(-10deg)}
+.m-suggest .brow{transform:translateY(-7px)}
+
+.mo{display:none}
+.m-idle .mo-smile,.m-listen .mo-smile,.m-write .mo-smile,.m-suggest .mo-smile{display:inline}
+.m-think .mo-o{display:inline}
+.m-answer .mo-open{display:inline;transform-origin:50% 0%;animation:talk .16s steps(2) infinite alternate}
+
+.arms,.x{display:none}
+.m-idle .a-idle,.m-listen .a-listen,.m-think .a-think,.m-write .a-write,.m-answer .a-answer,.m-suggest .a-suggest{display:inline}
+.m-idle .x-zz,.m-listen .x-waves,.m-think .x-spiral,.m-suggest .x-bang{display:inline}
+
+.zz1{animation:floatz 2.4s steps(6) infinite}
+.zz2{animation:floatz 2.4s steps(6) infinite 1.2s}
+.wave{animation:flick .6s steps(2) infinite}
+.wave.w2{animation-delay:.3s}
+.spiral{stroke-dasharray:140;animation:draw 1.4s steps(8) infinite}
+.pen{transform-origin:0% 100%;animation:scrib .7s steps(4) infinite}
+.line{stroke-dasharray:40;animation:draw 1.6s steps(6) infinite}
+.line.l2{animation-delay:.4s}
+.line.l3{animation-delay:.8s}
+.bang{animation:flick .5s steps(2) infinite}
+
+.card{animation:deal .3s steps(4) both}
+.caret{display:inline-block;width:2px;height:1em;margin-left:2px;vertical-align:-2px;background:currentColor;animation:caret .8s steps(1) infinite}
+.statebtn:hover{border-color:#4A4A55}
+</style>
+</helmet>
+
+<div style="width: 1200px; height: 760px; box-sizing: border-box; padding: 40px; display: flex; gap: 32px; background: #0E0E11; color: #EDEBE4; font-family: 'Atkinson Hyperlegible', system-ui, sans-serif;">
+
+  <div style="position: relative; width: 780px; height: 680px; border-radius: 10px 14px 12px 16px; background-color: #131317; background-image: radial-gradient(#26262D 1.2px, transparent 1.2px); background-size: 22px 22px; border: 2px solid #2A2A31; overflow: hidden; flex-shrink: 0;">
+
+    <div style="position: absolute; top: 22px; left: 24px; right: 24px; display: flex; align-items: center; justify-content: space-between; font-family: 'Martian Mono', monospace; font-size: 12px;">
+      <div style="display: flex; align-items: center; gap: 10px; color: #A9A69E;">
+        <span style="width: 9px; height: 9px; border-radius: 50%; background: #FF5A36;"></span>
+        <span>REC · point hebdo produit · 23:41</span>
+      </div>
+      <div style="color: #77746D;">audio local</div>
+    </div>
+
+    <sc-if value="{{ showCaption }}" hint-placeholder-val="{{ false }}">
+      <div class="card" style="--r: -1.5deg; position: absolute; right: 270px; bottom: 250px; max-width: 360px; padding: 14px 18px; border-radius: 14px 18px 12px 20px; background: #1C1C22; border: 2px solid #EDEBE4; font-size: 16px; line-height: 1.45; color: #EDEBE4;">
+        <span style="color: #FF5A36; font-weight: 700;">Gribouille,</span> où est géré le refresh token ? Il expire trop vite.
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ showNotes }}" hint-placeholder-val="{{ false }}">
+      <div class="card" style="--r: -2deg; position: absolute; right: 270px; bottom: 120px; width: 330px; padding: 16px 20px 18px; border-radius: 4px 6px 4px 8px; background: #EDEBE4; color: #17171B; box-shadow: 6px 6px 0 #FF5A36;">
+        <div style="font-family: 'Martian Mono', monospace; font-size: 11px; letter-spacing: .06em; color: #6A665D; margin-bottom: 6px;">NOTES · EN COURS</div>
+        <div style="font-family: 'Caveat', cursive; font-size: 25px; line-height: 1.2; white-space: pre-line;">{{ notesTyped }}<span class="caret"></span></div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ showAnswer }}" hint-placeholder-val="{{ false }}">
+      <div class="card" style="--r: 1deg; position: absolute; right: 270px; bottom: 170px; width: 360px; padding: 16px 20px; border-radius: 18px 22px 4px 20px; background: #1C1C22; border: 2px solid #EDEBE4; color: #EDEBE4;">
+        <div style="font-size: 16px; line-height: 1.55;">{{ answerTyped }}<span class="caret"></span></div>
+        <div style="margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap; font-family: 'Martian Mono', monospace; font-size: 11px;">
+          <span style="padding: 3px 9px; border-radius: 999px; border: 1.5px solid #77746D; color: #C9C6BE;">codebase</span>
+          <span style="padding: 3px 9px; border-radius: 999px; border: 1.5px solid #77746D; color: #C9C6BE;">Linear</span>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ showSuggest }}" hint-placeholder-val="{{ false }}">
+      <div class="card" style="--r: -1deg; position: absolute; right: 270px; bottom: 150px; width: 340px; padding: 16px 20px 18px; border-radius: 4px 6px 4px 8px; background: #EDEBE4; color: #17171B; box-shadow: 6px 6px 0 #FFD23F;">
+        <sc-if value="{{ notConfirmed }}" hint-placeholder-val="{{ true }}">
+          <div style="font-family: 'Martian Mono', monospace; font-size: 11px; letter-spacing: .06em; color: #6A665D; margin-bottom: 6px;">JE CRÉE LE TICKET ?</div>
+          <div style="font-family: 'Caveat', cursive; font-size: 27px; font-weight: 700; line-height: 1.1;">Passer le refresh token à 30 jours</div>
+          <div style="font-size: 13px; color: #55524A; margin-top: 6px;">Linear · équipe API · d'après la discussion de 23:38</div>
+          <div style="display: flex; gap: 10px; margin-top: 14px;">
+            <button type="button" onClick="{{ confirm }}" style="min-height: 44px; padding: 0 18px; border-radius: 8px 10px 8px 12px; border: 2px solid #17171B; background: #FF5A36; color: #17171B; font: 600 13px 'Martian Mono', monospace; cursor: pointer;">Créer</button>
+            <button type="button" onClick="{{ ignore }}" style="min-height: 44px; padding: 0 16px; border-radius: 8px 10px 8px 12px; border: 2px solid #17171B; background: transparent; color: #17171B; font: 600 13px 'Martian Mono', monospace; cursor: pointer;">Pas maintenant</button>
+          </div>
+        </sc-if>
+        <sc-if value="{{ confirmed }}" hint-placeholder-val="{{ false }}">
+          <div style="display: flex; align-items: center; gap: 10px; font-family: 'Caveat', cursive; font-size: 28px; font-weight: 700;">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#17171B" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 13l5 5L20 6"></path></svg>
+            Ticket créé dans Linear
+          </div>
+        </sc-if>
+      </div>
+    </sc-if>
+
+    <div style="position: absolute; right: 24px; bottom: 26px; display: flex; flex-direction: column; align-items: center; gap: 4px;">
+      <div class="{{ mascotClass }}">
+        <svg class="gb" width="240" height="240" viewBox="0 0 240 240" role="img" aria-label="Gribouille, la mascotte, état : {{ statusLabel }}">
+          <defs>
+            <filter id="boil" x="-10%" y="-10%" width="120%" height="120%">
+              <feTurbulence type="fractalNoise" baseFrequency="0.035" numOctaves="2" seed="1">
+                <animate attributeName="seed" values="1;5;9;13" dur="0.48s" calcMode="discrete" repeatCount="indefinite"></animate>
+              </feTurbulence>
+              <feDisplacementMap in="SourceGraphic" scale="3.4"></feDisplacementMap>
+            </filter>
+          </defs>
+          <g filter="url(#boil)" stroke="#EDEBE4" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" fill="none">
+            <g class="hop">
+              <g class="ant">
+                <path d="M120 47 C120 34 124 28 130 22"></path>
+                <circle class="bulb" cx="131" cy="18" r="7" fill="{{ bulb }}"></circle>
+              </g>
+              <path d="M62 74 C60 52 82 46 120 46 C158 46 180 52 178 76 L181 150 C182 176 162 184 120 184 C78 184 58 176 59 150 Z" fill="#1E1E24"></path>
+              <path d="M98 184 l-2 14 l-8 2 M142 184 l2 14 l8 2"></path>
+              <path d="M84 124 l9 -1 M147 123 l9 1" stroke="#FF5A36" stroke-width="3"></path>
+              <path class="brow bl" d="M90 88 q9 -6 18 0"></path>
+              <path class="brow br" d="M132 88 q9 -6 18 0"></path>
+              <circle class="eye" cx="100" cy="105" r="6.5" fill="#EDEBE4" stroke="none"></circle>
+              <circle class="eye" cx="140" cy="105" r="6.5" fill="#EDEBE4" stroke="none"></circle>
+              <path class="happy" d="M93 108 q7 -10 14 0 M133 108 q7 -10 14 0"></path>
+              <path class="mo mo-smile" d="M111 128 q9 8 18 0"></path>
+              <circle class="mo mo-o" cx="124" cy="131" r="4"></circle>
+              <ellipse class="mo mo-open" cx="120" cy="131" rx="8" ry="7" fill="#0E0E11"></ellipse>
+
+              <g class="arms a-idle"><path d="M60 128 q-12 10 -10 24"></path><path d="M180 128 q12 10 10 24"></path></g>
+              <g class="arms a-listen"><path d="M60 128 q-12 10 -10 24"></path><path d="M180 122 q20 -4 22 -28"></path><path d="M196 92 q12 -2 12 10"></path></g>
+              <g class="arms a-think"><path d="M60 128 q-12 10 -10 24"></path><path d="M180 130 q6 24 -36 20"></path><circle cx="141" cy="149" r="5" fill="#1E1E24"></circle></g>
+              <g class="arms a-write">
+                <path d="M62 136 q12 18 36 18"></path><path d="M178 136 q-10 14 -30 16"></path>
+                <rect x="92" y="148" width="58" height="34" rx="3" fill="#EDEBE4"></rect>
+                <path class="line" d="M100 158 h40" stroke="#17171B" stroke-width="2.4"></path>
+                <path class="line l2" d="M100 166 h32" stroke="#17171B" stroke-width="2.4"></path>
+                <path class="line l3" d="M100 174 h22" stroke="#17171B" stroke-width="2.4"></path>
+                <g class="pen"><path d="M146 160 l16 -26" stroke-width="4.2"></path><path d="M160 137 l5 -8" stroke="#FFD23F" stroke-width="4.2"></path></g>
+              </g>
+              <g class="arms a-answer"><path d="M60 128 q-12 10 -10 24"></path><path d="M180 124 q18 4 24 -12"></path><circle cx="206" cy="108" r="4.5" fill="#1E1E24"></circle></g>
+              <g class="arms a-suggest"><path d="M60 128 q-12 10 -10 24"></path><path d="M180 118 q18 -10 18 -42"></path><circle cx="198" cy="70" r="6" fill="#1E1E24"></circle></g>
+            </g>
+
+            <g class="x x-zz" stroke-width="2.6">
+              <path class="zz1" d="M168 34 h10 l-10 10 h10"></path>
+              <path class="zz2" d="M186 16 h8 l-8 8 h8"></path>
+            </g>
+            <g class="x x-waves">
+              <path class="wave" d="M214 80 q7 12 0 26"></path>
+              <path class="wave w2" d="M224 72 q13 20 0 42"></path>
+            </g>
+            <g class="x x-spiral">
+              <path class="spiral" d="M76 30 c0 -8 12 -8 12 0 c0 12 -22 12 -22 0 c0 -16 32 -16 32 0" stroke="#FFD23F"></path>
+            </g>
+            <g class="x x-bang" stroke="#FFD23F">
+              <g class="bang"><path d="M218 30 v20"></path><circle cx="218" cy="60" r="2.4" fill="#FFD23F"></circle></g>
+              <path d="M204 22 l-5 -7 M232 26 l7 -5 M232 46 l8 2"></path>
+            </g>
+          </g>
+        </svg>
+      </div>
+      <div style="font-family: 'Caveat', cursive; font-size: 24px; font-weight: 700; color: #EDEBE4;">{{ statusLabel }}</div>
+    </div>
+  </div>
+
+  <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 18px;">
+    <div>
+      <div style="font-family: 'Martian Mono', monospace; font-size: 11px; letter-spacing: .08em; color: #77746D;">MASCOTTE · PROTOTYPE</div>
+      <h1 style="margin: 6px 0 0; font-family: 'Caveat', cursive; font-weight: 700; font-size: 56px; line-height: 1; color: #EDEBE4;">Gribouille</h1>
+      <p style="margin: 10px 0 0; font-size: 15px; line-height: 1.5; color: #A9A69E;">Un petit carnet vivant, dessiné à la craie, qui tremble comme un dessin animé fait main.</p>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 8px;">
+      <sc-for list="{{ states }}" as="s" hint-placeholder-count="6">
+        <button type="button" class="statebtn" onClick="{{ s.pick }}" style="display: flex; align-items: center; gap: 12px; min-height: 54px; padding: 8px 14px; border-radius: 8px 12px 8px 14px; border: 2px solid {{ s.border }}; background: {{ s.bg }}; color: #EDEBE4; text-align: left; cursor: pointer; font-family: 'Atkinson Hyperlegible', sans-serif;">
+          <span style="width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; border: 2px solid #EDEBE4; background: {{ s.dot }};"></span>
+          <span style="display: flex; flex-direction: column; gap: 1px;">
+            <span style="font-size: 15px; font-weight: 700;">{{ s.label }}</span>
+            <span style="font-size: 13px; color: #A9A69E;">{{ s.desc }}</span>
+          </span>
+        </button>
+      </sc-for>
+    </div>
+
+    <button type="button" onClick="{{ toggleAuto }}" style="margin-top: auto; min-height: 48px; border-radius: 8px 12px 8px 14px; border: 2px dashed #4A4A55; background: transparent; color: #C9C6BE; font: 600 12px 'Martian Mono', monospace; cursor: pointer;">{{ autoLabel }}</button>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1200,"height":760}}'>
+var ORDER = ['idle', 'listen', 'think', 'write', 'answer', 'suggest'];
+var META = {
+  idle:    { label: 'Fait la sieste', desc: 'En veille, n’attend que son nom', status: 'zzz…', dur: 70, bulb: '#4A4A55' },
+  listen:  { label: 'Tend l’oreille', desc: 'Son nom a été dit, il capte la question', status: 'j’écoute !', dur: 70, bulb: '#FF5A36' },
+  think:   { label: 'Se gratte la tête', desc: 'Fouille le code, les MCP, le web', status: 'hmm…', dur: 60, bulb: '#FFD23F' },
+  write:   { label: 'Griffonne', desc: 'Prend des notes en silence', status: 'je note…', dur: 110, bulb: '#EDEBE4' },
+  answer:  { label: 'Raconte', desc: 'Répond dans une bulle, voix en option', status: 'alors…', dur: 110, bulb: '#FF5A36' },
+  suggest: { label: 'Lève la main', desc: 'Propose une action, validée en un clic', status: 'j’ai une idée !', dur: 120, bulb: '#FFD23F' }
+};
+var NOTES = 'Décision : refresh token à 30 jours\nAction : mettre à jour la doc API\nQuestion : impact sur l’app mobile ?';
+var ANSWER = 'C’est dans api/src/auth/refresh.ts, ligne 88. La durée est fixée à 15 minutes, et un ticket ouvert en parle déjà.';
+
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { mode: 'idle', t: 0, since: 0, auto: true, confirmed: false };
+  }
+  componentDidMount() {
+    var self = this;
+    this.iv = setInterval(function () {
+      var st = self.state;
+      var t = st.t + 1;
+      var next = { t: t };
+      if (st.auto && t - st.since > META[st.mode].dur) {
+        next.mode = ORDER[(ORDER.indexOf(st.mode) + 1) % ORDER.length];
+        next.since = t;
+        next.confirmed = false;
+      } else if (st.auto && st.mode === 'suggest' && !st.confirmed && t - st.since > 70) {
+        next.confirmed = true;
+      }
+      self.setState(next);
+    }, 50);
+  }
+  componentWillUnmount() {
+    clearInterval(this.iv);
+  }
+  renderVals() {
+    var self = this;
+    var st = this.state;
+    var m = META[st.mode];
+    var n = Math.floor((st.t - st.since) * 1.8);
+    return {
+      mascotClass: 'm-' + st.mode,
+      bulb: m.bulb,
+      statusLabel: m.status,
+      showCaption: st.mode === 'listen' || st.mode === 'think',
+      showNotes: st.mode === 'write',
+      showAnswer: st.mode === 'answer',
+      showSuggest: st.mode === 'suggest',
+      notesTyped: NOTES.slice(0, n),
+      answerTyped: ANSWER.slice(0, n),
+      confirmed: st.confirmed,
+      notConfirmed: !st.confirmed,
+      confirm: function () { self.setState({ confirmed: true, auto: false }); },
+      ignore: function () { self.setState({ mode: 'idle', since: self.state.t, auto: false, confirmed: false }); },
+      autoLabel: st.auto ? 'DÉMO AUTO : ON' : 'RELANCER LA DÉMO AUTO',
+      toggleAuto: function () { self.setState({ auto: !self.state.auto, since: self.state.t }); },
+      states: ORDER.map(function (k) {
+        var on = k === st.mode;
+        return {
+          label: META[k].label,
+          desc: META[k].desc,
+          dot: META[k].bulb,
+          bg: on ? '#1C1C22' : 'transparent',
+          border: on ? '#EDEBE4' : '#2A2A31',
+          pick: function () { self.setState({ mode: k, since: self.state.t, auto: false, confirmed: false }); }
+        };
+      })
+    };
+  }
+}
+</script>
+</body>
+</html>

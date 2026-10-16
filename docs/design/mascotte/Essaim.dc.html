@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Essaim, nuée de particules</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;700;800&amp;family=DM+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#05060A}
+a{color:#93C5FD}a:hover{color:#BFDBFE}
+.p{position:absolute;left:50%;top:50%;border-radius:50%;will-change:transform}
+.eye{position:absolute;left:50%;top:50%;border-radius:999px;background:#FFFFFF;box-shadow:0 0 14px rgba(255,255,255,.9);transition:width .25s,height .25s}
+.chip:hover{border-color:#4B5563}
+</style>
+</helmet>
+<div style="width: 600px; height: 680px; box-sizing: border-box; padding: 32px; display: flex; flex-direction: column; gap: 12px; background: #05060A; color: #E5E7EB; font-family: 'Sora', sans-serif;">
+  <div style="display: flex; justify-content: space-between; align-items: baseline;">
+    <h2 style="margin: 0; font-weight: 800; font-size: 32px; letter-spacing: -.03em;">Essaim</h2>
+    <span style="font-family: 'DM Mono', monospace; font-size: 12px; color: #6B7280;">04 / particules</span>
+  </div>
+  <p style="margin: 0; font-size: 14px; line-height: 1.5; color: #9CA3AF;">Une nuée de points qui se réorganise : un anneau qui respire, des ondes, des orbites, une ligne qui s'écrit, une forme d'onde qui parle.</p>
+  <div style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;">
+    <div style="position: relative; width: 340px; height: 340px;" role="img" aria-label="Essaim, état : {{ status }}">
+      <sc-for list="{{ parts }}" as="p" hint-placeholder-count="46">
+        <span class="p" style="width: {{ p.s }}px; height: {{ p.s }}px; margin: {{ p.m }}px 0 0 {{ p.m }}px; transform: {{ p.tf }}; opacity: {{ p.o }}; background: {{ color }}; box-shadow: 0 0 10px {{ color }};"></span>
+      </sc-for>
+      <span class="eye" style="width: {{ ew }}px; height: {{ eh }}px; margin: {{ emy }}px 0 0 {{ emx }}px; transform: {{ e1 }};"></span>
+      <span class="eye" style="width: {{ ew }}px; height: {{ eh }}px; margin: {{ emy }}px 0 0 {{ emx }}px; transform: {{ e2 }};"></span>
+    </div>
+    <div style="margin-top: 8px; font-family: 'DM Mono', monospace; font-size: 13px; letter-spacing: .1em; text-transform: uppercase; color: {{ color }};">{{ status }}</div>
+  </div>
+  <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+    <sc-for list="{{ chips }}" as="c" hint-placeholder-count="6">
+      <button type="button" class="chip" onClick="{{ c.pick }}" style="min-height: 44px; padding: 0 16px; border-radius: 999px; border: 1px solid {{ c.border }}; background: {{ c.bg }}; color: {{ c.fg }}; font: 500 12px 'DM Mono', monospace; cursor: pointer;">{{ c.label }}</button>
+    </sc-for>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":600,"height":680}}'>
+var ORDER = ['idle', 'listen', 'think', 'write', 'answer', 'suggest'];
+var LABEL = { idle: 'Veille', listen: 'Écoute', think: 'Réfléchit', write: 'Note', answer: 'Répond', suggest: 'Propose' };
+var STATUS = { idle: 'en veille', listen: 'écoute', think: 'réfléchit', write: 'prend des notes', answer: 'répond', suggest: 'a une idée' };
+var COLOR = { idle: '#C9D1E6', listen: '#5EEAD4', think: '#C4B5FD', write: '#FCD34D', answer: '#F8FAFC', suggest: '#BEF264' };
+var N = 46, TAU = Math.PI * 2;
+function target(mode, i, t) {
+  var a, r, x, y, o = 1;
+  if (mode === 'idle') {
+    a = i / N * TAU + t * 0.01; r = 78 * (1 + 0.04 * Math.sin(t * 0.08 + i));
+    x = r * Math.cos(a); y = r * Math.sin(a);
+  } else if (mode === 'listen') {
+    a = i / N * TAU; r = 84 + 16 * Math.sin(t * 0.35 + i * 0.8);
+    x = r * Math.cos(a); y = r * Math.sin(a);
+  } else if (mode === 'think') {
+    var k = i % 3, idx = Math.floor(i / 3), th = k * Math.PI / 3;
+    a = idx / 16 * TAU + t * 0.12 * (k === 1 ? -1 : 1);
+    var x0 = 100 * Math.cos(a), y0 = 34 * Math.sin(a);
+    x = x0 * Math.cos(th) - y0 * Math.sin(th); y = x0 * Math.sin(th) + y0 * Math.cos(th);
+  } else if (mode === 'write') {
+    if (i < 28) { a = i / 28 * TAU + t * 0.02; x = 62 * Math.cos(a); y = 62 * Math.sin(a) - 24; }
+    else { var j = i - 28; x = -85 + j * 10; y = 92; o = j < (t % 46) / 2 ? 1 : 0; }
+  } else if (mode === 'answer') {
+    x = -120 + i * (240 / (N - 1));
+    var env = Math.sin(Math.PI * i / (N - 1));
+    y = 34 + Math.sin(i * 0.5 + t * 0.45) * 30 * env * (0.6 + 0.4 * Math.abs(Math.sin(t * 0.13)));
+  } else {
+    var b = -Math.abs(Math.sin(t * 0.22)) * 22;
+    if (i < 36) { a = i / 36 * TAU + t * 0.03; x = 70 * Math.cos(a); y = 70 * Math.sin(a) + b; }
+    else if (i < 44) { x = 125; y = -78 + (i - 36) * 8 + b; }
+    else { x = 125; y = -2 + b; }
+  }
+  return { x: x, y: y, o: o };
+}
+function eyes(mode, t) {
+  var b = mode === 'suggest' ? -Math.abs(Math.sin(t * 0.22)) * 22 : 0;
+  var m = { idle: [0, -6, 16, 4], listen: [0, -8, 16, 26], think: [12, -18, 12, 18], write: [-8, -14, 12, 14], answer: [0, -44, 18, 7], suggest: [0, -10 + b, 16, 26] }[mode];
+  return { dx: m[0], dy: m[1], w: m[2], h: m[3] };
+}
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.pos = [];
+    for (var i = 0; i < N; i++) this.pos.push({ x: 0, y: 0, o: 0 });
+    this.ep = { x: 0, y: 0 };
+    this.state = { mode: 'idle', auto: true, t: 0, since: 0 };
+  }
+  componentDidMount() {
+    var self = this;
+    this.iv = setInterval(function () {
+      var st = self.state, t = st.t + 1, next = { t: t };
+      if (st.auto && t - st.since > 64) { next.mode = ORDER[(ORDER.indexOf(st.mode) + 1) % ORDER.length]; next.since = t; }
+      var mode = next.mode || st.mode;
+      for (var i = 0; i < N; i++) {
+        var g = target(mode, i, t), p = self.pos[i];
+        p.x += (g.x - p.x) * 0.18; p.y += (g.y - p.y) * 0.18; p.o += (g.o - p.o) * 0.3;
+      }
+      var e = eyes(mode, t);
+      self.ep.x += (e.dx - self.ep.x) * 0.2; self.ep.y += (e.dy - self.ep.y) * 0.2;
+      self.setState(next);
+    }, 50);
+  }
+  componentWillUnmount() { clearInterval(this.iv); }
+  renderVals() {
+    var self = this, st = this.state, e = eyes(st.mode, st.t);
+    var parts = this.pos.map(function (p, i) {
+      var s = 4 + (i % 4);
+      return { s: s, m: -s / 2, o: p.o.toFixed(2), tf: 'translate(' + p.x.toFixed(1) + 'px,' + p.y.toFixed(1) + 'px)' };
+    });
+    return {
+      parts: parts,
+      color: COLOR[st.mode],
+      status: STATUS[st.mode],
+      ew: e.w, eh: e.h, emx: -e.w / 2, emy: -e.h / 2,
+      e1: 'translate(' + (this.ep.x - 22).toFixed(1) + 'px,' + this.ep.y.toFixed(1) + 'px)',
+      e2: 'translate(' + (this.ep.x + 22).toFixed(1) + 'px,' + this.ep.y.toFixed(1) + 'px)',
+      chips: ORDER.map(function (k) {
+        var on = k === st.mode;
+        return { label: LABEL[k], bg: on ? '#E5E7EB' : 'transparent', fg: on ? '#05060A' : '#D1D5DB', border: on ? '#E5E7EB' : '#262A33',
+          pick: function () { self.setState({ mode: k, auto: false, since: self.state.t }); } };
+      })
+    };
+  }
+}
+</script>
+</body>
+</html>
