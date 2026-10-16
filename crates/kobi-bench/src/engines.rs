@@ -14,10 +14,18 @@ const NEMOTRON: &[&str] = &["nemotron-160ms", "nemotron-560ms"];
 #[cfg(not(any(feature = "nemotron", feature = "nemotron-shared")))]
 const NEMOTRON: &[&str] = &[];
 
-/// Voxtral Realtime : `voxtral` = délai par défaut (6 tokens, 480 ms),
-/// `voxtral-dN` = N tokens de 80 ms.
+/// Voxtral Realtime : `voxtral` = GGUF Q8_0, délai par défaut (6 tokens,
+/// 480 ms) ; `-q4` = GGUF Q4_K_M (plus léger pour le CPU) ; `-dN` = N tokens
+/// de 80 ms.
 #[cfg(feature = "voxtral")]
-const VOXTRAL: &[&str] = &["voxtral", "voxtral-d3", "voxtral-d12"];
+const VOXTRAL: &[&str] = &[
+    "voxtral",
+    "voxtral-d3",
+    "voxtral-d12",
+    "voxtral-q4",
+    "voxtral-q4-d3",
+    "voxtral-q4-d12",
+];
 #[cfg(not(feature = "voxtral"))]
 const VOXTRAL: &[&str] = &[];
 
@@ -43,12 +51,19 @@ pub fn whisper_model(name: &str) -> Option<&'static str> {
     }
 }
 
-/// Délai en tokens de 80 ms d'un nom `voxtral` ou `voxtral-dN`.
-pub fn voxtral_delay(name: &str) -> Option<i32> {
-    match name.strip_prefix("voxtral")? {
-        "" => Some(6),
-        rest => rest.strip_prefix("-d")?.parse().ok(),
-    }
+/// Variante Voxtral d'un nom `voxtral[-q4][-dN]` : quantification du GGUF
+/// et délai en tokens de 80 ms.
+pub fn voxtral_variant(name: &str) -> Option<(&'static str, i32)> {
+    let rest = name.strip_prefix("voxtral")?;
+    let (quant, rest) = match rest.strip_prefix("-q4") {
+        Some(rest) => ("Q4_K_M", rest),
+        None => ("Q8_0", rest),
+    };
+    let delay = match rest {
+        "" => 6,
+        rest => rest.strip_prefix("-d")?.parse().ok()?,
+    };
+    Some((quant, delay))
 }
 
 /// Réglages communs ; chaque moteur ignore ceux qui ne le concernent pas.
@@ -148,12 +163,12 @@ pub fn build(name: &str, opts: &EngineOptions) -> Result<Box<dyn SttEngine>, Str
         return Ok(Box::new(engine));
     }
     #[cfg(feature = "voxtral")]
-    if let Some(delay) = voxtral_delay(name) {
+    if let Some((quant, delay)) = voxtral_variant(name) {
         use kobi_stt::voxtral::{Device, VoxtralEngine, VoxtralOptions};
         let model = opts.model.clone().unwrap_or_else(|| {
             opts.models
                 .join("voxtral-mini-4b-realtime-2602")
-                .join("Voxtral-Mini-4B-Realtime-2602-Q8_0.gguf")
+                .join(format!("Voxtral-Mini-4B-Realtime-2602-{quant}.gguf"))
         });
         let device = match opts.device.as_str() {
             "cpu" => Device::Cpu,
@@ -222,11 +237,13 @@ mod tests {
     }
 
     #[test]
-    fn voxtral_delay_from_name() {
-        assert_eq!(voxtral_delay("voxtral"), Some(6));
-        assert_eq!(voxtral_delay("voxtral-d12"), Some(12));
-        assert_eq!(voxtral_delay("voxtral-x"), None);
-        assert_eq!(voxtral_delay("nemotron-160ms"), None);
+    fn voxtral_variant_from_name() {
+        assert_eq!(voxtral_variant("voxtral"), Some(("Q8_0", 6)));
+        assert_eq!(voxtral_variant("voxtral-d12"), Some(("Q8_0", 12)));
+        assert_eq!(voxtral_variant("voxtral-q4"), Some(("Q4_K_M", 6)));
+        assert_eq!(voxtral_variant("voxtral-q4-d3"), Some(("Q4_K_M", 3)));
+        assert_eq!(voxtral_variant("voxtral-x"), None);
+        assert_eq!(voxtral_variant("nemotron-160ms"), None);
     }
 
     #[test]

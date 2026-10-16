@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{AudioFrame, Result, Segment, Source, SttEngine, SAMPLE_RATE};
+use crate::{AudioFrame, Result, Segment, Source, SttEngine, SttError, SAMPLE_RATE};
 
 /// Une piste à rejouer.
 #[derive(Debug, Clone)]
@@ -65,6 +65,8 @@ pub struct WavReplayer {
     tracks: Vec<Track>,
     frame_ms: u32,
     speed: f64,
+    /// Arrêt rapide : (facteur temps réel maximal, audio minimal avant de juger).
+    max_rtf: Option<(f64, f64)>,
 }
 
 impl WavReplayer {
@@ -73,6 +75,7 @@ impl WavReplayer {
             tracks,
             frame_ms: 20,
             speed: 1.0,
+            max_rtf: None,
         }
     }
 
@@ -88,6 +91,17 @@ impl WavReplayer {
     pub fn speed(mut self, speed: f64) -> Self {
         assert!(speed >= 0.0, "speed doit être positive ou nulle");
         self.speed = speed;
+        self
+    }
+
+    /// Arrêt rapide : abandonne la relecture avec [`SttError::TooSlow`] si le
+    /// facteur temps réel (durée réelle / audio poussé) dépasse `ratio` une
+    /// fois `after` secondes d'audio poussées. Avant, la relecture s'arrête dès
+    /// que ces `after` secondes ne peuvent plus être atteintes à temps
+    /// (durée réelle > `ratio × after`). `finish` n'est alors pas appelé.
+    pub fn max_rtf(mut self, ratio: f64, after: f64) -> Self {
+        assert!(ratio > 0.0 && after >= 0.0, "max_rtf : valeurs positives");
+        self.max_rtf = Some((ratio, after));
         self
     }
 
@@ -136,6 +150,15 @@ impl WavReplayer {
                     wall,
                     audio_pos,
                 }));
+                if let Some((ratio, after)) = self.max_rtf {
+                    let wall = started.elapsed().as_secs_f64();
+                    if too_slow(wall, audio_pos, ratio, after) {
+                        return Err(SttError::TooSlow {
+                            audio: audio_pos,
+                            wall,
+                        });
+                    }
+                }
             }
         }
 
@@ -155,6 +178,13 @@ impl WavReplayer {
             emissions,
         })
     }
+}
+
+/// Vrai si, à `wall` secondes réelles pour `audio` secondes poussées, le
+/// facteur temps réel dépasse `ratio` une fois `after` secondes d'audio
+/// atteintes, ou ne peut plus rester sous `ratio` en les atteignant.
+fn too_slow(wall: f64, audio: f64, ratio: f64, after: f64) -> bool {
+    wall > ratio * audio.max(after)
 }
 
 fn sleep_until(started: Instant, deadline_secs: f64) {
@@ -213,5 +243,58 @@ mod tests {
             "durée {}",
             out.wall_duration
         );
+    }
+
+    #[test]
+    fn regle_d_arret_rapide() {
+        // Avant 120 s d'audio : arrêt dès que 120 s ne peuvent plus tenir en 240 s.
+        assert!(!too_slow(200.0, 60.0, 2.0, 120.0));
+        assert!(too_slow(241.0, 60.0, 2.0, 120.0));
+        // Après : facteur temps réel courant.
+        assert!(!too_slow(250.0, 130.0, 2.0, 120.0));
+        assert!(too_slow(270.0, 130.0, 2.0, 120.0));
+    }
+
+    /// Moteur qui met 3 ms à traiter chaque trame de 20 ms… à vitesse 10×.
+    struct Slow;
+
+    impl SttEngine for Slow {
+        fn name(&self) -> &str {
+            "lent"
+        }
+
+        fn push(&mut self, _frame: &AudioFrame) -> Result<Vec<Segment>> {
+            std::thread::sleep(Duration::from_millis(3));
+            Ok(Vec::new())
+        }
+
+        fn finish(&mut self) -> Result<Vec<Segment>> {
+            panic!("finish ne doit pas être appelé après un arrêt rapide")
+        }
+    }
+
+    #[test]
+    fn moteur_trop_lent_arrete_tot() {
+        let tracks = vec![Track {
+            source: Source::Moi,
+            samples: silence(16_000 * 60),
+        }];
+        // Sans attente, le moteur traite ~6,7 s d'audio par seconde : avec un
+        // plafond à 0,05 (20 s d'audio par seconde) il est arrêté dès que
+        // 1 s d'audio est jugeable.
+        let started = Instant::now();
+        let err = WavReplayer::new(tracks)
+            .speed(0.0)
+            .max_rtf(0.05, 1.0)
+            .run(&mut Slow)
+            .unwrap_err();
+        match err {
+            SttError::TooSlow { audio, wall } => {
+                assert!(audio < 5.0, "arrêté à {audio} s d'audio");
+                assert!(wall / audio > 0.05);
+            }
+            other => panic!("attendu TooSlow, obtenu {other}"),
+        }
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 }

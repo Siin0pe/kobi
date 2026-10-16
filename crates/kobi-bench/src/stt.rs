@@ -15,7 +15,7 @@ use kobi_bench::report::{now_rfc3339, rust_build_info, Report, ReportRow};
 use kobi_stt::fake::FakeEngine;
 use kobi_stt::replay::{Track, WavReplayer};
 use kobi_stt::wav::read_wav_16k_mono;
-use kobi_stt::{Source, SttEngine, SAMPLE_RATE};
+use kobi_stt::{Source, SttEngine, SttError, SAMPLE_RATE};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Device {
@@ -65,6 +65,16 @@ pub struct SttArgs {
     /// laisser la machine utilisable.
     #[arg(long, default_value_t = DEFAULT_THREADS, value_parser = clap::value_parser!(u32).range(1..))]
     threads: u32,
+
+    /// Arrêt rapide : abandonne un moteur dont le facteur temps réel dépasse
+    /// cette valeur après `--rtf-after` secondes d'audio (conclusion « ne
+    /// tient pas le CPU »). Sans cette option, la relecture va jusqu'au bout.
+    #[arg(long, value_name = "FACTEUR")]
+    max_rtf: Option<f64>,
+
+    /// Audio rejoué avant de juger le facteur temps réel (`--max-rtf`).
+    #[arg(long, value_name = "SECONDES", default_value_t = 120.0)]
+    rtf_after: f64,
 
     /// Dossier des modèles (défaut : ~/Kobi-bench/models).
     #[arg(long, value_name = "DOSSIER")]
@@ -143,9 +153,25 @@ pub fn run(args: SttArgs) -> anyhow::Result<()> {
             let monitor = ResourceMonitor::start(Duration::from_millis(250));
             let (mut engine, device) =
                 build_engine(name, &models, args.device, args.threads, &meeting.reference)?;
-            let outcome = WavReplayer::new(meeting.tracks.clone())
-                .speed(args.speed)
-                .run(&mut engine)?;
+            let mut replayer = WavReplayer::new(meeting.tracks.clone()).speed(args.speed);
+            if let Some(ratio) = args.max_rtf {
+                replayer = replayer.max_rtf(ratio, args.rtf_after);
+            }
+            let outcome = match replayer.run(&mut engine) {
+                Ok(outcome) => outcome,
+                Err(SttError::TooSlow { audio, wall }) => {
+                    drop(engine);
+                    let _ = monitor.stop();
+                    eprintln!(
+                        "  arrêt rapide : facteur temps réel {:.2} après {audio:.0} s d'audio \
+                         ({wall:.0} s de calcul, {} threads) : ne tient pas le CPU",
+                        wall / audio.max(1e-9),
+                        args.threads
+                    );
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+            };
             let resources = monitor.stop();
             let metrics = evaluate(
                 &meeting.reference,
