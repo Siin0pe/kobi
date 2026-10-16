@@ -9,7 +9,7 @@
 //!   --models <dossier>   dossier des modèles (~/Kobi-bench/models)
 //!   --model <dossier>    paquet imposé, à la place de la recherche
 //!   --lang <code>        langue forcée (fr, en…), détection sinon
-//!   --threads <n>        fils d'inférence (4)
+//!   --threads <n>        fils d'inférence (3)
 //!   --device cpu|cuda    matériel (cpu)
 //!   --speed <x>          1 = temps réel, 0 = sans attente (défaut)
 //!   --json <fichier>     rapport complet en JSON

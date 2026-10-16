@@ -34,7 +34,7 @@ impl Default for EngineOptions {
             models: PathBuf::from("models"),
             model: None,
             language: None,
-            threads: 4,
+            threads: 3,
             device: "cpu".into(),
         }
     }
