@@ -25,6 +25,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 import wave
 import zipfile
@@ -74,11 +75,10 @@ VOICES = {
         "5cd711846720e261c2a176f6924c198a7424d0a75dd4b0a5357a5fb9cb739285",
         "5a47cc0789e91267d17666bbec842dd92950669271a09023eb6970ee364cf88a",
     ),
-    "fr_FR-mls-medium": (
-        "fr/fr_FR/mls/medium",
-        "0ed223f78466917f2bae05ee90096ce69ab1fdeb251f55590d0e7422d234e162",
-        "252b0b0a6e4cc4949e23eccb956f9c779986c32f934f2f7e2191e5fdc2edca61",
-    ),
+    # fr_FR-mls-medium et fr_FR-mls_1840-low sont écartées : charabia avec ce
+    # binaire Piper (vérifié avec Whisper). Les voix « low » allongent aussi
+    # les mots isolés quand le bruit est à 0 : fr_FR-gilles-low ne sert qu'aux
+    # phrases.
     "en_US-ryan-medium": (
         "en/en_US/ryan/medium",
         "abf4c274862564ed647ba0d2c47f8ee7c9b717d27bdad9219100eb310db4047a",
@@ -129,6 +129,21 @@ class Utterance:
     voice: str
     speaker: int | None = None  # uniquement pour les voix multi-locuteurs
     length_scale: float = 1.0
+
+
+def limit_cpu(threads: int = 3) -> None:
+    """Limite ce process et ses enfants (Piper, SAPI) à `threads` processeurs
+    logiques, en priorité basse : le poste est partagé et ces outils ne
+    doivent pas prendre plus de la moitié du CPU. Sans effet hors Windows."""
+    if sys.platform != "win32":
+        return
+    import ctypes
+
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.GetCurrentProcess()
+    BELOW_NORMAL_PRIORITY_CLASS = 0x4000
+    kernel32.SetPriorityClass(handle, BELOW_NORMAL_PRIORITY_CLASS)
+    kernel32.SetProcessAffinityMask(handle, ctypes.c_size_t((1 << threads) - 1))
 
 
 def sha256(path: Path) -> str:
@@ -224,62 +239,179 @@ def _to_16k(src: Path) -> bytes:
     return np.clip(np.round(y), -32768, 32767).astype("<i2").tobytes()
 
 
+def _retry_on_memory_error(fn, *args, attempts: int = 6, wait: float = 5.0):
+    """Le poste est partagé : la mémoire peut manquer quelques secondes."""
+    for attempt in range(attempts):
+        try:
+            return fn(*args)
+        except MemoryError:
+            if attempt == attempts - 1:
+                raise
+            print(f"mémoire insuffisante, nouvel essai dans {wait:.0f} s", file=sys.stderr)
+            time.sleep(wait)
+
+
+SAPI_PREFIX = "sapi:"
+
+# Voix Windows (SAPI 5) lues par System.Speech. Déterministes, mais propres au
+# poste : elles complètent le peu de voix Piper françaises utilisables.
+SAPI_SCRIPT = r"""
+param($jobs)
+Add-Type -AssemblyName System.Speech
+$s = New-Object System.Speech.Synthesis.SpeechSynthesizer
+foreach ($it in (Get-Content -Raw -Encoding UTF8 $jobs | ConvertFrom-Json)) {
+    $s.SelectVoice($it.voice)
+    $s.Rate = $it.rate
+    $s.SetOutputToWaveFile($it.out)
+    $s.Speak($it.text)
+}
+$s.SetOutputToNull()
+$s.Dispose()
+"""
+
+
+def sapi_voices() -> list[str]:
+    """Voix SAPI installées (vide hors Windows)."""
+    if sys.platform != "win32":
+        return []
+    proc = subprocess.run(
+        ["powershell", "-NoProfile", "-Command",
+         "Add-Type -AssemblyName System.Speech; "
+         "(New-Object System.Speech.Synthesis.SpeechSynthesizer).GetInstalledVoices() "
+         "| % { $_.VoiceInfo.Name }"],
+        capture_output=True, encoding="utf-8", check=True,
+    )
+    return [v.strip() for v in proc.stdout.splitlines() if v.strip()]
+
+
+def _sapi_rate(length_scale: float) -> int:
+    # Rate SAPI de -10 à 10 ; +10 parle environ 3 fois plus vite.
+    return max(-10, min(10, round(10 * np.log(1 / length_scale) / np.log(3))))
+
+
+def _run_sapi(voice: str, length_scale: float, jobs: list[tuple[int, Utterance]], tmp: Path) -> None:
+    items = [
+        {"voice": voice[len(SAPI_PREFIX):], "rate": _sapi_rate(length_scale),
+         "text": u.text, "out": str(tmp / f"{i}.wav")}
+        for i, u in jobs
+    ]
+    (tmp / "sapi.json").write_text(json.dumps(items, ensure_ascii=False), encoding="utf-8")
+    (tmp / "sapi.ps1").write_text(SAPI_SCRIPT, encoding="utf-8")
+    subprocess.run(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+         "-File", str(tmp / "sapi.ps1"), str(tmp / "sapi.json")],
+        check=True, capture_output=True,
+    )
+
+
+def _run_piper(voice: str, length_scale: float, jobs: list[tuple[int, Utterance]], tmp: Path) -> None:
+    exe = piper_exe()
+    model = voice_model(voice)
+    todo = jobs
+    for _ in range(PIPER_ATTEMPTS):
+        lines = []
+        for i, u in todo:
+            line = {"text": u.text, "output_file": str(tmp / f"{i}.wav")}
+            if u.speaker is not None:
+                # Piper plante si on passe speaker_id à une voix mono-locuteur.
+                line["speaker_id"] = u.speaker
+            lines.append(json.dumps(line, ensure_ascii=False))
+        proc = subprocess.run(
+            [str(exe), "-m", str(model), "--json-input", "-q",
+             "--noise_scale", "0", "--noise_w", "0",
+             "--length_scale", str(length_scale), "--sentence_silence", "0"],
+            input="\n".join(lines) + "\n",
+            encoding="utf-8",
+            capture_output=True,
+        )
+        if proc.returncode == 0:
+            return
+        # Piper plante parfois sous Windows (0xC0000409), surtout quand la
+        # mémoire manque. Les phrases sont écrites dans l'ordre : on garde les
+        # fichiers finis, on jette le dernier (peut-être tronqué) et on relance
+        # sur le reste. La sortie étant déterministe, le résultat ne change pas.
+        done = [i for i, _ in todo if (tmp / f"{i}.wav").exists()]
+        if done:
+            (tmp / f"{done[-1]}.wav").unlink()
+            done.pop()
+        todo = [(i, u) for i, u in todo if i not in set(done)]
+        print(
+            f"piper {voice} : code {proc.returncode:#x}, nouvelle tentative "
+            f"pour {len(todo)} phrases",
+            file=sys.stderr,
+        )
+    raise RuntimeError(f"piper {voice} : échec après {PIPER_ATTEMPTS} tentatives")
+
+
 def synthesize(utterances: list[Utterance]) -> list[bytes]:
     """Synthétise chaque phrase et renvoie son PCM s16le 16 kHz mono.
 
-    Un seul process Piper par couple (voix, vitesse) : le modèle n'est chargé
-    qu'une fois.
+    Un seul process par couple (voix, vitesse) : le modèle n'est chargé
+    qu'une fois. Une voix `sapi:<nom>` passe par les voix Windows.
     """
-    exe = piper_exe()
     results: list[bytes | None] = [None] * len(utterances)
-    groups: dict[tuple[str, float], list[int]] = {}
+    groups: dict[tuple[str, float], list[tuple[int, Utterance]]] = {}
     for i, u in enumerate(utterances):
-        groups.setdefault((u.voice, u.length_scale), []).append(i)
+        groups.setdefault((u.voice, u.length_scale), []).append((i, u))
 
-    with tempfile.TemporaryDirectory(prefix="kobitts-") as tmp:
-        for (voice, length_scale), indices in groups.items():
-            model = voice_model(voice)
-            todo = indices
-            for attempt in range(PIPER_ATTEMPTS):
-                lines = []
-                for i in todo:
-                    u = utterances[i]
-                    line = {"text": u.text, "output_file": str(Path(tmp) / f"{i}.wav")}
-                    if u.speaker is not None:
-                        # Piper plante si on passe speaker_id à une voix mono-locuteur.
-                        line["speaker_id"] = u.speaker
-                    lines.append(json.dumps(line, ensure_ascii=False))
-                proc = subprocess.run(
-                    [str(exe), "-m", str(model), "--json-input", "-q",
-                     "--noise_scale", "0", "--noise_w", "0",
-                     "--length_scale", str(length_scale), "--sentence_silence", "0"],
-                    input="\n".join(lines) + "\n",
-                    encoding="utf-8",
-                    capture_output=True,
-                )
-                if proc.returncode == 0:
-                    break
-                # Piper plante parfois sous Windows (0xC0000409) sans raison
-                # reproductible. Les phrases sont écrites dans l'ordre : on
-                # garde les fichiers finis, on jette le dernier (peut-être
-                # tronqué) et on relance sur le reste. La sortie étant
-                # déterministe, le résultat ne change pas.
-                done = [i for i in todo if (Path(tmp) / f"{i}.wav").exists()]
-                if done:
-                    (Path(tmp) / f"{done[-1]}.wav").unlink()
-                    done.pop()
-                todo = [i for i in todo if i not in set(done)]
-                print(
-                    f"piper {voice} : code {proc.returncode:#x}, nouvelle tentative "
-                    f"pour {len(todo)} phrases",
-                    file=sys.stderr,
-                )
-            else:
-                raise RuntimeError(f"piper {voice} : échec après {PIPER_ATTEMPTS} tentatives")
-            for i in indices:
-                results[i] = _to_16k(Path(tmp) / f"{i}.wav")
+    with tempfile.TemporaryDirectory(prefix="kobitts-") as tmp_dir:
+        tmp = Path(tmp_dir)
+        for (voice, length_scale), jobs in groups.items():
+            run = _run_sapi if voice.startswith(SAPI_PREFIX) else _run_piper
+            run(voice, length_scale, jobs, tmp)
+            for i, _ in jobs:
+                results[i] = _retry_on_memory_error(_to_16k, tmp / f"{i}.wav")
+                (tmp / f"{i}.wav").unlink()
     assert all(r is not None for r in results)
     return results  # type: ignore[return-value]
+
+
+def pitch_shift(pcm: bytes, factor: float) -> bytes:
+    """Décale la hauteur (et la durée) d'un facteur : relu comme s'il avait été
+    enregistré à 16 kHz × facteur. Sert à créer des pseudo-locuteurs."""
+    if factor == 1.0:
+        return pcm
+    x = np.frombuffer(pcm, dtype="<i2").astype(np.float64)
+    y = _retry_on_memory_error(resample, x, round(SAMPLE_RATE * factor))
+    return np.clip(np.round(y), -32768, 32767).astype("<i2").tobytes()
+
+
+def trim(pcm: bytes, threshold: int = 200, margin: float = 0.03, fade: float = 0.005) -> bytes:
+    """Retire le silence que Piper laisse autour d'une phrase, avec un fondu
+    de quelques millisecondes pour éviter les clics."""
+    x = np.frombuffer(pcm, dtype="<i2").astype(np.float64)
+    loud = np.flatnonzero(np.abs(x) > threshold)
+    if loud.size == 0:
+        return pcm
+    pad = round(margin * SAMPLE_RATE)
+    x = x[max(0, loud[0] - pad) : loud[-1] + 1 + pad]
+    n = min(round(fade * SAMPLE_RATE), len(x) // 2)
+    ramp = np.linspace(0.0, 1.0, n, endpoint=False)
+    x[:n] *= ramp
+    x[len(x) - n :] *= ramp[::-1]
+    return np.round(x).astype("<i2").tobytes()
+
+
+def phonemes(texts: list[str], voice: str) -> list[str]:
+    """Phonèmes eSpeak que Piper utilise pour chaque texte (une phrase chacun),
+    sans les marques d'accent, pour repérer les homophones."""
+    with tempfile.TemporaryDirectory(prefix="kobitts-") as tmp:
+        lines = [
+            json.dumps({"text": t, "output_file": str(Path(tmp) / f"{i}.wav")}, ensure_ascii=False)
+            for i, t in enumerate(texts)
+        ]
+        proc = subprocess.run(
+            [str(piper_exe()), "-m", str(voice_model(voice)), "--json-input", "--debug",
+             "--noise_scale", "0", "--noise_w", "0"],
+            input="\n".join(lines) + "\n",
+            encoding="utf-8",
+            capture_output=True,
+            check=True,
+        )
+    found = re.findall(r"Converting \d+ phoneme\(s\) to ids: (.*)", proc.stdout + proc.stderr)
+    if len(found) != len(texts):
+        raise RuntimeError(f"phonemes : {len(found)} résultats pour {len(texts)} textes")
+    return [re.sub(r"[ˈˌ.,!?;:]", "", p).strip() for p in found]
 
 
 def write_wav(path: Path, pcm: bytes) -> None:

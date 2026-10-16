@@ -23,7 +23,9 @@ python bench/corpus/generate.py --out DIR  # ailleurs que ~/Kobi-bench/corpus
 
 Prérequis : Python 3.10+ et numpy. Au premier lancement, le script télécharge
 Piper et les voix dans `~/Kobi-bench/` (variable `KOBI_BENCH_HOME` pour changer
-de dossier) et vérifie leurs SHA-256. Rien n'est écrit dans le dépôt. Piper est
+de dossier) et vérifie leurs SHA-256. Rien n'est écrit dans le dépôt.
+`--threads` (défaut 3) limite le process et ses enfants à 3 processeurs
+logiques, en priorité basse. Piper est
 épinglé pour Windows ; ailleurs, installer le binaire Piper `2023.11.14-2` dans
 `~/Kobi-bench/tools/piper/`.
 
