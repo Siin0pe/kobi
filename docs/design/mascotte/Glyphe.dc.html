@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Kobi, la mascotte</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Recursive:slnt,wght,CASL,CRSV,MONO@-15..0,300..1000,0..1,0..1,0..1&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#D7FF3A}
+a{color:#0B0B0B}a:hover{color:#333}
+
+@keyframes wave{0%,100%{font-variation-settings:"wght" 350,"CASL" 0,"slnt" 0}50%{font-variation-settings:"wght" 1000,"CASL" 1,"slnt" -12}}
+@keyframes thump{0%,100%{font-variation-settings:"wght" 700,"CASL" 1;transform:scale(1)}50%{font-variation-settings:"wght" 1000,"CASL" 1;transform:scale(1.2)}}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes breathe{0%,100%{transform:scale(1)}50%{transform:scale(1.025,.975)}}
+@keyframes perk{0%{transform:scale(1,1)}35%{transform:scale(.9,1.12) translateY(-10px)}70%{transform:scale(1.05,.96)}100%{transform:scale(1)}}
+@keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.035)}}
+@keyframes sway{0%,100%{transform:rotate(-3deg)}50%{transform:rotate(3deg)}}
+@keyframes scribble{0%,100%{transform:rotate(-5deg) translateX(0)}50%{transform:rotate(-5deg) translateX(-3px)}}
+@keyframes nod{0%,100%{transform:translateY(0)}50%{transform:translateY(5px)}}
+@keyframes bounce{0%,100%{transform:translateY(0) scale(1,1)}15%{transform:translateY(0) scale(1.08,.9)}40%{transform:translateY(-28px) scale(.95,1.06) rotate(-3deg)}65%{transform:translateY(0) scale(1.05,.95)}80%{transform:translateY(-6px)}}
+@keyframes shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-12px) rotate(-2deg)}40%{transform:translateX(10px) rotate(2deg)}60%{transform:translateX(-7px)}80%{transform:translateX(4px)}}
+@keyframes droop{to{transform:translateY(8px) rotate(5deg)}}
+@keyframes zfloat{0%{transform:translate(0,0) scale(.6);opacity:0;font-variation-settings:"wght" 300}30%{opacity:1}100%{transform:translate(26px,-70px) scale(1.2);opacity:0;font-variation-settings:"wght" 1000}}
+@keyframes ripple{0%{opacity:0;transform:translateX(-8px)}40%{opacity:1}100%{opacity:0;transform:translateX(16px);font-variation-settings:"wght" 1000}}
+@keyframes popbang{0%{transform:scale(0) rotate(-30deg)}60%{transform:scale(1.25) rotate(8deg)}100%{transform:scale(1) rotate(0)}}
+@keyframes bangpulse{0%,100%{font-variation-settings:"wght" 800,"CASL" 1}50%{font-variation-settings:"wght" 1000,"CASL" 1,"slnt" -15}}
+@keyframes deal{0%{opacity:0;transform:translateY(16px) rotate(var(--r))}100%{opacity:1;transform:translateY(0) rotate(var(--r))}}
+@keyframes caret{50%{opacity:0}}
+@keyframes sweat{0%{transform:translateY(0);opacity:0}30%{opacity:1}100%{transform:translateY(30px);opacity:0}}
+
+.pill{position:relative;z-index:2;width:300px;height:176px;border-radius:88px;background:#0B0B0B;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;box-shadow:12px 12px 0 rgba(11,11,11,.16);transform-origin:50% 100%}
+.m-idle .pill{animation:breathe 3s ease-in-out infinite}
+.m-listen .pill{animation:perk .45s ease-out,pulse 1s ease-in-out .45s infinite}
+.m-think .pill{animation:sway 1.8s ease-in-out infinite}
+.m-write .pill{animation:scribble .3s steps(2) infinite}
+.m-answer .pill{animation:nod .5s ease-in-out infinite}
+.m-suggest .pill{animation:bounce 1.1s ease-in-out infinite}
+.m-error .pill{animation:shake .5s ease-in-out 2,droop .4s ease-out 1s forwards}
+.m-done .pill{animation:perk .45s ease-out,breathe 2s ease-in-out .45s infinite}
+
+.eyes{display:flex;gap:40px;transition:transform .4s cubic-bezier(.3,1.5,.5,1)}
+.m-listen .eyes{transform:translate(-14px,0)}
+.m-think .eyes{transform:translate(18px,-18px)}
+.m-write .eyes{transform:translate(-18px,16px)}
+.m-answer .eyes{transform:translate(-10px,-4px)}
+.m-suggest .eyes{transform:translate(-12px,-6px)}
+.m-error .eyes{transform:translate(0,6px)}
+.g{display:inline-block;width:60px;text-align:center;font-family:'Recursive',monospace;font-size:84px;line-height:1;color:#D7FF3A;font-variation-settings:"wght" 700,"CASL" 1}
+.m-idle .g{font-variation-settings:"wght" 300,"CASL" 0}
+.m-listen .g{animation:thump .8s ease-in-out infinite}
+.m-think .g{animation:spin 1.1s linear infinite}
+.m-think .g + .g{animation-direction:reverse}
+.m-suggest .g{animation:spin 2.2s linear infinite}
+.m-error .g{font-variation-settings:"wght" 1000,"CASL" 0}
+.mouth{font-family:'Recursive',monospace;font-size:32px;line-height:1;color:#D7FF3A;font-variation-settings:"wght" 900,"CASL" 1;height:32px}
+
+.fx{position:absolute;display:none;font-family:'Recursive',monospace;color:#0B0B0B}
+.m-idle .zz{display:block}
+.zz span{position:absolute;font-size:34px;animation:zfloat 2.6s ease-out infinite}
+.zz span:nth-child(2){animation-delay:.85s;left:18px;font-size:26px}
+.zz span:nth-child(3){animation-delay:1.7s;left:-10px;font-size:22px}
+.m-listen .waves{display:flex}
+.waves span{font-size:66px;line-height:1;margin-left:-6px;animation:ripple 1s ease-out infinite;font-variation-settings:"wght" 500}
+.waves span:nth-child(2){animation-delay:.2s}
+.waves span:nth-child(3){animation-delay:.4s}
+.m-suggest .bang,.m-done .bang{display:block}
+.bang{font-size:140px;line-height:1;animation:popbang .5s cubic-bezier(.3,1.6,.5,1) both,bangpulse .8s ease-in-out .5s infinite}
+.m-error .drop{display:block}
+.drop{font-size:40px;animation:sweat 1.2s ease-in infinite}
+
+.ch{display:inline-block;white-space:pre;animation:wave 2.4s ease-in-out infinite}
+.m-listen .ch,.m-suggest .ch{animation-duration:1.1s}
+.m-error .ch{animation:none;font-variation-settings:"wght" 1000,"slnt" -15}
+.card{animation:deal .35s cubic-bezier(.3,1.4,.5,1) both}
+.caret{display:inline-block;width:.55em;height:1em;vertical-align:-3px;background:currentColor;animation:caret .8s steps(1) infinite}
+.statebtn:hover{border-color:#D7FF3A}
+</style>
+</helmet>
+
+<div style="width: 1200px; height: 760px; display: flex; background: #D7FF3A; color: #0B0B0B; font-family: 'Recursive', sans-serif;">
+
+  <div class="{{ cls }}" style="position: relative; width: 820px; height: 760px; flex-shrink: 0; overflow: hidden;">
+
+    <div style="position: absolute; top: 32px; left: 40px; right: 40px; display: flex; justify-content: space-between; font-size: 13px; font-variation-settings: 'MONO' 1, 'wght' 500;">
+      <span>kobi · état : {{ label }}</span>
+      <span>audio local</span>
+    </div>
+
+    <sc-if value="{{ showCaption }}" hint-placeholder-val="{{ false }}">
+      <div class="card" style="--r: -2deg; position: absolute; left: 40px; top: 170px; width: 330px; padding: 18px 20px; border-radius: 22px 22px 22px 6px; background: #0B0B0B; color: #D7FF3A; font-size: 19px; line-height: 1.4; font-variation-settings: 'CASL' 1, 'wght' 500;">
+        <span style="font-variation-settings: 'CASL' 1, 'wght' 1000;">Kobi,</span> {{ captionTyped }}<span class="caret"></span>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ showSources }}" hint-placeholder-val="{{ false }}">
+      <div style="position: absolute; left: 40px; top: 330px; display: flex; flex-direction: column; gap: 10px;">
+        <sc-for list="{{ sources }}" as="s" hint-placeholder-count="3">
+          <div class="card" style="--r: 0deg; display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-radius: 999px; border: 2px solid #0B0B0B; background: {{ s.bg }}; color: {{ s.fg }}; font-size: 15px; font-variation-settings: 'MONO' 1, 'wght' 600;">
+            <span>{{ s.icon }}</span><span>{{ s.label }}</span>
+          </div>
+        </sc-for>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ showNotes }}" hint-placeholder-val="{{ false }}">
+      <div class="card" style="--r: -2.5deg; position: absolute; left: 40px; top: 170px; width: 340px; padding: 20px 22px; border-radius: 10px; background: #F7FFE0; border: 2.5px solid #0B0B0B; box-shadow: 8px 8px 0 #0B0B0B;">
+        <div style="font-size: 12px; letter-spacing: .08em; font-variation-settings: 'MONO' 1, 'wght' 700; margin-bottom: 10px;">NOTES · EN COURS</div>
+        <div style="font-size: 17px; line-height: 1.55; white-space: pre-line; font-variation-settings: 'MONO' 1, 'wght' 500;">{{ notesTyped }}<span class="caret"></span></div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ showAnswer }}" hint-placeholder-val="{{ false }}">
+      <div class="card" style="--r: 1.5deg; position: absolute; left: 40px; top: 170px; width: 360px; padding: 20px 22px; border-radius: 24px 24px 6px 24px; background: #0B0B0B; color: #F7FFE0; font-size: 18px; line-height: 1.5; font-variation-settings: 'CASL' 1, 'wght' 450;">
+        {{ answerTyped }}<span class="caret"></span>
+        <div style="display: flex; gap: 8px; margin-top: 14px; font-size: 12px; font-variation-settings: 'MONO' 1, 'wght' 600;">
+          <span style="padding: 4px 10px; border-radius: 999px; background: #D7FF3A; color: #0B0B0B;">codebase</span>
+          <span style="padding: 4px 10px; border-radius: 999px; background: #D7FF3A; color: #0B0B0B;">linear</span>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ showAction }}" hint-placeholder-val="{{ false }}">
+      <div class="card" style="--r: -1.5deg; position: absolute; left: 40px; top: 170px; width: 350px; padding: 20px 22px; border-radius: 10px; background: #F7FFE0; border: 2.5px solid #0B0B0B; box-shadow: 8px 8px 0 #0B0B0B;">
+        <sc-if value="{{ notConfirmed }}" hint-placeholder-val="{{ true }}">
+          <div style="font-size: 12px; letter-spacing: .08em; font-variation-settings: 'MONO' 1, 'wght' 700;">JE CRÉE LE TICKET ?</div>
+          <div style="margin-top: 8px; font-size: 24px; line-height: 1.15; font-variation-settings: 'CASL' 1, 'wght' 900;">Passer le refresh token à 30 jours</div>
+          <div style="margin-top: 6px; font-size: 14px; color: #3A4200; font-variation-settings: 'wght' 450;">linear · équipe api · d'après 23:38</div>
+          <div style="display: flex; gap: 10px; margin-top: 16px;">
+            <button type="button" onClick="{{ confirm }}" style="min-height: 46px; padding: 0 20px; border-radius: 999px; border: 2.5px solid #0B0B0B; background: #0B0B0B; color: #D7FF3A; font: 800 15px 'Recursive', sans-serif; cursor: pointer;">Créer</button>
+            <button type="button" onClick="{{ ignore }}" style="min-height: 46px; padding: 0 18px; border-radius: 999px; border: 2.5px solid #0B0B0B; background: transparent; color: #0B0B0B; font: 800 15px 'Recursive', sans-serif; cursor: pointer;">Pas maintenant</button>
+          </div>
+        </sc-if>
+        <sc-if value="{{ confirmed }}" hint-placeholder-val="{{ false }}">
+          <div style="font-size: 12px; letter-spacing: .08em; font-variation-settings: 'MONO' 1, 'wght' 700;">LINEAR</div>
+          <div style="margin-top: 8px; font-size: 24px; line-height: 1.15; font-variation-settings: 'CASL' 1, 'wght' 900;">Ticket créé.</div>
+          <div style="margin-top: 6px; font-size: 14px; color: #3A4200;">Lien ajouté au compte rendu.</div>
+        </sc-if>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ showError }}" hint-placeholder-val="{{ false }}">
+      <div class="card" style="--r: 2deg; position: absolute; left: 40px; top: 170px; width: 330px; padding: 20px 22px; border-radius: 10px; background: #0B0B0B; color: #F7FFE0; box-shadow: 8px 8px 0 #FF4D2E;">
+        <div style="font-size: 12px; letter-spacing: .08em; color: #FF8A73; font-variation-settings: 'MONO' 1, 'wght' 700;">LINEAR NE RÉPOND PAS</div>
+        <div style="margin-top: 8px; font-size: 20px; line-height: 1.3; font-variation-settings: 'CASL' 1, 'wght' 700;">Je réessaie dans {{ countdown }} s. Le ticket est gardé dans le compte rendu.</div>
+      </div>
+    </sc-if>
+
+    <div style="position: absolute; left: 430px; top: 170px; width: 300px; height: 176px;">
+      <sc-if value="{{ showOrbit }}" hint-placeholder-val="{{ false }}">
+        <sc-for list="{{ orbit }}" as="o" hint-placeholder-count="6">
+          <span style="position: absolute; left: 50%; top: 50%; margin: -28px 0 0 -18px; font-family: 'Recursive', monospace; font-size: 48px; line-height: 1; color: #0B0B0B; z-index: {{ o.z }}; opacity: {{ o.op }}; transform: {{ o.tf }}; font-variation-settings: {{ o.fv }};">{{ o.ch }}</span>
+        </sc-for>
+      </sc-if>
+      <div class="fx zz" style="right: 6px; top: -10px;"><span>z</span><span>z</span><span>z</span></div>
+      <div class="fx waves" style="left: -64px; top: 48px;"><span>(</span><span>(</span><span>(</span></div>
+      <div class="fx bang" style="right: -78px; top: -30px;">!</div>
+      <div class="fx drop" style="right: 36px; top: 4px;">,</div>
+      <div class="pill">
+        <div class="eyes"><span class="g">{{ eye }}</span><span class="g">{{ eye }}</span></div>
+        <div class="mouth">{{ mouth }}</div>
+      </div>
+    </div>
+
+    <div style="position: absolute; left: 330px; top: 410px; width: 500px; text-align: center; font-size: 104px; line-height: 1; letter-spacing: -.03em;">
+      <sc-for list="{{ word }}" as="w" hint-placeholder-count="5">
+        <span class="ch" style="animation-delay: {{ w.d }};">{{ w.c }}</span>
+      </sc-for>
+    </div>
+  </div>
+
+  <div style="flex: 1; min-width: 0; box-sizing: border-box; padding: 36px 32px; display: flex; flex-direction: column; gap: 16px; background: #0B0B0B; color: #F7FFE0;">
+    <div>
+      <div style="font-size: 12px; letter-spacing: .08em; color: #A8B86A; font-variation-settings: 'MONO' 1, 'wght' 600;">MASCOTTE · STYLE GLYPHE · V2</div>
+      <h1 style="margin: 6px 0 0; font-size: 56px; line-height: 1; letter-spacing: -.03em; color: #D7FF3A; font-variation-settings: 'wght' 1000, 'CASL' 1;">Kobi</h1>
+      <p style="margin: 10px 0 0; font-size: 14px; line-height: 1.5; color: #C9D3A8;">Un visage fait de lettres. Chaque changement d'état brouille les caractères avant de les poser.</p>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 6px;">
+      <sc-for list="{{ states }}" as="s" hint-placeholder-count="7">
+        <button type="button" class="statebtn" onClick="{{ s.pick }}" style="display: flex; align-items: center; gap: 14px; min-height: 48px; padding: 6px 14px; border-radius: 14px; border: 2px solid {{ s.border }}; background: {{ s.bg }}; color: {{ s.fg }}; text-align: left; cursor: pointer; font-family: 'Recursive', sans-serif;">
+          <span style="width: 28px; font-size: 22px; text-align: center; font-variation-settings: 'MONO' 1, 'wght' 900;">{{ s.eye }}</span>
+          <span style="display: flex; flex-direction: column;">
+            <span style="font-size: 15px; font-variation-settings: 'wght' 800;">{{ s.label }}</span>
+            <span style="font-size: 12px; opacity: .75;">{{ s.desc }}</span>
+          </span>
+        </button>
+      </sc-for>
+    </div>
+    <button type="button" onClick="{{ toggleAuto }}" style="margin-top: auto; min-height: 46px; border-radius: 999px; border: 2px dashed #5A6430; background: transparent; color: #D7FF3A; font: 700 13px 'Recursive', sans-serif; cursor: pointer;">{{ autoLabel }}</button>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1200,"height":760}}'>
+var ORDER = ['idle', 'listen', 'think', 'write', 'answer', 'suggest', 'error'];
+var META = {
+  idle:    { label: 'Veille', desc: 'n’attend que son nom', eye: '–', word: 'zzz', dur: 55 },
+  listen:  { label: 'Écoute', desc: 'son nom a été dit', eye: 'O', word: 'oui ?', dur: 60 },
+  think:   { label: 'Réfléchit', desc: 'fouille code, MCP, web', eye: '@', word: 'hmm…', dur: 70 },
+  write:   { label: 'Note', desc: 'annote en silence', eye: 'o', word: 'noté', dur: 85 },
+  answer:  { label: 'Répond', desc: 'bulle, voix en option', eye: '^', word: 'alors', dur: 95 },
+  suggest: { label: 'Propose', desc: 'action en un clic', eye: '*', word: 'idée !', dur: 100 },
+  error:   { label: 'Oups', desc: 'un outil ne répond pas', eye: 'x', word: 'oups', dur: 60 }
+};
+var NOISE = '#%&@*?!/<>{}=+$';
+var CAPTION = 'où est géré le refresh token ? Il expire trop vite.';
+var NOTES = 'Décision : refresh token → 30 j\nAction : mettre à jour la doc API\nQuestion : impact sur le mobile ?';
+var ANSWER = 'C’est dans api/src/auth/refresh.ts, ligne 88. Durée actuelle : 15 min. Un ticket ouvert en parle déjà.';
+var SRC = [['{}', 'codebase'], ['#', 'linear'], ['/', 'web']];
+var ORB = ['{', '}', '<', '/', '>', '#'];
+var MOUTH = ['o', 'O', 'o', '-', 'O', 'o'];
+
+function scramble(target, k, speed) {
+  var out = '';
+  for (var i = 0; i < target.length; i++) {
+    var c = target.charAt(i);
+    out += (c === ' ' || k > i * speed + 3) ? c : NOISE.charAt((i * 7 + k * 3) % NOISE.length);
+  }
+  return out;
+}
+
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { mode: 'idle', t: 0, since: 0, auto: true, confirmed: false };
+  }
+  componentDidMount() {
+    var self = this;
+    this.iv = setInterval(function () {
+      var st = self.state, t = st.t + 1, k = t - st.since, next = { t: t };
+      if (st.auto && k > META[st.mode].dur) {
+        next.mode = ORDER[(ORDER.indexOf(st.mode) + 1) % ORDER.length];
+        next.since = t; next.confirmed = false;
+      } else if (st.auto && st.mode === 'suggest' && !st.confirmed && k > 60) {
+        next.confirmed = true;
+      }
+      self.setState(next);
+    }, 60);
+  }
+  componentWillUnmount() { clearInterval(this.iv); }
+  go(mode) { this.setState({ mode: mode, since: this.state.t, auto: false, confirmed: false }); }
+  renderVals() {
+    var self = this, st = this.state, mode = st.mode, k = st.t - st.since, m = META[mode];
+    var done = mode === 'suggest' && st.confirmed;
+
+    var eyeTarget = done ? '^' : m.eye;
+    var eye = k < 5 ? NOISE.charAt((k * 5 + 2) % NOISE.length) : eyeTarget;
+    var blinkable = mode === 'listen' || mode === 'write' || mode === 'answer';
+    if (blinkable && k > 8 && st.t % 46 < 2) eye = '–';
+
+    var wordText = done ? 'fait !' : m.word;
+    var wordStr = scramble(wordText, k, 1.6);
+    var word = wordStr.split('').map(function (c, i) { return { c: c, d: (i * 0.12).toFixed(2) + 's' }; });
+
+    var orbit = ORB.map(function (ch, i) {
+      var a = i / ORB.length * Math.PI * 2 + st.t * 0.07;
+      var depth = (Math.sin(a) + 1) / 2;
+      var x = Math.cos(a) * 210, y = Math.sin(a) * 74;
+      return {
+        ch: ch, z: depth > 0.5 ? 3 : 1, op: (0.3 + 0.7 * depth).toFixed(2),
+        tf: 'translate(' + x.toFixed(1) + 'px,' + y.toFixed(1) + 'px) scale(' + (0.7 + 0.5 * depth).toFixed(2) + ')',
+        fv: '"wght" ' + Math.round(300 + 700 * depth) + ', "CASL" 1'
+      };
+    });
+
+    var sources = [];
+    SRC.forEach(function (s, i) {
+      if (k > 6 + i * 14) {
+        var ok = k > 16 + i * 14;
+        sources.push({ icon: ok ? '→' : s[0], label: s[1] + (ok ? ' · trouvé' : ' …'), bg: ok ? '#0B0B0B' : 'transparent', fg: ok ? '#D7FF3A' : '#0B0B0B' });
+      }
+    });
+
+    return {
+      cls: 'm-' + (done ? 'done' : mode),
+      label: done ? 'action faite' : m.label.toLowerCase(),
+      eye: eye,
+      mouth: mode === 'answer' ? MOUTH[Math.floor(st.t / 2) % MOUTH.length] : (mode === 'error' ? '~' : ''),
+      word: word,
+      showCaption: mode === 'listen',
+      captionTyped: CAPTION.slice(0, Math.floor(k * 1.1)),
+      showSources: mode === 'think',
+      sources: sources,
+      showOrbit: mode === 'think',
+      orbit: orbit,
+      showNotes: mode === 'write',
+      notesTyped: NOTES.slice(0, Math.floor(k * 1.3)),
+      showAnswer: mode === 'answer',
+      answerTyped: ANSWER.slice(0, Math.floor(k * 1.5)),
+      showAction: mode === 'suggest',
+      confirmed: st.confirmed,
+      notConfirmed: !st.confirmed,
+      confirm: function () { self.setState({ confirmed: true, auto: false }); },
+      ignore: function () { self.go('idle'); },
+      showError: mode === 'error',
+      countdown: Math.max(1, 5 - Math.floor(k / 12)),
+      autoLabel: st.auto ? 'démo auto : on' : 'relancer la démo auto',
+      toggleAuto: function () { self.setState({ auto: !self.state.auto, since: self.state.t }); },
+      states: ORDER.map(function (key) {
+        var on = key === mode;
+        return {
+          eye: META[key].eye, label: META[key].label, desc: META[key].desc,
+          bg: on ? '#D7FF3A' : 'transparent', fg: on ? '#0B0B0B' : '#F7FFE0', border: on ? '#D7FF3A' : '#2A2D1E',
+          pick: function () { self.go(key); }
+        };
+      })
+    };
+  }
+}
+</script>
+</body>
+</html>
