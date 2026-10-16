@@ -53,6 +53,7 @@ export class KobiSkin implements Skin {
     muted: '#3A4200',
     danger: '#FF4D2E',
     font: "'Recursive', system-ui, sans-serif",
+    dots: { idle: '#0B0B0B', listen: '#D7FF3A' },
   };
 
   private root!: HTMLElement;
