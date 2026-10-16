@@ -82,6 +82,15 @@ pub struct Usage {
     pub cache_read_input_tokens: u64,
     #[serde(default)]
     pub output_tokens: u64,
+    #[serde(default)]
+    pub output_tokens_details: OutputTokensDetails,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize)]
+pub struct OutputTokensDetails {
+    /// Tokens de réflexion, compris dans `output_tokens`.
+    #[serde(default)]
+    pub thinking_tokens: u64,
 }
 
 impl Usage {
@@ -189,7 +198,7 @@ mod tests {
     #[test]
     fn analyse_result_quel_que_soit_l_ordre_des_champs() {
         let e = Event::parse(
-            r#"{"duration_api_ms":1452,"stop_reason":"end_turn","session_id":"abc","total_cost_usd":0.1,"type":"result","subtype":"success","is_error":false,"result":"un","num_turns":1,"usage":{"input_tokens":2,"cache_creation_input_tokens":10,"cache_read_input_tokens":30,"output_tokens":3,"service_tier":"standard"}}"#,
+            r#"{"duration_api_ms":1452,"stop_reason":"end_turn","session_id":"abc","total_cost_usd":0.1,"type":"result","subtype":"success","is_error":false,"result":"un","num_turns":1,"usage":{"input_tokens":2,"cache_creation_input_tokens":10,"cache_read_input_tokens":30,"output_tokens":3,"output_tokens_details":{"thinking_tokens":1},"service_tier":"standard"}}"#,
         )
         .unwrap();
         let Event::Result(r) = e else {
@@ -202,6 +211,7 @@ mod tests {
         let usage = r.usage.unwrap();
         assert_eq!(usage.total_input(), 42);
         assert_eq!(usage.cache_read_input_tokens, 30);
+        assert_eq!(usage.output_tokens_details.thinking_tokens, 1);
     }
 
     #[test]

@@ -352,6 +352,7 @@ fn record(model: &str, kind: &str, point: u32, i: usize, turn: &Turn, bg: &Backg
         "tools": turn.tools, "input_total": u.total_input(),
         "cache_read": u.cache_read_input_tokens, "cache_creation": u.cache_creation_input_tokens,
         "input_uncached": u.input_tokens, "output": u.output_tokens,
+        "thinking": u.output_tokens_details.thinking_tokens,
         "compilations": bg.compilers, "cpu": bg.cpu, "mcp": turn.mcp,
         "text": turn.text.chars().take(300).collect::<String>(),
     })
