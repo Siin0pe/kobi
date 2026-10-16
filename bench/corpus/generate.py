@@ -23,8 +23,6 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-import numpy as np
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tts"))
 import kobitts  # noqa: E402
 
@@ -79,22 +77,6 @@ def parse(path: Path) -> list[Sentence]:
     return out
 
 
-def trim(pcm: bytes, threshold: int = 200, margin: float = 0.03, fade: float = 0.005) -> bytes:
-    """Retire le silence que Piper laisse autour d'une phrase, avec un fondu
-    de quelques millisecondes pour éviter les clics."""
-    x = np.frombuffer(pcm, dtype="<i2").astype(np.float64)
-    loud = np.flatnonzero(np.abs(x) > threshold)
-    if loud.size == 0:
-        return pcm
-    pad = round(margin * kobitts.SAMPLE_RATE)
-    x = x[max(0, loud[0] - pad) : loud[-1] + 1 + pad]
-    n = min(round(fade * kobitts.SAMPLE_RATE), len(x) // 2)
-    ramp = np.linspace(0.0, 1.0, n, endpoint=False)
-    x[:n] *= ramp
-    x[len(x) - n :] *= ramp[::-1]
-    return np.round(x).astype("<i2").tobytes()
-
-
 def build(name: str, out_dir: Path) -> dict:
     sentences = parse(DIALOGUES_DIR / f"{name}.txt")
     clips = kobitts.synthesize([
@@ -116,7 +98,7 @@ def build(name: str, out_dir: Path) -> dict:
             else:
                 gap = rng.uniform(*SENTENCE_GAP)
             t += gap
-        clip = trim(clip)
+        clip = kobitts.trim(clip)
         start = t
         t += kobitts.duration(clip)
         for track in TRACKS:
@@ -182,8 +164,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--out", type=Path, default=kobitts.BENCH_HOME / "corpus")
     parser.add_argument("dialogues", nargs="*", help="noms (défaut : tous)")
+    parser.add_argument(
+        "--threads", type=int, default=3,
+        help="processeurs logiques utilisables, en priorité basse (défaut 3)",
+    )
     args = parser.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
+    kobitts.limit_cpu(args.threads)
 
     names = args.dialogues or sorted(p.stem for p in DIALOGUES_DIR.glob("*.txt"))
     manifest = {
