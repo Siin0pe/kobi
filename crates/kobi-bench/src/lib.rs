@@ -2,4 +2,5 @@
 
 pub mod engines;
 pub mod metrics;
+pub mod protocol;
 pub mod report;

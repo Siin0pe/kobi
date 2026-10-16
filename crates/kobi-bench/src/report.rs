@@ -104,7 +104,9 @@ impl Report {
                 r.meeting,
                 r.machine,
                 r.device,
-                r.threads.map_or("—".to_string(), |t| t.to_string()),
+                // Mesure antérieure au protocole à 3 threads : indicative.
+                r.threads
+                    .map_or("? (indicatif)".to_string(), |t| t.to_string()),
                 pct(m.wer),
                 by(Source::Moi),
                 by(Source::Eux),
@@ -216,7 +218,9 @@ mod tests {
         v["rows"][0].as_object_mut().unwrap().remove("threads");
         let r: Report = serde_json::from_value(v).unwrap();
         assert_eq!(r.rows[0].threads, None);
-        assert!(r.to_markdown().contains("| fake | fr | poste | cpu | — |"));
+        assert!(r
+            .to_markdown()
+            .contains("| fake | fr | poste | cpu | ? (indicatif) |"));
     }
 
     #[test]

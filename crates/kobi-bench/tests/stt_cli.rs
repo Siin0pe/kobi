@@ -39,6 +39,8 @@ fn fake_engine_report_is_written_and_readable() {
         .arg(root.join("corpus"))
         .arg("--out")
         .arg(&out)
+        // Verrou local au test : ne bloque pas les vraies mesures du poste.
+        .env("KOBI_BENCH_LOCK", root.join(".bench.lock"))
         .status()
         .unwrap();
     assert!(status.success());
@@ -48,6 +50,7 @@ fn fake_engine_report_is_written_and_readable() {
     let row = &report.rows[0];
     assert_eq!((row.engine.as_str(), row.meeting.as_str()), ("fake", "fr"));
     assert_eq!(row.threads, Some(3));
+    assert!(!root.join(".bench.lock").exists(), "verrou libéré");
     assert_eq!(row.metrics.wer, 0.0);
     assert!(row.metrics.delays.as_ref().unwrap().first_word.is_some());
 
