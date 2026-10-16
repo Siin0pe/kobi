@@ -60,9 +60,9 @@ pub struct SttArgs {
     #[arg(long, value_enum, default_value_t = Device::Cpu)]
     device: Device,
 
-    /// Fils d'inférence accordés au moteur, noté dans le rapport. 3 par
-    /// défaut : la moitié des 12 threads du poste de référence, pour laisser
-    /// la machine utilisable.
+    /// Fils d'inférence accordés au moteur, noté dans le rapport. 4 par
+    /// défaut (protocole) sur les 12 threads du poste de référence, pour
+    /// laisser la machine utilisable.
     #[arg(long, default_value_t = DEFAULT_THREADS, value_parser = clap::value_parser!(u32).range(1..))]
     threads: u32,
 

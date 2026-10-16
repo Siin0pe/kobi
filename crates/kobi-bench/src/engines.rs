@@ -21,14 +21,26 @@ const VOXTRAL: &[&str] = &["voxtral", "voxtral-d3", "voxtral-d12"];
 #[cfg(not(feature = "voxtral"))]
 const VOXTRAL: &[&str] = &[];
 
+/// Whisper : `whisper` = large-v3-turbo, `whisper-small` et `whisper-base` =
+/// modèles multilingues plus petits.
 #[cfg(feature = "whisper")]
-const WHISPER: &[&str] = &["whisper"];
+const WHISPER: &[&str] = &["whisper", "whisper-small", "whisper-base"];
 #[cfg(not(feature = "whisper"))]
 const WHISPER: &[&str] = &[];
 
 /// Moteurs natifs compilés dans ce binaire.
 pub fn native() -> Vec<&'static str> {
     [NEMOTRON, VOXTRAL, WHISPER].concat()
+}
+
+/// Fichier ggml d'un nom `whisper` ou `whisper-<taille>`.
+pub fn whisper_model(name: &str) -> Option<&'static str> {
+    match name {
+        "whisper" => Some("ggml-large-v3-turbo.bin"),
+        "whisper-small" => Some("ggml-small.bin"),
+        "whisper-base" => Some("ggml-base.bin"),
+        _ => None,
+    }
 }
 
 /// Délai en tokens de 80 ms d'un nom `voxtral` ou `voxtral-dN`.
@@ -59,7 +71,7 @@ impl Default for EngineOptions {
             models: PathBuf::from("models"),
             model: None,
             language: None,
-            threads: 3,
+            threads: crate::protocol::DEFAULT_THREADS as i32,
             device: "cpu".into(),
         }
     }
@@ -118,16 +130,16 @@ pub fn build(name: &str, opts: &EngineOptions) -> Result<Box<dyn SttEngine>, Str
             NemotronEngine::new(config).map_err(|e| e.to_string())?,
         ));
     }
-    // Whisper large-v3-turbo, fenêtre glissante de 5 s, pas de 1 s.
+    // Whisper, fenêtre glissante de 5 s, pas de 1 s.
     #[cfg(feature = "whisper")]
-    if name == "whisper" {
+    if let Some(file) = whisper_model(name) {
         use kobi_stt::whisper::{whisper_engine, WhisperConfig};
         if opts.device == "cuda" && !cfg!(feature = "whisper-cuda") {
             return Err("whisper sur cuda : compiler avec la feature whisper-cuda".into());
         }
         let mut config = WhisperConfig::new(match &opts.model {
             Some(model) => model.clone(),
-            None => opts.models.join("whisper").join("ggml-large-v3-turbo.bin"),
+            None => opts.models.join("whisper").join(file),
         });
         config.language = opts.language.clone();
         config.gpu = opts.device == "cuda";
@@ -200,6 +212,13 @@ mod tests {
         );
         assert!(name("560ms", "cuda").is_err());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn whisper_model_from_name() {
+        assert_eq!(whisper_model("whisper"), Some("ggml-large-v3-turbo.bin"));
+        assert_eq!(whisper_model("whisper-base"), Some("ggml-base.bin"));
+        assert_eq!(whisper_model("whisper-tiny"), None);
     }
 
     #[test]

@@ -5,7 +5,7 @@
 //!   Un verrou pris par [`BenchLock`] dont le processus est mort (tué avant
 //!   d'avoir pu le supprimer) est repris ; ceux des autres outils ne le sont
 //!   jamais, leur pid pouvant être celui de MSYS et non celui du système ;
-//! - **la moitié du CPU au plus** : priorité « en dessous de la normale » ; le
+//! - **CPU partagé** : priorité « en dessous de la normale » ; le
 //!   nombre de threads des moteurs est fixé par `kobi-bench stt --threads`
 //!   ([`DEFAULT_THREADS`] par défaut), reporté sur rayon et OpenMP par
 //!   [`limit_threads`].
@@ -17,9 +17,9 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
-/// Threads par défaut d'un moteur : la moitié des 6 cœurs du poste de
-/// référence.
-pub const DEFAULT_THREADS: u32 = 3;
+/// Threads par défaut d'un moteur (protocole du 17/10/2026, sur les 12 du
+/// poste de référence).
+pub const DEFAULT_THREADS: u32 = 4;
 
 /// Marque du pid système dans le fichier `owner` écrit par [`BenchLock`].
 const OS_PID: &str = "ospid";
