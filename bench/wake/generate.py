@@ -1,10 +1,16 @@
-"""Génère le jeu d'entraînement du mot-clé « Kobi » (KOB-24).
+"""Génère le jeu d'entraînement du mot-clé « Kobi » (KOB-24, variété ajoutée par KOB-26).
 
 Positifs en français et en anglais : « Kobi », « hey Kobi » et « Kobi, <commande> »,
-avec les voix Piper utilisables (plus de 900 locuteurs, dont 3 en français),
-les voix Windows Hortense et Zira quand elles sont installées, cinq vitesses et
-cinq hauteurs. Négatifs : mots proches (« copie », « robot », « Toby »…) et
-phrases de réunion tirées des dialogues de `bench/corpus/`.
+avec les voix Piper utilisables (plus de 1 000 locuteurs, dont 4 en français),
+les voix Windows Hortense et Zira quand elles sont installées, cinq vitesses,
+cinq hauteurs et trois niveaux de bruit du générateur Piper. Négatifs : mots
+proches (« copie », « robot », « Toby »…) et phrases de réunion tirées des
+dialogues de `bench/corpus/`.
+
+Le bruit du générateur rend les voix moins uniformes, mais Piper le tire sans
+graine : seuls les clips sans bruit sont reproductibles octet pour octet.
+Un clip dont la durée par caractère dépasse 2,5 fois la médiane de sa langue
+(traîne ou babillage d'une voix « low ») est écarté.
 
 Les locuteurs sont répartis entre `train` et `test` : quelques voix entières
 (`TEST_VOICES`) et un locuteur sur dix des voix multi-locuteurs vont en `test`,
@@ -51,6 +57,7 @@ VOICES = {
         "fr_FR-tom-medium",
         "fr_FR-siwis-medium",
         "fr_FR-upmc-medium",
+        "fr_FR-gilles-low",
         "sapi:Microsoft Hortense Desktop",
     ],
     "en": [
@@ -59,20 +66,30 @@ VOICES = {
         "en_GB-alan-medium",
         "en_GB-jenny_dioco-medium",
         "en_US-libritts_r-medium",
+        "en_GB-vctk-medium",
+        "en_GB-cori-medium",
+        "en_US-kristin-medium",
+        "en_US-norman-medium",
+        "en_US-john-medium",
         "sapi:Microsoft Zira Desktop",
     ],
 }
 # Écartées après écoute par Whisper : fr_FR-mls-medium, fr_FR-mls_1840-low et
-# upmc#jessica (charabia), fr_FR-gilles-low (traîne d'une seconde après un mot
-# isolé quand le bruit est à 0).
+# upmc#jessica (charabia). fr_FR-gilles-low traîne d'une seconde après un mot
+# isolé quand le bruit est à 0 : ses clips trop longs sont filtrés (voir
+# MAX_DURATION_RATIO).
 EXCLUDED_SPEAKERS = {"fr_FR-upmc-medium": {"jessica"}}
 
-# Voix gardées pour le test, jamais entendues à l'entraînement.
-TEST_VOICES = {"fr_FR-siwis-medium", "en_US-ryan-medium", "en_US-amy-medium"}
+# Voix gardées pour le test, jamais entendues à l'entraînement. tom (AGPL) et
+# ryan (CC BY-NC-SA) n'entrent ainsi dans aucun modèle entraîné.
+TEST_VOICES = {"fr_FR-tom-medium", "en_US-ryan-medium", "en_US-amy-medium"}
 TEST_EVERY = 10  # un locuteur sur dix des voix multi-locuteurs en test
 
 SPEEDS = (0.8, 0.9, 1.0, 1.15, 1.3)  # length_scale : < 1 plus rapide
 PITCHES = (0.9, 0.95, 1.0, 1.05, 1.1)  # décalage de hauteur : pseudo-locuteurs
+# Bruit du générateur Piper (noise_scale, noise_w) ; (0, 0) = déterministe.
+NOISES = ((0.0, 0.0), (0.333, 0.333), (0.667, 0.8))
+MAX_DURATION_RATIO = 2.5
 
 WAKE = "Kobi"
 POSITIVES = {
@@ -136,6 +153,7 @@ class Clip:
     speaker_name: str
     length_scale: float
     pitch: float
+    noise: tuple[float, float] = (0.0, 0.0)
     split: str = ""
     extra: dict = field(default_factory=dict)
 
@@ -210,14 +228,16 @@ def plan(lang: str, n_pos: int, n_near: int, n_phrases: int, rng: random.Random)
 
     def add(label: str, draw, i: int) -> None:
         """Ajoute un clip pour le locuteur i ; `draw` tire (forme, texte).
-        Un même (locuteur, texte, vitesse, hauteur) donnerait un audio
-        identique : on retire jusqu'à trouver une combinaison neuve."""
+        Une même combinaison (locuteur, texte, vitesse, hauteur, bruit) n'est
+        tirée qu'une fois."""
         nonlocal counter
         voice, sid, sname, split = pool[i % len(pool)]
+        sapi = voice.startswith(kobitts.SAPI_PREFIX)
         for _ in range(50):
             kind, text = draw()
             speed, pitch = rng.choice(SPEEDS), rng.choice(PITCHES)
-            key = (voice, sid, text, speed, pitch)
+            noise = NOISES[0] if sapi else rng.choice(NOISES)  # SAPI : pas de bruit
+            key = (voice, sid, text, speed, pitch, noise)
             if key not in seen:
                 break
         else:
@@ -228,7 +248,7 @@ def plan(lang: str, n_pos: int, n_near: int, n_phrases: int, rng: random.Random)
             id=f"{lang}-{kind}-{counter:05d}",
             label=label, kind=kind, lang=lang, text=text,
             voice=voice, speaker=sid, speaker_name=sname,
-            length_scale=speed, pitch=pitch, split=split,
+            length_scale=speed, pitch=pitch, noise=noise, split=split,
         ))
         counter += 1
 
@@ -258,48 +278,70 @@ def plan(lang: str, n_pos: int, n_near: int, n_phrases: int, rng: random.Random)
     return clips, info
 
 
-def render(clips: list[Clip]) -> list[bytes]:
+def render(clips: list[Clip]) -> tuple[list[bytes], list[float]]:
     """Synthétise les clips ; « Kobi, <commande> » est assemblé à partir de
     « Kobi » et de la commande dits par la même voix, pour connaître la fin
-    exacte du mot-clé."""
+    exacte du mot-clé. Renvoie aussi, pour chaque clip, la durée par
+    caractère de sa première partie, ramenée à la vitesse 1."""
     utts: list[kobitts.Utterance] = []
     parts: list[tuple[int, ...]] = []
+
+    def utt(c: Clip, text: str) -> kobitts.Utterance:
+        return kobitts.Utterance(
+            kobitts.spoken(text, c.lang), c.voice, c.speaker, c.length_scale,
+            noise_scale=c.noise[0], noise_w=c.noise[1],
+        )
+
     for c in clips:
         if c.kind == "command":
             command = c.text.split(", ", 1)[1]
-            first = len(utts)
-            utts.append(kobitts.Utterance(kobitts.spoken(WAKE + ".", c.lang), c.voice, c.speaker, c.length_scale))
-            utts.append(kobitts.Utterance(kobitts.spoken(command, c.lang), c.voice, c.speaker, c.length_scale))
-            parts.append((first, first + 1))
+            parts.append((len(utts), len(utts) + 1))
+            utts += [utt(c, WAKE + "."), utt(c, command)]
         else:
             parts.append((len(utts),))
-            utts.append(kobitts.Utterance(kobitts.spoken(c.text, c.lang), c.voice, c.speaker, c.length_scale))
+            utts.append(utt(c, c.text))
     audio = kobitts.synthesize(utts)
 
-    out = []
+    out, ratios = [], []
     for c, idx in zip(clips, parts):
         lead = kobitts.silence(0.1)
+        first = kobitts.trim(audio[idx[0]])
+        ratios.append(kobitts.duration(first) / c.length_scale / len(utts[idx[0]].text))
         if len(idx) == 2:
-            wake = kobitts.trim(audio[idx[0]])
             rest = kobitts.trim(audio[idx[1]])
-            pcm = lead + wake + kobitts.silence(COMMA_PAUSE) + rest + lead
-            c.extra["wake_end"] = round(kobitts.duration(lead + wake), 3)
+            pcm = lead + first + kobitts.silence(COMMA_PAUSE) + rest + lead
+            c.extra["wake_end"] = round(kobitts.duration(lead + first), 3)
         else:
-            pcm = lead + kobitts.trim(audio[idx[0]]) + lead
+            pcm = lead + first + lead
             if c.label == "positive":
                 c.extra["wake_end"] = round(kobitts.duration(pcm) - 0.1, 3)
         out.append(kobitts.pitch_shift(pcm, c.pitch))
         if "wake_end" in c.extra:
             c.extra["wake_end"] = round(c.extra["wake_end"] / c.pitch, 3)
-    return out
+    return out, ratios
+
+
+def outliers(clips: list[Clip], ratios: list[float]) -> list[bool]:
+    """Clips anormalement longs pour leur texte (traîne, babillage) : durée
+    par caractère au-delà de MAX_DURATION_RATIO fois la médiane de la langue."""
+    medians = {}
+    for lang in {c.lang for c in clips}:
+        values = sorted(r for c, r in zip(clips, ratios) if c.lang == lang)
+        medians[lang] = values[len(values) // 2]
+    return [r > MAX_DURATION_RATIO * medians[c.lang] for c, r in zip(clips, ratios)]
+
+
+def synth_key(c: Clip) -> tuple:
+    return (c.voice, c.length_scale, c.noise)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--out", type=Path, default=kobitts.BENCH_HOME / "wake")
-    parser.add_argument("--positives", type=int, default=1000, help="par langue")
+    parser.add_argument("--positives", type=int, default=1500, help="par langue")
     parser.add_argument("--near", type=int, default=600, help="négatifs proches par langue")
     parser.add_argument("--phrases", type=int, default=300, help="phrases de réunion par langue")
+    parser.add_argument("--batch", type=int, default=400, help="clips synthétisés par lot")
     parser.add_argument(
         "--threads", type=int, default=3,
         help="processeurs logiques utilisables, en priorité basse (défaut 3)",
@@ -319,15 +361,40 @@ def main() -> None:
 
     for sub in ("positive", "negative"):
         shutil.rmtree(args.out / sub, ignore_errors=True)
-    audio = render(clips)
+
+    # Par lots, écrits au fur et à mesure, pour borner la mémoire. Les clips
+    # sont triés par réglage de synthèse : un lot ne relance Piper que pour
+    # quelques voix.
+    order = sorted(range(len(clips)), key=lambda i: synth_key(clips[i]))
+    ratios: list[float] = [0.0] * len(clips)
+    digests: list[bytes] = [b""] * len(clips)
+    durations: list[float] = [0.0] * len(clips)
+    for b in range(0, len(order), args.batch):
+        idx = order[b : b + args.batch]
+        audio, batch_ratios = render([clips[i] for i in idx])
+        for i, pcm, r in zip(idx, audio, batch_ratios):
+            c = clips[i]
+            kobitts.write_wav(args.out / c.label / c.split / f"{c.id}.wav", pcm)
+            ratios[i], digests[i], durations[i] = r, hashlib.sha256(pcm).digest(), kobitts.duration(pcm)
+        print(f"  {min(b + args.batch, len(order))}/{len(order)} clips", flush=True)
+
+    dropped: dict[str, int] = {}
+    kept = []
+    for i, (c, bad) in enumerate(zip(clips, outliers(clips, ratios))):
+        if bad:
+            (args.out / c.label / c.split / f"{c.id}.wav").unlink()
+            dropped[c.speaker_name] = dropped.get(c.speaker_name, 0) + 1
+        else:
+            kept.append(i)
+    if dropped:
+        print(f"clips trop longs écartés : {dropped}")
 
     meta_lines = []
     wav_hash = hashlib.sha256()
     counts: dict[str, int] = {}
-    for c, pcm in zip(clips, audio):
-        path = args.out / c.label / c.split / f"{c.id}.wav"
-        kobitts.write_wav(path, pcm)
-        wav_hash.update(c.id.encode() + hashlib.sha256(pcm).digest())
+    for i in kept:
+        c = clips[i]
+        wav_hash.update(c.id.encode() + digests[i])
         for key in (c.label, f"{c.label}/{c.split}", f"{c.label}/{c.lang}", f"{c.label}/{c.kind}"):
             counts[key] = counts.get(key, 0) + 1
         meta_lines.append(json.dumps({
@@ -341,7 +408,9 @@ def main() -> None:
             "voice": c.speaker_name,
             "length_scale": c.length_scale,
             "pitch": c.pitch,
-            "duration": round(kobitts.duration(pcm), 3),
+            "noise_scale": c.noise[0],
+            "noise_w": c.noise[1],
+            "duration": round(durations[i], 3),
             **c.extra,
         }, ensure_ascii=False))
     meta = args.out / "metadata.jsonl"
@@ -354,6 +423,9 @@ def main() -> None:
         "sample_rate": kobitts.SAMPLE_RATE,
         "speeds": SPEEDS,
         "pitches": PITCHES,
+        "noises": NOISES,
+        "dropped_too_long": dropped,
+        "voice_licenses": {v: kobitts.VOICE_LICENSES.get(v, "?") for lang in LANGS for v in VOICES[lang]},
         "counts": dict(sorted(counts.items())),
         "langs": infos,
         "sha256": {"metadata.jsonl": kobitts.sha256(meta), "wav": wav_hash.hexdigest()},
@@ -363,8 +435,8 @@ def main() -> None:
     )
     for key, n in sorted(counts.items()):
         print(f"{key} : {n}")
-    total = sum(kobitts.duration(p) for p in audio)
-    print(f"{len(clips)} clips, {total / 60:.1f} min d'audio")
+    total = sum(durations[i] for i in kept)
+    print(f"{len(kept)} clips, {total / 60:.1f} min d'audio")
 
 
 if __name__ == "__main__":
