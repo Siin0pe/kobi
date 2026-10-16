@@ -10,6 +10,7 @@ use kobi_bench::metrics::evaluate;
 use kobi_bench::metrics::normalize::Lang;
 use kobi_bench::metrics::reference::{common_lang, load_jsonl, timed_words, RefUtterance};
 use kobi_bench::metrics::resources::ResourceMonitor;
+use kobi_bench::protocol::{lower_priority, BenchLock};
 use kobi_bench::report::{now_rfc3339, Report, ReportRow};
 use kobi_stt::fake::FakeEngine;
 use kobi_stt::replay::{Track, WavReplayer};
@@ -83,7 +84,7 @@ pub struct SttArgs {
 /// features actives.
 pub fn engines() -> Vec<&'static str> {
     let mut names = vec!["fake"];
-    names.extend_from_slice(kobi_bench::engines::NATIVE);
+    names.extend(kobi_bench::engines::native());
     names
 }
 
@@ -121,6 +122,16 @@ pub fn run(args: SttArgs) -> anyhow::Result<()> {
     }
 
     let meetings = load_corpus(&args.corpus, &args.meetings, args.limit)?;
+
+    // Une mesure à la fois, en priorité basse : le poste reste utilisable.
+    if !lower_priority() {
+        eprintln!("priorité basse non appliquée : lancer la commande avec `nice`");
+    }
+    let _lock = BenchLock::acquire(
+        BenchLock::default_path(&home),
+        &format!("kobi-bench stt {}", args.engines.join(",")),
+    )
+    .context("verrou de mesure")?;
     let report_path = out.join("rapport.json");
     let mut report = Report::load_or_default(&report_path)
         .with_context(|| format!("lecture de {}", report_path.display()))?;

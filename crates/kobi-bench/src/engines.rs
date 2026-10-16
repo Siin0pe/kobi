@@ -1,18 +1,37 @@
 //! Moteurs de transcription à bibliothèques natives, construits par nom.
 //!
 //! Ils ne sont compilés qu'avec leur feature (`nemotron` pour le CPU,
-//! `nemotron-shared` pour les bibliothèques sherpa-onnx CUDA) ; [`NATIVE`]
-//! liste ceux du binaire.
+//! `nemotron-shared` pour les bibliothèques sherpa-onnx CUDA, `voxtral` et
+//! `voxtral-cuda` pour transcribe.cpp) ; [`native`] liste ceux du binaire.
 
 use std::path::{Path, PathBuf};
 
 use kobi_stt::SttEngine;
 
-/// Moteurs natifs compilés dans ce binaire.
 #[cfg(any(feature = "nemotron", feature = "nemotron-shared"))]
-pub const NATIVE: &[&str] = &["nemotron-160ms", "nemotron-560ms"];
+const NEMOTRON: &[&str] = &["nemotron-160ms", "nemotron-560ms"];
 #[cfg(not(any(feature = "nemotron", feature = "nemotron-shared")))]
-pub const NATIVE: &[&str] = &[];
+const NEMOTRON: &[&str] = &[];
+
+/// Voxtral Realtime : `voxtral` = délai par défaut (6 tokens, 480 ms),
+/// `voxtral-dN` = N tokens de 80 ms.
+#[cfg(feature = "voxtral")]
+const VOXTRAL: &[&str] = &["voxtral", "voxtral-d3", "voxtral-d12"];
+#[cfg(not(feature = "voxtral"))]
+const VOXTRAL: &[&str] = &[];
+
+/// Moteurs natifs compilés dans ce binaire.
+pub fn native() -> Vec<&'static str> {
+    [NEMOTRON, VOXTRAL].concat()
+}
+
+/// Délai en tokens de 80 ms d'un nom `voxtral` ou `voxtral-dN`.
+pub fn voxtral_delay(name: &str) -> Option<i32> {
+    match name.strip_prefix("voxtral")? {
+        "" => Some(6),
+        rest => rest.strip_prefix("-d")?.parse().ok(),
+    }
+}
 
 /// Réglages communs ; chaque moteur ignore ceux qui ne le concernent pas.
 #[derive(Debug, Clone)]
@@ -69,7 +88,7 @@ pub fn nemotron_package(models: &Path, chunk: &str, device: &str) -> Result<Path
 
 /// Construit le moteur natif `name` (`nemotron-160ms`…).
 #[cfg_attr(
-    not(any(feature = "nemotron", feature = "nemotron-shared")),
+    not(any(feature = "nemotron", feature = "nemotron-shared", feature = "voxtral")),
     allow(unused_variables)
 )]
 pub fn build(name: &str, opts: &EngineOptions) -> Result<Box<dyn SttEngine>, String> {
@@ -88,12 +107,33 @@ pub fn build(name: &str, opts: &EngineOptions) -> Result<Box<dyn SttEngine>, Str
             NemotronEngine::new(config).map_err(|e| e.to_string())?,
         ));
     }
+    #[cfg(feature = "voxtral")]
+    if let Some(delay) = voxtral_delay(name) {
+        use kobi_stt::voxtral::{Device, VoxtralEngine, VoxtralOptions};
+        let model = opts.model.clone().unwrap_or_else(|| {
+            opts.models
+                .join("voxtral-mini-4b-realtime-2602")
+                .join("Voxtral-Mini-4B-Realtime-2602-Q8_0.gguf")
+        });
+        let device = match opts.device.as_str() {
+            "cpu" => Device::Cpu,
+            "cuda" => Device::Cuda,
+            other => return Err(format!("matériel inconnu pour Voxtral : {other}")),
+        };
+        let mut options = VoxtralOptions::new(model, device);
+        options.delay_tokens = delay;
+        options.threads = opts.threads;
+        return Ok(Box::new(
+            VoxtralEngine::load(options).map_err(|e| e.to_string())?,
+        ));
+    }
+    let native = native();
     Err(format!(
         "moteur natif inconnu ou non compilé : {name} (compilés : {})",
-        if NATIVE.is_empty() {
+        if native.is_empty() {
             "aucun, voir les features".to_string()
         } else {
-            NATIVE.join(", ")
+            native.join(", ")
         }
     ))
 }
@@ -132,6 +172,14 @@ mod tests {
         );
         assert!(name("560ms", "cuda").is_err());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn voxtral_delay_from_name() {
+        assert_eq!(voxtral_delay("voxtral"), Some(6));
+        assert_eq!(voxtral_delay("voxtral-d12"), Some(12));
+        assert_eq!(voxtral_delay("voxtral-x"), None);
+        assert_eq!(voxtral_delay("nemotron-160ms"), None);
     }
 
     #[test]

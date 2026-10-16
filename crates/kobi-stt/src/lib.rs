@@ -9,6 +9,8 @@ pub mod fake;
 #[cfg(any(feature = "nemotron", feature = "nemotron-shared"))]
 pub mod nemotron;
 pub mod replay;
+#[cfg(feature = "voxtral")]
+pub mod voxtral;
 pub mod wav;
 
 use serde::{Deserialize, Serialize};
