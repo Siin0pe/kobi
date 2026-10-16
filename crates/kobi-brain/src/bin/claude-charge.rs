@@ -282,6 +282,8 @@ struct Turn {
     end: Duration,
     tools: u32,
     usage: Usage,
+    text: String,
+    mcp: String,
 }
 
 fn is_tool_start(event: &Event) -> bool {
@@ -302,7 +304,18 @@ async fn turn(claude: &mut ClaudeCode, message: &str) -> Result<Turn, String> {
             .next_event()
             .await
             .ok_or("process claude terminé avant le résultat")?;
-        if event.text_delta().is_some() {
+        if let Event::System(s) = &event {
+            if s.subtype == "init" {
+                let states: Vec<String> = s
+                    .mcp_servers
+                    .iter()
+                    .map(|m| format!("{}:{}", m.name, m.status))
+                    .collect();
+                turn.mcp = states.join(",");
+            }
+        }
+        if let Some(delta) = event.text_delta() {
+            turn.text.push_str(delta);
             turn.first_text.get_or_insert(t0.elapsed());
             if turn.tools > 0 {
                 turn.text_after_tool.get_or_insert(t0.elapsed());
@@ -339,7 +352,8 @@ fn record(model: &str, kind: &str, point: u32, i: usize, turn: &Turn, bg: &Backg
         "tools": turn.tools, "input_total": u.total_input(),
         "cache_read": u.cache_read_input_tokens, "cache_creation": u.cache_creation_input_tokens,
         "input_uncached": u.input_tokens, "output": u.output_tokens,
-        "compilations": bg.compilers, "cpu": bg.cpu,
+        "compilations": bg.compilers, "cpu": bg.cpu, "mcp": turn.mcp,
+        "text": turn.text.chars().take(300).collect::<String>(),
     })
 }
 
@@ -472,7 +486,11 @@ async fn main() -> Result<(), String> {
 
     let mut claude = ClaudeCode::spawn(&options(&a)).map_err(|e| e.to_string())?;
     let warmup = turn(&mut claude, "Réponds uniquement : ok").await?;
-    eprintln!("chauffe {:.2} s", warmup.end.as_secs_f64());
+    eprintln!(
+        "chauffe {:.2} s, MCP [{}]",
+        warmup.end.as_secs_f64(),
+        warmup.mcp
+    );
 
     let mut seen = 0.0;
     let mut summary = Vec::new();
