@@ -68,6 +68,13 @@ pub enum SttError {
     Format(String),
     #[error("moteur : {0}")]
     Engine(String),
+    /// Relecture arrêtée : le moteur ne suit pas le temps réel (voir
+    /// [`replay::WavReplayer::max_rtf`]).
+    #[error(
+        "trop lent : {wall:.0} s de calcul pour {audio:.0} s d'audio (facteur temps réel {:.2})",
+        wall / audio.max(1e-9)
+    )]
+    TooSlow { audio: f64, wall: f64 },
 }
 
 pub type Result<T> = std::result::Result<T, SttError>;
