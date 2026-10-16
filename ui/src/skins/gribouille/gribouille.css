@@ -1,0 +1,127 @@
+/* Skin Gribouille. CSS et keyframes repris du prototype
+   docs/design/mascotte/Gribouille.dc.html (noms préfixés par `gb-`,
+   sélecteurs limités au skin). Polices embarquées (SIL OFL 1.1). */
+
+@font-face{font-family:'Caveat';font-weight:500;font-display:block;src:url('../../fonts/caveat-latin-500-normal.woff2') format('woff2')}
+@font-face{font-family:'Caveat';font-weight:700;font-display:block;src:url('../../fonts/caveat-latin-700-normal.woff2') format('woff2')}
+@font-face{font-family:'Martian Mono';font-weight:400;font-display:block;src:url('../../fonts/martian-mono-latin-400-normal.woff2') format('woff2')}
+@font-face{font-family:'Martian Mono';font-weight:600;font-display:block;src:url('../../fonts/martian-mono-latin-600-normal.woff2') format('woff2')}
+@font-face{font-family:'Atkinson Hyperlegible';font-weight:400;font-display:block;src:url('../../fonts/atkinson-hyperlegible-latin-400-normal.woff2') format('woff2')}
+@font-face{font-family:'Atkinson Hyperlegible';font-weight:700;font-display:block;src:url('../../fonts/atkinson-hyperlegible-latin-700-normal.woff2') format('woff2')}
+
+@keyframes gb-breathe{0%,100%{transform:scale(1,1)}50%{transform:scale(1.03,.97)}}
+@keyframes gb-hop{0%,100%{transform:translateY(0)}40%{transform:translateY(-10px)}60%{transform:translateY(-10px)}}
+@keyframes gb-bighop{0%,100%{transform:translateY(0) rotate(0)}35%{transform:translateY(-22px) rotate(-5deg)}55%{transform:translateY(-16px) rotate(4deg)}}
+@keyframes gb-sway{0%,100%{transform:rotate(-3deg)}50%{transform:rotate(3deg)}}
+@keyframes gb-jiggle{0%,100%{transform:translateX(0)}50%{transform:translateX(3px)}}
+@keyframes gb-nod{0%,100%{transform:translateY(0)}50%{transform:translateY(4px)}}
+@keyframes gb-blink{0%,88%,100%{transform:scaleY(1)}92%{transform:scaleY(.1)}}
+@keyframes gb-talk{0%{transform:scaleY(.35)}100%{transform:scaleY(1)}}
+@keyframes gb-draw{0%{stroke-dashoffset:140}70%,100%{stroke-dashoffset:0}}
+@keyframes gb-scrib{0%,100%{transform:translate(0,0) rotate(0)}25%{transform:translate(-6px,2px) rotate(-6deg)}50%{transform:translate(-12px,0) rotate(0)}75%{transform:translate(-6px,3px) rotate(5deg)}}
+@keyframes gb-flick{0%,100%{opacity:1}50%{opacity:.15}}
+@keyframes gb-floatz{0%{transform:translate(0,6px);opacity:0}40%{opacity:1}100%{transform:translate(6px,-8px);opacity:0}}
+@keyframes gb-antwig{0%,100%{transform:rotate(-10deg)}50%{transform:rotate(12deg)}}
+@keyframes gb-pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.5)}}
+/* Ajouts pour Fait et Oups, dans le même esprit saccadé. */
+@keyframes gb-shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-8px) rotate(-3deg)}50%{transform:translateX(7px) rotate(3deg)}75%{transform:translateX(-4px)}}
+@keyframes gb-droop{to{transform:translateY(6px) rotate(4deg)}}
+@keyframes gb-sweat{0%{transform:translateY(0);opacity:0}30%{opacity:1}100%{transform:translateY(22px);opacity:0}}
+
+.skin-gribouille{position:absolute;left:530px;top:120px;width:240px;display:flex;flex-direction:column;align-items:center;gap:4px}
+.skin-gribouille .status{font-family:'Caveat',cursive;font-size:24px;font-weight:700;color:#EDEBE4;white-space:nowrap}
+
+.skin-gribouille .gb *{transform-box:fill-box}
+.skin-gribouille .hop{transform-origin:50% 100%}
+.skin-gribouille.m-idle .hop{animation:gb-breathe 2.4s steps(4) infinite}
+.skin-gribouille.m-listen .hop{animation:gb-hop .9s steps(5) infinite}
+.skin-gribouille.m-think .hop{animation:gb-sway 1.6s steps(6) infinite}
+.skin-gribouille.m-write .hop{animation:gb-jiggle .5s steps(2) infinite}
+.skin-gribouille.m-answer .hop{animation:gb-nod .6s steps(3) infinite}
+.skin-gribouille.m-suggest .hop{animation:gb-bighop 1.2s steps(7) infinite}
+.skin-gribouille.m-done .hop{animation:gb-bighop 1.2s steps(7) 1,gb-breathe 2.4s steps(4) 1.2s infinite}
+.skin-gribouille.m-error .hop{animation:gb-shake .5s steps(4) 2,gb-droop .4s steps(3) 1s forwards}
+
+.skin-gribouille .ant{transform-origin:0% 100%}
+.skin-gribouille.m-think .ant,.skin-gribouille.m-suggest .ant{animation:gb-antwig .5s steps(3) infinite}
+.skin-gribouille .bulb{transform-origin:50% 50%}
+.skin-gribouille.m-listen .bulb,.skin-gribouille.m-suggest .bulb,.skin-gribouille.m-done .bulb{animation:gb-pulse .7s steps(3) infinite}
+.skin-gribouille.m-idle .bulb{animation:gb-flick 3s steps(2) infinite}
+.skin-gribouille.m-error .bulb{animation:gb-flick .4s steps(2) infinite}
+
+.skin-gribouille .eye{transform-origin:50% 50%;transition:transform .2s steps(3);animation:gb-blink 3.8s steps(2) infinite}
+.skin-gribouille.m-idle .eye{transform:scaleY(.15);animation:none}
+.skin-gribouille.m-listen .eye{transform:scale(1.3)}
+.skin-gribouille.m-think .eye{transform:translate(-6px,-6px)}
+.skin-gribouille.m-write .eye{transform:translate(2px,6px)}
+.skin-gribouille.m-suggest .eye{transform:translate(5px,-2px) scale(1.35)}
+.skin-gribouille.m-answer .eye,.skin-gribouille.m-done .eye,.skin-gribouille.m-error .eye{display:none}
+.skin-gribouille .happy,.skin-gribouille .xeyes{display:none}
+.skin-gribouille.m-answer .happy,.skin-gribouille.m-done .happy{display:inline}
+.skin-gribouille.m-error .xeyes{display:inline}
+
+.skin-gribouille .brow{transform-origin:50% 50%;transition:transform .2s steps(3)}
+.skin-gribouille.m-idle .brow{transform:translateY(3px)}
+.skin-gribouille.m-listen .brow{transform:translateY(-4px)}
+.skin-gribouille.m-think .br{transform:translateY(-7px) rotate(-10deg)}
+.skin-gribouille.m-think .bl{transform:translateY(2px) rotate(6deg)}
+.skin-gribouille.m-write .bl{transform:translateY(2px) rotate(10deg)}
+.skin-gribouille.m-write .br{transform:translateY(2px) rotate(-10deg)}
+.skin-gribouille.m-suggest .brow,.skin-gribouille.m-done .brow{transform:translateY(-7px)}
+.skin-gribouille.m-error .bl{transform:translateY(-3px) rotate(-14deg)}
+.skin-gribouille.m-error .br{transform:translateY(-3px) rotate(14deg)}
+
+.skin-gribouille .mo{display:none}
+.skin-gribouille.m-idle .mo-smile,.skin-gribouille.m-listen .mo-smile,.skin-gribouille.m-write .mo-smile,.skin-gribouille.m-suggest .mo-smile,.skin-gribouille.m-done .mo-smile{display:inline}
+.skin-gribouille.m-think .mo-o{display:inline}
+.skin-gribouille.m-answer .mo-open{display:inline;transform-origin:50% 0%;animation:gb-talk .16s steps(2) infinite alternate}
+.skin-gribouille.m-error .mo-wavy{display:inline}
+
+.skin-gribouille .arms,.skin-gribouille .x{display:none}
+.skin-gribouille.m-idle .a-idle,.skin-gribouille.m-listen .a-listen,.skin-gribouille.m-think .a-think,.skin-gribouille.m-write .a-write,.skin-gribouille.m-answer .a-answer,.skin-gribouille.m-suggest .a-suggest,.skin-gribouille.m-done .a-done,.skin-gribouille.m-error .a-error{display:inline}
+.skin-gribouille.m-idle .x-zz,.skin-gribouille.m-listen .x-waves,.skin-gribouille.m-think .x-spiral,.skin-gribouille.m-suggest .x-bang,.skin-gribouille.m-done .x-check,.skin-gribouille.m-error .x-sweat{display:inline}
+
+.skin-gribouille .zz1{animation:gb-floatz 2.4s steps(6) infinite}
+.skin-gribouille .zz2{animation:gb-floatz 2.4s steps(6) infinite 1.2s}
+.skin-gribouille .wave{animation:gb-flick .6s steps(2) infinite}
+.skin-gribouille .wave.w2{animation-delay:.3s}
+.skin-gribouille .spiral{stroke-dasharray:140;animation:gb-draw 1.4s steps(8) infinite}
+.skin-gribouille .pen{transform-origin:0% 100%;animation:gb-scrib .7s steps(4) infinite}
+.skin-gribouille .line{stroke-dasharray:40;animation:gb-draw 1.6s steps(6) infinite}
+.skin-gribouille .line.l2{animation-delay:.4s}
+.skin-gribouille .line.l3{animation-delay:.8s}
+.skin-gribouille .bang{animation:gb-flick .5s steps(2) infinite}
+.skin-gribouille .check{stroke-dasharray:60;animation:gb-draw .9s steps(5) 1 both}
+.skin-gribouille .drop{animation:gb-sweat 1.2s steps(6) infinite}
+
+/* Réduire les animations : expressions gardées, aucun mouvement. */
+.skin-gribouille.reduced-motion *{animation:none!important;transition:none!important}
+.skin-gribouille.reduced-motion .spiral,.skin-gribouille.reduced-motion .line,.skin-gribouille.reduced-motion .check{stroke-dashoffset:0}
+.skin-gribouille.paused *{animation-play-state:paused!important}
+
+/* Thème des cartes communes, repris du prototype. */
+.stage[data-skin='gribouille'] .bubbles .card{animation-timing-function:steps(4)}
+.stage[data-skin='gribouille'] .bubbles .caret{width:2px;margin-left:2px;vertical-align:-2px}
+.stage[data-skin='gribouille'] .bubbles .kicker{font-family:'Martian Mono',monospace;font-variation-settings:normal;font-weight:400;font-size:11px;letter-spacing:.06em;color:#6A665D}
+.stage[data-skin='gribouille'] .card-question,
+.stage[data-skin='gribouille'] .card-answer{background:#1C1C22;border:2px solid #EDEBE4;color:#EDEBE4;font-size:16px;line-height:1.5;font-variation-settings:normal}
+.stage[data-skin='gribouille'] .card-question{--r:-1.5deg;width:360px;padding:14px 18px;border-radius:14px 18px 12px 20px}
+.stage[data-skin='gribouille'] .card-question .lead{color:#FF5A36;font-weight:700;font-variation-settings:normal}
+.stage[data-skin='gribouille'] .card-answer{--r:1deg;padding:16px 20px;border-radius:18px 22px 4px 20px}
+.stage[data-skin='gribouille'] .card-answer .tags{font-family:'Martian Mono',monospace;font-size:11px;font-variation-settings:normal}
+.stage[data-skin='gribouille'] .card-answer .tag{padding:3px 9px;background:transparent;border:1.5px solid #77746D;color:#C9C6BE}
+.stage[data-skin='gribouille'] .card-notes,
+.stage[data-skin='gribouille'] .card-action{background:#EDEBE4;color:#17171B;border:none;border-radius:4px 6px 4px 8px}
+.stage[data-skin='gribouille'] .card-notes{--r:-2deg;width:330px;padding:16px 20px 18px;box-shadow:6px 6px 0 #FF5A36}
+.stage[data-skin='gribouille'] .card-notes .body{font-family:'Caveat',cursive;font-size:25px;line-height:1.2;font-weight:500;font-variation-settings:normal}
+.stage[data-skin='gribouille'] .card-action{--r:-1deg;width:340px;padding:16px 20px 18px;box-shadow:6px 6px 0 #FFD23F}
+.stage[data-skin='gribouille'] .card-action .title{font-family:'Caveat',cursive;font-size:27px;font-weight:700;line-height:1.1;font-variation-settings:normal}
+.stage[data-skin='gribouille'] .card-action .meta{font-size:13px;color:#55524A}
+.stage[data-skin='gribouille'] .card-action .btn{min-height:44px;border-radius:8px 10px 8px 12px;border:2px solid #17171B;font:600 13px 'Martian Mono',monospace}
+.stage[data-skin='gribouille'] .card-action .btn-primary{background:#FF5A36;color:#17171B}
+.stage[data-skin='gribouille'] .card-error{background:#1C1C22;border:2px solid #EDEBE4;border-radius:4px 6px 4px 8px;box-shadow:6px 6px 0 #FF5A36}
+.stage[data-skin='gribouille'] .card-error .kicker{color:#FF8A6E}
+.stage[data-skin='gribouille'] .card-error .message{font-family:'Caveat',cursive;font-size:26px;font-weight:700;line-height:1.15;font-variation-settings:normal}
+.stage[data-skin='gribouille'] .card-sources .source{border:2px solid #EDEBE4;color:#EDEBE4;font-family:'Martian Mono',monospace;font-size:13px;font-variation-settings:normal;border-radius:8px 12px 8px 14px}
+.stage[data-skin='gribouille'] .card-sources .source.found{background:#EDEBE4;color:#17171B}
+.stage[data-skin='gribouille'] .dot{border-color:#EDEBE4}
