@@ -2,7 +2,7 @@
 // captures) : `skin`, `state`, `backdrop=1`, `reduced=1`.
 
 import { isMascotState, STATES, type MascotData, type MascotState } from './contract';
-import { demoData } from './demo';
+import { demoData, playDemo } from './demo';
 import { skinFactory } from './skins/registry';
 import { Stage } from './stage';
 import './styles/fonts.css';
@@ -18,6 +18,8 @@ const stage = new Stage(document.getElementById('app')!, {
 });
 stage.useSkin(skinFactory(params.get('skin')));
 
+let stopDemo: () => void = () => {};
+
 const initial = params.get('state');
 if (isMascotState(initial)) stage.setState(initial, demoData(initial));
 
@@ -31,6 +33,8 @@ declare global {
       update(data: MascotData): void;
       useSkin(id: string): void;
       demoData(state: MascotState): MascotData;
+      /** Rejoue un état avec ses données en flux (démo, captures). */
+      play(state: MascotState): void;
     };
   }
 }
@@ -38,8 +42,19 @@ declare global {
 window.kobi = {
   stage,
   states: STATES,
-  setState: (state, data) => stage.setState(state, data ?? {}),
+  setState: (state, data) => {
+    stopDemo();
+    stage.setState(state, data ?? {});
+  },
   update: (data) => stage.update(data),
   useSkin: (id) => void stage.useSkin(skinFactory(id)),
   demoData,
+  play: (state) => {
+    stopDemo();
+    stopDemo = playDemo(
+      state,
+      (s, d) => stage.setState(s, d),
+      (d) => stage.update(d),
+    );
+  },
 };
