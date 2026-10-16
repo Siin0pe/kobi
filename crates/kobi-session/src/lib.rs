@@ -1,7 +1,3 @@
-//! kobi-session
+//! kobi-session : machine à états, déclencheurs et fichiers de Kobi (`~/Kobi`).
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn compile() {}
-}
+pub mod config;
