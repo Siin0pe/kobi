@@ -81,7 +81,10 @@ test('Kobi cligne des yeux en écoute, jamais en réflexion', async ({ page }) =
   expect(closes.length).toBeLessThanOrEqual(10);
   // Chaque clignement dure ~120 ms puis les yeux se rouvrent en `O`.
   for (const c of closes) {
-    const reopen = listen.find((e) => e.t > c.t && e.eye === 'O')!;
+    const reopen = listen.find((e) => e.t > c.t && e.eye === 'O');
+    // Un clignement commencé à la toute fin de la fenêtre n'a pas encore rouvert les yeux.
+    if (!reopen && c === closes.at(-1)) continue;
+    if (!reopen) throw new Error(`yeux restés fermés après ${c.t} ms`);
     expect(reopen.t - c.t).toBeGreaterThanOrEqual(100);
     expect(reopen.t - c.t).toBeLessThan(200);
   }
