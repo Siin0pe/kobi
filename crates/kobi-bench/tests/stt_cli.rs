@@ -47,10 +47,11 @@ fn fake_engine_report_is_written_and_readable() {
     assert_eq!(report.rows.len(), 1);
     let row = &report.rows[0];
     assert_eq!((row.engine.as_str(), row.meeting.as_str()), ("fake", "fr"));
+    assert_eq!(row.threads, Some(3));
     assert_eq!(row.metrics.wer, 0.0);
     assert!(row.metrics.delays.as_ref().unwrap().first_word.is_some());
 
     let md = std::fs::read_to_string(out.join("rapport.md")).unwrap();
-    assert!(md.contains("| fake | fr | ci | cpu | 0,0 % |"), "{md}");
+    assert!(md.contains("| fake | fr | ci | cpu | 3 | 0,0 % |"), "{md}");
     std::fs::remove_dir_all(&root).ok();
 }

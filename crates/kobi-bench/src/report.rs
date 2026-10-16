@@ -20,14 +20,24 @@ pub struct ReportRow {
     pub machine: String,
     /// Matériel d'exécution du moteur (`cpu`, `cuda`…).
     pub device: String,
+    /// Fils d'inférence accordés au moteur ; absent dans les rapports
+    /// antérieurs à l'option `--threads`.
+    #[serde(default)]
+    pub threads: Option<u32>,
     /// Date de la mesure (UTC, RFC 3339).
     pub date: String,
     pub metrics: SttMetrics,
 }
 
 impl ReportRow {
-    fn key(&self) -> (&str, &str, &str, &str) {
-        (&self.engine, &self.meeting, &self.machine, &self.device)
+    fn key(&self) -> (&str, &str, &str, &str, Option<u32>) {
+        (
+            &self.engine,
+            &self.meeting,
+            &self.machine,
+            &self.device,
+            self.threads,
+        )
     }
 }
 
@@ -45,8 +55,8 @@ impl Report {
         Ok(serde_json::from_str(&std::fs::read_to_string(path)?)?)
     }
 
-    /// Ajoute une ligne ou remplace celle de même moteur, réunion, machine
-    /// et matériel.
+    /// Ajoute une ligne ou remplace celle de même moteur, réunion, machine,
+    /// matériel et nombre de fils.
     pub fn upsert(&mut self, row: ReportRow) {
         match self.rows.iter_mut().find(|r| r.key() == row.key()) {
             Some(existing) => *existing = row,
@@ -71,12 +81,12 @@ impl Report {
     pub fn to_markdown(&self) -> String {
         let mut md = String::new();
         md.push_str(
-            "| Moteur | Réunion | Machine | Matériel | WER | WER moi | WER eux \
+            "| Moteur | Réunion | Machine | Matériel | Threads | WER | WER moi | WER eux \
              | 1er mot méd. / p90 | Final méd. / p90 | Fin de phrase méd. / p90 \
              | Vitesse | RTF | CPU moy. / pic | RAM pic |\n",
         );
         md.push_str(
-            "| -- | -- | -- | -- | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: |\n",
+            "| -- | -- | -- | -- | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: |\n",
         );
         for r in &self.rows {
             let m = &r.metrics;
@@ -89,11 +99,12 @@ impl Report {
             let delays = m.delays.as_ref();
             let _ = writeln!(
                 md,
-                "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} / {} | {} Mo |",
+                "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} / {} | {} Mo |",
                 r.engine,
                 r.meeting,
                 r.machine,
                 r.device,
+                r.threads.map_or("—".to_string(), |t| t.to_string()),
                 pct(m.wer),
                 by(Source::Moi),
                 by(Source::Eux),
@@ -156,6 +167,7 @@ mod tests {
             meeting: meeting.into(),
             machine: "poste".into(),
             device: "cpu".into(),
+            threads: Some(3),
             date: "2026-10-15T21:00:00Z".into(),
             metrics: SttMetrics {
                 engine: engine.into(),
@@ -192,7 +204,19 @@ mod tests {
         let md = r.to_markdown();
         let table: Vec<_> = md.lines().filter(|l| l.starts_with('|')).collect();
         assert_eq!(table.len(), 3);
-        assert!(table[2].starts_with("| fake | fr | poste | cpu | 12,3 % | — | — | — |"));
+        assert!(table[2].starts_with("| fake | fr | poste | cpu | 3 | 12,3 % | — | — | — |"));
+    }
+
+    #[test]
+    fn old_reports_without_threads_still_load() {
+        let mut v = serde_json::to_value(Report {
+            rows: vec![row("fake", "fr", 0.1)],
+        })
+        .unwrap();
+        v["rows"][0].as_object_mut().unwrap().remove("threads");
+        let r: Report = serde_json::from_value(v).unwrap();
+        assert_eq!(r.rows[0].threads, None);
+        assert!(r.to_markdown().contains("| fake | fr | poste | cpu | — |"));
     }
 
     #[test]
