@@ -9,8 +9,15 @@ use std::path::{Path, PathBuf};
 
 use kobi_stt::SttEngine;
 
+/// Nemotron : `nemotron-<bloc>` = paquet int8 sur CPU, fp32 sur GPU ;
+/// suffixe `-int8` ou `-fp32` pour imposer la précision.
 #[cfg(any(feature = "nemotron", feature = "nemotron-shared"))]
-const NEMOTRON: &[&str] = &["nemotron-160ms", "nemotron-560ms"];
+const NEMOTRON: &[&str] = &[
+    "nemotron-160ms",
+    "nemotron-560ms",
+    "nemotron-160ms-fp32",
+    "nemotron-560ms-fp32",
+];
 #[cfg(not(any(feature = "nemotron", feature = "nemotron-shared")))]
 const NEMOTRON: &[&str] = &[];
 
@@ -92,12 +99,25 @@ impl Default for EngineOptions {
     }
 }
 
-/// Paquet sherpa-onnx de Nemotron pour une taille de bloc : int8 sur CPU,
-/// fp32 sur GPU (les opérateurs int8 n'ont pas de noyau CUDA). En cas de
-/// plusieurs dates, la plus récente.
-pub fn nemotron_package(models: &Path, chunk: &str, device: &str) -> Result<PathBuf, String> {
+/// Taille de bloc et précision d'un nom `nemotron-<bloc>[-int8|-fp32]`. Sans
+/// suffixe : int8 sur CPU, fp32 sur GPU (les opérateurs int8 n'ont pas de
+/// noyau CUDA dans onnxruntime).
+pub fn nemotron_variant<'a>(name: &'a str, device: &str) -> Option<(&'a str, bool)> {
+    let rest = name.strip_prefix("nemotron-")?;
+    let (chunk, int8) = match rest.rsplit_once('-') {
+        Some((chunk, "int8")) => (chunk, true),
+        Some((chunk, "fp32")) => (chunk, false),
+        Some(_) => return None,
+        None => (rest, device != "cuda"),
+    };
+    chunk.strip_suffix("ms")?.parse::<u32>().ok()?;
+    Some((chunk, int8))
+}
+
+/// Paquet sherpa-onnx de Nemotron pour une taille de bloc et une précision.
+/// En cas de plusieurs dates, la plus récente.
+pub fn nemotron_package(models: &Path, chunk: &str, want_int8: bool) -> Result<PathBuf, String> {
     let prefix = format!("sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-{chunk}-");
-    let want_int8 = device != "cuda";
     let mut found: Vec<PathBuf> = std::fs::read_dir(models)
         .map_err(|e| format!("{} : {e}", models.display()))?
         .filter_map(|e| e.ok().map(|e| e.path()))
@@ -131,11 +151,11 @@ pub fn nemotron_package(models: &Path, chunk: &str, device: &str) -> Result<Path
 )]
 pub fn build(name: &str, opts: &EngineOptions) -> Result<Box<dyn SttEngine>, String> {
     #[cfg(any(feature = "nemotron", feature = "nemotron-shared"))]
-    if let Some(chunk) = name.strip_prefix("nemotron-") {
+    if let Some((chunk, int8)) = nemotron_variant(name, &opts.device) {
         use kobi_stt::nemotron::{NemotronConfig, NemotronEngine};
         let dir = match &opts.model {
             Some(dir) => dir.clone(),
-            None => nemotron_package(&opts.models, chunk, &opts.device)?,
+            None => nemotron_package(&opts.models, chunk, int8)?,
         };
         let mut config = NemotronConfig::new(dir);
         config.language = opts.language.clone();
@@ -198,7 +218,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn picks_int8_on_cpu_and_fp32_on_cuda() {
+    fn nemotron_names_give_chunk_and_precision() {
+        assert_eq!(
+            nemotron_variant("nemotron-160ms", "cpu"),
+            Some(("160ms", true))
+        );
+        assert_eq!(
+            nemotron_variant("nemotron-160ms", "cuda"),
+            Some(("160ms", false))
+        );
+        assert_eq!(
+            nemotron_variant("nemotron-560ms-fp32", "cpu"),
+            Some(("560ms", false))
+        );
+        assert_eq!(
+            nemotron_variant("nemotron-560ms-int8", "cuda"),
+            Some(("560ms", true))
+        );
+        assert_eq!(nemotron_variant("nemotron-560ms-q4", "cpu"), None);
+        assert_eq!(nemotron_variant("nemotron-x", "cpu"), None);
+        assert_eq!(nemotron_variant("whisper", "cpu"), None);
+    }
+
+    #[test]
+    fn picks_the_package_of_the_requested_precision() {
         let dir = std::env::temp_dir().join(format!("kobi-engines-{}", std::process::id()));
         let p = "sherpa-onnx-nemotron-3.5-asr-streaming-0.6b";
         for d in [
@@ -214,18 +257,18 @@ mod tests {
                 .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
         };
         assert_eq!(
-            name("160ms", "cpu").unwrap(),
+            name("160ms", true).unwrap(),
             format!("{p}-160ms-int8-2026-06-11")
         );
         assert_eq!(
-            name("160ms", "cuda").unwrap(),
+            name("160ms", false).unwrap(),
             format!("{p}-160ms-2026-06-11")
         );
         assert_eq!(
-            name("560ms", "cpu").unwrap(),
+            name("560ms", true).unwrap(),
             format!("{p}-560ms-int8-2026-09-01")
         );
-        assert!(name("560ms", "cuda").is_err());
+        assert!(name("560ms", false).is_err());
         std::fs::remove_dir_all(&dir).ok();
     }
 
