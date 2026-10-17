@@ -3,3 +3,4 @@
 pub mod config;
 pub mod etat;
 pub mod logs;
+pub mod modeles;
