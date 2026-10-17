@@ -14,16 +14,14 @@ pub enum MenuAction {
     StartMeeting,
     Pause,
     ToggleMascot,
-    Settings,
     Quit,
 }
 
 impl MenuAction {
-    pub const ALL: [MenuAction; 5] = [
+    pub const ALL: [MenuAction; 4] = [
         MenuAction::StartMeeting,
         MenuAction::Pause,
         MenuAction::ToggleMascot,
-        MenuAction::Settings,
         MenuAction::Quit,
     ];
 
@@ -33,7 +31,6 @@ impl MenuAction {
             MenuAction::StartMeeting => "start-meeting",
             MenuAction::Pause => "pause",
             MenuAction::ToggleMascot => "toggle-mascot",
-            MenuAction::Settings => "settings",
             MenuAction::Quit => "quit",
         }
     }
@@ -43,7 +40,6 @@ impl MenuAction {
             MenuAction::StartMeeting => "Démarrer une réunion",
             MenuAction::Pause => "Pause",
             MenuAction::ToggleMascot => "Afficher/masquer Kobi",
-            MenuAction::Settings => "Réglages…",
             MenuAction::Quit => "Quitter Kobi",
         }
     }
@@ -62,9 +58,7 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let separator = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(
         app,
-        &[
-            &items[0], &items[1], &items[2], &items[3], &separator, &items[4],
-        ],
+        &[&items[0], &items[1], &items[2], &separator, &items[3]],
     )?;
     let mut tray = TrayIconBuilder::with_id("kobi")
         .tooltip("Kobi")
@@ -98,11 +92,6 @@ pub fn handle<R: Runtime>(app: &AppHandle<R>, id: &str) {
             }
         }
         MenuAction::Quit => app.exit(0),
-        MenuAction::Settings => {
-            if let Err(e) = crate::settings::open(app) {
-                eprintln!("kobi : réglages : fenêtre impossible à ouvrir : {e}");
-            }
-        }
         // Réunion et pause : la session (J1) écoutera l'événement.
         MenuAction::StartMeeting | MenuAction::Pause => {}
     }
@@ -137,7 +126,6 @@ mod tests {
                 "Démarrer une réunion",
                 "Pause",
                 "Afficher/masquer Kobi",
-                "Réglages…",
                 "Quitter Kobi"
             ]
         );

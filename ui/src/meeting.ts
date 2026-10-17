@@ -1,9 +1,9 @@
 // Réunion : indicateur REC visible pendant toute la réunion et carte qui
 // rappelle de prévenir les participants, avec un message prêt à coller (FR et
-// EN). Communs à tous les skins, aux couleurs du thème (RGPD : les
+// EN), aux couleurs de Kobi (RGPD : les
 // participants doivent savoir qu'ils sont transcrits).
 
-import { CONSENT_MESSAGES, type ConsentLang, type MeetingInfo } from './contract';
+import { CONSENT_MESSAGES, type ConsentLang, type MeetingInfo } from './states';
 
 export interface ConsentEvent {
   /** `copy` : message copié ; `done` : l'utilisateur a prévenu les participants. */

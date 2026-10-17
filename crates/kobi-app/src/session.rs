@@ -34,7 +34,7 @@ pub struct EtatUi {
     pub etat: &'static str,
     /// Activité en réunion (`calme`, `ecoute`…), absente hors réunion.
     pub activite: Option<&'static str>,
-    /// Clé du contrat des skins (`idle`, `listen`…).
+    /// État de la mascotte (`idle`, `listen`…).
     pub mascotte: &'static str,
     /// La transcription tourne (indicateur REC).
     pub transcrit: bool,
@@ -150,10 +150,7 @@ pub fn installer<R: Runtime>(builder: Builder<R>) -> Builder<R> {
             demarrer,
             pause,
             reprendre,
-            terminer,
-            // Réglages de l'interface (KOB-99) : un seul invoke_handler par application.
-            crate::settings::get_skin,
-            crate::settings::set_skin
+            terminer
         ])
 }
 

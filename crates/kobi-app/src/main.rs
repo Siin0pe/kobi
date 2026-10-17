@@ -8,7 +8,6 @@ mod interpellation;
 mod placement;
 mod raccourci;
 mod session;
-mod settings;
 mod tray;
 
 use std::sync::mpsc::Sender;
@@ -114,7 +113,6 @@ fn main() {
                         "pause",
                         "toggle-mascot",
                         "toggle-mascot",
-                        "settings",
                         "quit",
                     ] {
                         std::thread::sleep(std::time::Duration::from_millis(300));

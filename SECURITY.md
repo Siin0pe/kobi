@@ -21,7 +21,7 @@ Nous accusons réception sous 7 jours et vous tenons informé jusqu'au correctif
 * Une action MCP exécutée sans la carte de confirmation, ou autre chose que ce qu'elle affichait.
 * Une fuite de l'audio, des transcriptions, des notes ou de la mémoire locale hors de la machine, en dehors des envois à Claude que vous avez configurés.
 * Une clé API ou un jeton exposé (journaux, fichiers, interface).
-* L'exécution de code via un fichier de réunion, un skin ou une configuration.
+* L'exécution de code via un fichier de réunion ou une configuration.
 
 ## Hors périmètre
 

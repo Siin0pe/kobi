@@ -7,7 +7,5 @@ export default defineConfig({
   build: {
     target: ['es2022', 'safari15'],
     assetsInlineLimit: 0,
-    // Deux pages : la mascotte et les réglages.
-    rollupOptions: { input: { main: 'index.html', reglages: 'reglages.html' } },
   },
 });

@@ -1,4 +1,4 @@
-// Brouillage des caractères et clignements, signature du skin Kobi.
+// Brouillage des caractères et clignements, signature de Kobi.
 //
 // À chaque changement d'état, les yeux et le mot passent par des symboles
 // (`#%&@*?!/<>{}=+$`) : les yeux pendant 300 ms, puis le mot se pose lettre

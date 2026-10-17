@@ -11,6 +11,14 @@ body {
 
 .stage {
   --scale: 1;
+  /* Couleurs de Kobi, reprises par les bulles et les cartes. */
+  --backdrop: #d7ff3a;
+  --ink: #0b0b0b;
+  --paper: #f7ffe0;
+  --accent: #d7ff3a;
+  --muted: #3a4200;
+  --danger: #ff4d2e;
+  --font: 'Recursive', system-ui, sans-serif;
   position: fixed;
   inset: 0;
   font-family: var(--font);
@@ -32,7 +40,6 @@ body {
   transform: translate(-50%, -50%) scale(var(--scale));
   overflow: hidden;
 }
-.skin-host,
 .bubbles {
   position: absolute;
   inset: 0;

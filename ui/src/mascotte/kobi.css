@@ -1,0 +1,101 @@
+/* Kobi, style Glyphe. CSS et keyframes repris du prototype
+   docs/design/mascotte/Glyphe.dc.html (noms préfixés par `kobi-`, sélecteurs
+   limités à `.kobi`). Coordonnées dans la scène de 820 × 560 px. */
+
+@keyframes kobi-wave{0%,100%{font-variation-settings:"wght" 350,"CASL" 0,"slnt" 0}50%{font-variation-settings:"wght" 1000,"CASL" 1,"slnt" -12}}
+@keyframes kobi-thump{0%,100%{font-variation-settings:"wght" 700,"CASL" 1;transform:scale(1)}50%{font-variation-settings:"wght" 1000,"CASL" 1;transform:scale(1.2)}}
+@keyframes kobi-spin{to{transform:rotate(360deg)}}
+@keyframes kobi-breathe{0%,100%{transform:scale(1)}50%{transform:scale(1.025,.975)}}
+@keyframes kobi-perk{0%{transform:scale(1,1)}35%{transform:scale(.9,1.12) translateY(-10px)}70%{transform:scale(1.05,.96)}100%{transform:scale(1)}}
+@keyframes kobi-pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.035)}}
+@keyframes kobi-sway{0%,100%{transform:rotate(-3deg)}50%{transform:rotate(3deg)}}
+@keyframes kobi-scribble{0%,100%{transform:rotate(-5deg) translateX(0)}50%{transform:rotate(-5deg) translateX(-3px)}}
+@keyframes kobi-nod{0%,100%{transform:translateY(0)}50%{transform:translateY(5px)}}
+@keyframes kobi-bounce{0%,100%{transform:translateY(0) scale(1,1)}15%{transform:translateY(0) scale(1.08,.9)}40%{transform:translateY(-28px) scale(.95,1.06) rotate(-3deg)}65%{transform:translateY(0) scale(1.05,.95)}80%{transform:translateY(-6px)}}
+@keyframes kobi-shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-12px) rotate(-2deg)}40%{transform:translateX(10px) rotate(2deg)}60%{transform:translateX(-7px)}80%{transform:translateX(4px)}}
+@keyframes kobi-droop{to{transform:translateY(8px) rotate(5deg)}}
+@keyframes kobi-zfloat{0%{transform:translate(0,0) scale(.6);opacity:0;font-variation-settings:"wght" 300}30%{opacity:1}100%{transform:translate(26px,-70px) scale(1.2);opacity:0;font-variation-settings:"wght" 1000}}
+@keyframes kobi-ripple{0%{opacity:0;transform:translateX(-8px)}40%{opacity:1}100%{opacity:0;transform:translateX(16px);font-variation-settings:"wght" 1000}}
+@keyframes kobi-popbang{0%{transform:scale(0) rotate(-30deg)}60%{transform:scale(1.25) rotate(8deg)}100%{transform:scale(1) rotate(0)}}
+@keyframes kobi-bangpulse{0%,100%{font-variation-settings:"wght" 800,"CASL" 1}50%{font-variation-settings:"wght" 1000,"CASL" 1,"slnt" -15}}
+@keyframes kobi-sweat{0%{transform:translateY(0);opacity:0}30%{opacity:1}100%{transform:translateY(30px);opacity:0}}
+
+.kobi{position:absolute;inset:0;color:#0B0B0B;font-family:'Recursive',monospace}
+.kobi .body{position:absolute;left:430px;top:170px;width:300px;height:176px}
+/* Enveloppe d'inertie : absorbe la pose courante au changement d'état pour
+   que l'animation suivante démarre sans saut (voir motion.ts). */
+.kobi .inertia{position:relative;z-index:2;width:300px;height:176px;transform-origin:50% 100%}
+
+.kobi .pill{position:relative;z-index:2;width:300px;height:176px;border-radius:88px;background:#0B0B0B;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;box-shadow:12px 12px 0 rgba(11,11,11,.16);transform-origin:50% 100%}
+.kobi.m-idle .pill{animation:kobi-breathe 3s ease-in-out infinite}
+.kobi.m-listen .pill{animation:kobi-perk .45s ease-out,kobi-pulse 1s ease-in-out .45s infinite}
+.kobi.m-think .pill{animation:kobi-sway 1.8s ease-in-out infinite}
+.kobi.m-write .pill{animation:kobi-scribble .3s steps(2) infinite}
+.kobi.m-answer .pill{animation:kobi-nod .5s ease-in-out infinite}
+.kobi.m-suggest .pill{animation:kobi-bounce 1.1s ease-in-out infinite}
+.kobi.m-error .pill{animation:kobi-shake .5s ease-in-out 2,kobi-droop .4s ease-out 1s forwards}
+.kobi.m-done .pill{animation:kobi-perk .45s ease-out,kobi-breathe 2s ease-in-out .45s infinite}
+
+.kobi .eyes{display:flex;gap:40px;transition:transform .4s cubic-bezier(.3,1.5,.5,1)}
+.kobi.m-listen .eyes{transform:translate(-14px,0)}
+.kobi.m-think .eyes{transform:translate(18px,-18px)}
+.kobi.m-write .eyes{transform:translate(-18px,16px)}
+.kobi.m-answer .eyes{transform:translate(-10px,-4px)}
+.kobi.m-suggest .eyes{transform:translate(-12px,-6px)}
+.kobi.m-error .eyes{transform:translate(0,6px)}
+.kobi .g{display:inline-block;width:60px;text-align:center;font-family:'Recursive',monospace;font-size:84px;line-height:1;color:#D7FF3A;font-variation-settings:"wght" 700,"CASL" 1}
+.kobi.m-idle .g{font-variation-settings:"wght" 300,"CASL" 0}
+.kobi.m-listen .g{animation:kobi-thump .8s ease-in-out infinite}
+.kobi.m-think .g{animation:kobi-spin 1.1s linear infinite}
+.kobi.m-think .g + .g{animation-direction:reverse}
+.kobi.m-suggest .g{animation:kobi-spin 2.2s linear infinite}
+.kobi.m-error .g{font-variation-settings:"wght" 1000,"CASL" 0}
+.kobi .mouth{font-family:'Recursive',monospace;font-size:32px;line-height:1;color:#D7FF3A;font-variation-settings:"wght" 900,"CASL" 1;height:32px;white-space:pre}
+
+.kobi .fx{position:absolute;display:none;font-family:'Recursive',monospace;color:#0B0B0B}
+.kobi.m-idle .zz{display:block}
+.kobi .zz span{position:absolute;font-size:34px;animation:kobi-zfloat 2.6s ease-out infinite}
+.kobi .zz span:nth-child(2){animation-delay:.85s;left:18px;font-size:26px}
+.kobi .zz span:nth-child(3){animation-delay:1.7s;left:-10px;font-size:22px}
+.kobi.m-listen .waves{display:flex}
+.kobi .waves span{font-size:66px;line-height:1;margin-left:-6px;animation:kobi-ripple 1s ease-out infinite;font-variation-settings:"wght" 500}
+.kobi .waves span:nth-child(2){animation-delay:.2s}
+.kobi .waves span:nth-child(3){animation-delay:.4s}
+.kobi.m-suggest .bang,.kobi.m-done .bang{display:block}
+.kobi .bang{font-size:140px;line-height:1;animation:kobi-popbang .5s cubic-bezier(.3,1.6,.5,1) both,kobi-bangpulse .8s ease-in-out .5s infinite}
+.kobi.m-error .drop{display:block}
+.kobi .drop{font-size:40px;animation:kobi-sweat 1.2s ease-in infinite}
+
+.kobi .orbit{position:absolute;inset:0;display:none}
+.kobi.m-think .orbit{display:block}
+.kobi .orbit span{position:absolute;left:50%;top:50%;margin:-28px 0 0 -18px;font-family:'Recursive',monospace;font-size:48px;line-height:1;color:#0B0B0B;will-change:transform,opacity}
+
+.kobi .word{position:absolute;left:330px;top:410px;width:500px;text-align:center;font-size:104px;line-height:1;letter-spacing:-.03em}
+.kobi .ch{display:inline-block;white-space:pre;animation:kobi-wave 2.4s ease-in-out infinite}
+.kobi.m-listen .ch,.kobi.m-suggest .ch{animation-duration:1.1s}
+.kobi.m-error .ch{animation:none;font-variation-settings:"wght" 1000,"slnt" -15}
+
+/* Sommeil profond : après 20 s de veille, le mot cesse d'onduler (posé en
+   douceur par la mascotte) et les « z » ne bougent plus qu'en transformation et
+   opacité, sans graisse animée : la veille ne redessine presque plus de texte.
+   La pilule continue de respirer. */
+.kobi.m-idle.deep .ch{animation:none;font-variation-settings:"wght" 350,"CASL" 0,"slnt" 0}
+@keyframes kobi-zfloat-deep{0%{transform:translate(0,0) scale(.6);opacity:0}30%{opacity:1}100%{transform:translate(26px,-70px) scale(1.2);opacity:0}}
+.kobi.m-idle.deep .zz span{animation-name:kobi-zfloat-deep;font-variation-settings:"wght" 650}
+/* En sommeil profond, 8 images/s suffisent pour un mouvement aussi lent, et
+   un seul « z » s'envole : sans GPU, chaque image coûte (WebKitGTK repeint et
+   recompose la fenêtre), et chaque animation décalée ajoute ses images. */
+.kobi.m-idle.deep .pill{animation-timing-function:steps(12)}
+.kobi.m-idle.deep .zz span{animation-timing-function:steps(21)}
+.kobi.m-idle.deep .zz span+span{visibility:hidden;animation:none}
+
+/* Réduire les animations : la mascotte garde ses expressions (yeux, mot,
+   bouche, symboles), sans mouvement continu. */
+.kobi.reduced-motion *,.kobi.reduced-motion{animation:none!important;transition:none!important}
+.kobi.reduced-motion .zz span{opacity:1}
+.kobi.reduced-motion .zz span:nth-child(1){transform:translate(14px,-36px)}
+.kobi.reduced-motion .zz span:nth-child(2){transform:translate(26px,-70px) scale(.9)}
+.kobi.reduced-motion .zz span:nth-child(3){opacity:0}
+.kobi.reduced-motion .waves span{opacity:1}
+.kobi.reduced-motion .drop{opacity:1;transform:translateY(10px)}
+.kobi.paused *,.kobi.paused{animation-play-state:paused!important}

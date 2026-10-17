@@ -54,9 +54,9 @@ function fakeTauri(): void {
 
 test('démarrer puis terminer une réunion depuis la webview', async ({ page }) => {
   await page.addInitScript(fakeTauri);
-  const errors = await openUi(page, 'skin=kobi');
+  const errors = await openUi(page, '');
   const root = page.locator('[data-session]');
-  const skin = page.locator('.skin-kobi');
+  const kobi = page.locator('.kobi');
 
   await expect(root).toHaveAttribute('data-session', 'veille');
   await expect(root).toHaveAttribute('data-rec', 'false');
@@ -75,7 +75,7 @@ test('démarrer puis terminer une réunion depuis la webview', async ({ page }) 
       transcrit: true,
     }),
   );
-  await expect(skin).toHaveAttribute('data-state', 'think');
+  await expect(kobi).toHaveAttribute('data-state', 'think');
 
   // Les segments sont relayés en événement DOM.
   const segment = await page.evaluate(
@@ -101,7 +101,7 @@ test('démarrer puis terminer une réunion depuis la webview', async ({ page }) 
   const ended = await page.evaluate(() => window.kobi.command('terminer'));
   expect(ended).toMatchObject({ etat: 'veille', transcrit: false });
   await expect(root).toHaveAttribute('data-session', 'veille');
-  await expect(skin).toHaveAttribute('data-state', 'idle');
+  await expect(kobi).toHaveAttribute('data-state', 'idle');
 
   // Un refus de la session revient en erreur, sans changer l'affichage.
   const refusal = await page.evaluate(() => window.kobi.command('pause').then(() => 'ok', (e) => String(e)));
@@ -114,7 +114,7 @@ test('démarrer puis terminer une réunion depuis la webview', async ({ page }) 
 });
 
 test('hors de Tauri, les commandes ne font rien', async ({ page }) => {
-  const errors = await openUi(page, 'skin=kobi');
+  const errors = await openUi(page, '');
   expect(await page.evaluate(() => window.kobi.command('demarrer'))).toBeUndefined();
   await expect(page.locator('[data-session]')).toHaveCount(0);
   await expectNoErrors(errors);

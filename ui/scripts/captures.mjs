@@ -1,8 +1,8 @@
-// Captures d'un skin pour les PR et la CI : une image PNG, une vidéo WebM et
+// Captures de Kobi pour les PR : une image PNG, une vidéo WebM et
 // un GIF par état, plus un « tour » qui enchaîne les 8 états (transitions).
 //
 //   npm run build
-//   node scripts/captures.mjs --skin kobi --out captures/kobi [--seconds 3] [--states idle,listen] [--no-gif] [--dist dist] [--query discret=1]
+//   node scripts/captures.mjs --out captures/kobi [--seconds 3] [--states idle,listen] [--no-gif] [--dist dist] [--query discret=1]
 //
 // Les GIF demandent ffmpeg dans le PATH. Le script lance lui-même `vite preview`.
 
@@ -22,8 +22,7 @@ function arg(name, fallback) {
   return process.argv[i + 1];
 }
 
-const skin = arg('skin', 'kobi');
-const out = resolve(arg('out', `captures/${skin}`));
+const out = resolve(arg('out', 'captures/kobi'));
 const seconds = Number(arg('seconds', '3'));
 const states = arg('states', STATES.join(',')).split(',');
 const gif = !process.argv.includes('--no-gif');
@@ -92,7 +91,7 @@ const server = spawn('node', ['node_modules/vite/bin/vite.js', 'preview', '--out
   stdio: 'ignore',
   detached: true,
 });
-const base = `http://127.0.0.1:${PORT}/?skin=${skin}&backdrop=1${extra ? `&${extra}` : ''}`;
+const base = `http://127.0.0.1:${PORT}/?backdrop=1${extra ? `&${extra}` : ''}`;
 
 try {
   await waitForServer(base);
@@ -106,7 +105,7 @@ try {
       await page.waitForTimeout(seconds * 1000);
       await page.screenshot({ path: join(out, `${state}.png`) });
     });
-    console.log(`${skin} · ${state} : ok`);
+    console.log(`${state} : ok`);
   }
   if (tour) {
     await record(browser, 'tour', base, async (page) => {
@@ -115,7 +114,7 @@ try {
         await page.waitForTimeout(2200);
       }
     });
-    console.log(`${skin} · tour : ok`);
+    console.log('tour : ok');
   }
   await browser.close();
 } finally {

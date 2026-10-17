@@ -4,7 +4,7 @@ import { expectNoErrors, openUi } from './helpers';
 const STATES = ['idle', 'listen', 'think', 'write', 'answer', 'suggest', 'done', 'error'] as const;
 
 test('mode discret : pastille de 32 px colorée selon l’état', async ({ page }) => {
-  const errors = await openUi(page, 'skin=kobi&discret=1');
+  const errors = await openUi(page, 'discret=1');
   const dot = page.getByRole('button', { name: /^Kobi : Veille/ });
   await expect(dot).toBeVisible();
   await expect(page.locator('.scene')).toBeHidden();
@@ -26,7 +26,7 @@ test('mode discret : pastille de 32 px colorée selon l’état', async ({ page 
 });
 
 test('un clic sur la pastille déplie la mascotte dans son état courant', async ({ page }) => {
-  const errors = await openUi(page, 'skin=kobi&discret=1&state=answer');
+  const errors = await openUi(page, 'discret=1&state=answer');
   const changes: boolean[] = [];
   await page.exposeFunction('compactChanged', (c: boolean) => changes.push(c));
   await page.evaluate(() => (window.kobi.stage.onCompactChange = (c) => (window as unknown as { compactChanged(c: boolean): void }).compactChanged(c)));
@@ -34,7 +34,7 @@ test('un clic sur la pastille déplie la mascotte dans son état courant', async
   await page.locator('.dot').click({ force: true });
   await expect(page.locator('.scene')).toBeVisible();
   await expect(page.locator('.dot')).toBeHidden();
-  await expect(page.locator('.skin-kobi')).toHaveAttribute('data-state', 'answer');
+  await expect(page.locator('.kobi')).toHaveAttribute('data-state', 'answer');
   await expect(page.locator('[data-card=answer]')).toBeVisible();
   expect(changes).toEqual([false]);
   await expectNoErrors(errors);
@@ -42,7 +42,7 @@ test('un clic sur la pastille déplie la mascotte dans son état courant', async
 
 test('repliée, la mascotte ne coûte rien : seule la pastille peut s’animer', async ({ page }) => {
   await page.clock.install();
-  const errors = await openUi(page, 'skin=kobi&state=think');
+  const errors = await openUi(page, 'state=think');
   await page.evaluate(() => window.kobi.setCompact(true));
   await page.clock.runFor(2000);
   const running = await page.evaluate(() =>
