@@ -8,7 +8,9 @@
 // tâches de Windows). Un échauffement de 5 s précède chaque mesure.
 
 import { spawn } from 'node:child_process';
-import { readFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { cpus } from 'node:os';
 import { chromium } from '@playwright/test';
 
@@ -123,7 +125,7 @@ if (mode === 'chromium') {
   const display = `:${90 + Math.floor(Math.random() * 9)}`;
   const xvfb = spawn('Xvfb', [display, '-screen', '0', '1920x1080x24', '-nolisten', 'tcp'], { stdio: 'ignore', detached: true });
   await sleep(1500);
-  const app = spawn(bin, [], { stdio: 'ignore', detached: true, env: { ...process.env, DISPLAY: display, HOME: process.env.KOBI_HOME ?? process.env.HOME } });
+  const app = spawn(bin, [], { stdio: 'ignore', detached: true, env: { ...process.env, DISPLAY: display, HOME: process.env.KOBI_HOME ?? mkdtempSync(join(tmpdir(), 'kobi-cpu-')) } });
   try {
     await sleep((warmup + 5) * 1000);
     const both = snapshot();

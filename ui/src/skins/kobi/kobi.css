@@ -75,6 +75,14 @@
 .skin-kobi.m-listen .ch,.skin-kobi.m-suggest .ch{animation-duration:1.1s}
 .skin-kobi.m-error .ch{animation:none;font-variation-settings:"wght" 1000,"slnt" -15}
 
+/* Sommeil profond : après 20 s de veille, le mot cesse d'onduler (posé en
+   douceur par le skin) et les « z » ne bougent plus qu'en transformation et
+   opacité, sans graisse animée : la veille ne redessine presque plus de texte.
+   La pilule continue de respirer. */
+.skin-kobi.m-idle.deep .ch{animation:none;font-variation-settings:"wght" 350,"CASL" 0,"slnt" 0}
+@keyframes kobi-zfloat-deep{0%{transform:translate(0,0) scale(.6);opacity:0}30%{opacity:1}100%{transform:translate(26px,-70px) scale(1.2);opacity:0}}
+.skin-kobi.m-idle.deep .zz span{animation-name:kobi-zfloat-deep;font-variation-settings:"wght" 650}
+
 /* Réduire les animations : la mascotte garde ses expressions (yeux, mot,
    bouche, symboles), sans mouvement continu. */
 .skin-kobi.reduced-motion *,.skin-kobi.reduced-motion{animation:none!important;transition:none!important}

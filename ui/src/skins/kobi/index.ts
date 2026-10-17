@@ -28,6 +28,9 @@ export const LOOKS: Record<MascotState, Look> = {
 /** États où Kobi cligne des yeux. */
 const BLINKS: ReadonlySet<MascotState> = new Set(['listen', 'write', 'answer']);
 
+/** Délai avant le sommeil profond (veille économe, voir kobi.css). */
+export const DEEP_SLEEP_MS = 20_000;
+
 /** Bouche qui parle (Répond), une image toutes les 120 ms comme le prototype. */
 const MOUTH = ['o', 'O', 'o', '-', 'O', 'o'];
 const MOUTH_MS = 120;
@@ -65,6 +68,7 @@ export class KobiSkin implements Skin {
   private reduced = false;
   private paused = false;
   private mouthTimer = 0;
+  private deepTimer = 0;
   private mouthStep = 0;
 
   mount(host: HTMLElement, env: SkinEnv): void {
@@ -124,6 +128,28 @@ export class KobiSkin implements Skin {
     else this.orbit.stop();
     if (this.paused) this.orbit.pause(true);
     this.syncTimers();
+    window.clearTimeout(this.deepTimer);
+    if (state === 'idle') this.deepTimer = window.setTimeout(() => this.deepSleep(), DEEP_SLEEP_MS);
+  }
+
+  /** Passe la veille en sommeil profond, en posant le mot sans à-coup. */
+  private deepSleep(): void {
+    if (this.state !== 'idle') return;
+    const letters = [...this.word.children] as HTMLElement[];
+    const from = letters.map((l) => getComputedStyle(l).fontVariationSettings);
+    // Les « z » changent d'animation : chacune reprend là où en était l'ancienne.
+    const zs = [...this.root.querySelectorAll<HTMLElement>('.zz span')];
+    const times = zs.map((z) => z.getAnimations()[0]?.currentTime ?? null);
+    this.root.classList.add('deep');
+    zs.forEach((z, i) => {
+      const anim = z.getAnimations()[0];
+      if (anim && times[i] !== null) anim.currentTime = times[i]!;
+    });
+    if (this.reduced) return;
+    letters.forEach((l, i) => {
+      const to = getComputedStyle(l).fontVariationSettings;
+      l.animate([{ fontVariationSettings: from[i]! }, { fontVariationSettings: to }], { duration: 1200, easing: 'ease-in-out' });
+    });
   }
 
   setData(_data: Readonly<MascotData>): void {
@@ -149,6 +175,7 @@ export class KobiSkin implements Skin {
 
   destroy(): void {
     window.clearInterval(this.mouthTimer);
+    window.clearTimeout(this.deepTimer);
     this.blinker.run(false);
     this.scrambler.stop();
     this.orbit.stop();

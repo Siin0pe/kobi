@@ -77,3 +77,29 @@ for (const state of ['idle', 'think', 'answer', 'listen'] as const) {
     await expectNoErrors(errors);
   });
 }
+
+test('après 20 s de veille, Kobi passe en sommeil profond sans redessiner son texte', async ({ page }) => {
+  await page.clock.install();
+  const errors = await openUi(page, 'skin=kobi');
+  const skin = page.locator('.skin-kobi');
+  await page.clock.runFor(19_000);
+  await expect(skin).not.toHaveClass(/deep/);
+  await page.clock.runFor(2_000);
+  await expect(skin).toHaveClass(/deep/);
+  // Le mot se pose en douceur (animation finie), puis plus rien ne touche à la police.
+  await page.clock.runFor(1_500);
+  await page.waitForTimeout(1_400);
+  const fontAnimations = await page.evaluate(() =>
+    document
+      .getAnimations()
+      .filter((a) => a.playState === 'running')
+      .filter((a) => (a.effect as KeyframeEffect).getKeyframes().some((k) => 'fontVariationSettings' in k)).length,
+  );
+  expect(fontAnimations).toBe(0);
+  // La respiration continue.
+  expect(await page.locator('.skin-kobi .pill').evaluate((n) => n.getAnimations().length)).toBe(1);
+  // Le moindre changement d'état réveille Kobi.
+  await page.evaluate(() => window.kobi.setState('listen', window.kobi.demoData('listen')));
+  await expect(skin).not.toHaveClass(/deep/);
+  await expectNoErrors(errors);
+});
