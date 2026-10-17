@@ -13,7 +13,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, InputCallbackInfo, SampleFormat, SizedSample, StreamInstant};
 
-use crate::{downmix, AudioFrame, Resampler, Source, SAMPLE_RATE};
+use crate::{AudioFrame, Converter, Source};
 
 /// Sources à capturer.
 #[derive(Debug, Clone)]
@@ -343,9 +343,7 @@ where
     T: SizedSample + Send + 'static,
     f32: FromSample<T>,
 {
-    let channels = config.channels() as usize;
-    let in_rate = config.sample_rate();
-    let mut resampler = Resampler::new(in_rate, SAMPLE_RATE);
+    let mut converter = Converter::new(source, config.sample_rate(), config.channels());
     let mut converted = Vec::new();
 
     let on_data = move |data: &[T], info: &InputCallbackInfo| {
@@ -355,29 +353,14 @@ where
         };
         converted.clear();
         converted.extend(data.iter().map(|&s| s.to_sample::<f32>()));
-        let (mut samples, pos) = resampler.process(&downmix(&converted, channels));
-        if samples.is_empty() {
-            return;
-        }
         let capture = info.timestamp().capture;
         let since_origin = match capture.checked_duration_since(*origin) {
             Some(d) => d.as_secs_f64(),
             None => -origin.duration_since(capture).as_secs_f64(),
         };
-        let mut t = since_origin + pos / in_rate as f64;
-        if t < 0.0 {
-            let skip = ((-t * SAMPLE_RATE as f64).ceil() as usize).min(samples.len());
-            samples.drain(..skip);
-            t += skip as f64 / SAMPLE_RATE as f64;
-            if samples.is_empty() {
-                return;
-            }
+        if let Some(frame) = converter.push(&converted, since_origin) {
+            let _ = frames.send(frame);
         }
-        let _ = frames.send(AudioFrame {
-            source,
-            samples,
-            t: Duration::from_secs_f64(t.max(0.0)),
-        });
     };
     let on_error = move |e: cpal::Error| {
         let _ = errors.send(StreamError {

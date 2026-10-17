@@ -3,6 +3,8 @@
 
 mod align;
 mod capture;
+mod convert;
+mod input;
 mod resample;
 
 use std::time::Duration;
@@ -11,6 +13,8 @@ pub use align::{Placement, TrackAligner};
 pub use capture::{
     list_devices, Capture, CaptureOptions, DeviceInfo, DeviceList, SourceInfo, StreamError,
 };
+pub use convert::Converter;
+pub use input::AudioInput;
 pub use resample::{downmix, Resampler};
 
 /// Fréquence d'échantillonnage de tout l'audio produit par ce crate.
