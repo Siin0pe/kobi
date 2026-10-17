@@ -59,6 +59,9 @@ pub struct MeetingConfig {
     pub system_prompt: Option<String>,
     /// Délai de réponse à une carte de confirmation avant refus.
     pub permission_timeout: Duration,
+    /// Outils autorisés sans carte : lecture seule (annotations des
+    /// serveurs MCP) et liste blanche du workspace.
+    pub permission_rules: kobi_perms::Rules,
     /// Arguments en plus, passés tels quels.
     pub extra_args: Vec<String>,
 }
@@ -77,6 +80,7 @@ impl Default for MeetingConfig {
             model: None,
             system_prompt: Some(SYSTEM_PROMPT.to_owned()),
             permission_timeout: kobi_perms::DEFAULT_TIMEOUT,
+            permission_rules: kobi_perms::Rules::default(),
             extra_args: Vec::new(),
         }
     }
@@ -155,9 +159,12 @@ pub struct ClaudeCodeBrain {
 impl ClaudeCodeBrain {
     /// Ouvre la session : serveur de permission puis process `claude`.
     pub async fn start(config: MeetingConfig) -> Result<Self, BrainError> {
-        let (perms, approvals) = PermsServer::start(config.permission_timeout)
-            .await
-            .map_err(|e| BrainError::Unavailable(format!("serveur de permission : {e}")))?;
+        let (perms, approvals) = PermsServer::start_with_rules(
+            config.permission_timeout,
+            config.permission_rules.clone(),
+        )
+        .await
+        .map_err(|e| BrainError::Unavailable(format!("serveur de permission : {e}")))?;
         let kobi = perms.mcp_config()["mcpServers"][kobi_perms::SERVER_NAME].clone();
         let opts = ClaudeOptions {
             program: config.program.clone(),
