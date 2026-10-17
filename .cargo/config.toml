@@ -19,3 +19,14 @@ GGML_AVX2 = "ON"
 GGML_FMA = "ON"
 GGML_F16C = "ON"
 GGML_BMI2 = "ON"
+
+# Sous Linux x86_64, le C++ compilé par les crates (whisper.cpp, transcribe.cpp)
+# l'est dans l'ancienne ABI de libstdc++, comme l'onnxruntime statique de
+# sherpa-onnx (manylinux, GCC 11, _GLIBCXX_USE_CXX11_ABI=0). Sinon, avec
+# whisper et nemotron dans le même binaire, des instances de std::regex au
+# même nom mais de tailles différentes (std::__detail::_Scanner<char>, qui
+# contient une std::string) se mélangent à l'édition de liens et la création
+# du moteur Nemotron plante (« free(): invalid pointer », KOB-127). Ces
+# bibliothèques ne parlent à Rust que par leur API C : l'ABI C++ ne déborde
+# pas. Après un changement : cargo clean -p whisper-rs-sys -p transcribe-cpp-sys.
+CXXFLAGS_x86_64_unknown_linux_gnu = "-D_GLIBCXX_USE_CXX11_ABI=0"
