@@ -138,6 +138,9 @@ pub fn run(args: SttArgs) -> anyhow::Result<()> {
         &format!("kobi-bench stt {}", args.engines.join(",")),
     )
     .context("verrou de mesure")?;
+    _lock
+        .release_on_interrupt()
+        .context("gestionnaire de Ctrl-C")?;
     let report_path = out.join("rapport.json");
     let mut report = Report::load_or_default(&report_path)
         .with_context(|| format!("lecture de {}", report_path.display()))?;

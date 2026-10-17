@@ -4,7 +4,9 @@
 //!   créé de façon atomique (avec un fichier `owner`) et supprimé à la fin.
 //!   Un verrou pris par [`BenchLock`] dont le processus est mort (tué avant
 //!   d'avoir pu le supprimer) est repris ; ceux des autres outils ne le sont
-//!   jamais, leur pid pouvant être celui de MSYS et non celui du système ;
+//!   jamais, leur pid pouvant être celui de MSYS et non celui du système.
+//!   Sur Ctrl-C ou SIGTERM, [`BenchLock::release_on_interrupt`] le supprime
+//!   avant de quitter ;
 //! - **CPU partagé** : priorité « en dessous de la normale » ; le
 //!   nombre de threads des moteurs est fixé par `kobi-bench stt --threads`
 //!   ([`DEFAULT_THREADS`] par défaut), reporté sur rayon et OpenMP par
@@ -71,6 +73,32 @@ impl BenchLock {
             }
         }
     }
+}
+
+impl BenchLock {
+    /// Sur Ctrl-C (et SIGTERM, SIGHUP sous Unix), supprime le verrou s'il est
+    /// toujours à ce processus, puis quitte avec le code 130 : `Drop` ne
+    /// s'exécute pas quand le processus est interrompu. Un seul gestionnaire
+    /// par processus (limite de `ctrlc`).
+    pub fn release_on_interrupt(&self) -> Result<(), ctrlc::Error> {
+        let path = self.0.clone();
+        let pid = std::process::id();
+        ctrlc::set_handler(move || {
+            if owned_by(&path, pid) {
+                let _ = std::fs::remove_dir_all(&path);
+            }
+            eprintln!("interrompu : verrou {} libéré", path.display());
+            std::process::exit(130);
+        })
+    }
+}
+
+/// Vrai si le verrou `path` porte le pid système `pid`.
+fn owned_by(path: &Path, pid: u32) -> bool {
+    std::fs::read_to_string(path.join("owner"))
+        .ok()
+        .and_then(|owner| owner_pid(&owner))
+        == Some(pid)
 }
 
 impl Drop for BenchLock {
@@ -182,6 +210,16 @@ mod tests {
         // Autres outils : pid peut-être MSYS, jamais interprété.
         assert_eq!(owner_pid("KOB-20 nemotron (pid 2896) depuis 2026"), None);
         assert_eq!(owner_pid("inconnu"), None);
+    }
+
+    #[test]
+    fn interruption_ne_libere_que_son_propre_verrou() {
+        let path = lock_with_owner("mien", "KOB-128 stt ospid 77 77");
+        assert!(owned_by(&path, 77));
+        assert!(!owned_by(&path, 78));
+        let other = lock_with_owner("autre", "kyutai ospid 1234");
+        assert!(!owned_by(&other, 77));
+        assert!(!owned_by(&path.join("absent"), 77));
     }
 
     #[test]
