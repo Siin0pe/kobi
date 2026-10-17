@@ -4,6 +4,7 @@
 mod align;
 mod capture;
 mod convert;
+mod file;
 mod input;
 mod resample;
 
@@ -14,6 +15,7 @@ pub use capture::{
     list_devices, Capture, CaptureOptions, DeviceInfo, DeviceList, SourceInfo, StreamError,
 };
 pub use convert::Converter;
+pub use file::{FileInput, FileOptions};
 pub use input::AudioInput;
 pub use resample::{downmix, Resampler};
 
