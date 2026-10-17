@@ -63,6 +63,9 @@ struct Running {
 /// Capture en cours. L'arrêt se fait en la détruisant (ou par [`Capture::stop`]).
 pub struct Capture {
     running: Vec<Running>,
+    /// Audio système sous Linux : monitor PulseAudio ou PipeWire.
+    #[cfg(target_os = "linux")]
+    monitor: Option<crate::pulse::MonitorCapture>,
     infos: Vec<SourceInfo>,
     frames: Receiver<AudioFrame>,
     errors: Receiver<StreamError>,
@@ -79,6 +82,10 @@ impl Capture {
         for &source in &options.sources {
             let (device, config) = match source {
                 Source::Moi => select(&host, Direction::Input, options.mic.as_deref())?,
+                // Sous Linux, l'audio système passe par le monitor (plus bas).
+                #[cfg(target_os = "linux")]
+                Source::Eux => continue,
+                #[cfg(not(target_os = "linux"))]
                 Source::Eux => loopback(&host, options.output.as_deref())?,
             };
             let info = SourceInfo {
@@ -109,9 +116,31 @@ impl Capture {
         for r in &running {
             let _ = r.origin.set(r.stream.now());
         }
+        // Le monitor prend comme origine le même instant, sur l'horloge du système.
+        #[cfg(target_os = "linux")]
+        let monitor = if options.sources.contains(&Source::Eux) {
+            let monitor = crate::pulse::MonitorCapture::spawn(
+                options.output.as_deref(),
+                frame_tx.clone(),
+                std::time::Instant::now(),
+            )
+            .context("audio système (monitor PulseAudio ou PipeWire)")?;
+            infos.push(SourceInfo {
+                source: Source::Eux,
+                device: monitor.device().to_string(),
+                sample_rate: crate::SAMPLE_RATE,
+                channels: 1,
+                sample_format: SampleFormat::F32,
+            });
+            Some(monitor)
+        } else {
+            None
+        };
 
         Ok(Self {
             running,
+            #[cfg(target_os = "linux")]
+            monitor,
             infos,
             frames,
             errors,
@@ -141,12 +170,26 @@ impl Capture {
                     .get()
                     .map(|o| r.stream.now().saturating_duration_since(*o))
             })
+            .or_else(|| self.monitor_elapsed())
             .unwrap_or_default()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn monitor_elapsed(&self) -> Option<Duration> {
+        use crate::AudioInput;
+        self.monitor.as_ref().map(|m| m.elapsed())
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn monitor_elapsed(&self) -> Option<Duration> {
+        None
     }
 
     /// Arrête les flux et renvoie les blocs restants ainsi que la durée finale.
     pub fn stop(self) -> (Vec<AudioFrame>, Duration) {
         let elapsed = self.elapsed();
+        #[cfg(target_os = "linux")]
+        drop(self.monitor);
         drop(self.running);
         (self.frames.try_iter().collect(), elapsed)
     }
@@ -300,12 +343,12 @@ fn loopback(
     select(host, Direction::Output, name)
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 fn loopback(
     _host: &cpal::Host,
     _name: Option<&str>,
 ) -> Result<(cpal::Device, cpal::SupportedStreamConfig)> {
-    bail!("la capture de l'audio système n'est disponible que sous Windows pour l'instant")
+    bail!("la capture de l'audio système n'est disponible que sous Windows et Linux pour l'instant")
 }
 
 fn build_stream(
