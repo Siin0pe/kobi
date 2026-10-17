@@ -30,9 +30,9 @@ impl Default for SessionPartagee {
 /// État envoyé à la webview.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct EtatUi {
-    /// `veille`, `reunion`, `pause` ou `fin`.
+    /// `veille`, `assistant`, `reunion`, `pause` ou `fin`.
     pub etat: &'static str,
-    /// Activité en réunion (`calme`, `ecoute`…), absente hors réunion.
+    /// Activité en réunion ou en échange (`calme`, `ecoute`…), absente sinon.
     pub activite: Option<&'static str>,
     /// État de la mascotte (`idle`, `listen`…).
     pub mascotte: &'static str,
@@ -42,23 +42,22 @@ pub struct EtatUi {
 
 impl From<Etat> for EtatUi {
     fn from(etat: Etat) -> Self {
+        let cle = |a| match a {
+            Activite::Calme => "calme",
+            Activite::Ecoute => "ecoute",
+            Activite::Reflechit => "reflechit",
+            Activite::Note => "note",
+            Activite::Repond => "repond",
+            Activite::Propose => "propose",
+            Activite::Fait => "fait",
+            Activite::Oups => "oups",
+        };
         let (nom, activite) = match etat {
             Etat::Veille => ("veille", None),
             Etat::Pause => ("pause", None),
             Etat::Fin => ("fin", None),
-            Etat::Reunion(a) => (
-                "reunion",
-                Some(match a {
-                    Activite::Calme => "calme",
-                    Activite::Ecoute => "ecoute",
-                    Activite::Reflechit => "reflechit",
-                    Activite::Note => "note",
-                    Activite::Repond => "repond",
-                    Activite::Propose => "propose",
-                    Activite::Fait => "fait",
-                    Activite::Oups => "oups",
-                }),
-            ),
+            Etat::Reunion(a) => ("reunion", Some(cle(a))),
+            Etat::Assistant(a) => ("assistant", Some(cle(a))),
         };
         EtatUi {
             etat: nom,
@@ -280,7 +279,10 @@ mod tests {
         for etat in Etat::tous() {
             let ui = EtatUi::from(etat);
             assert_eq!(ui.mascotte, etat.mascotte().cle());
-            assert_eq!(ui.activite.is_some(), matches!(etat, Etat::Reunion(_)));
+            assert_eq!(
+                ui.activite.is_some(),
+                matches!(etat, Etat::Reunion(_) | Etat::Assistant(_))
+            );
         }
     }
 }

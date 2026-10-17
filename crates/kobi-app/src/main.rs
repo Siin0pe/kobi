@@ -4,8 +4,12 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod diag;
+mod ecoute;
 mod interpellation;
+mod mot_cle;
 mod placement;
+mod porte;
 mod raccourci;
 mod session;
 mod tray;

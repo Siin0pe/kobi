@@ -37,9 +37,9 @@ export function enableWindowDrag(root: HTMLElement): void {
 
 /** État de la session, tel que l'envoie `kobi-app` (événement `state`). */
 export interface SessionState {
-  /** `veille`, `reunion`, `pause` ou `fin`. */
-  etat: 'veille' | 'reunion' | 'pause' | 'fin';
-  /** Activité en réunion (`calme`, `ecoute`…), `null` hors réunion. */
+  /** `veille`, `assistant` (échange hors réunion), `reunion`, `pause` ou `fin`. */
+  etat: 'veille' | 'assistant' | 'reunion' | 'pause' | 'fin';
+  /** Activité en réunion ou en échange (`calme`, `ecoute`…), `null` sinon. */
   activite: string | null;
   /** État de la mascotte (`idle`, `listen`…). */
   mascotte: string;
