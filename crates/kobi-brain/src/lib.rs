@@ -17,6 +17,6 @@ pub use brain::{
 };
 pub use claude_code::{
     ClaudeCode, ClaudeCodeBrain, ClaudeInstall, ClaudeOptions, Detection, Error, Event,
-    MeetingConfig, TurnResult, TurnTranslator, Usage,
+    MeetingConfig, TurnResult, TurnTranslator, Usage, SYSTEM_PROMPT, SYSTEM_PROMPT_VERSION,
 };
 pub use kobi_perms::{ApprovalRequest, Decision, PermissionRequest};
