@@ -1,7 +1,8 @@
 //! Moteurs de transcription à bibliothèques natives, construits par nom.
 //!
 //! Ils ne sont compilés qu'avec leur feature (`nemotron` pour le CPU,
-//! `nemotron-shared` pour les bibliothèques sherpa-onnx CUDA, `voxtral` et
+//! `nemotron-shared` pour les bibliothèques sherpa-onnx CUDA, `kyutai` pour
+//! candle, `voxtral` et
 //! `voxtral-cuda` pour transcribe.cpp,
 //! `whisper` et `whisper-cuda` pour whisper.cpp) ; [`native`] liste ceux du binaire.
 
@@ -36,6 +37,13 @@ const VOXTRAL: &[&str] = &[
 #[cfg(not(feature = "voxtral"))]
 const VOXTRAL: &[&str] = &[];
 
+/// Kyutai STT 1B en_fr, poids du dépôt (bf16 lus en f32) ou, via
+/// [`EngineOptions::model`], un fichier de poids quantifiés (`.gguf`).
+#[cfg(feature = "kyutai")]
+const KYUTAI: &[&str] = &["kyutai"];
+#[cfg(not(feature = "kyutai"))]
+const KYUTAI: &[&str] = &[];
+
 /// Whisper : `whisper` = large-v3-turbo, `whisper-small` et `whisper-base` =
 /// modèles multilingues plus petits.
 #[cfg(feature = "whisper")]
@@ -45,7 +53,7 @@ const WHISPER: &[&str] = &[];
 
 /// Moteurs natifs compilés dans ce binaire.
 pub fn native() -> Vec<&'static str> {
-    [NEMOTRON, VOXTRAL, WHISPER].concat()
+    [KYUTAI, NEMOTRON, VOXTRAL, WHISPER].concat()
 }
 
 /// Fichier ggml d'un nom `whisper` ou `whisper-<taille>`.
@@ -145,7 +153,8 @@ pub fn nemotron_package(models: &Path, chunk: &str, want_int8: bool) -> Result<P
         feature = "nemotron",
         feature = "nemotron-shared",
         feature = "voxtral",
-        feature = "whisper"
+        feature = "whisper",
+        feature = "kyutai"
     )),
     allow(unused_variables)
 )]
@@ -181,6 +190,29 @@ pub fn build(name: &str, opts: &EngineOptions) -> Result<Box<dyn SttEngine>, Str
         config.threads = opts.threads;
         let (engine, _) = whisper_engine(&config).map_err(|e| e.to_string())?;
         return Ok(Box::new(engine));
+    }
+    // Kyutai : dossier du dépôt Hugging Face ; `--model` désigne soit ce
+    // dossier, soit un fichier de poids (`.safetensors`, `.gguf`) placé dedans.
+    #[cfg(feature = "kyutai")]
+    if name == "kyutai" {
+        use kobi_stt::kyutai::{KyutaiEngine, KyutaiOptions};
+        if opts.device != "cpu" {
+            return Err("kyutai : seul le CPU est compilé".into());
+        }
+        let mut options = KyutaiOptions::new(opts.models.join("kyutai-stt-1b-en_fr-candle"));
+        if let Some(model) = &opts.model {
+            if model.is_dir() {
+                options.model_dir = model.clone();
+            } else {
+                if let Some(dir) = model.parent() {
+                    options.model_dir = dir.to_path_buf();
+                }
+                options.weights = Some(model.clone());
+            }
+        }
+        return Ok(Box::new(
+            KyutaiEngine::load(&options).map_err(|e| e.to_string())?,
+        ));
     }
     #[cfg(feature = "voxtral")]
     if let Some((quant, delay)) = voxtral_variant(name) {

@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 
 [features]
+# Adaptateur Kyutai STT 1B en_fr via la crate moshi (candle), CPU, sans
+# bibliothèque native.
+kyutai = ["dep:moshi", "dep:candle", "dep:candle-nn", "dep:candle-transformers", "dep:kobi-audio", "dep:serde_json"]
 # Adaptateur Nemotron 3.5 ASR Streaming via sherpa-onnx. `nemotron` : CPU,
 # bibliothèques statiques téléchargées au build. `nemotron-shared` :
 # bibliothèques partagées, par exemple la version CUDA désignée par
@@ -22,8 +25,14 @@ whisper = ["dep:whisper-rs"]
 whisper-cuda = ["whisper", "whisper-rs/cuda"]
 
 [dependencies]
+candle = { package = "candle-core", version = "0.9.1", optional = true }
+candle-nn = { version = "0.9.1", optional = true }
+candle-transformers = { version = "0.9.1", optional = true }
 hound = "3.5"
+kobi-audio = { version = "0.1.0", path = "../kobi-audio", optional = true }
+moshi = { version = "=0.6.4", optional = true }
 serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", optional = true }
 sherpa-onnx = { version = "=1.13.8", optional = true, default-features = false }
 thiserror = "2"
 transcribe-cpp = { version = "0.4.0", default-features = false, optional = true }
