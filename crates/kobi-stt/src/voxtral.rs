@@ -13,8 +13,11 @@
 //! prononcé vers `p − délai`.
 //!
 //! Un [`Stream`](transcribe_cpp::Stream) emprunte sa session : chaque source a
-//! donc son propre thread qui possède session et flux. Les deux threads
-//! partagent le modèle, dont transcribe.cpp sérialise les calculs.
+//! donc son propre thread qui possède session et flux. transcribe.cpp 0.x
+//! n'accepte qu'un flux actif par modèle (`model busy` au second) : chaque
+//! source a donc aussi son propre modèle. Le second (pour `moi` et `eux`) est
+//! chargé dès [`VoxtralEngine::load`], pour que son chargement ne soit pas
+//! compté dans la relecture ; la mémoire du modèle est donc doublée.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -86,23 +89,14 @@ pub struct VoxtralEngine {
     name: String,
     options: VoxtralOptions,
     model: Model,
+    /// Modèles préchargés pour les sources suivantes.
+    spares: Vec<Model>,
     workers: HashMap<Source, Worker>,
 }
 
 impl VoxtralEngine {
     pub fn load(options: VoxtralOptions) -> Result<Self> {
-        let backend = match options.device {
-            Device::Cpu => Backend::Cpu,
-            Device::Cuda => Backend::Cuda,
-        };
-        let model = Model::load_with(
-            &options.model,
-            &ModelOptions {
-                backend,
-                device: None,
-            },
-        )
-        .map_err(engine_error)?;
+        let model = load_model(&options)?;
         let caps = model.capabilities().map_err(engine_error)?;
         if !caps.supports_streaming {
             return Err(SttError::Engine(format!(
@@ -110,10 +104,12 @@ impl VoxtralEngine {
                 model.arch()
             )));
         }
+        let spares = vec![load_model(&options)?];
         Ok(Self {
             name: format!("voxtral-d{}", options.delay_tokens),
             options,
             model,
+            spares,
             workers: HashMap::new(),
         })
     }
@@ -123,11 +119,21 @@ impl VoxtralEngine {
         self.model.backend()
     }
 
-    fn worker(&mut self, source: Source) -> &mut Worker {
-        let (model, options) = (&self.model, &self.options);
-        self.workers
-            .entry(source)
-            .or_insert_with(|| spawn_worker(model.clone(), options.clone(), source))
+    fn worker(&mut self, source: Source) -> Result<&mut Worker> {
+        if !self.workers.contains_key(&source) {
+            // Le modèle principal sert la première source ; les suivantes ont
+            // le leur (un seul flux actif par modèle).
+            let model = if self.workers.is_empty() {
+                self.model.clone()
+            } else if let Some(model) = self.spares.pop() {
+                model
+            } else {
+                load_model(&self.options)?
+            };
+            let worker = spawn_worker(model, self.options.clone(), source);
+            self.workers.insert(source, worker);
+        }
+        Ok(self.workers.get_mut(&source).expect("worker créé"))
     }
 }
 
@@ -137,7 +143,7 @@ impl SttEngine for VoxtralEngine {
     }
 
     fn push(&mut self, frame: &AudioFrame) -> Result<Vec<Segment>> {
-        let worker = self.worker(frame.source);
+        let worker = self.worker(frame.source)?;
         worker.call(Command::Feed(frame.samples.clone()))
     }
 
@@ -250,6 +256,21 @@ fn run_worker(
         }
     }
     Ok(())
+}
+
+fn load_model(options: &VoxtralOptions) -> Result<Model> {
+    let backend = match options.device {
+        Device::Cpu => Backend::Cpu,
+        Device::Cuda => Backend::Cuda,
+    };
+    Model::load_with(
+        &options.model,
+        &ModelOptions {
+            backend,
+            device: None,
+        },
+    )
+    .map_err(engine_error)
 }
 
 fn engine_error(e: transcribe_cpp::Error) -> SttError {
