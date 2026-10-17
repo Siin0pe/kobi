@@ -1,6 +1,7 @@
 // Skins disponibles, par identifiant (réglage `skin` de config.toml).
 
 import type { SkinFactory } from '../contract';
+import { createEssaimSkin } from './essaim';
 import { createFakeSkin } from './factice';
 import { createGeleeSkin } from './gelee';
 import { createGribouilleSkin } from './gribouille';
@@ -14,6 +15,7 @@ export const SKINS: Record<string, SkinFactory> = {
   mercure: createMercureSkin,
   matrice: createMatriceSkin,
   gelee: createGeleeSkin,
+  essaim: createEssaimSkin,
   factice: createFakeSkin,
 };
 
