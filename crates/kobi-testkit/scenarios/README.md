@@ -27,6 +27,7 @@ sur stdout, soit une directive :
 | `{"fake":"sleep","ms":N}` | Pause de N ms (délais, « je cherche encore »). |
 | `{"fake":"exit","code":N,"stderr":"…"}` | Plantage : message sur stderr, code N. |
 | `{"fake":"call","tool":"mcp__notes__read_notes","input":{}}` | Appelle l'outil MCP pour de vrai ; son texte remplace `{{tool_result}}` dans les lignes suivantes. |
+| `{"fake":"builtin","tool":"Bash","input":{…},"tool_use_id":"…","blocked":[…],"allow":[…],"deny":[…]}` | Outil de base de Claude Code. S'il est dans `--disallowedTools` : rejoue `blocked` (`{{blocked_message}}` = « No such tool available: … »), sans permission. Sinon : permission comme ci-dessous, et l'outil n'est jamais exécuté. |
 | `{"fake":"permission","tool":"…","input":{…},"tool_use_id":"…","allow":[…],"deny":[…]}` | Appelle l'outil de `--permission-prompt-tool` (serveur « kobi ») ; si autorisé, appelle l'outil puis rejoue `allow`, sinon rejoue `deny` avec le message de refus dans `{{deny_message}}`. |
 
 Variables substituées dans toutes les lignes : `{{pid}}` (process du faux

@@ -31,6 +31,9 @@ pub const SYSTEM_PROMPT_VERSION: u32 = 1;
 /// fichiers (dossier de conception, Permissions).
 pub const MEETING_DISALLOWED_TOOLS: &[&str] = &[
     "Bash",
+    // Lecture et arrêt des commandes lancées en arrière-plan.
+    "BashOutput",
+    "KillShell",
     "PowerShell",
     "Edit",
     "MultiEdit",
@@ -366,7 +369,7 @@ mod tests {
         assert_eq!(value("--permission-prompt-tool"), "mcp__kobi__approve");
         assert_eq!(
             value("--disallowedTools"),
-            "Bash PowerShell Edit MultiEdit Write NotebookEdit"
+            "Bash BashOutput KillShell PowerShell Edit MultiEdit Write NotebookEdit"
         );
         assert_eq!(value("--model"), "opus");
         assert_eq!(value("--append-system-prompt"), SYSTEM_PROMPT);
