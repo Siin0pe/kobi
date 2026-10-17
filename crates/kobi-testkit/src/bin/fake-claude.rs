@@ -47,6 +47,7 @@ fn main() {
                 out,
                 mcp: Mcp::new(args.mcp_config.as_deref()),
                 permission_tool: args.permission_tool.clone(),
+                disallowed: args.disallowed.clone(),
                 vars: HashMap::new(),
             };
             player.run(&scenario);
@@ -105,17 +106,30 @@ struct Args {
     scenario: Option<PathBuf>,
     mcp_config: Option<String>,
     permission_tool: Option<String>,
+    /// Outils de `--disallowedTools` (séparés par des espaces ou des virgules,
+    /// en une ou plusieurs valeurs).
+    disallowed: Vec<String>,
 }
 
 impl Args {
     fn parse() -> Self {
         let mut parsed = Self::default();
-        let mut args = std::env::args().skip(1);
+        let mut args = std::env::args().skip(1).peekable();
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--scenario" => parsed.scenario = args.next().map(PathBuf::from),
                 "--mcp-config" => parsed.mcp_config = args.next(),
                 "--permission-prompt-tool" => parsed.permission_tool = args.next(),
+                "--disallowedTools" | "--disallowed-tools" => {
+                    while let Some(value) = args.next_if(|a| !a.starts_with("--")) {
+                        parsed.disallowed.extend(
+                            value
+                                .split([' ', ','])
+                                .filter(|t| !t.is_empty())
+                                .map(String::from),
+                        );
+                    }
+                }
                 _ => {}
             }
         }
@@ -190,6 +204,7 @@ struct Player {
     out: Output,
     mcp: Mcp,
     permission_tool: Option<String>,
+    disallowed: Vec<String>,
     /// Valeurs substituées dans les lignes : `{{tool_result}}`, `{{deny_message}}`,
     /// `{{pid}}` (process du faux claude), `{{turn}}` (numéro du tour, dès 1).
     vars: HashMap<&'static str, String>,
@@ -240,6 +255,7 @@ impl Player {
                     self.vars.insert("tool_result", result);
                 }
                 Some("permission") => self.permission(line),
+                Some("builtin") => self.builtin(line),
                 Some(other) => fail(&format!("directive inconnue : {other}")),
             }
         }
@@ -255,23 +271,67 @@ impl Player {
         self.out.emit(&text);
     }
 
-    /// Demande l'autorisation, appelle l'outil si elle est accordée, puis
-    /// rejoue la branche `allow` ou `deny`.
-    fn permission(&mut self, line: &Value) {
+    /// Outil de base de Claude Code (`Bash`, `Write`…). Interdit par
+    /// `--disallowedTools` : erreur « No such tool available », rejoue
+    /// `blocked`, sans demande de permission. Sinon, demande l'autorisation
+    /// comme Claude Code ; l'outil n'est jamais exécuté pour de vrai.
+    fn builtin(&mut self, line: &Value) {
         let tool = line["tool"].as_str().unwrap_or_default();
-        let input = line["input"].clone();
-        let decision = match &self.permission_tool {
+        if self.disallowed.iter().any(|t| t == tool) {
+            self.vars
+                .insert("blocked_message", format!("No such tool available: {tool}"));
+            self.play(
+                line["blocked"]
+                    .as_array()
+                    .map(Vec::as_slice)
+                    .unwrap_or_default(),
+            );
+            return;
+        }
+        let decision = self.ask_permission(tool, line["input"].clone(), &line["tool_use_id"]);
+        if decision["behavior"] == "allow" {
+            self.vars
+                .insert("tool_result", format!("({tool} simulé par le faux claude)"));
+            self.play(
+                line["allow"]
+                    .as_array()
+                    .map(Vec::as_slice)
+                    .unwrap_or_default(),
+            );
+        } else {
+            let message = decision["message"].as_str().unwrap_or("refusé").to_owned();
+            self.vars.insert("deny_message", message);
+            self.play(
+                line["deny"]
+                    .as_array()
+                    .map(Vec::as_slice)
+                    .unwrap_or_default(),
+            );
+        }
+    }
+
+    /// Réponse de l'outil de `--permission-prompt-tool` (refus s'il n'y en a pas).
+    fn ask_permission(&mut self, tool: &str, input: Value, tool_use_id: &Value) -> Value {
+        match &self.permission_tool {
             None => json!({"behavior":"deny","message":"aucun --permission-prompt-tool"}),
             Some(prompt_tool) => {
                 let answer = self.call_tool(
                     &prompt_tool.clone(),
-                    json!({"tool_name": tool, "input": input, "tool_use_id": line["tool_use_id"]}),
+                    json!({"tool_name": tool, "input": input, "tool_use_id": tool_use_id}),
                 );
                 serde_json::from_str(&answer).unwrap_or_else(|e| {
                     fail(&format!("réponse de permission illisible ({e}) : {answer}"))
                 })
             }
-        };
+        }
+    }
+
+    /// Demande l'autorisation, appelle l'outil si elle est accordée, puis
+    /// rejoue la branche `allow` ou `deny`.
+    fn permission(&mut self, line: &Value) {
+        let tool = line["tool"].as_str().unwrap_or_default();
+        let input = line["input"].clone();
+        let decision = self.ask_permission(tool, input.clone(), &line["tool_use_id"]);
         if decision["behavior"] == "allow" {
             let input = decision.get("updatedInput").cloned().unwrap_or(input);
             let result = self.call_tool(tool, input);
