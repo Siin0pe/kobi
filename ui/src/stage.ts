@@ -28,6 +28,8 @@ export interface StageOptions {
   reducedMotion?: boolean;
   /** Se cale sur l'élément parent (aperçu des réglages) au lieu de la fenêtre. */
   inFrame?: boolean;
+  /** Annonce les changements d'état aux lecteurs d'écran (désactivé pour un aperçu). */
+  announce?: boolean;
 }
 
 export class Stage {
@@ -79,8 +81,10 @@ export class Stage {
 
     this.live = document.createElement('div');
     this.live.className = 'sr-only';
-    this.live.setAttribute('role', 'status');
-    this.live.setAttribute('aria-live', 'polite');
+    if (options.announce ?? true) {
+      this.live.setAttribute('role', 'status');
+      this.live.setAttribute('aria-live', 'polite');
+    }
 
     // Mode discret : une pastille de 32 px colorée selon l'état ; un clic la déplie.
     this.dot = document.createElement('button');

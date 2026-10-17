@@ -31,7 +31,7 @@ root.innerHTML = `
     <h2 id="skin-titre">Apparence de Kobi</h2>
     <div class="choix">
       <div class="liste" role="radiogroup" aria-labelledby="skin-titre"></div>
-      <figure class="apercu">
+      <figure class="apercu" aria-hidden="true">
         <div class="cadre"></div>
         <figcaption></figcaption>
       </figure>
@@ -42,7 +42,7 @@ root.innerHTML = `
 const list = root.querySelector<HTMLElement>('.liste')!;
 const caption = root.querySelector<HTMLElement>('figcaption')!;
 const status = root.querySelector<HTMLElement>('.statut')!;
-const stage = new Stage(root.querySelector<HTMLElement>('.cadre')!, { backdrop: true, inFrame: true });
+const stage = new Stage(root.querySelector<HTMLElement>('.cadre')!, { backdrop: true, inFrame: true, announce: false });
 
 let current = await loadSkin();
 let previewed = '';
