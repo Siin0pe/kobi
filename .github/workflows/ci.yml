@@ -50,6 +50,13 @@ jobs:
           cargo clippy -p kobi-stt -p kobi-bench --features kobi-stt/nemotron,kobi-bench/nemotron --all-targets -- -D warnings
           cargo test -p kobi-stt -p kobi-bench --features kobi-stt/nemotron,kobi-bench/nemotron
 
+      # Mot-clé avec ONNX Runtime lié statiquement (binaires précompilés
+      # d'ort ; le défaut, ort-dynamic, est couvert par le workspace).
+      - name: Mot-clé, ONNX Runtime statique
+        run: |
+          cargo clippy -p kobi-wake --no-default-features --features ort-static --all-targets -- -D warnings
+          cargo test -p kobi-wake --no-default-features --features ort-static
+
   ui:
     name: interface (chromium)
     runs-on: ubuntu-latest

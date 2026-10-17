@@ -124,6 +124,28 @@ CPU : la machine cible n'a pas de GPU (le GPU ne sert qu'à l'entraînement).
 charge au repos (audio en temps réel par blocs de 80 ms, 1 thread ONNX par
 modèle) : CPU du process en % d'un cœur, calcul par bloc, mémoire.
 
+### ONNX Runtime : lien statique ou chargement dynamique
+
+Par défaut (feature `ort-dynamic`), rien n'est lié à la compilation : la
+bibliothèque partagée d'ONNX Runtime est chargée à la première session, il
+faut donc la fournir pour exécuter un détecteur (pas pour compiler ni pour les
+tests). La feature `ort-static` (avec `--no-default-features`) fait
+télécharger par `ort` un ONNX Runtime précompilé, lié statiquement ; sous
+Linux, ce binaire exige glibc ≥ 2.38 et libstdc++ ≥ 13 et ne se lie pas sur
+Debian 12 ni Ubuntu 22.04 (`undefined symbol: __isoc23_strtol`).
+
+```sh
+# ONNX Runtime officiel (Microsoft), 1.27 ou plus récent ; Linux : glibc >= 2.27
+curl -LO https://github.com/microsoft/onnxruntime/releases/download/v1.28.0/onnxruntime-linux-x64-1.28.0.tgz
+tar xzf onnxruntime-linux-x64-1.28.0.tgz
+cargo build --release -p kobi-wake --examples
+ORT_DYLIB_PATH=$PWD/onnxruntime-linux-x64-1.28.0/lib/libonnxruntime.so target/release/examples/wake_eval
+```
+
+Recherche de la bibliothèque, dans l'ordre : `ORT_DYLIB_PATH`, le dossier de
+l'exécutable (où un paquet Kobi dépose `libonnxruntime.so`, `.dylib` ou
+`onnxruntime.dll`), puis les chemins du chargeur du système.
+
 ## Limites
 
 * **Licence : prototype non distribuable.** Presque toutes les voix Piper

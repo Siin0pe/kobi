@@ -155,6 +155,7 @@ fn session(path: &Path, threads: usize) -> Result<Session, WakeError> {
     if !path.exists() {
         return Err(WakeError::MissingModel(path.to_path_buf()));
     }
+    crate::runtime::ensure()?;
     Session::builder()
         .map_err(ort_err)?
         .with_intra_threads(threads)

@@ -5,6 +5,7 @@
 //! openWakeWord ([`oww::OpenWakeWord`], KOB-26) et rustpotter (KOB-27).
 
 pub mod oww;
+pub mod runtime;
 
 /// Fréquence d'échantillonnage attendue par tous les détecteurs.
 pub const SAMPLE_RATE: u32 = 16_000;
