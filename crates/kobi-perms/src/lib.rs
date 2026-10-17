@@ -8,13 +8,18 @@
 //! délai, ou si la demande est abandonnée, la réponse est un refus.
 //!
 //! Côté interface, [`cards::Cards`] transforme les demandes en cartes
-//! numérotées et transmet la réponse de l'utilisateur.
+//! numérotées et transmet la réponse de l'utilisateur. Les [`rules::Rules`]
+//! autorisent d'office la lecture seule et la liste blanche du workspace,
+//! sans carte.
 
 pub mod cards;
+pub mod rules;
 
 pub use cards::{Card, Cards};
+pub use rules::{Rules, Verdict};
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -93,16 +98,27 @@ impl ApprovalRequest {
 pub struct Approver {
     requests: mpsc::Sender<ApprovalRequest>,
     timeout: Duration,
+    rules: Arc<Rules>,
     #[allow(dead_code, reason = "lu par la macro tool_handler")]
     tool_router: ToolRouter<Self>,
 }
 
 #[tool_router]
 impl Approver {
+    /// Sans règles : tout passe par une carte.
     pub fn new(requests: mpsc::Sender<ApprovalRequest>, timeout: Duration) -> Self {
+        Self::with_rules(requests, timeout, Arc::new(Rules::default()))
+    }
+
+    pub fn with_rules(
+        requests: mpsc::Sender<ApprovalRequest>,
+        timeout: Duration,
+        rules: Arc<Rules>,
+    ) -> Self {
         Self {
             requests,
             timeout,
+            rules,
             tool_router: Self::tool_router(),
         }
     }
@@ -116,6 +132,9 @@ impl Approver {
     }
 
     async fn decision(&self, request: PermissionRequest) -> Decision {
+        if let Verdict::Allow(_) = self.rules.verdict(&request.tool_name) {
+            return Decision::Allow;
+        }
         let (pending, answer) = ApprovalRequest::new(request);
         if self.requests.send(pending).await.is_err() {
             return Decision::Deny("Kobi ne peut pas demander de confirmation.".into());
@@ -155,15 +174,26 @@ pub struct PermsServer {
 }
 
 impl PermsServer {
-    /// Démarre le serveur ; les demandes arrivent sur le récepteur renvoyé.
+    /// Démarre le serveur sans règles (tout passe par une carte) ; les
+    /// demandes arrivent sur le récepteur renvoyé.
     pub async fn start(
         timeout: Duration,
     ) -> std::io::Result<(Self, mpsc::Receiver<ApprovalRequest>)> {
+        Self::start_with_rules(timeout, Rules::default()).await
+    }
+
+    /// Démarre le serveur ; seules les demandes que `rules` n'autorisent pas
+    /// d'office arrivent sur le récepteur renvoyé.
+    pub async fn start_with_rules(
+        timeout: Duration,
+        rules: Rules,
+    ) -> std::io::Result<(Self, mpsc::Receiver<ApprovalRequest>)> {
+        let rules = Arc::new(rules);
         let (tx, rx) = mpsc::channel(16);
         let cancel = CancellationToken::new();
         let service: StreamableHttpService<Approver, LocalSessionManager> =
             StreamableHttpService::new(
-                move || Ok(Approver::new(tx.clone(), timeout)),
+                move || Ok(Approver::with_rules(tx.clone(), timeout, rules.clone())),
                 Default::default(),
                 StreamableHttpServerConfig::default().with_cancellation_token(cancel.child_token()),
             );
@@ -260,6 +290,18 @@ mod tests {
         drop(rx);
         let text = approver.approve(Parameters(request())).await;
         assert_eq!(parse(&text)["behavior"], "deny");
+    }
+
+    #[tokio::test]
+    async fn autorise_d_office_sans_carte_selon_les_regles() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let rules = Rules::new(["Write"]);
+        let approver = Approver::with_rules(tx, DEFAULT_TIMEOUT, Arc::new(rules));
+        assert_eq!(
+            parse(&approver.approve(Parameters(request())).await)["behavior"],
+            "allow"
+        );
+        assert!(rx.try_recv().is_err(), "aucune carte");
     }
 
     #[tokio::test]
