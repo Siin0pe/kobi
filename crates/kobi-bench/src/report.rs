@@ -109,7 +109,7 @@ impl Report {
                 r.meeting,
                 r.machine,
                 r.device,
-                // Mesure antérieure au protocole à 3 threads : indicative.
+                // Mesure antérieure à l'option --threads : indicative.
                 r.threads
                     .map_or("? (indicatif)".to_string(), |t| t.to_string()),
                 pct(m.wer),

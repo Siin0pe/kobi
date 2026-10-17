@@ -69,7 +69,7 @@ impl NemotronConfig {
         Self {
             model_dir: model_dir.into(),
             language: None,
-            num_threads: 3,
+            num_threads: 4,
             endpoint_silence: 0.8,
             provider: Provider::Cpu,
         }
