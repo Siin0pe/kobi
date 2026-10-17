@@ -29,5 +29,9 @@ sur stdout, soit une directive :
 | `{"fake":"call","tool":"mcp__notes__read_notes","input":{}}` | Appelle l'outil MCP pour de vrai ; son texte remplace `{{tool_result}}` dans les lignes suivantes. |
 | `{"fake":"permission","tool":"…","input":{…},"tool_use_id":"…","allow":[…],"deny":[…]}` | Appelle l'outil de `--permission-prompt-tool` (serveur « kobi ») ; si autorisé, appelle l'outil puis rejoue `allow`, sinon rejoue `deny` avec le message de refus dans `{{deny_message}}`. |
 
+Variables substituées dans toutes les lignes : `{{pid}}` (process du faux
+`claude`), `{{turn}}` (numéro du tour, dès 1), `{{tool_result}}` et
+`{{deny_message}}` (voir ci-dessus).
+
 Les serveurs MCP viennent de `--mcp-config` (JSON ou chemin de fichier),
 en stdio (`command`, `args`) ou en HTTP (`url`).
