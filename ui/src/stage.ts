@@ -39,6 +39,8 @@ export class Stage {
   private readonly motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
   private readonly forcedMotion: boolean | undefined;
   private readonly cleanups: Array<() => void> = [];
+  /** Animations arrêtées par la mise en pause, à relancer au retour. */
+  private frozen: Animation[] = [];
 
   constructor(parent: HTMLElement, options: StageOptions = {}) {
     this.forcedMotion = options.reducedMotion;
@@ -153,6 +155,17 @@ export class Stage {
     if (paused === this.paused) return;
     this.paused = paused;
     this.root.classList.toggle('paused', paused);
+    if (paused) {
+      // Tout ce qui tourne s'arrête : animations CSS, transitions en vol,
+      // animations Web des skins.
+      this.frozen = this.root.getAnimations({ subtree: true }).filter((a) => a.playState === 'running');
+      this.frozen.forEach((a) => a.pause());
+    } else {
+      this.frozen.forEach((a) => {
+        if (a.playState === 'paused') a.play();
+      });
+      this.frozen = [];
+    }
     this.bubbles.setPaused(paused);
     this.skin?.setPaused(paused);
   }

@@ -5,7 +5,8 @@ import { defineConfig, devices } from '@playwright/test';
 export default defineConfig({
   testDir: 'tests',
   fullyParallel: true,
-  workers: 2,
+  // Un seul navigateur : la machine est partagée avec des mesures de performance.
+  workers: 1,
   reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : 'list',
   use: {
     baseURL: 'http://127.0.0.1:4173',
