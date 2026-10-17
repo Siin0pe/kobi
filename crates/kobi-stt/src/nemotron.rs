@@ -305,6 +305,21 @@ mod tests {
         assert_eq!(NemotronConfig::new("m/autre").chunk_ms(), None);
     }
 
+    /// KOB-127 : avec whisper.cpp lié dans le même binaire, la création du
+    /// moteur plantait sous Linux (« free(): invalid pointer » dans le
+    /// `std::regex` d'onnxruntime). Ignoré sans modèle :
+    /// `KOBI_NEMOTRON_DIR=<dossier du paquet> cargo test -p kobi-stt
+    /// --features whisper,nemotron -- --ignored`.
+    #[test]
+    #[cfg(feature = "whisper")]
+    #[ignore = "demande KOBI_NEMOTRON_DIR"]
+    fn loads_with_whisper_in_the_same_binary() {
+        // Force l'édition de liens de whisper.cpp sans l'appeler.
+        std::hint::black_box(whisper_rs::print_system_info as fn() -> &'static str);
+        let dir = PathBuf::from(std::env::var("KOBI_NEMOTRON_DIR").expect("KOBI_NEMOTRON_DIR"));
+        NemotronEngine::new(NemotronConfig::new(&dir)).unwrap();
+    }
+
     /// Transcrit le WAV français fourni avec le paquet. Ignoré sans modèle :
     /// `KOBI_NEMOTRON_DIR=<dossier du paquet> cargo test -p kobi-stt
     /// --features nemotron -- --ignored`.
