@@ -2,10 +2,12 @@
 
 import type { SkinFactory } from '../contract';
 import { createFakeSkin } from './factice';
+import { createGribouilleSkin } from './gribouille';
 import { createKobiSkin } from './kobi';
 
 export const SKINS: Record<string, SkinFactory> = {
   kobi: createKobiSkin,
+  gribouille: createGribouilleSkin,
   factice: createFakeSkin,
 };
 
