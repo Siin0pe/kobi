@@ -24,6 +24,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import urllib.request
@@ -47,6 +48,10 @@ PIPER_ARCHIVES = {
     "win32": (
         "piper_windows_amd64.zip",
         "f3c58906402b24f3a96d92145f58acba6d86c9b5db896d207f78dc80811efcea",
+    ),
+    "linux": (
+        "piper_linux_x86_64.tar.gz",
+        "a50cb45f355b7af1f6d758c1b360717877ba0a398cc8cbe6d2a7a3a26e225992",
     ),
 }
 
@@ -188,7 +193,12 @@ class Utterance:
 def limit_cpu(threads: int = 4) -> None:
     """Limite ce process et ses enfants (Piper, SAPI) à `threads` processeurs
     logiques, en priorité basse : le poste est partagé et ces outils ne
-    doivent pas prendre plus de la moitié du CPU. Sans effet hors Windows."""
+    doivent pas prendre plus de la moitié du CPU. Hors Windows : affinité
+    seulement, la priorité basse vient de `nice`."""
+    if sys.platform.startswith("linux"):
+        cpus = sorted(os.sched_getaffinity(0))[:threads]
+        os.sched_setaffinity(0, cpus)
+        return
     if sys.platform != "win32":
         return
     import ctypes
@@ -240,8 +250,15 @@ def piper_exe() -> Path:
         archive,
         sha,
     )
-    with zipfile.ZipFile(archive) as z:
-        z.extractall(TOOLS_DIR)
+    if name.endswith(".zip"):
+        with zipfile.ZipFile(archive) as z:
+            z.extractall(TOOLS_DIR)
+    else:
+        # `filter` n'existe qu'à partir de Python 3.11.4 (archive vérifiée
+        # par SHA-256 de toute façon).
+        safe = {"filter": "tar"} if hasattr(tarfile, "tar_filter") else {}
+        with tarfile.open(archive) as t:
+            t.extractall(TOOLS_DIR, **safe)
     return exe
 
 
