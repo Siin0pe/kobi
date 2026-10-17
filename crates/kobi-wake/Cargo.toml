@@ -4,8 +4,19 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+# Par défaut, ONNX Runtime partagé chargé à l'exécution (ORT_DYLIB_PATH,
+# dossier de l'exécutable ou chargeur du système) : rien n'est lié à la
+# compilation, le workspace se construit partout (voir src/runtime.rs).
+default = ["ort-dynamic"]
+ort-dynamic = ["ort/load-dynamic"]
+# ONNX Runtime précompilé par ort, téléchargé au build et lié statiquement :
+# pratique en développement, mais sous Linux il exige glibc >= 2.38.
+# S'utilise avec --no-default-features.
+ort-static = ["ort/download-binaries", "ort/copy-dylibs", "ort/tls-native"]
+
 [dependencies]
-ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "api-27", "download-binaries", "copy-dylibs", "tls-native"] }
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "api-27"] }
 thiserror = "2"
 
 [dev-dependencies]
