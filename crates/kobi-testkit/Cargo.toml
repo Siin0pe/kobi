@@ -4,20 +4,17 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
-description = "Doublures de test du cerveau : faux `claude` et faux serveur MCP."
+description = "Doublures de test du cerveau (faux `claude`, faux serveur MCP) et cas du prompt système."
 
 [dependencies]
+kobi-brain = { path = "../kobi-brain" }
+kobi-perms = { path = "../kobi-perms" }
 rmcp = { version = "3.5", features = ["server", "macros", "transport-io"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["io-std", "macros", "rt"] }
+tokio = { version = "1", features = ["io-std", "macros", "rt", "rt-multi-thread", "time"] }
 # Client HTTP du serveur de permission (boucle locale, sans TLS).
 ureq = { version = "2", default-features = false }
-
-[dev-dependencies]
-kobi-brain = { path = "../kobi-brain" }
-kobi-perms = { path = "../kobi-perms" }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 
 [[bin]]
 name = "fake-claude"
@@ -27,4 +24,10 @@ test = false
 [[bin]]
 name = "fake-mcp"
 path = "src/bin/fake-mcp.rs"
+test = false
+
+# Cas de non-régression du prompt système (contre le vrai Claude, à la main).
+[[bin]]
+name = "cas-prompt"
+path = "src/bin/cas-prompt.rs"
 test = false

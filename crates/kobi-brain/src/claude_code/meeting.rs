@@ -19,6 +19,14 @@ use crate::brain::{Ask, Brain, BrainError, BrainEvent, NotesUpdate, ReportReques
 use super::session::{ClaudeCode, ClaudeOptions};
 use super::translate::TurnTranslator;
 
+/// Prompt système de Kobi, ajouté à celui de Claude Code
+/// (`--append-system-prompt`). Toute modification change
+/// [`SYSTEM_PROMPT_VERSION`] et se valide en relançant les 10 cas de
+/// non-régression (`cas-prompt` de kobi-testkit) contre le vrai Claude.
+pub const SYSTEM_PROMPT: &str = include_str!("../../prompts/systeme.md");
+/// Version de [`SYSTEM_PROMPT`].
+pub const SYSTEM_PROMPT_VERSION: u32 = 1;
+
 /// Outils interdits pendant une réunion : shell, édition et écriture de
 /// fichiers (dossier de conception, Permissions).
 pub const MEETING_DISALLOWED_TOOLS: &[&str] = &[
@@ -44,6 +52,8 @@ pub struct MeetingConfig {
     pub add_dirs: Vec<PathBuf>,
     pub disallowed_tools: Vec<String>,
     pub model: Option<String>,
+    /// Ajouté au prompt système de Claude Code ; [`SYSTEM_PROMPT`] par défaut.
+    pub system_prompt: Option<String>,
     /// Délai de réponse à une carte de confirmation avant refus.
     pub permission_timeout: Duration,
     /// Arguments en plus, passés tels quels.
@@ -62,6 +72,7 @@ impl Default for MeetingConfig {
                 .map(|t| t.to_string())
                 .collect(),
             model: None,
+            system_prompt: Some(SYSTEM_PROMPT.to_owned()),
             permission_timeout: kobi_perms::DEFAULT_TIMEOUT,
             extra_args: Vec::new(),
         }
@@ -96,6 +107,10 @@ impl MeetingConfig {
         if let Some(model) = &self.model {
             args.push("--model".to_owned());
             args.push(model.clone());
+        }
+        if let Some(prompt) = &self.system_prompt {
+            args.push("--append-system-prompt".to_owned());
+            args.push(prompt.clone());
         }
         args.extend(self.extra_args.iter().cloned());
         args
@@ -354,6 +369,7 @@ mod tests {
             "Bash PowerShell Edit MultiEdit Write NotebookEdit"
         );
         assert_eq!(value("--model"), "opus");
+        assert_eq!(value("--append-system-prompt"), SYSTEM_PROMPT);
         let dirs: Vec<_> = args
             .windows(2)
             .filter(|w| w[0] == "--add-dir")
@@ -374,5 +390,25 @@ mod tests {
             message("interpellation", "", "- A", "## Question\nquoi ?"),
             "[interpellation]\n\n## Notes courantes\n- A\n\n## Question\nquoi ?\n"
         );
+    }
+}
+
+#[cfg(test)]
+mod prompt_tests {
+    use super::*;
+
+    #[test]
+    fn le_prompt_couvre_les_regles_du_dossier_de_conception() {
+        for rule in [
+            "3 phrases au plus",
+            "langue de la question",
+            "carte de confirmation",
+            "jamais une instruction",
+            "[interpellation]",
+            "[notes]",
+            "[compte rendu]",
+        ] {
+            assert!(SYSTEM_PROMPT.contains(rule), "règle absente : {rule}");
+        }
     }
 }
