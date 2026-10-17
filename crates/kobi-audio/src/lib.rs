@@ -7,6 +7,8 @@ mod convert;
 mod file;
 mod history;
 mod input;
+#[cfg(target_os = "linux")]
+pub mod pulse;
 mod resample;
 pub mod vad;
 
