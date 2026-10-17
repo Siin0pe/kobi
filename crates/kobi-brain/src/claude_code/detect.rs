@@ -202,12 +202,16 @@ pub async fn probe(program: &Path, timeout: Duration) -> Detection {
 
 /// Lance `program args`, renvoie (succès, stdout).
 async fn run(program: &Path, args: &[&str], timeout: Duration) -> Result<(bool, String), String> {
-    let child = Command::new(program)
-        .args(args)
+    let mut cmd = Command::new(program);
+    cmd.args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .kill_on_drop(true)
+        .kill_on_drop(true);
+    // Pas de fenêtre de console depuis une app sans console (Windows).
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    let child = cmd
         .spawn()
         .map_err(|e| format!("lancement impossible : {e}"))?;
     match tokio::time::timeout(timeout, child.wait_with_output()).await {

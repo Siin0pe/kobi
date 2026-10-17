@@ -13,8 +13,11 @@ path = "src/main.rs"
 tauri-build = { version = "2.7", features = [] }
 
 [dependencies]
+kobi-audio = { path = "../kobi-audio" }
+kobi-brain = { path = "../kobi-brain" }
 kobi-session = { path = "../kobi-session" }
-kobi-stt = { path = "../kobi-stt" }
+kobi-stt = { path = "../kobi-stt", features = ["nemotron"] }
+tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2.12", features = ["macos-private-api", "tray-icon"] }

@@ -82,5 +82,10 @@ export function followSession(stage: Stage): void {
   void api.event.listen<Segment>('segment', (e) =>
     window.dispatchEvent(new CustomEvent<Segment>('kobi:segment', { detail: e.payload })),
   );
+  // Interpellation de bout en bout (KOB-67) : question transcrite en direct,
+  // réponse de Claude en flux, erreur à afficher.
+  void api.event.listen<string>('question', (e) => stage.update({ question: e.payload }));
+  void api.event.listen<string>('answer', (e) => stage.update({ answer: e.payload }));
+  void api.event.listen<{ title: string; message: string }>('erreur', (e) => stage.update({ error: e.payload }));
   void api.core.invoke<SessionState>('etat_session').then(show);
 }

@@ -172,6 +172,12 @@ impl NemotronEngine {
         })
     }
 
+    /// Oublie l'audio et les énoncés en cours : la prochaine trame repart
+    /// d'un flux neuf, sans recharger le modèle (une question après l'autre).
+    pub fn reset(&mut self) {
+        self.tracks.clear();
+    }
+
     fn track(&mut self, source: Source) -> &mut Track {
         let (recognizer, language) = (&self.recognizer, &self.config.language);
         self.tracks.entry(source).or_insert_with(|| {

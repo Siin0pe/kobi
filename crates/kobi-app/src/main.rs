@@ -4,6 +4,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod interpellation;
 mod placement;
 mod raccourci;
 mod session;
@@ -93,6 +94,7 @@ fn main() {
             if let Some(problem) = &config.problem {
                 tracing::warn!(%problem, "config.toml");
             }
+            interpellation::installer(app.handle());
             raccourci::installer(app.handle(), &config.config.hotkey)?;
             let window = app
                 .get_webview_window("main")

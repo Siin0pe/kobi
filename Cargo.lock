@@ -2593,6 +2593,8 @@ dependencies = [
 name = "kobi-app"
 version = "0.1.0"
 dependencies = [
+ "kobi-audio",
+ "kobi-brain",
  "kobi-session",
  "kobi-stt",
  "serde",
@@ -2600,6 +2602,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-global-shortcut",
+ "tokio",
  "tracing",
 ]
 

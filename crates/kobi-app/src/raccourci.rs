@@ -17,6 +17,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use crate::session::{appliquer, EtatUi};
 
 /// Délai sans question après lequel l'écoute s'arrête.
+#[allow(dead_code)] // tests ; le fil d'interpellation fixe son propre délai
 pub const SANS_QUESTION: Duration = Duration::from_secs(4);
 
 /// Compteur d'interpellations : seule la dernière peut clore l'écoute.
@@ -72,12 +73,9 @@ pub fn installer<R: Runtime>(app: &AppHandle<R>, hotkey: &str) -> tauri::Result<
         tauri_plugin_global_shortcut::Builder::new()
             .with_handler(|app, _raccourci, evenement| {
                 if evenement.state() == ShortcutState::Pressed {
-                    match interpeller(app, SANS_QUESTION) {
-                        Ok(etat) => tracing::info!(
-                            etat = etat.etat,
-                            mascotte = etat.mascotte,
-                            "raccourci global : interpellation"
-                        ),
+                    // Écoute du micro, transcription, question à Claude (KOB-67).
+                    match crate::interpellation::declencher(app) {
+                        Ok(()) => tracing::info!("raccourci global : interpellation"),
                         Err(refus) => tracing::info!(%refus, "raccourci global ignoré"),
                     }
                 }
