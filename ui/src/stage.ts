@@ -20,8 +20,12 @@ export const SCENE_WIDTH = 820;
 export const SCENE_HEIGHT = 560;
 
 export interface StageOptions {
-  /** Affiche le fond vert de Kobi (captures, développement). La fenêtre native reste transparente. */
-  backdrop?: boolean;
+  /**
+   * Fond affiché derrière Kobi (captures, développement) : le vert de la
+   * marque (`true`), ou un bureau sombre ou clair pour vérifier la lisibilité.
+   * La fenêtre native reste transparente.
+   */
+  backdrop?: boolean | 'sombre' | 'clair';
   /** Force « réduire les animations » (tests) ; sinon suit le réglage système. */
   reducedMotion?: boolean;
   /** Se cale sur l'élément parent (aperçu) au lieu de la fenêtre. */
@@ -64,7 +68,8 @@ export class Stage {
 
     this.root = document.createElement('div');
     this.root.className = 'stage';
-    this.root.classList.toggle('with-backdrop', options.backdrop ?? false);
+    this.root.classList.toggle('with-backdrop', Boolean(options.backdrop));
+    if (typeof options.backdrop === 'string') this.root.dataset.backdrop = options.backdrop;
 
     this.scene = document.createElement('div');
     this.scene.className = 'scene';
@@ -115,6 +120,7 @@ export class Stage {
     }
     this.root.classList.toggle('reduced-motion', this.reducedMotion);
     this.bubbles.setReducedMotion(this.reducedMotion);
+    this.rec.setReducedMotion(this.reducedMotion);
     this.setState('idle');
     this.applyPaused();
   }
@@ -130,7 +136,7 @@ export class Stage {
     this.root.dataset.state = state;
     this.scene.setAttribute('aria-label', `Kobi : ${STATE_LABELS[state]}`);
     this.paintDot();
-    this.kobi.setState(state);
+    this.kobi.setState(state, this.data);
     this.bubbles.render(state, this.data);
     if (state !== this.spoken) {
       this.spoken = state;
@@ -174,7 +180,9 @@ export class Stage {
   updateMeeting(patch: Partial<MeetingInfo>): void {
     if (!this.meeting) return;
     const wasPaused = Boolean(this.meeting.paused);
+    const notes = this.meeting.notes ?? 0;
     this.setMeeting({ ...this.meeting, ...patch });
+    if ((this.meeting.notes ?? 0) > notes && !this.isPaused()) this.kobi.noteAdded();
     if (Boolean(this.meeting.paused) !== wasPaused) this.say(this.meeting.paused ? 'Transcription en pause.' : 'Transcription reprise.');
   }
 
@@ -188,6 +196,7 @@ export class Stage {
   private setMeeting(info: MeetingInfo | null): void {
     this.meeting = info;
     this.rec.set(info);
+    this.kobi.setRecording(info === null ? null : { paused: Boolean(info.paused) });
     this.root.classList.toggle('in-meeting', info !== null);
     this.dot.classList.toggle('recording', info !== null && !info.paused);
     this.paintDot();
@@ -222,7 +231,13 @@ export class Stage {
   /** Met à jour les données sans changer d'état (texte en flux, sources). */
   update(data: MascotData): void {
     this.data = { ...this.data, ...data };
+    this.kobi.setData(this.data);
     this.bubbles.render(this.state, this.data);
+  }
+
+  /** Volume du micro, de 0 à 1 : Kobi l'écoute en Écoute. */
+  setLevel(level: number): void {
+    if (!this.isPaused()) this.kobi.setLevel(level);
   }
 
   /** Appelé quand l'utilisateur confirme ou refuse une carte d'action. */
@@ -234,6 +249,7 @@ export class Stage {
     this.reducedMotion = reduced;
     this.root.classList.toggle('reduced-motion', reduced);
     this.bubbles.setReducedMotion(reduced);
+    this.rec.setReducedMotion(reduced);
     this.kobi.setReducedMotion(reduced);
   }
 

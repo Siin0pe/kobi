@@ -74,7 +74,9 @@
   padding: 10px 16px;
   border-radius: 999px;
   border: 2px solid var(--ink);
-  background: transparent;
+  /* Fond papier, pas transparent : la fenêtre l'est, la puce doit rester
+     lisible sur un bureau sombre. */
+  background: var(--paper);
   color: var(--ink);
   font-size: 15px;
   font-variation-settings: 'MONO' 1, 'wght' 600;

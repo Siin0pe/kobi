@@ -5,6 +5,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { chromium } from '@playwright/test';
+import { stopTree } from './stop.mjs';
 
 const arg = (n, d) => (process.argv.includes(`--${n}`) ? process.argv[process.argv.indexOf(`--${n}`) + 1] : d);
 const out = resolve(arg('out', 'captures/reunion'));
@@ -55,5 +56,5 @@ try {
   if (r.status !== 0) throw new Error('ffmpeg');
   console.log('ok');
 } finally {
-  process.kill(-server.pid);
+  stopTree(server);
 }

@@ -8,21 +8,30 @@
 }
 
 .rec {
+  /* Collé en haut à gauche de la pilule, comme une étiquette : il reste
+     immobile pendant les sauts de Kobi pour rester lisible. */
   position: absolute;
-  left: 40px;
-  top: 28px;
+  left: 404px;
+  top: 112px;
+  transform: rotate(-3deg);
+  transform-origin: 0 100%;
   z-index: 6;
   display: flex;
   align-items: center;
   gap: 8px;
-  max-width: 380px;
-  padding: 6px 12px 6px 10px;
+  max-width: 340px;
+  padding: 6px 14px 6px 10px;
   border-radius: 999px;
-  background: rgba(11, 11, 11, 0.86);
+  /* Étiquette rouge, contour noir et liseré vert : visible sur le vert de la
+     marque comme sur un bureau sombre ou clair. */
+  background: #ff3b30;
   color: #ffffff;
-  box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.55);
-  font: 600 13px var(--font);
-  font-variation-settings: 'MONO' 1, 'wght' 600;
+  border: 2.5px solid #0b0b0b;
+  box-shadow:
+    0 0 0 2px #d7ff3a,
+    4px 4px 0 rgba(11, 11, 11, 0.25);
+  font: 700 14px var(--font);
+  font-variation-settings: 'MONO' 1, 'wght' 750;
   letter-spacing: 0.04em;
   white-space: nowrap;
 }
@@ -34,11 +43,15 @@
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  background: #ff3b30;
+  background: #ffffff;
+  box-shadow: 0 0 0 2px #0b0b0b;
   animation: rec-blink 1.6s steps(1) infinite;
 }
+.rec.is-paused {
+  background: #5f6368;
+}
 .rec.is-paused .rec-dot {
-  background: #9aa0a6;
+  background: #c4c7c5;
   animation: none;
 }
 .rec-label {
@@ -47,10 +60,28 @@
 }
 .rec-time {
   font-variant-numeric: tabular-nums;
-  opacity: 0.8;
 }
-.rec-time::before {
+.rec-time::before,
+.rec-notes::before {
   content: '· ';
+}
+.rec-notes {
+  display: inline-block;
+  font-variant-numeric: tabular-nums;
+}
+.rec-notes[hidden] {
+  display: none;
+}
+.rec-plus {
+  position: absolute;
+  right: 6px;
+  top: -10px;
+  padding: 0 5px;
+  border-radius: 6px;
+  background: #d7ff3a;
+  color: #0b0b0b;
+  font-weight: 800;
+  pointer-events: none;
 }
 .reduced-motion .rec-dot {
   animation: none;

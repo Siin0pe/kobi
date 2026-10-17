@@ -77,6 +77,8 @@ export interface MeetingInfo {
   startedAt: number;
   /** Transcription en pause (« Kobi, pause » ou un clic). */
   paused?: boolean;
+  /** Nombre de notes prises depuis le début de la réunion. */
+  notes?: number;
 }
 
 export type ConsentLang = 'fr' | 'en';

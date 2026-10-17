@@ -60,6 +60,7 @@ export function playDemo(
   state: MascotState,
   apply: (state: MascotState, data: MascotData) => void,
   update: (data: MascotData) => void,
+  level: (level: number) => void = () => {},
 ): () => void {
   const timers: number[] = [];
   const at = (ms: number, fn: () => void) => timers.push(window.setTimeout(fn, ms));
@@ -80,6 +81,16 @@ export function playDemo(
       const words = full.answer!.split(' ');
       apply(state, { answer: '', answerTags: full.answerTags });
       for (let i = 1; i <= words.length; i++) at(i * 140, () => update({ answer: words.slice(0, i).join(' ') }));
+      break;
+    }
+    case 'listen': {
+      // Volume d'une voix qui pose la question : syllabes et petites pauses.
+      apply(state, full);
+      for (let t = 0; t < 3200; t += 50) {
+        const syllable = Math.max(0, Math.sin(t / 37) * Math.sin(t / 151));
+        const pause = (t > 1300 && t < 1600) || t > 2900 ? 0 : 1;
+        at(t, () => level(pause * (0.25 + 0.75 * syllable)));
+      }
       break;
     }
     case 'error': {

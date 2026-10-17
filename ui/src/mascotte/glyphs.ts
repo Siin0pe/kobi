@@ -4,6 +4,7 @@
 // (`#%&@*?!/<>{}=+$`) : les yeux pendant 300 ms, puis le mot se pose lettre
 // par lettre. Rythme du prototype : un pas toutes les 60 ms, la lettre i se
 // pose au pas 1,6 × i + 3. La boucle ne tourne que pendant le brouillage.
+// Les symboles tressautent, chaque lettre qui se pose rebondit.
 
 export const NOISE = '#%&@*?!/<>{}=+$';
 const STEP_MS = 60;
@@ -26,6 +27,17 @@ export function settleStep(length: number): number {
   return Math.floor((length - 1) * LETTER_SPEED + LETTER_DELAY) + 1;
 }
 
+/** Rebond d'une lettre qui se pose (transformation seule : la graisse ondule à part). */
+const LETTER_POP: Keyframe[] = [
+  { transform: 'translateY(14px) scale(.6,1.3)', easing: 'cubic-bezier(.2,.8,.3,1.2)' },
+  { offset: 0.45, transform: 'translateY(-10px) scale(1.12,.92)', easing: 'cubic-bezier(.45,0,.35,1)' },
+  { offset: 0.75, transform: 'translateY(2px) scale(.97,1.03)' },
+  { transform: 'none' },
+];
+
+/** Paire d'yeux : gauche, droite. */
+export type Eyes = readonly [string, string];
+
 export class Scrambler {
   private eye = '';
   private letters: string[] = [];
@@ -35,6 +47,10 @@ export class Scrambler {
   private instant = false;
   /** Clignement en cours : les yeux affichent `–`. */
   private blinking = false;
+  /** Expression passagère (clin d'œil, regard d'un œil…), sinon l'œil de l'état. */
+  private expression: Eyes | null = null;
+  private glitchTimer = 0;
+  private glitched: { span: HTMLElement; final: string } | null = null;
 
   constructor(
     private readonly eyes: HTMLElement[],
@@ -46,12 +62,16 @@ export class Scrambler {
     this.eye = eye;
     this.letters = Array.from(word);
     this.blinking = false;
+    this.expression = null;
     const spans = this.letters.map((_, i) => {
       const span = document.createElement('span');
       span.className = 'ch';
       span.style.animationDelay = `${(i * 0.12).toFixed(2)}s`;
       return span;
     });
+    // Une seule boucle à la fois : un changement d'état rapproché ne doit pas
+    // laisser tourner l'ancienne (elle échapperait à la pause).
+    this.stop();
     this.word.replaceChildren(...spans);
     this.start = performance.now();
     this.lastStep = -1;
@@ -67,6 +87,7 @@ export class Scrambler {
     this.instant = instant;
     if (instant) {
       this.stop();
+      this.expression = null;
       this.paint(Number.POSITIVE_INFINITY);
     }
   }
@@ -78,12 +99,54 @@ export class Scrambler {
   /** Ferme ou rouvre les yeux (sans effet pendant le brouillage). */
   blink(closed: boolean): void {
     this.blinking = closed;
-    if (!this.scrambling) this.paintEyes(closed ? '–' : this.eye);
+    if (!this.scrambling) this.paintEyes();
   }
 
+  /** Expression passagère des deux yeux, `null` pour revenir à celle de l'état. */
+  express(eyes: Eyes | null): void {
+    this.expression = eyes;
+    if (!this.scrambling) this.paintEyes();
+  }
+
+  /** Brouille une seule lettre du mot quelques pas, puis la repose (veille). */
+  glitch(index: number): void {
+    const span = this.word.children[index] as HTMLElement | undefined;
+    const final = this.letters[index];
+    if (!span || final === undefined || final === ' ' || this.scrambling || this.instant || this.glitched) return;
+    this.glitched = { span, final };
+    let step = 0;
+    const tick = (): void => {
+      if (step < 4) {
+        span.textContent = noise(index * 5 + step * 3 + 1);
+        step += 1;
+        this.glitchTimer = window.setTimeout(tick, STEP_MS);
+      } else {
+        this.endGlitch();
+        span.animate(LETTER_POP, { duration: 360 });
+      }
+    };
+    tick();
+  }
+
+  /** Pose tout de suite le mot et les yeux (pause en plein brouillage). */
+  finish(): void {
+    const running = this.frame !== 0;
+    this.stop();
+    if (running) this.paint(Number.POSITIVE_INFINITY);
+  }
+
+  /** Arrête la boucle de brouillage et repose une lettre brouillée seule. */
   stop(): void {
     cancelAnimationFrame(this.frame);
     this.frame = 0;
+    this.endGlitch();
+  }
+
+  private endGlitch(): void {
+    window.clearTimeout(this.glitchTimer);
+    this.glitchTimer = 0;
+    if (this.glitched) this.glitched.span.textContent = this.glitched.final;
+    this.glitched = null;
   }
 
   private loop(): void {
@@ -92,30 +155,51 @@ export class Scrambler {
       const k = Math.floor((now - this.start) / STEP_MS);
       if (k !== this.lastStep) this.paint(k);
       if (k < Math.max(EYE_STEPS, settleStep(this.letters.length))) this.loop();
+      else this.paintEyes();
     });
   }
 
   private paint(k: number): void {
     this.lastStep = k;
-    const eye = k < EYE_STEPS ? noise(k * 5 + 2) : this.blinking ? '–' : this.eye;
-    this.paintEyes(eye);
+    if (k < EYE_STEPS) {
+      const n = noise(k * 5 + 2);
+      for (const node of this.eyes) if (node.textContent !== n) node.textContent = n;
+    } else {
+      this.paintEyes();
+    }
     const text = scramble(this.letters, k);
     const spans = this.word.children;
+    const live = Number.isFinite(k);
     for (let i = 0; i < spans.length; i++) {
-      const span = spans[i]!;
-      if (span.textContent !== text[i]) span.textContent = text[i]!;
+      const span = spans[i] as HTMLElement;
+      const c = text[i]!;
+      if (span.textContent === c) continue;
+      const settled = c === this.letters[i];
+      span.textContent = c;
+      if (!live) continue;
+      if (settled) {
+        span.style.transform = '';
+        if (c !== ' ') span.animate(LETTER_POP, { duration: 380 });
+      } else {
+        // Le symbole tressaute : petit décalage pseudo-aléatoire à chaque pas.
+        const s = (i * 13 + k * 7) % 9;
+        span.style.transform = `translateY(${s - 4}px) rotate(${(s % 5) * 4 - 8}deg)`;
+      }
     }
   }
 
-  private paintEyes(eye: string): void {
-    for (const node of this.eyes) if (node.textContent !== eye) node.textContent = eye;
+  private paintEyes(): void {
+    const pair: Eyes = this.blinking ? ['–', '–'] : (this.expression ?? [this.eye, this.eye]);
+    this.eyes.forEach((node, i) => {
+      if (node.textContent !== pair[i]) node.textContent = pair[i]!;
+    });
   }
 }
 
 /**
- * Clignements aléatoires (Écoute, Note, Répond) : yeux fermés 120 ms toutes
- * les 2 à 5 s, parfois deux fois de suite. Une seule minuterie à la fois,
- * aucune quand la fenêtre est masquée ou les animations réduites.
+ * Clignements aléatoires : yeux fermés 120 ms toutes les 2 à 5 s, parfois
+ * deux fois de suite. Une seule minuterie à la fois, aucune quand la fenêtre
+ * est masquée ou les animations réduites.
  */
 export class Blinker {
   private timer = 0;

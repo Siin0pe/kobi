@@ -8,6 +8,7 @@
 
 import { spawn } from 'node:child_process';
 import { chromium } from '@playwright/test';
+import { stopTree } from './stop.mjs';
 
 const STATES = ['idle', 'listen', 'think', 'write', 'answer', 'suggest', 'done', 'error'];
 const PORT = 4175;
@@ -65,7 +66,7 @@ const result = await page.evaluate(async (pairs) => {
 }, pairs);
 
 await browser.close();
-process.kill(-server.pid);
+stopTree(server);
 
 const d = result.deltas.sort((x, y) => x - y);
 const q = (p) => d[Math.min(d.length - 1, Math.floor(p * d.length))].toFixed(1);

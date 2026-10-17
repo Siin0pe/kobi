@@ -10,6 +10,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, rmSync, renameSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { chromium } from '@playwright/test';
+import { stopTree } from './stop.mjs';
 
 const STATES = ['idle', 'listen', 'think', 'write', 'answer', 'suggest', 'done', 'error'];
 const W = 820;
@@ -118,5 +119,5 @@ try {
   }
   await browser.close();
 } finally {
-  process.kill(-server.pid);
+  stopTree(server);
 }

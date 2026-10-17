@@ -1,10 +1,11 @@
 // Point d'entrée de l'interface. Paramètres d'URL (développement, tests,
-// captures) : `state`, `backdrop=1`, `reduced=1`, `discret=1`,
+// captures) : `state`, `backdrop=1|sombre|clair`, `reduced=1`, `discret=1`,
 // `reunion=<titre>` (+ `depuis=<s>`, `carte=0`).
 
 import { isMascotState, STATES, type MascotData, type MascotState } from './states';
 import { demoData, playDemo } from './demo';
 import { command, enableWindowDrag, followSession, type Command, type SessionState } from './native';
+import { applyRecording, type RecordingState } from './recording';
 import { Stage } from './stage';
 import './styles/fonts.css';
 import './styles/stage.css';
@@ -12,10 +13,14 @@ import './styles/bubbles.css';
 import './styles/meeting.css';
 
 const params = new URLSearchParams(location.search);
+
+function backdropParam(value: string | null): boolean | 'sombre' | 'clair' {
+  return value === 'sombre' || value === 'clair' ? value : value === '1';
+}
 const reduced = params.get('reduced');
 
 const stage = new Stage(document.getElementById('app')!, {
-  backdrop: params.get('backdrop') === '1',
+  backdrop: backdropParam(params.get('backdrop')),
   reducedMotion: reduced === null ? undefined : reduced === '1',
 });
 enableWindowDrag(stage.root);
@@ -38,9 +43,13 @@ declare global {
       states: readonly MascotState[];
       setState(state: MascotState, data?: MascotData): void;
       update(data: MascotData): void;
+      /** Volume du micro (0 à 1), comme l'événement `niveau` de la coque. */
+      setLevel(level: number): void;
       /** Réunion : indicateur REC et carte « prévenez les participants ». */
       startMeeting(title?: string): void;
       endMeeting(): void;
+      /** État d'enregistrement, comme l'événement `enregistrement` de la coque. */
+      recording(state: RecordingState): void;
       /** Mode discret (pastille de 32 px). */
       setCompact(compact: boolean): void;
       demoData(state: MascotState): MascotData;
@@ -60,9 +69,11 @@ window.kobi = {
     stage.setState(state, data ?? {});
   },
   update: (data) => stage.update(data),
+  setLevel: (level) => stage.setLevel(level),
   setCompact: (compact) => stage.setCompact(compact),
   startMeeting: (title) => stage.startMeeting({ title, startedAt: Date.now() }),
   endMeeting: () => stage.endMeeting(),
+  recording: (state) => applyRecording(stage, state),
   demoData,
   command,
   play: (state) => {
@@ -71,6 +82,7 @@ window.kobi = {
       state,
       (s, d) => stage.setState(s, d),
       (d) => stage.update(d),
+      (level) => stage.setLevel(level),
     );
   },
 };
