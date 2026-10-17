@@ -8,6 +8,7 @@ mod file;
 mod history;
 mod input;
 mod resample;
+pub mod vad;
 
 use std::time::Duration;
 
