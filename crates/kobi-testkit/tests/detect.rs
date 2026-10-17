@@ -9,6 +9,11 @@ use kobi_brain::Detection;
 
 const FAKE_CLAUDE: &str = env!("CARGO_BIN_EXE_fake-claude");
 
+/// Les tests copient un exécutable puis le lancent : si un autre test fait
+/// un fork pendant la copie, le fichier encore ouvert en écriture ne peut
+/// pas être exécuté (`ETXTBSY` sous Linux). Ils passent donc un par un.
+static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Copie le faux `claude` dans un dossier propre au test, sous le nom du
 /// vrai, avec le mode demandé.
 fn install(test: &str, mode: Option<&str>) -> (PathBuf, PathBuf) {
@@ -33,6 +38,7 @@ fn path_of(dirs: &[&Path]) -> std::ffi::OsString {
 
 #[tokio::test]
 async fn present_et_connecte() {
+    let _serial = SERIAL.lock().await;
     let (dir, exe) = install("present", None);
     let found = find_in(Some(&path_of(&[&dir])), &[]);
     assert_eq!(found, std::slice::from_ref(&exe));
@@ -52,6 +58,7 @@ async fn present_et_connecte() {
 
 #[tokio::test]
 async fn absent() {
+    let _serial = SERIAL.lock().await;
     let (dir, _) = install("absent-vide", None);
     std::fs::remove_dir_all(&dir).unwrap();
     std::fs::create_dir_all(&dir).unwrap();
@@ -63,6 +70,7 @@ async fn absent() {
 
 #[tokio::test]
 async fn binaire_qui_echoue() {
+    let _serial = SERIAL.lock().await;
     let (_, exe) = install("echoue", Some("broken"));
     let d = probe(&exe, PROBE_TIMEOUT).await;
     let Detection::Broken { program, reason } = &d else {
@@ -75,6 +83,7 @@ async fn binaire_qui_echoue() {
 
 #[tokio::test]
 async fn binaire_qui_ne_repond_pas() {
+    let _serial = SERIAL.lock().await;
     let (_, exe) = install("bloque", Some("hang"));
     let d = probe(&exe, Duration::from_millis(500)).await;
     assert!(
@@ -85,6 +94,7 @@ async fn binaire_qui_ne_repond_pas() {
 
 #[tokio::test]
 async fn installe_mais_pas_connecte() {
+    let _serial = SERIAL.lock().await;
     let (_, exe) = install("deconnecte", Some("logged-out"));
     let d = probe(&exe, PROBE_TIMEOUT).await;
     assert!(
@@ -96,6 +106,7 @@ async fn installe_mais_pas_connecte() {
 
 #[tokio::test]
 async fn ancienne_version_sans_auth_status() {
+    let _serial = SERIAL.lock().await;
     let (_, exe) = install("ancienne", Some("old"));
     let d = probe(&exe, PROBE_TIMEOUT).await;
     assert!(
@@ -112,6 +123,7 @@ async fn ancienne_version_sans_auth_status() {
 
 #[tokio::test]
 async fn le_premier_du_path_gagne() {
+    let _serial = SERIAL.lock().await;
     let (a, exe_a) = install("ordre-a", None);
     let (b, _) = install("ordre-b", Some("broken"));
     assert_eq!(find_in(Some(&path_of(&[&a, &b])), &[])[0], exe_a);
@@ -119,6 +131,7 @@ async fn le_premier_du_path_gagne() {
 
 #[tokio::test]
 async fn auth_status_bloque_connexion_inconnue() {
+    let _serial = SERIAL.lock().await;
     let (_, exe) = install("auth-bloque", Some("auth-hang"));
     let d = probe(&exe, Duration::from_millis(500)).await;
     assert!(
