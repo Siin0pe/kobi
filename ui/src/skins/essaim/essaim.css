@@ -1,0 +1,32 @@
+/* Skin Essaim. Styles repris du prototype docs/design/mascotte/Essaim.dc.html ;
+   la nuée est dessinée sur un canevas. Polices embarquées (SIL OFL 1.1). */
+
+@font-face{font-family:'Sora';font-weight:400;font-display:block;src:url('../../fonts/sora-latin-400-normal.woff2') format('woff2')}
+@font-face{font-family:'Sora';font-weight:700;font-display:block;src:url('../../fonts/sora-latin-700-normal.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-weight:400;font-display:block;src:url('../../fonts/dm-mono-latin-400-normal.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-weight:500;font-display:block;src:url('../../fonts/dm-mono-latin-500-normal.woff2') format('woff2')}
+
+.skin-essaim{position:absolute;left:450px;top:90px;width:340px;display:flex;flex-direction:column;align-items:center}
+.skin-essaim canvas{width:340px;height:340px}
+.skin-essaim .status{margin-top:8px;font-family:'DM Mono',monospace;font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:var(--color);transition:color .4s}
+
+/* Thème des cartes communes : nuit profonde, texte clair, accent de l'état. */
+.stage[data-skin='essaim'] .bubbles .card{font-variation-settings:normal}
+.stage[data-skin='essaim'] .bubbles .kicker{font-family:'DM Mono',monospace;font-variation-settings:normal;font-weight:500;color:#6B7280;letter-spacing:.1em}
+.stage[data-skin='essaim'] .card-question,
+.stage[data-skin='essaim'] .card-answer,
+.stage[data-skin='essaim'] .card-error{background:#0D1018;color:#E5E7EB;border:1px solid #262A33;border-radius:20px;font-family:'Sora',sans-serif;font-size:15px;line-height:1.55;box-shadow:0 0 40px rgba(94,234,212,.08)}
+.stage[data-skin='essaim'] .card-question .lead{color:#5EEAD4;font-weight:700;font-variation-settings:normal}
+.stage[data-skin='essaim'] .card-answer .tag{background:transparent;border:1px solid #3B4252;color:#D1D5DB;font-family:'DM Mono',monospace}
+.stage[data-skin='essaim'] .card-notes,
+.stage[data-skin='essaim'] .card-action{background:#E5E7EB;color:#05060A;border:none;border-radius:18px;box-shadow:0 0 0 1px #262A33,0 0 40px rgba(190,242,100,.12)}
+.stage[data-skin='essaim'] .card-notes .body{font-family:'DM Mono',monospace;font-variation-settings:normal;font-size:15px}
+.stage[data-skin='essaim'] .card-action .title{font-family:'Sora',sans-serif;font-weight:700;font-variation-settings:normal;letter-spacing:-.02em}
+.stage[data-skin='essaim'] .card-action .btn{border:1px solid #05060A;font:500 13px 'DM Mono',monospace}
+.stage[data-skin='essaim'] .card-action .btn-primary{background:#05060A;color:#BEF264}
+.stage[data-skin='essaim'] .card-error{border-color:#7F1D1D;box-shadow:0 0 40px rgba(252,165,165,.12)}
+.stage[data-skin='essaim'] .card-error .kicker{color:#FCA5A5}
+.stage[data-skin='essaim'] .card-error .message{font-variation-settings:normal;font-weight:700;font-size:17px}
+.stage[data-skin='essaim'] .card-sources .source{border:1px solid #262A33;background:#0D1018;color:#D1D5DB;font-family:'DM Mono',monospace;font-variation-settings:normal}
+.stage[data-skin='essaim'] .card-sources .source.found{border-color:#C4B5FD;color:#C4B5FD}
+.stage[data-skin='essaim'] .dot{border-color:#E5E7EB}
