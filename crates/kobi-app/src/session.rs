@@ -10,7 +10,7 @@ use std::sync::Mutex;
 use kobi_session::etat::{Activite, Etat, Evenement};
 use kobi_stt::Segment;
 use serde::Serialize;
-use tauri::{AppHandle, Builder, Emitter, Manager, Runtime, State};
+use tauri::{AppHandle, Builder, Emitter, Manager, Runtime};
 
 /// Nom de l'événement qui porte l'état de la session.
 pub const EVENEMENT_ETAT: &str = "state";
@@ -86,7 +86,14 @@ pub fn appliquer<R: Runtime>(
     *etat = suivant;
     drop(etat);
     for traverse in traverses {
-        let _ = app.emit(EVENEMENT_ETAT, EtatUi::from(traverse));
+        let ui = EtatUi::from(traverse);
+        tracing::info!(
+            etat = ui.etat,
+            activite = ui.activite,
+            mascotte = ui.mascotte,
+            "état de la session"
+        );
+        let _ = app.emit(EVENEMENT_ETAT, ui);
     }
     Ok(suivant.into())
 }
@@ -97,10 +104,16 @@ pub fn emettre_segment<R: Runtime>(app: &AppHandle<R>, segment: &Segment) {
     let _ = app.emit(EVENEMENT_SEGMENT, segment);
 }
 
-#[tauri::command]
-fn etat_session(session: State<'_, SessionPartagee>) -> EtatUi {
+/// État courant de la session.
+pub fn etat<R: Runtime>(app: &AppHandle<R>) -> EtatUi {
+    let session = app.state::<SessionPartagee>();
     let etat = *session.0.lock().unwrap_or_else(|e| e.into_inner());
     etat.into()
+}
+
+#[tauri::command]
+fn etat_session<R: Runtime>(app: AppHandle<R>) -> EtatUi {
+    etat(&app)
 }
 
 #[tauri::command]

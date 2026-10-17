@@ -5,6 +5,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod placement;
+mod raccourci;
 mod session;
 
 use std::sync::mpsc::Sender;
@@ -74,6 +75,23 @@ fn main() {
     choose_webkit_renderer();
     session::installer(tauri::Builder::default())
         .setup(|app| {
+            if let Some(dir) = kobi_session::logs::default_dir() {
+                if let Err(e) = kobi_session::logs::init(&dir) {
+                    eprintln!("journal {} indisponible : {e}", dir.display());
+                }
+            }
+            let config = match kobi_session::config::default_path() {
+                Some(path) => kobi_session::config::load_or_create(&path),
+                None => kobi_session::config::Loaded {
+                    config: Default::default(),
+                    created: false,
+                    problem: None,
+                },
+            };
+            if let Some(problem) = &config.problem {
+                tracing::warn!(%problem, "config.toml");
+            }
+            raccourci::installer(app.handle(), &config.config.hotkey)?;
             let window = app
                 .get_webview_window("main")
                 .expect("fenêtre « main » déclarée dans tauri.conf.json");
