@@ -52,7 +52,25 @@ fn place(window: &WebviewWindow, saved: Option<Saved>) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Sous Linux sans GPU, le moteur DMA-BUF de WebKitGTK ne peint rien et
+/// tourne à vide (constaté sous Xvfb : fenêtre noire, 72 % d'un cœur). On le
+/// désactive alors, sauf si l'utilisateur a déjà choisi.
+#[cfg(target_os = "linux")]
+fn choose_webkit_renderer() {
+    let has_gpu = std::fs::read_dir("/dev/dri")
+        .map(|d| {
+            d.flatten()
+                .any(|e| e.file_name().to_string_lossy().starts_with("renderD"))
+        })
+        .unwrap_or(false);
+    if !has_gpu && std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+}
+
 fn main() {
+    #[cfg(target_os = "linux")]
+    choose_webkit_renderer();
     tauri::Builder::default()
         .setup(|app| {
             let window = app
