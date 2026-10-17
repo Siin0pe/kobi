@@ -95,14 +95,16 @@ if (mode === 'chromium') {
       await sleep(200);
     }
     const browser = await chromium.launch();
-    const pid = browser.process().pid;
+    // Le navigateur est un descendant de ce script ; le serveur Vite (node) est exclu.
+    const pid = process.pid;
+    const notNode = (p) => p.comm !== 'node';
     const page = await browser.newPage({ viewport: { width: 410, height: 280 } });
     console.log(header.join('\n'));
     for (const state of states) {
       await page.goto(`http://127.0.0.1:${PORT}/?skin=${skin}&state=${state}`);
       await page.waitForFunction(() => 'kobi' in window);
       await sleep(warmup * 1000);
-      console.log(row(`Chromium headless, ${skin}, ${state}`, await measure(pid)));
+      console.log(row(`Chromium headless, ${skin}, ${state}`, await measure(pid, notNode)));
     }
     // Fenêtre masquée : le navigateur coupe le rendu et la scène met tout en pause.
     await page.evaluate(() => {
@@ -110,7 +112,7 @@ if (mode === 'chromium') {
       document.dispatchEvent(new Event('visibilitychange'));
     });
     await sleep(warmup * 1000);
-    console.log(row(`Chromium headless, ${skin}, ${states.at(-1)}, page masquée (pause)`, await measure(pid)));
+    console.log(row(`Chromium headless, ${skin}, ${states.at(-1)}, page masquée (pause)`, await measure(pid, notNode)));
     await browser.close();
   } finally {
     process.kill(-server.pid);
