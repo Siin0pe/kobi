@@ -67,6 +67,27 @@ export interface ErrorInfo {
   message: string;
 }
 
+/**
+ * Réunion en cours : l'indicateur REC reste visible tant qu'elle dure, quel que
+ * soit l'état de la mascotte (y compris en mode discret).
+ */
+export interface MeetingInfo {
+  /** Titre facultatif, affiché à côté de REC. */
+  title?: string;
+  /** Début de la réunion (horodatage en ms, `Date.now()`), pour la durée affichée. */
+  startedAt: number;
+  /** Transcription en pause (« Kobi, pause » ou un clic). */
+  paused?: boolean;
+}
+
+export type ConsentLang = 'fr' | 'en';
+
+/** Messages prêts à coller pour prévenir les participants qu'ils sont transcrits. */
+export const CONSENT_MESSAGES: Record<ConsentLang, string> = {
+  fr: 'Pour information : j’utilise Kobi, un assistant qui transcrit cette réunion en local sur mon ordinateur pour m’aider à prendre des notes. L’audio ne quitte pas ma machine. Dites-le-moi si vous préférez que je l’arrête.',
+  en: 'Heads-up: I’m using Kobi, an assistant that transcribes this meeting locally on my computer to help me take notes. The audio never leaves my machine. Let me know if you’d rather I turn it off.',
+};
+
 /** Données affichées avec l'état. Tous les champs sont facultatifs. */
 export interface MascotData {
   /** Question en cours de transcription (Écoute). */

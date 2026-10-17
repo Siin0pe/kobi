@@ -3,8 +3,11 @@
 // animations) et met tout en pause quand la fenêtre est masquée.
 
 import { Bubbles, type ActionDecision } from './bubbles';
+import { ConsentCard, RecIndicator, type ConsentEvent } from './meeting';
 import {
   DOT_COLORS,
+  type ConsentLang,
+  type MeetingInfo,
   STATE_LABELS,
   STATE_SPOKEN,
   type MascotData,
@@ -32,6 +35,11 @@ export class Stage {
   private readonly live: HTMLElement;
   private readonly bubbles: Bubbles;
   private readonly dot: HTMLButtonElement;
+  private readonly rec = new RecIndicator();
+  private consent: ConsentCard | null = null;
+  private meeting: MeetingInfo | null = null;
+  /** Appelé quand l'utilisateur copie le message ou confirme avoir prévenu les participants. */
+  onConsent: ((e: ConsentEvent) => void) | null = null;
   private compact = false;
   /** Appelé quand l'utilisateur déplie la pastille (la coque peut agrandir la fenêtre). */
   onCompactChange: ((compact: boolean) => void) | null = null;
@@ -78,7 +86,7 @@ export class Stage {
     this.dot.hidden = true;
     this.dot.addEventListener('click', () => this.setCompact(false));
 
-    this.scene.append(this.skinHost, this.bubbles.root);
+    this.scene.append(this.skinHost, this.bubbles.root, this.rec.root);
     this.root.append(this.scene, this.dot, this.live);
     parent.append(this.root);
 
@@ -154,6 +162,69 @@ export class Stage {
     this.onCompactChange?.(compact);
   }
 
+  get currentMeeting(): MeetingInfo | null {
+    return this.meeting;
+  }
+
+  /**
+   * Début de réunion : l'indicateur REC s'affiche jusqu'à `endMeeting`, et la
+   * carte qui rappelle de prévenir les participants s'ouvre (sauf `consent: false`).
+   */
+  startMeeting(info: MeetingInfo, options: { consent?: boolean; lang?: ConsentLang } = {}): void {
+    this.setMeeting(info);
+    this.say(info.title ? `Réunion « ${info.title} » : transcription en local.` : 'Réunion : transcription en local.');
+    if (options.consent ?? true) this.openConsent(options.lang ?? 'fr');
+  }
+
+  /** Met à jour la réunion (titre, pause). */
+  updateMeeting(patch: Partial<MeetingInfo>): void {
+    if (!this.meeting) return;
+    const wasPaused = Boolean(this.meeting.paused);
+    this.setMeeting({ ...this.meeting, ...patch });
+    if (Boolean(this.meeting.paused) !== wasPaused) this.say(this.meeting.paused ? 'Transcription en pause.' : 'Transcription reprise.');
+  }
+
+  endMeeting(): void {
+    if (!this.meeting) return;
+    this.closeConsent();
+    this.setMeeting(null);
+    this.say('Réunion terminée.');
+  }
+
+  private setMeeting(info: MeetingInfo | null): void {
+    this.meeting = info;
+    this.rec.set(info);
+    this.root.classList.toggle('in-meeting', info !== null);
+    this.dot.classList.toggle('recording', info !== null && !info.paused);
+    this.paintDot();
+  }
+
+  private openConsent(lang: ConsentLang): void {
+    this.closeConsent();
+    const card = new ConsentCard();
+    card.setLang(lang);
+    card.onEvent = (e) => {
+      this.onConsent?.(e);
+      if (e.action === 'done') this.closeConsent();
+    };
+    this.consent = card;
+    this.scene.classList.add('consent-open');
+    this.scene.append(card.root);
+    // Une demande qui attend l'utilisateur : la mascotte repliée se déplie.
+    if (this.compact) this.setCompact(false);
+    card.root.querySelector<HTMLButtonElement>('.btn-primary')?.focus({ preventScroll: true });
+  }
+
+  private closeConsent(): void {
+    this.consent?.root.remove();
+    this.consent = null;
+    this.scene.classList.remove('consent-open');
+  }
+
+  private say(text: string): void {
+    this.live.textContent = text;
+  }
+
   /** Met à jour les données sans changer d'état (texte en flux, sources). */
   update(data: MascotData): void {
     this.data = { ...this.data, ...data };
@@ -174,6 +245,7 @@ export class Stage {
   }
 
   destroy(): void {
+    this.rec.destroy();
     this.skin?.destroy();
     this.cleanups.forEach((fn) => fn());
     this.root.remove();
@@ -188,7 +260,8 @@ export class Stage {
     const color = this.skin?.theme.dots?.[this.state] ?? DOT_COLORS[this.state];
     this.dot.style.setProperty('--dot', color);
     this.dot.dataset.state = this.state;
-    this.dot.setAttribute('aria-label', `Kobi : ${STATE_LABELS[this.state]}. Déplier la mascotte`);
+    const rec = this.meeting ? (this.meeting.paused ? ', réunion en pause' : ', réunion transcrite') : '';
+    this.dot.setAttribute('aria-label', `Kobi : ${STATE_LABELS[this.state]}${rec}. Déplier la mascotte`);
     this.dot.title = `Kobi : ${STATE_LABELS[this.state]}`;
   }
 
@@ -213,6 +286,7 @@ export class Stage {
       this.frozen.forEach((a) => a.pause());
     }
     this.bubbles.setPaused(paused);
+    this.rec.setPaused(hidden);
     this.skin?.setPaused(paused);
   }
 

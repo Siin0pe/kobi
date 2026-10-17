@@ -1,5 +1,6 @@
 // Point d'entrée de l'interface. Paramètres d'URL (développement, tests,
-// captures) : `skin`, `state`, `backdrop=1`, `reduced=1`.
+// captures) : `skin`, `state`, `backdrop=1`, `reduced=1`, `discret=1`,
+// `reunion=<titre>` (+ `depuis=<s>`, `carte=0`).
 
 import { isMascotState, STATES, type MascotData, type MascotState } from './contract';
 import { demoData, playDemo } from './demo';
@@ -9,6 +10,7 @@ import { Stage } from './stage';
 import './styles/fonts.css';
 import './styles/stage.css';
 import './styles/bubbles.css';
+import './styles/meeting.css';
 
 const params = new URLSearchParams(location.search);
 const reduced = params.get('reduced');
@@ -23,6 +25,8 @@ enableWindowDrag(stage.root);
 let stopDemo: () => void = () => {};
 
 if (params.get('discret') === '1') stage.setCompact(true);
+const meeting = params.get('reunion');
+if (meeting !== null) stage.startMeeting({ title: meeting || undefined, startedAt: Date.now() - Number(params.get('depuis') ?? 0) * 1000 }, { consent: params.get('carte') !== '0' });
 
 const initial = params.get('state');
 if (isMascotState(initial)) stage.setState(initial, demoData(initial));
@@ -36,6 +40,9 @@ declare global {
       setState(state: MascotState, data?: MascotData): void;
       update(data: MascotData): void;
       useSkin(id: string): void;
+      /** Réunion : indicateur REC et carte « prévenez les participants ». */
+      startMeeting(title?: string): void;
+      endMeeting(): void;
       /** Mode discret (pastille de 32 px). */
       setCompact(compact: boolean): void;
       demoData(state: MascotState): MascotData;
@@ -55,6 +62,8 @@ window.kobi = {
   update: (data) => stage.update(data),
   useSkin: (id) => void stage.useSkin(skinFactory(id)),
   setCompact: (compact) => stage.setCompact(compact),
+  startMeeting: (title) => stage.startMeeting({ title, startedAt: Date.now() }),
+  endMeeting: () => stage.endMeeting(),
   demoData,
   play: (state) => {
     stopDemo();
