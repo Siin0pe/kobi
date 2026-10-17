@@ -59,3 +59,53 @@ fn fake_engine_report_is_written_and_readable() {
     assert!(md.contains("| Rust "), "{md}");
     std::fs::remove_dir_all(&root).ok();
 }
+
+/// Ctrl-C pendant une mesure : le verrou disparaît et le code de sortie est 130.
+#[cfg(unix)]
+#[test]
+fn interruption_libere_le_verrou() {
+    use std::time::{Duration, Instant};
+
+    let root = std::env::temp_dir().join(format!("kobi-bench-int-{}", std::process::id()));
+    let meeting = root.join("corpus").join("fr");
+    std::fs::create_dir_all(&meeting).unwrap();
+    // 60 s rejouées en temps réel : la mesure dure bien plus que le test.
+    let silence = vec![0.0f32; 60 * 16_000];
+    write_wav_16k_mono(meeting.join("moi.wav"), &silence).unwrap();
+    write_wav_16k_mono(meeting.join("eux.wav"), &silence).unwrap();
+    std::fs::write(
+        meeting.join("reference.jsonl"),
+        r#"{"start": 0.2, "end": 1.2, "source": "moi", "lang": "fr", "kobi": false, "text": "Bonjour."}"#,
+    )
+    .unwrap();
+    let lock = root.join(".bench.lock");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_kobi-bench"))
+        .args(["stt", "--engine", "fake", "--speed", "1"])
+        .arg("--corpus")
+        .arg(root.join("corpus"))
+        .arg("--out")
+        .arg(root.join("rapports"))
+        .env("KOBI_BENCH_LOCK", &lock)
+        .spawn()
+        .unwrap();
+    let start = Instant::now();
+    while !lock.join("owner").exists() {
+        assert!(
+            start.elapsed() < Duration::from_secs(20),
+            "verrou jamais pris"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    // Laisse le gestionnaire s'installer et la relecture démarrer.
+    std::thread::sleep(Duration::from_millis(500));
+    let kill = Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(kill.success());
+    let status = child.wait().unwrap();
+    assert_eq!(status.code(), Some(130), "{status:?}");
+    assert!(!lock.exists(), "verrou libéré après Ctrl-C");
+    std::fs::remove_dir_all(&root).ok();
+}

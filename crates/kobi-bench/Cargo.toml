@@ -20,7 +20,7 @@ whisper-cuda = ["whisper", "kobi-stt/whisper-cuda"]
 anyhow = "1"
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 clap = { version = "4.6", features = ["derive"] }
-ctrlc = "3.5"
+ctrlc = { version = "3.5", features = ["termination"] }
 hound = "3.5.1"
 kobi-audio = { version = "0.1.0", path = "../kobi-audio" }
 kobi-brain = { version = "0.1.0", path = "../kobi-brain" }
