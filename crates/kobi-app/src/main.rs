@@ -5,6 +5,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod placement;
+mod session;
 
 use std::sync::mpsc::Sender;
 use std::sync::Mutex;
@@ -71,7 +72,7 @@ fn choose_webkit_renderer() {
 fn main() {
     #[cfg(target_os = "linux")]
     choose_webkit_renderer();
-    tauri::Builder::default()
+    session::installer(tauri::Builder::default())
         .setup(|app| {
             let window = app
                 .get_webview_window("main")

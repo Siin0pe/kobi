@@ -1,8 +1,17 @@
 // Intégration à la coque Tauri (API globale `window.__TAURI__`, activée par
 // `withGlobalTauri`). Hors de Tauri (navigateur, tests), rien ne se passe.
+//
+// L'interface ne contient aucune logique métier : elle envoie des commandes à
+// la session (démarrer, pause, reprendre, terminer) et affiche l'état que la
+// session lui renvoie par l'événement `state`.
+
+import { isMascotState } from './contract';
+import type { Stage } from './stage';
 
 interface TauriGlobal {
   window: { getCurrentWindow(): { startDragging(): Promise<void> } };
+  core: { invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> };
+  event: { listen<T>(event: string, handler: (e: { payload: T }) => void): Promise<() => void> };
 }
 
 function tauri(): TauriGlobal | undefined {
@@ -24,4 +33,54 @@ export function enableWindowDrag(root: HTMLElement): void {
     e.preventDefault();
     void api.window.getCurrentWindow().startDragging();
   });
+}
+
+/** État de la session, tel que l'envoie `kobi-app` (événement `state`). */
+export interface SessionState {
+  /** `veille`, `reunion`, `pause` ou `fin`. */
+  etat: 'veille' | 'reunion' | 'pause' | 'fin';
+  /** Activité en réunion (`calme`, `ecoute`…), `null` hors réunion. */
+  activite: string | null;
+  /** Clé du contrat des skins. */
+  mascotte: string;
+  /** La transcription tourne (indicateur REC). */
+  transcrit: boolean;
+}
+
+/** Segment de transcription (événement `segment`). */
+export interface Segment {
+  start: number;
+  end: number;
+  source: 'moi' | 'eux';
+  text: string;
+  is_final: boolean;
+}
+
+export const COMMANDS = ['demarrer', 'pause', 'reprendre', 'terminer'] as const;
+export type Command = (typeof COMMANDS)[number];
+
+/** Envoie une commande à la session ; `undefined` hors de Tauri. Un refus rejette la promesse. */
+export function command(name: Command): Promise<SessionState | undefined> {
+  const api = tauri();
+  return api ? api.core.invoke<SessionState>(name) : Promise.resolve(undefined);
+}
+
+/**
+ * Affiche l'état de la session : la mascotte suit l'événement `state`, la
+ * racine porte `data-session` et `data-rec`. Les segments sont relayés en
+ * événement DOM `kobi:segment` (panneau de transcription, KOB-50).
+ */
+export function followSession(stage: Stage): void {
+  const api = tauri();
+  if (!api) return;
+  const show = (s: SessionState) => {
+    stage.root.dataset.session = s.etat;
+    stage.root.dataset.rec = String(s.transcrit);
+    if (isMascotState(s.mascotte) && s.mascotte !== stage.root.dataset.state) stage.setState(s.mascotte);
+  };
+  void api.event.listen<SessionState>('state', (e) => show(e.payload));
+  void api.event.listen<Segment>('segment', (e) =>
+    window.dispatchEvent(new CustomEvent<Segment>('kobi:segment', { detail: e.payload })),
+  );
+  void api.core.invoke<SessionState>('etat_session').then(show);
 }

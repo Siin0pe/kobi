@@ -4,7 +4,7 @@
 
 import { isMascotState, STATES, type MascotData, type MascotState } from './contract';
 import { demoData, playDemo } from './demo';
-import { enableWindowDrag } from './native';
+import { command, enableWindowDrag, followSession, type Command, type SessionState } from './native';
 import { skinFactory } from './skins/registry';
 import { Stage } from './stage';
 import './styles/fonts.css';
@@ -21,6 +21,7 @@ const stage = new Stage(document.getElementById('app')!, {
 });
 stage.useSkin(skinFactory(params.get('skin')));
 enableWindowDrag(stage.root);
+followSession(stage);
 
 let stopDemo: () => void = () => {};
 
@@ -48,6 +49,8 @@ declare global {
       demoData(state: MascotState): MascotData;
       /** Rejoue un état avec ses données en flux (démo, captures). */
       play(state: MascotState): void;
+      /** Commande envoyée à la session (coque native). */
+      command(name: Command): Promise<SessionState | undefined>;
     };
   }
 }
@@ -65,6 +68,7 @@ window.kobi = {
   startMeeting: (title) => stage.startMeeting({ title, startedAt: Date.now() }),
   endMeeting: () => stage.endMeeting(),
   demoData,
+  command,
   play: (state) => {
     stopDemo();
     stopDemo = playDemo(

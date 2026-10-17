@@ -2554,6 +2554,8 @@ dependencies = [
 name = "kobi-app"
 version = "0.1.0"
 dependencies = [
+ "kobi-session",
+ "kobi-stt",
  "serde",
  "serde_json",
  "tauri",
