@@ -8,6 +8,7 @@
 //! Le reste de Kobi ne voit que le trait [`Brain`] et ses événements
 //! ([`BrainEvent`]) ; [`fake::FakeBrain`] sert aux tests de la session.
 
+pub mod actions;
 pub mod brain;
 pub mod claude_code;
 pub mod fake;
