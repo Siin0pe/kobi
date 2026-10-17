@@ -27,14 +27,24 @@ fn rect(monitor: &tauri::Monitor) -> Rect {
 
 /// Pose la fenêtre à sa position mémorisée, ou en bas à droite de l'écran principal.
 fn place(window: &WebviewWindow, saved: Option<Saved>) -> tauri::Result<()> {
-    let size = window.outer_size()?;
-    let size = (size.width, size.height);
+    let reported = window.outer_size()?;
+    // Taille déclarée dans tauri.conf.json, en pixels logiques.
+    let declared = window
+        .app_handle()
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|w| w.label == window.label())
+        .map(|w| (w.width, w.height))
+        .unwrap_or((410.0, 280.0));
+    let primary = window.primary_monitor()?;
+    let scale = primary.as_ref().map_or(1.0, |m| m.scale_factor());
+    let size = placement::physical_size((reported.width, reported.height), declared, scale);
     let screens: Vec<Rect> = window.available_monitors()?.iter().map(rect).collect();
     let target = match placement::restore(saved, size, &screens) {
         Some(pos) => Some(pos),
-        None => window
-            .primary_monitor()?
-            .map(|m| placement::bottom_right(rect(&m), size, m.scale_factor())),
+        None => primary.map(|m| placement::bottom_right(rect(&m), size, m.scale_factor())),
     };
     if let Some((x, y)) = target {
         window.set_position(PhysicalPosition::new(x, y))?;

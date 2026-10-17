@@ -49,6 +49,19 @@ pub fn bottom_right(work_area: Rect, window: (u32, u32), scale: f64) -> (i32, i3
     )
 }
 
+/// Taille physique de la fenêtre. Sous Linux, une fenêtre encore cachée
+/// annonce 0 × 0 : on se rabat alors sur la taille déclarée (pixels logiques)
+/// multipliée par l'échelle de l'écran.
+pub fn physical_size(reported: (u32, u32), declared: (f64, f64), scale: f64) -> (u32, u32) {
+    if reported.0 > 0 && reported.1 > 0 {
+        return reported;
+    }
+    (
+        (declared.0 * scale).round() as u32,
+        (declared.1 * scale).round() as u32,
+    )
+}
+
 /// Garde la position mémorisée seulement si le centre de la fenêtre tombe sur
 /// un écran encore branché.
 pub fn restore(saved: Option<Saved>, window: (u32, u32), screens: &[Rect]) -> Option<(i32, i32)> {
@@ -147,6 +160,17 @@ mod tests {
             height: 200,
         };
         assert_eq!(bottom_right(tiny, (410, 280), 1.0), (0, 0));
+    }
+
+    #[test]
+    fn taille_declaree_si_la_fenetre_cachee_annonce_zero() {
+        // Constaté sous Linux (GTK) : 0 × 0 avant le premier affichage.
+        assert_eq!(physical_size((0, 0), (410.0, 280.0), 1.0), (410, 280));
+        assert_eq!(physical_size((0, 0), (410.0, 280.0), 1.25), (513, 350));
+        assert_eq!(physical_size((615, 420), (410.0, 280.0), 1.5), (615, 420));
+        // Le coin bas droit en tient compte : plus de fenêtre poussée hors de l'écran.
+        let size = physical_size((0, 0), (410.0, 280.0), 1.0);
+        assert_eq!(bottom_right(FHD, size, 1.0), (1494, 744));
     }
 
     #[test]
