@@ -4,6 +4,7 @@
 
 import { Bubbles, type ActionDecision } from './bubbles';
 import {
+  DOT_COLORS,
   STATE_LABELS,
   STATE_SPOKEN,
   type MascotData,
@@ -30,11 +31,16 @@ export class Stage {
   private readonly skinHost: HTMLElement;
   private readonly live: HTMLElement;
   private readonly bubbles: Bubbles;
+  private readonly dot: HTMLButtonElement;
+  private compact = false;
+  /** Appelé quand l'utilisateur déplie la pastille (la coque peut agrandir la fenêtre). */
+  onCompactChange: ((compact: boolean) => void) | null = null;
   private skin: Skin | null = null;
   private state: MascotState = 'idle';
   private data: MascotData = {};
   private spoken: MascotState | null = null;
   private paused = false;
+  private windowHidden = false;
   private reducedMotion: boolean;
   private readonly motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
   private readonly forcedMotion: boolean | undefined;
@@ -65,8 +71,15 @@ export class Stage {
     this.live.setAttribute('role', 'status');
     this.live.setAttribute('aria-live', 'polite');
 
+    // Mode discret : une pastille de 32 px colorée selon l'état ; un clic la déplie.
+    this.dot = document.createElement('button');
+    this.dot.type = 'button';
+    this.dot.className = 'dot';
+    this.dot.hidden = true;
+    this.dot.addEventListener('click', () => this.setCompact(false));
+
     this.scene.append(this.skinHost, this.bubbles.root);
-    this.root.append(this.scene, this.live);
+    this.root.append(this.scene, this.dot, this.live);
     parent.append(this.root);
 
     this.fit();
@@ -97,6 +110,7 @@ export class Stage {
     this.applyTheme(skin.theme);
     this.root.dataset.skin = skin.id;
     skin.mount(this.skinHost, { reducedMotion: this.reducedMotion });
+    this.paintDot();
     skin.setState(this.state, this.data);
     if (this.isPaused()) skin.setPaused(true);
     this.paused = this.isPaused();
@@ -113,12 +127,31 @@ export class Stage {
     this.data = { ...data };
     this.root.dataset.state = state;
     this.scene.setAttribute('aria-label', `Kobi : ${STATE_LABELS[state]}`);
+    this.paintDot();
     this.skin?.setState(state, this.data);
     this.bubbles.render(state, this.data);
     if (state !== this.spoken) {
       this.spoken = state;
       this.live.textContent = STATE_SPOKEN[state];
     }
+  }
+
+  get isCompact(): boolean {
+    return this.compact;
+  }
+
+  /**
+   * Mode discret : la mascotte et les cartes laissent place à la pastille.
+   * Le skin est mis en pause tant qu'il est caché (aucun coût CPU).
+   */
+  setCompact(compact: boolean): void {
+    if (compact === this.compact) return;
+    this.compact = compact;
+    this.root.classList.toggle('compact', compact);
+    this.scene.hidden = compact;
+    this.dot.hidden = !compact;
+    this.applyPaused();
+    this.onCompactChange?.(compact);
   }
 
   /** Met à jour les données sans changer d'état (texte en flux, sources). */
@@ -146,25 +179,38 @@ export class Stage {
     this.root.remove();
   }
 
+  /** Pause : fenêtre masquée, ou mascotte repliée en pastille. */
   private isPaused(): boolean {
-    return document.visibilityState === 'hidden';
+    return document.visibilityState === 'hidden' || this.compact;
+  }
+
+  private paintDot(): void {
+    const color = this.skin?.theme.dots?.[this.state] ?? DOT_COLORS[this.state];
+    this.dot.style.setProperty('--dot', color);
+    this.dot.dataset.state = this.state;
+    this.dot.setAttribute('aria-label', `Kobi : ${STATE_LABELS[this.state]}. Déplier la mascotte`);
+    this.dot.title = `Kobi : ${STATE_LABELS[this.state]}`;
   }
 
   private applyPaused(): void {
     const paused = this.isPaused();
-    if (paused === this.paused) return;
+    const hidden = document.visibilityState === 'hidden';
+    if (paused === this.paused && hidden === this.windowHidden) return;
     this.paused = paused;
+    this.windowHidden = hidden;
+    // `paused` arrête la scène (mascotte et cartes) ; `window-hidden` arrête
+    // tout, pastille comprise.
     this.root.classList.toggle('paused', paused);
-    if (paused) {
-      // Tout ce qui tourne s'arrête : animations CSS, transitions en vol,
-      // animations Web des skins.
-      this.frozen = this.root.getAnimations({ subtree: true }).filter((a) => a.playState === 'running');
+    this.root.classList.toggle('window-hidden', hidden);
+    this.frozen.forEach((a) => {
+      if (a.playState === 'paused') a.play();
+    });
+    this.frozen = [];
+    const scope = hidden ? this.root : paused ? this.scene : null;
+    if (scope) {
+      // Animations CSS, transitions en vol, animations Web des skins.
+      this.frozen = scope.getAnimations({ subtree: true }).filter((a) => a.playState === 'running');
       this.frozen.forEach((a) => a.pause());
-    } else {
-      this.frozen.forEach((a) => {
-        if (a.playState === 'paused') a.play();
-      });
-      this.frozen = [];
     }
     this.bubbles.setPaused(paused);
     this.skin?.setPaused(paused);

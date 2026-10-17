@@ -22,6 +22,8 @@ enableWindowDrag(stage.root);
 
 let stopDemo: () => void = () => {};
 
+if (params.get('discret') === '1') stage.setCompact(true);
+
 const initial = params.get('state');
 if (isMascotState(initial)) stage.setState(initial, demoData(initial));
 
@@ -34,6 +36,8 @@ declare global {
       setState(state: MascotState, data?: MascotData): void;
       update(data: MascotData): void;
       useSkin(id: string): void;
+      /** Mode discret (pastille de 32 px). */
+      setCompact(compact: boolean): void;
       demoData(state: MascotState): MascotData;
       /** Rejoue un état avec ses données en flux (démo, captures). */
       play(state: MascotState): void;
@@ -50,6 +54,7 @@ window.kobi = {
   },
   update: (data) => stage.update(data),
   useSkin: (id) => void stage.useSkin(skinFactory(id)),
+  setCompact: (compact) => stage.setCompact(compact),
   demoData,
   play: (state) => {
     stopDemo();

@@ -2,7 +2,7 @@
 // un GIF par état, plus un « tour » qui enchaîne les 8 états (transitions).
 //
 //   npm run build
-//   node scripts/captures.mjs --skin kobi --out captures/kobi [--seconds 3] [--states idle,listen] [--no-gif]
+//   node scripts/captures.mjs --skin kobi --out captures/kobi [--seconds 3] [--states idle,listen] [--no-gif] [--dist dist] [--query discret=1]
 //
 // Les GIF demandent ffmpeg dans le PATH. Le script lance lui-même `vite preview`.
 
@@ -29,6 +29,8 @@ const states = arg('states', STATES.join(',')).split(',');
 const gif = !process.argv.includes('--no-gif');
 const tour = !process.argv.includes('--no-tour');
 const extra = arg('query', '');
+// Build à servir (par défaut `dist`), pour capturer sans toucher au build courant.
+const dist = arg('dist', 'dist');
 
 async function waitForServer(url, ms = 30_000) {
   const end = Date.now() + ms;
@@ -86,7 +88,7 @@ mkdirSync(out, { recursive: true });
 if (await fetch(`http://127.0.0.1:${PORT}/`).then(() => true, () => false)) {
   throw new Error(`port ${PORT} déjà occupé : arrêter l'ancien serveur`);
 }
-const server = spawn('node', ['node_modules/vite/bin/vite.js', 'preview', '--port', String(PORT), '--strictPort', '--host', '127.0.0.1'], {
+const server = spawn('node', ['node_modules/vite/bin/vite.js', 'preview', '--outDir', dist, '--port', String(PORT), '--strictPort', '--host', '127.0.0.1'], {
   stdio: 'ignore',
   detached: true,
 });

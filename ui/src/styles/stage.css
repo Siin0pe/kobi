@@ -42,11 +42,76 @@ body {
   pointer-events: auto;
 }
 
-/* Pause (fenêtre masquée) et « réduire les animations » : tout s'arrête. */
-.stage.paused *,
-.stage.paused *::before,
-.stage.paused *::after {
+/* Pause : la scène s'arrête quand elle est repliée en pastille, tout
+   s'arrête quand la fenêtre est masquée. */
+.stage.paused .scene *,
+.stage.window-hidden *,
+.stage.window-hidden *::before,
+.stage.window-hidden *::after {
   animation-play-state: paused !important;
+}
+.scene[hidden] {
+  display: none;
+}
+
+/* Mode discret : pastille de 32 px colorée selon l'état, en bas à droite. */
+@keyframes dot-pulse {
+  50% {
+    transform: scale(1.18);
+  }
+}
+@keyframes dot-ping {
+  0% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  100% {
+    transform: scale(1.9);
+    opacity: 0;
+  }
+}
+.dot {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2.5px solid var(--ink);
+  background: var(--dot);
+  /* Liseré clair : la pastille reste visible sur un bureau sombre comme clair. */
+  box-shadow:
+    0 0 0 1.5px rgba(255, 255, 255, 0.75),
+    3px 3px 0 rgba(11, 11, 11, 0.18);
+  cursor: pointer;
+  transition: background-color 0.3s ease;
+}
+.dot[hidden] {
+  display: none;
+}
+.dot:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
+}
+/* États actifs : la pastille respire ; une demande (Propose, Oups) émet une onde. */
+.dot[data-state='listen'],
+.dot[data-state='think'],
+.dot[data-state='answer'] {
+  animation: dot-pulse 1.2s ease-in-out infinite;
+}
+.dot[data-state='suggest']::after,
+.dot[data-state='error']::after {
+  content: '';
+  position: absolute;
+  inset: -2.5px;
+  border-radius: 50%;
+  border: 2.5px solid var(--dot);
+  animation: dot-ping 1.4s ease-out infinite;
+}
+.reduced-motion .dot,
+.reduced-motion .dot::after {
+  animation: none !important;
 }
 
 .sr-only {
@@ -59,4 +124,9 @@ body {
   clip: rect(0 0 0 0);
   white-space: nowrap;
   border: 0;
+}
+/* En aperçu (captures, développement), la pastille se pose sur un fond neutre
+   façon bureau : la vraie fenêtre est transparente. */
+.stage.compact.with-backdrop {
+  background: linear-gradient(135deg, #4B5563, #1F2937);
 }

@@ -101,7 +101,21 @@ export interface Theme {
   danger: string;
   /** Pile de polices, toutes embarquées (jamais chargées depuis Internet). */
   font: string;
+  /** Couleurs de la pastille du mode discret, si le skin veut remplacer celles par défaut. */
+  dots?: Partial<Record<MascotState, string>>;
 }
+
+/** Couleurs par défaut de la pastille du mode discret, une par état. */
+export const DOT_COLORS: Record<MascotState, string> = {
+  idle: '#6B7280',
+  listen: '#22C55E',
+  think: '#8B5CF6',
+  write: '#0EA5E9',
+  answer: '#14B8A6',
+  suggest: '#F59E0B',
+  done: '#16A34A',
+  error: '#EF4444',
+};
 
 export interface SkinEnv {
   /** Le système demande de réduire les animations. */
