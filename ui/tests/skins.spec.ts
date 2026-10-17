@@ -4,7 +4,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { expectNoErrors, openUi } from './helpers';
 
-const SKINS = ['kobi', 'gribouille', 'mercure'];
+const SKINS = ['kobi', 'gribouille', 'mercure', 'matrice'];
 const STATES = ['idle', 'listen', 'think', 'write', 'answer', 'suggest', 'done', 'error'] as const;
 
 /**
