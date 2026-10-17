@@ -150,7 +150,10 @@ pub fn installer<R: Runtime>(builder: Builder<R>) -> Builder<R> {
             demarrer,
             pause,
             reprendre,
-            terminer
+            terminer,
+            // Réglages de l'interface (KOB-99) : un seul invoke_handler par application.
+            crate::settings::get_skin,
+            crate::settings::set_skin
         ])
 }
 

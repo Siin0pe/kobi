@@ -7,6 +7,7 @@
 mod placement;
 mod raccourci;
 mod session;
+mod settings;
 mod tray;
 
 use std::sync::mpsc::Sender;
@@ -123,7 +124,7 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let WindowEvent::Moved(pos) = event {
+            if let (WindowEvent::Moved(pos), "main") = (event, window.label()) {
                 if let Some(saver) = window.try_state::<PositionSaver>() {
                     let saved = Saved { x: pos.x, y: pos.y };
                     let _ = saver.0.lock().map(|tx| tx.send(saved));
