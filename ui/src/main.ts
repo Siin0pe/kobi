@@ -3,6 +3,7 @@
 
 import { isMascotState, STATES, type MascotData, type MascotState } from './contract';
 import { demoData, playDemo } from './demo';
+import { enableWindowDrag } from './native';
 import { skinFactory } from './skins/registry';
 import { Stage } from './stage';
 import './styles/fonts.css';
@@ -17,6 +18,7 @@ const stage = new Stage(document.getElementById('app')!, {
   reducedMotion: reduced === null ? undefined : reduced === '1',
 });
 stage.useSkin(skinFactory(params.get('skin')));
+enableWindowDrag(stage.root);
 
 let stopDemo: () => void = () => {};
 
