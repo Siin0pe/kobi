@@ -5,6 +5,7 @@ mod align;
 mod capture;
 mod convert;
 mod file;
+mod history;
 mod input;
 mod resample;
 
@@ -16,6 +17,7 @@ pub use capture::{
 };
 pub use convert::Converter;
 pub use file::{FileInput, FileOptions};
+pub use history::{AudioHistory, HistoryError, RingTrack, DEFAULT_HISTORY};
 pub use input::AudioInput;
 pub use resample::{downmix, Resampler};
 

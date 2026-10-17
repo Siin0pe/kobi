@@ -8,3 +8,4 @@ license.workspace = true
 anyhow = "1"
 cpal = "0.18.2"
 hound = "3.5"
+thiserror = "2"
