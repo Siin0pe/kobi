@@ -53,10 +53,11 @@ impl WhisperRecognizer {
     pub fn new(config: &WhisperConfig) -> Result<Self> {
         // Redirige les journaux de whisper.cpp vers `log` (muet par défaut).
         whisper_rs::install_logging_hooks();
-        let missing = missing_cpu_features(whisper_rs::print_system_info(), cpu_has);
+        // Avant tout appel à ggml : une bibliothèque compilée avec une
+        // instruction absente peut planter (« Illegal instruction ») dès son
+        // premier appel, y compris whisper_print_system_info.
+        let missing = missing_cpu_features(&compiled_x86_features(), cpu_has);
         if !missing.is_empty() {
-            // Sans ce contrôle, le premier appel de l'encodeur s'arrête sur
-            // « Illegal instruction ».
             return Err(SttError::Engine(format!(
                 "whisper.cpp compilé avec {} que ce processeur n'a pas : recompiler avec \
                  GGML_{}=OFF, puis cargo clean -p whisper-rs-sys (voir .cargo/config.toml)",
@@ -123,14 +124,37 @@ fn compiled_with(system_info: &str, flag: &str) -> bool {
     system_info.contains(&format!("| {flag} = 1")) || system_info.contains(&format!(" {flag} = 1 "))
 }
 
-/// Instructions x86 compilées dans ggml que le processeur n'a pas (`has`
-/// renvoie `false`) : ggml les fixe à la compilation, il plante sinon.
-pub fn missing_cpu_features(system_info: &str, has: impl Fn(&str) -> bool) -> Vec<&'static str> {
-    const X86: [&str; 6] = ["AVX", "AVX2", "FMA", "F16C", "BMI2", "AVX512"];
-    X86.iter()
-        .copied()
-        .filter(|f| compiled_with(system_info, f) && !has(f))
-        .collect()
+/// Instructions x86 imposées à ggml à la compilation, lues dans les variables
+/// `GGML_*` vues par ce crate (`.cargo/config.toml` ou environnement). Vide
+/// avec `GGML_NATIVE=ON` : ggml suit alors le processeur de compilation.
+pub fn compiled_x86_features() -> Vec<&'static str> {
+    let on = |v: Option<&str>| {
+        v.is_some_and(|v| matches!(v.to_ascii_uppercase().as_str(), "ON" | "1" | "TRUE" | "YES"))
+    };
+    if on(option_env!("GGML_NATIVE")) {
+        return Vec::new();
+    }
+    [
+        ("AVX", option_env!("GGML_AVX")),
+        ("AVX2", option_env!("GGML_AVX2")),
+        ("FMA", option_env!("GGML_FMA")),
+        ("F16C", option_env!("GGML_F16C")),
+        ("BMI2", option_env!("GGML_BMI2")),
+        ("AVX512", option_env!("GGML_AVX512")),
+    ]
+    .into_iter()
+    .filter(|(_, v)| on(*v))
+    .map(|(f, _)| f)
+    .collect()
+}
+
+/// Parmi les instructions `compiled`, celles que le processeur n'a pas (`has`
+/// renvoie `false`).
+pub fn missing_cpu_features(
+    compiled: &[&'static str],
+    has: impl Fn(&str) -> bool,
+) -> Vec<&'static str> {
+    compiled.iter().copied().filter(|f| !has(f)).collect()
 }
 
 /// Instruction disponible sur ce processeur (toujours vrai hors x86).
@@ -272,17 +296,31 @@ mod tests {
     fn missing_cpu_features_lists_compiled_but_absent() {
         // Homelab i5-3470 : AVX et F16C, sans AVX2, FMA ni BMI2.
         let ivy_bridge = |f: &str| matches!(f, "AVX" | "F16C");
-        let avx2_build =
-            "CPU : SSE3 = 1 | AVX = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | BMI2 = 1 | AVX512 = 0 |";
+        let defaults = ["AVX", "AVX2", "FMA", "F16C", "BMI2"];
         assert_eq!(
-            missing_cpu_features(avx2_build, ivy_bridge),
+            missing_cpu_features(&defaults, ivy_bridge),
             ["AVX2", "FMA", "BMI2"]
         );
         // GGML_AVX2=OFF GGML_FMA=OFF mais BMI2 laissé actif : le cas du plantage.
-        let bmi2_left = "CPU : SSE3 = 1 | AVX = 1 | AVX2 = 0 | F16C = 1 | FMA = 0 | BMI2 = 1 |";
-        assert_eq!(missing_cpu_features(bmi2_left, ivy_bridge), ["BMI2"]);
-        let fixed = "CPU : SSE3 = 1 | AVX = 1 | AVX2 = 0 | F16C = 1 | FMA = 0 | BMI2 = 0 |";
-        assert!(missing_cpu_features(fixed, ivy_bridge).is_empty());
+        assert_eq!(
+            missing_cpu_features(&["AVX", "F16C", "BMI2"], ivy_bridge),
+            ["BMI2"]
+        );
+        assert!(missing_cpu_features(&["AVX", "F16C"], ivy_bridge).is_empty());
+    }
+
+    #[test]
+    fn compiled_features_follow_cargo_config() {
+        // .cargo/config.toml impose AVX, AVX2, FMA, F16C et BMI2 (sauf
+        // valeur déjà présente dans l'environnement de compilation).
+        let compiled = compiled_x86_features();
+        for (flag, var) in [
+            ("AVX2", option_env!("GGML_AVX2")),
+            ("BMI2", option_env!("GGML_BMI2")),
+        ] {
+            let on = var.is_some_and(|v| v.eq_ignore_ascii_case("on"));
+            assert_eq!(compiled.contains(&flag), on, "{flag} = {var:?}");
+        }
     }
 
     #[test]
