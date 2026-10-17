@@ -11,6 +11,7 @@
 pub mod brain;
 pub mod claude_code;
 pub mod fake;
+pub mod transcript;
 
 pub use brain::{
     Ask, Brain, BrainError, BrainEvent, NotesUpdate, ReportRequest, Turn, TurnSummary,
