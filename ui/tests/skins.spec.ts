@@ -4,7 +4,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { expectNoErrors, openUi } from './helpers';
 
-const SKINS = ['kobi', 'gribouille'];
+const SKINS = ['kobi', 'gribouille', 'mercure'];
 const STATES = ['idle', 'listen', 'think', 'write', 'answer', 'suggest', 'done', 'error'] as const;
 
 /** Animations CSS/Web en cours + animations SMIL non pausées. */
