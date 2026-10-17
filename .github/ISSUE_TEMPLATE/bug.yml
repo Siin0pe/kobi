@@ -1,0 +1,54 @@
+name: Bug
+description: Quelque chose ne marche pas comme prévu
+labels: ["Bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Merci ! Une faille de sécurité se signale en privé (voir SECURITY.md), pas ici.
+        Ne joignez ni audio ni transcription de vraie réunion.
+  - type: textarea
+    id: constat
+    attributes:
+      label: Ce qui se passe
+      description: Ce que vous avez vu, avec le message d'erreur exact s'il y en a un.
+    validations:
+      required: true
+  - type: textarea
+    id: attendu
+    attributes:
+      label: Ce que vous attendiez
+    validations:
+      required: true
+  - type: textarea
+    id: etapes
+    attributes:
+      label: Étapes pour reproduire
+      placeholder: |
+        1. Lancer Kobi…
+        2. Dire « Kobi, … »
+        3. …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version de Kobi
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: systeme
+    attributes:
+      label: Système
+      options:
+        - Windows
+        - macOS
+        - Linux
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Détails utiles
+      description: Processeur, moteur de transcription, extrait de journal (~/Kobi/logs), capture.

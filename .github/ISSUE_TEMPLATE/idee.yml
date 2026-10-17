@@ -1,0 +1,21 @@
+name: Idée
+description: Proposer une amélioration ou une nouvelle fonction
+labels: ["Feature"]
+body:
+  - type: textarea
+    id: besoin
+    attributes:
+      label: Le besoin
+      description: La situation concrète, en réunion ou hors réunion, où Kobi vous manque.
+    validations:
+      required: true
+  - type: textarea
+    id: proposition
+    attributes:
+      label: Ce que vous proposez
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Ce que vous faites aujourd'hui à la place

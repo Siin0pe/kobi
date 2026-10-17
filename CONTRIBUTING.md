@@ -1,5 +1,7 @@
 # Contribuer à Kobi
 
+Merci de lire le [code de conduite](CODE_OF_CONDUCT.md). Un bug ou une idée : ouvrez une issue avec le modèle correspondant. Une faille de sécurité : signalement privé, voir [SECURITY.md](SECURITY.md).
+
 Le plan de travail vit dans Linear (team `Kobi`, clé `KOB`). Chaque changement correspond à un ticket.
 
 ## Branches
