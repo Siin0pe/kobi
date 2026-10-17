@@ -190,7 +190,8 @@ struct Player {
     out: Output,
     mcp: Mcp,
     permission_tool: Option<String>,
-    /// Valeurs substituées dans les lignes : `{{tool_result}}`, `{{deny_message}}`.
+    /// Valeurs substituées dans les lignes : `{{tool_result}}`, `{{deny_message}}`,
+    /// `{{pid}}` (process du faux claude), `{{turn}}` (numéro du tour, dès 1).
     vars: HashMap<&'static str, String>,
 }
 
@@ -198,7 +199,9 @@ impl Player {
     fn run(&mut self, scenario: &Value) {
         let turns = scenario["turns"].as_array().cloned().unwrap_or_default();
         let mut turns = turns.into_iter();
-        for content in user_messages() {
+        self.vars.insert("pid", std::process::id().to_string());
+        for (n, content) in user_messages().enumerate() {
+            self.vars.insert("turn", (n + 1).to_string());
             let Some(turn) = turns.next() else {
                 fail("scénario épuisé : message en trop");
             };

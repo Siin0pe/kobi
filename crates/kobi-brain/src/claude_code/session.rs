@@ -152,6 +152,11 @@ impl ClaudeCode {
         })
     }
 
+    /// Identifiant du process `claude`, tant qu'il tourne.
+    pub fn id(&self) -> Option<u32> {
+        self.child.id()
+    }
+
     /// Identifiant de session, connu après le premier événement `init`.
     pub fn session_id(&self) -> Option<&str> {
         self.session_id.as_deref()
