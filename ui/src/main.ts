@@ -5,6 +5,7 @@
 import { isMascotState, STATES, type MascotData, type MascotState } from './contract';
 import { demoData, playDemo } from './demo';
 import { command, enableWindowDrag, followSession, type Command, type SessionState } from './native';
+import { loadSkin, onSkinChange } from './skin-choice';
 import { skinFactory } from './skins/registry';
 import { Stage } from './stage';
 import './styles/fonts.css';
@@ -19,7 +20,10 @@ const stage = new Stage(document.getElementById('app')!, {
   backdrop: params.get('backdrop') === '1',
   reducedMotion: reduced === null ? undefined : reduced === '1',
 });
-stage.useSkin(skinFactory(params.get('skin')));
+// Skin imposé par l'URL (tests, captures), sinon celui choisi dans les réglages.
+const forced = params.get('skin');
+stage.useSkin(skinFactory(forced ?? (await loadSkin())));
+if (!forced) onSkinChange((id) => stage.useSkin(skinFactory(id)));
 enableWindowDrag(stage.root);
 followSession(stage);
 

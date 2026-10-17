@@ -26,6 +26,8 @@ export interface StageOptions {
   backdrop?: boolean;
   /** Force « réduire les animations » (tests) ; sinon suit le réglage système. */
   reducedMotion?: boolean;
+  /** Se cale sur l'élément parent (aperçu des réglages) au lieu de la fenêtre. */
+  inFrame?: boolean;
 }
 
 export class Stage {
@@ -52,6 +54,7 @@ export class Stage {
   private reducedMotion: boolean;
   private readonly motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
   private readonly forcedMotion: boolean | undefined;
+  private readonly inFrame: boolean;
   private readonly cleanups: Array<() => void> = [];
   /** Animations arrêtées par la mise en pause, à relancer au retour. */
   private frozen: Animation[] = [];
@@ -90,10 +93,18 @@ export class Stage {
     this.root.append(this.scene, this.dot, this.live);
     parent.append(this.root);
 
+    this.inFrame = options.inFrame ?? false;
+    this.root.classList.toggle('in-frame', this.inFrame);
     this.fit();
-    const onResize = (): void => this.fit();
-    window.addEventListener('resize', onResize);
-    this.cleanups.push(() => window.removeEventListener('resize', onResize));
+    if (this.inFrame) {
+      const observer = new ResizeObserver(() => this.fit());
+      observer.observe(parent);
+      this.cleanups.push(() => observer.disconnect());
+    } else {
+      const onResize = (): void => this.fit();
+      window.addEventListener('resize', onResize);
+      this.cleanups.push(() => window.removeEventListener('resize', onResize));
+    }
 
     const onVisibility = (): void => this.applyPaused();
     document.addEventListener('visibilitychange', onVisibility);
@@ -302,7 +313,8 @@ export class Stage {
   }
 
   private fit(): void {
-    const scale = Math.min(window.innerWidth / SCENE_WIDTH, window.innerHeight / SCENE_HEIGHT);
+    const box = this.inFrame ? this.root.parentElement!.getBoundingClientRect() : { width: window.innerWidth, height: window.innerHeight };
+    const scale = Math.min(box.width / SCENE_WIDTH, box.height / SCENE_HEIGHT);
     this.root.style.setProperty('--scale', String(scale));
   }
 }
