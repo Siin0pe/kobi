@@ -12,6 +12,9 @@ test('mode discret : pastille de 32 px colorée selon l’état', async ({ page 
   expect(box?.width).toBe(32);
   expect(box?.height).toBe(32);
 
+  // Sans la transition de couleur (0,3 s) : sinon, sous charge, la couleur lue
+  // juste après le changement d'état est encore celle de l'état précédent.
+  await page.addStyleTag({ content: '.dot { transition: none !important; }' });
   const colors = new Set<string>();
   for (const state of STATES) {
     await page.evaluate((s) => window.kobi.setState(s, window.kobi.demoData(s)), state);
