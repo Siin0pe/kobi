@@ -1637,10 +1637,12 @@ dependencies = [
  "ctrlc",
  "hound",
  "kobi-audio",
+ "kobi-brain",
  "kobi-stt",
  "serde",
  "serde_json",
  "sysinfo",
+ "tokio",
  "windows-sys 0.61.2",
 ]
 
