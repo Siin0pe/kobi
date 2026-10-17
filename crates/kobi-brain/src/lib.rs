@@ -15,5 +15,8 @@ pub mod fake;
 pub use brain::{
     Ask, Brain, BrainError, BrainEvent, NotesUpdate, ReportRequest, Turn, TurnSummary,
 };
-pub use claude_code::{ClaudeCode, ClaudeOptions, Error, Event, TurnResult, TurnTranslator, Usage};
+pub use claude_code::{
+    ClaudeCode, ClaudeInstall, ClaudeOptions, Detection, Error, Event, TurnResult, TurnTranslator,
+    Usage,
+};
 pub use kobi_perms::{ApprovalRequest, Decision, PermissionRequest};

@@ -1,9 +1,11 @@
 //! Backend Claude Code : un process `claude` piloté en stream-json.
 
+pub mod detect;
 mod event;
 mod session;
 mod translate;
 
+pub use detect::{ClaudeInstall, Detection};
 pub use event::{Event, McpServerStatus, ResultEvent, StreamEvent, SystemEvent, TurnResult, Usage};
 pub use session::{ClaudeCode, ClaudeOptions, Error};
 pub use translate::TurnTranslator;
