@@ -24,6 +24,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import urllib.request
@@ -47,6 +48,10 @@ PIPER_ARCHIVES = {
     "win32": (
         "piper_windows_amd64.zip",
         "f3c58906402b24f3a96d92145f58acba6d86c9b5db896d207f78dc80811efcea",
+    ),
+    "linux": (
+        "piper_linux_x86_64.tar.gz",
+        "a50cb45f355b7af1f6d758c1b360717877ba0a398cc8cbe6d2a7a3a26e225992",
     ),
 }
 
@@ -104,6 +109,55 @@ VOICES = {
         "10bb85e071d616fcf4071f369f1799d0491492ab3c5d552ec19fb548fac13195",
         "b471dc60d2d8335e819c393d196d6fbf792817f40051257b269878505bc9afb3",
     ),
+    "en_GB-vctk-medium": (
+        "en/en_GB/vctk/medium",
+        "4e9fc85ab9009385319fc6bae7f55577f8a2d7ee77fd9159a5500eb6531f41e6",
+        "7f85e6391ed0f7f46e4abd19345929a16be931a0c9945086f96692dce2087fa8",
+    ),
+    "en_GB-cori-medium": (
+        "en/en_GB/cori/medium",
+        "1899f98e5fb8310154f3c2973f4b8a929ba7245e722b3d3a85680b833d95f10d",
+        "e262c16d7f192f69d4edd6b4ef8a5915379e67495fcc402f1ab15eeb33da3d36",
+    ),
+    "en_US-kristin-medium": (
+        "en/en_US/kristin/medium",
+        "5849957f929cbf720c258f8458692d6103fff2f0e3d3b19c8259474bb06a18d4",
+        "5681426d4aead22195de70531eeeeddb46493cfaffc5764b2ea3db73428b651c",
+    ),
+    "en_US-norman-medium": (
+        "en/en_US/norman/medium",
+        "b9739443232a80a59c7d18810dd856899bf16a7964725f5ab81ea49b1351cb71",
+        "6c2db7f558a4a8deb9fe822583c1c5105f6c4e834dd0f9de8ad17a888ee9fe1d",
+    ),
+    "en_US-john-medium": (
+        "en/en_US/john/medium",
+        "789c6c875726e627ddee93d51d8727859abe9c091c3d141591f4b83c2072e988",
+        "af60f177b6b550f3d7a302720c0fb89e7f94a82b5dca464775ef63b1c69ba09a",
+    ),
+}
+
+# Licence des données de chaque voix (MODEL_CARD de piper-voices v1.0.0). Un
+# modèle entraîné sur ces voix hérite de ces contraintes (voir le document des
+# décisions, « Licences des modèles »). « lessac » : affinée depuis la voix
+# lessac, sous licence de recherche ; « propre » : entraînée de zéro sur des
+# données libres.
+VOICE_LICENSES = {
+    "fr_FR-tom-medium": "AGPL-3.0",
+    "fr_FR-siwis-medium": "CC-BY-4.0, lessac",
+    "fr_FR-upmc-medium": "CC-BY-SA-4.0, lessac",
+    "fr_FR-gilles-low": "CC0, affinée depuis ryan",
+    "en_US-ryan-medium": "CC-BY-NC-SA-4.0, lessac",
+    "en_US-amy-medium": "mimic3 (à vérifier), lessac",
+    "en_GB-alan-medium": "mimic3 (à vérifier), lessac",
+    "en_GB-jenny_dioco-medium": "Jenny (à vérifier), lessac",
+    "en_US-libritts_r-medium": "CC-BY-4.0, lessac",
+    "en_GB-vctk-medium": "CC-BY-4.0, lessac",
+    "en_GB-cori-medium": "domaine public, propre",
+    "en_US-kristin-medium": "domaine public, propre",
+    "en_US-norman-medium": "domaine public, propre",
+    "en_US-john-medium": "domaine public, propre (affinée depuis kristin)",
+    "sapi:Microsoft Hortense Desktop": "voix Windows (licence Microsoft, à vérifier)",
+    "sapi:Microsoft Zira Desktop": "voix Windows (licence Microsoft, à vérifier)",
 }
 
 
@@ -129,12 +183,22 @@ class Utterance:
     voice: str
     speaker: int | None = None  # uniquement pour les voix multi-locuteurs
     length_scale: float = 1.0
+    # Bruit du générateur Piper. À 0 (défaut) la sortie est déterministe ;
+    # au-delà, Piper tire son propre aléa (sans graine) : plus de variété,
+    # mais plus de reproductibilité octet pour octet.
+    noise_scale: float = 0.0
+    noise_w: float = 0.0
 
 
-def limit_cpu(threads: int = 3) -> None:
+def limit_cpu(threads: int = 4) -> None:
     """Limite ce process et ses enfants (Piper, SAPI) à `threads` processeurs
     logiques, en priorité basse : le poste est partagé et ces outils ne
-    doivent pas prendre plus de la moitié du CPU. Sans effet hors Windows."""
+    doivent pas prendre plus de la moitié du CPU. Hors Windows : affinité
+    seulement, la priorité basse vient de `nice`."""
+    if sys.platform.startswith("linux"):
+        cpus = sorted(os.sched_getaffinity(0))[:threads]
+        os.sched_setaffinity(0, cpus)
+        return
     if sys.platform != "win32":
         return
     import ctypes
@@ -186,8 +250,15 @@ def piper_exe() -> Path:
         archive,
         sha,
     )
-    with zipfile.ZipFile(archive) as z:
-        z.extractall(TOOLS_DIR)
+    if name.endswith(".zip"):
+        with zipfile.ZipFile(archive) as z:
+            z.extractall(TOOLS_DIR)
+    else:
+        # `filter` n'existe qu'à partir de Python 3.11.4 (archive vérifiée
+        # par SHA-256 de toute façon).
+        safe = {"filter": "tar"} if hasattr(tarfile, "tar_filter") else {}
+        with tarfile.open(archive) as t:
+            t.extractall(TOOLS_DIR, **safe)
     return exe
 
 
@@ -289,7 +360,8 @@ def _sapi_rate(length_scale: float) -> int:
     return max(-10, min(10, round(10 * np.log(1 / length_scale) / np.log(3))))
 
 
-def _run_sapi(voice: str, length_scale: float, jobs: list[tuple[int, Utterance]], tmp: Path) -> None:
+def _run_sapi(voice: str, key: tuple, jobs: list[tuple[int, Utterance]], tmp: Path) -> None:
+    length_scale = key[0]
     items = [
         {"voice": voice[len(SAPI_PREFIX):], "rate": _sapi_rate(length_scale),
          "text": u.text, "out": str(tmp / f"{i}.wav")}
@@ -304,7 +376,8 @@ def _run_sapi(voice: str, length_scale: float, jobs: list[tuple[int, Utterance]]
     )
 
 
-def _run_piper(voice: str, length_scale: float, jobs: list[tuple[int, Utterance]], tmp: Path) -> None:
+def _run_piper(voice: str, key: tuple, jobs: list[tuple[int, Utterance]], tmp: Path) -> None:
+    length_scale, noise_scale, noise_w = key
     exe = piper_exe()
     model = voice_model(voice)
     todo = jobs
@@ -318,7 +391,7 @@ def _run_piper(voice: str, length_scale: float, jobs: list[tuple[int, Utterance]
             lines.append(json.dumps(line, ensure_ascii=False))
         proc = subprocess.run(
             [str(exe), "-m", str(model), "--json-input", "-q",
-             "--noise_scale", "0", "--noise_w", "0",
+             "--noise_scale", str(noise_scale), "--noise_w", str(noise_w),
              "--length_scale", str(length_scale), "--sentence_silence", "0"],
             input="\n".join(lines) + "\n",
             encoding="utf-8",
@@ -346,19 +419,21 @@ def _run_piper(voice: str, length_scale: float, jobs: list[tuple[int, Utterance]
 def synthesize(utterances: list[Utterance]) -> list[bytes]:
     """Synthétise chaque phrase et renvoie son PCM s16le 16 kHz mono.
 
-    Un seul process par couple (voix, vitesse) : le modèle n'est chargé
-    qu'une fois. Une voix `sapi:<nom>` passe par les voix Windows.
+    Un seul process par voix et réglage (vitesse, bruit) : le modèle n'est
+    chargé qu'une fois. Une voix `sapi:<nom>` passe par les voix Windows (le
+    bruit ne s'y applique pas).
     """
     results: list[bytes | None] = [None] * len(utterances)
-    groups: dict[tuple[str, float], list[tuple[int, Utterance]]] = {}
+    groups: dict[tuple[str, tuple], list[tuple[int, Utterance]]] = {}
     for i, u in enumerate(utterances):
-        groups.setdefault((u.voice, u.length_scale), []).append((i, u))
+        key = (u.length_scale, u.noise_scale, u.noise_w)
+        groups.setdefault((u.voice, key), []).append((i, u))
 
     with tempfile.TemporaryDirectory(prefix="kobitts-") as tmp_dir:
         tmp = Path(tmp_dir)
-        for (voice, length_scale), jobs in groups.items():
+        for (voice, key), jobs in groups.items():
             run = _run_sapi if voice.startswith(SAPI_PREFIX) else _run_piper
-            run(voice, length_scale, jobs, tmp)
+            run(voice, key, jobs, tmp)
             for i, _ in jobs:
                 results[i] = _retry_on_memory_error(_to_16k, tmp / f"{i}.wav")
                 (tmp / f"{i}.wav").unlink()

@@ -165,8 +165,8 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=kobitts.BENCH_HOME / "corpus")
     parser.add_argument("dialogues", nargs="*", help="noms (défaut : tous)")
     parser.add_argument(
-        "--threads", type=int, default=3,
-        help="processeurs logiques utilisables, en priorité basse (défaut 3)",
+        "--threads", type=int, default=4,
+        help="processeurs logiques utilisables, en priorité basse (défaut 4)",
     )
     args = parser.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
