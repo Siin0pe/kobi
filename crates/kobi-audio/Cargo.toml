@@ -4,8 +4,23 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+# Silero VAD (ONNX) par ONNX Runtime chargé à l'exécution (ORT_DYLIB_PATH,
+# dossier de l'exécutable ou chargeur du système) : rien n'est lié à la
+# compilation. Sans cette feature, seul l'Endpointer est disponible.
+silero = ["dep:ort"]
+
 [dependencies]
 anyhow = "1"
 cpal = "0.18.2"
 hound = "3.5"
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "api-27", "load-dynamic"], optional = true }
 thiserror = "2"
+
+[dev-dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[[example]]
+name = "vad_eval"
+required-features = ["silero"]
