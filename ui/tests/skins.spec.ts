@@ -4,14 +4,17 @@
 import { expect, test, type Page } from '@playwright/test';
 import { expectNoErrors, openUi } from './helpers';
 
-const SKINS = ['kobi', 'gribouille'];
+const SKINS = ['kobi', 'gribouille', 'mercure'];
 const STATES = ['idle', 'listen', 'think', 'write', 'answer', 'suggest', 'done', 'error'] as const;
 
-/** Animations CSS/Web en cours + animations SMIL non pausées. */
+/**
+ * Animations continues en cours (CSS, Web Animations, SMIL non pausé). Les
+ * transitions CSS, brèves et finies, ne comptent pas.
+ */
 function moving(page: Page): Promise<number> {
   return page.evaluate(
     () =>
-      document.getAnimations().filter((a) => a.playState === 'running').length +
+      document.getAnimations().filter((a) => a.playState === 'running' && !(a instanceof CSSTransition)).length +
       [...document.querySelectorAll('svg')].filter((s) => s.querySelector('animate, animateTransform, animateMotion') && !s.animationsPaused()).length,
   );
 }
