@@ -98,9 +98,13 @@ pub fn handle<R: Runtime>(app: &AppHandle<R>, id: &str) {
             }
         }
         MenuAction::Quit => app.exit(0),
-        // Réunion, pause et réglages : la session (J1) et la fenêtre des
-        // réglages (KOB-99) écoutent l'événement.
-        MenuAction::StartMeeting | MenuAction::Pause | MenuAction::Settings => {}
+        MenuAction::Settings => {
+            if let Err(e) = crate::settings::open(app) {
+                eprintln!("kobi : réglages : fenêtre impossible à ouvrir : {e}");
+            }
+        }
+        // Réunion et pause : la session (J1) écoutera l'événement.
+        MenuAction::StartMeeting | MenuAction::Pause => {}
     }
 }
 

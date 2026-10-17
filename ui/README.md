@@ -4,10 +4,14 @@ Interface web (TypeScript, sans framework) servie par Tauri : la mascotte, ses b
 
 ```sh
 npm ci
-npm run dev          # http://localhost:1420/?skin=factice&state=think&backdrop=1
-npm test             # Playwright (Chromium headless) sur le build de production
-npm run build && node scripts/captures.mjs --skin factice --out captures/factice
+npm run dev          # http://localhost:1420/?skin=kobi&state=think&backdrop=1
+                     # http://localhost:1420/reglages.html (choix du skin)
+npm test             # Playwright (Chromium headless, un seul worker) sur le build de production
+npm run build && node scripts/captures.mjs --skin kobi --out captures/kobi   # PNG, WebM, GIF par état + tour
+npm run build && node scripts/fluidite.mjs --skin kobi                      # intervalles entre images aux 56 transitions
 ```
+
+Sur une machine partagée avec des mesures de performance, les tests tournent avec un seul navigateur ; `KOBI_UI_PORT` change le port du serveur de test.
 
 Paramètres d'URL : `skin` (identifiant), `state` (un des 8 états, avec des données de démonstration), `backdrop=1` (fond du thème ; la fenêtre native est transparente), `reduced=1` ou `reduced=0` (force « réduire les animations »).
 
@@ -35,7 +39,27 @@ La scène ([`src/stage.ts`](src/stage.ts)) appelle :
 
 Le skin fournit son **thème** (`backdrop`, `ink`, `paper`, `accent`, `muted`, `danger`, `font`) que la scène applique aussi aux bulles et cartes communes. Les polices sont embarquées dans `src/fonts/`, jamais chargées depuis Internet.
 
-Pour ajouter un skin : un dossier `src/skins/<id>/` qui exporte une fabrique `() => Skin`, enregistrée dans [`src/skins/registry.ts`](src/skins/registry.ts). Le skin factice ([`src/skins/factice`](src/skins/factice)) est le plus petit exemple complet.
+## Skins
+
+| Identifiant | Skin | Rendu | Prototype |
+| -- | -- | -- | -- |
+| `kobi` | Kobi (défaut) | DOM + CSS, police variable Recursive, brouillage des caractères | `docs/design/mascotte/Glyphe.dc.html` |
+| `gribouille` | Gribouille | SVG, filtre de turbulence animé (SMIL), stop motion | `Gribouille.dc.html` |
+| `mercure` | Mercure | DOM + CSS, dégradé conique flouté sur le compositeur | `Mercure.dc.html` |
+| `matrice` | Matrice | grille de 135 points, minuterie de 100 ms seulement si l'image bouge | `Matrice.dc.html` |
+| `gelee` | Gelée | DOM + CSS, flous (le plus coûteux) | `Gelee.dc.html` |
+| `essaim` | Essaim | canevas, 46 particules, sprites de lueur | `Essaim.dc.html` |
+| `factice` | — | skin de test du contrat | — |
+
+Le skin choisi est gardé (dans l'application : `~/Kobi/config.toml`, clé `skin` ; dans un navigateur : stockage local) et appliqué à chaud depuis la page des réglages (`reglages.html`).
+
+## Écrire un skin
+
+1. Un dossier `src/skins/<id>/` qui exporte une fabrique `() => Skin` ; l'enregistrer dans [`src/skins/registry.ts`](src/skins/registry.ts) et dans la liste des réglages ([`src/reglages.ts`](src/reglages.ts)). Le skin factice ([`src/skins/factice`](src/skins/factice)) est le plus petit exemple complet.
+2. Dessiner dans la partie droite de la scène (x ≥ 400 px) ; préfixer classes et keyframes par l'identifiant du skin.
+3. Habiller les cartes communes avec des règles `.stage[data-skin='<id>'] .card-…` ; embarquer les polices dans `src/fonts/` avec leur licence (jamais de Google Fonts).
+4. Respecter `setPaused` (plus aucune animation, minuterie ni boucle) et `setReducedMotion` (expressions gardées, aucun mouvement). Une animation qui échappe au CSS (SMIL, canevas) se met en pause à la main ; une boucle de canevas le signale avec `data-animating="1"`.
+5. Ajouter l'identifiant à `tests/skins.spec.ts` : le test commun vérifie les 8 états, l'absence de requête externe, la pause et « réduire les animations ».
 
 ## Polices
 
