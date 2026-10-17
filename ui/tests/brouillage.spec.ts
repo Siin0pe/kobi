@@ -25,11 +25,33 @@ async function sample(page: import('@playwright/test').Page, ms: number) {
   );
 }
 
+/**
+ * Même échantillonnage sur horloge simulée : chaque pas de 16 ms est avancé à la
+ * main, le résultat ne dépend pas de la charge de la machine (KOB-131 : en temps
+ * réel, les images affamées faisaient expirer le test).
+ */
+async function sampleClock(page: import('@playwright/test').Page, ms: number) {
+  const out: Array<{ t: number; eye: string; word: string }> = [];
+  for (let t = 0; t <= ms; t += 16) {
+    out.push({
+      t,
+      ...(await page.evaluate(() => ({
+        eye: document.querySelector('.skin-kobi .g')!.textContent ?? '',
+        word: document.querySelector('.skin-kobi .word')!.textContent ?? '',
+      }))),
+    });
+    await page.clock.runFor(16);
+  }
+  return out;
+}
+
 test('au changement d’état, yeux et mot sont brouillés puis posés lettre par lettre', async ({ page }) => {
+  await page.clock.install();
   const errors = await openUi(page, 'skin=kobi');
-  await page.waitForTimeout(800);
+  await page.clock.pauseAt(Date.now() + 2_000);
+  await page.clock.runFor(800);
   await page.evaluate(() => window.kobi.setState('suggest', window.kobi.demoData('suggest')));
-  const frames = await sample(page, 1000);
+  const frames = await sampleClock(page, 1000);
   const target = 'idée !';
 
   // Yeux : symboles pendant ~300 ms, puis `*`.
@@ -56,16 +78,28 @@ test('au changement d’état, yeux et mot sont brouillés puis posés lettre pa
 /** Journal des yeux affichés : chaque remplacement du texte, avec l'heure (horloge simulée). */
 async function watchEyes(page: import('@playwright/test').Page): Promise<void> {
   await page.evaluate(() => {
-    const log: Array<{ t: number; eye: string }> = [];
-    (window as unknown as { eyeLog: typeof log }).eyeLog = log;
-    new MutationObserver((records) => {
-      for (const r of records) for (const n of r.addedNodes) log.push({ t: performance.now(), eye: n.textContent ?? '' });
-    }).observe(document.querySelector('.skin-kobi .g')!, { childList: true });
+    const log: Array<{ t: number; eye: string; state: string }> = [];
+    const skin = document.querySelector<HTMLElement>('.skin-kobi')!;
+    // L'état est noté avec chaque changement : l'horloge simulée continue
+    // d'avancer entre deux appels du test, un clignement d'Écoute peut donc
+    // tomber juste avant le passage en Réfléchit.
+    const record = (records: MutationRecord[]) => {
+      for (const r of records)
+        for (const n of r.addedNodes) log.push({ t: performance.now(), eye: n.textContent ?? '', state: skin.dataset.state ?? '' });
+    };
+    const observer = new MutationObserver(record);
+    observer.observe(document.querySelector('.skin-kobi .g')!, { childList: true });
+    // Les enregistrements en attente sont vidés avant chaque lecture : sinon un
+    // clignement de fin de phase serait compté dans la suivante.
+    (window as unknown as { eyeLog: () => typeof log }).eyeLog = () => {
+      record(observer.takeRecords());
+      return log.splice(0);
+    };
   });
 }
 
-async function eyeLog(page: import('@playwright/test').Page): Promise<Array<{ t: number; eye: string }>> {
-  return page.evaluate(() => (window as unknown as { eyeLog: Array<{ t: number; eye: string }> }).eyeLog.splice(0));
+async function eyeLog(page: import('@playwright/test').Page): Promise<Array<{ t: number; eye: string; state: string }>> {
+  return page.evaluate(() => (window as unknown as { eyeLog: () => Array<{ t: number; eye: string; state: string }> }).eyeLog());
 }
 
 test('Kobi cligne des yeux en écoute, jamais en réflexion', async ({ page }) => {
@@ -74,7 +108,7 @@ test('Kobi cligne des yeux en écoute, jamais en réflexion', async ({ page }) =
   await watchEyes(page);
   await page.evaluate(() => window.kobi.setState('listen', window.kobi.demoData('listen')));
   await page.clock.runFor(12_000);
-  const listen = (await eyeLog(page)).filter((e) => !'#%&@*?!/<>{}=+$'.includes(e.eye));
+  const listen = (await eyeLog(page)).filter((e) => e.state === 'listen' && !'#%&@*?!/<>{}=+$'.includes(e.eye));
   const closes = listen.filter((e) => e.eye === '–');
   // Entre 2 et 5 s entre deux clignements : au moins 2 en 12 s, au plus ~10.
   expect(closes.length).toBeGreaterThanOrEqual(2);
@@ -91,7 +125,7 @@ test('Kobi cligne des yeux en écoute, jamais en réflexion', async ({ page }) =
 
   await page.evaluate(() => window.kobi.setState('think', window.kobi.demoData('think')));
   await page.clock.runFor(12_000);
-  const think = (await eyeLog(page)).filter((e) => e.eye === '–');
+  const think = (await eyeLog(page)).filter((e) => e.state === 'think' && e.eye === '–');
   expect(think).toEqual([]);
   await expectNoErrors(errors);
 });

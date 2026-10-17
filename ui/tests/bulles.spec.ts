@@ -40,10 +40,15 @@ test('les sources apparaissent une à une puis sont trouvées', async ({ page })
 });
 
 test('la carte remplacée s’efface puis disparaît', async ({ page }) => {
+  // Horloge simulée : la sortie dure 180 ms, trop peu pour une assertion en
+  // temps réel sur une machine chargée (test instable sinon).
+  await page.clock.install();
   const errors = await openUi(page, 'skin=kobi&state=listen');
+  await page.clock.pauseAt(Date.now() + 1_000);
   await page.evaluate(() => window.kobi.setState('write', window.kobi.demoData('write')));
   await expect(page.locator('.card-question.leaving')).toHaveCount(1);
-  await expect(page.locator('.card-question')).toHaveCount(0, { timeout: 1_000 });
+  await page.clock.runFor(300);
+  await expect(page.locator('.card-question')).toHaveCount(0);
   await expect(page.locator('[data-card]')).toHaveCount(1);
   await expectNoErrors(errors);
 });
