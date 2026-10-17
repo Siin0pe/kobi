@@ -1312,6 +1312,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "kobi-testkit"
+version = "0.1.0"
+dependencies = [
+ "kobi-brain",
+ "kobi-perms",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "tokio",
+ "ureq",
+]
+
+[[package]]
 name = "kobi-tts"
 version = "0.1.0"
 

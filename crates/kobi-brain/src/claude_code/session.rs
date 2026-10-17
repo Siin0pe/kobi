@@ -232,7 +232,9 @@ impl ClaudeCode {
         }
     }
 
-    async fn exited(&mut self) -> Error {
+    /// Diagnostic d'un process arrêté : code de sortie et fin de stderr. À
+    /// appeler quand [`ClaudeCode::next_event`] renvoie `None`.
+    pub async fn exited(&mut self) -> Error {
         let status = tokio::time::timeout(Duration::from_secs(5), self.child.wait())
             .await
             .ok()
