@@ -57,6 +57,12 @@ jobs:
           cargo clippy -p kobi-wake --no-default-features --features ort-static --all-targets -- -D warnings
           cargo test -p kobi-wake --no-default-features --features ort-static
 
+      # Kyutai STT : candle, Rust pur, rien de natif à télécharger.
+      - name: Moteur Kyutai (moshi, candle)
+        run: |
+          cargo clippy -p kobi-stt -p kobi-bench --features kobi-stt/kyutai,kobi-bench/kyutai --all-targets -- -D warnings
+          cargo test -p kobi-stt -p kobi-bench --features kobi-stt/kyutai,kobi-bench/kyutai
+
   ui:
     name: interface (chromium)
     runs-on: ubuntu-latest

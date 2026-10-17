@@ -13,7 +13,7 @@ use kobi_bench::metrics::resources::ResourceMonitor;
 use kobi_bench::protocol::{limit_threads, lower_priority, BenchLock, DEFAULT_THREADS};
 use kobi_bench::report::{now_rfc3339, rust_build_info, Report, ReportRow};
 use kobi_stt::fake::FakeEngine;
-use kobi_stt::replay::{Track, WavReplayer};
+use kobi_stt::replay::{ReplayOutcome, Track, WavReplayer};
 use kobi_stt::wav::read_wav_16k_mono;
 use kobi_stt::{Source, SttEngine, SttError, SAMPLE_RATE};
 
@@ -173,6 +173,7 @@ pub fn run(args: SttArgs) -> anyhow::Result<()> {
                 Err(e) => return Err(e.into()),
             };
             let resources = monitor.stop();
+            write_transcript(&out, name, &meeting.name, &outcome)?;
             let metrics = evaluate(
                 &meeting.reference,
                 &outcome,
@@ -243,6 +244,34 @@ fn build_engine(
             Ok((engine, device.label().to_string()))
         }
     }
+}
+
+/// Segments finaux, pour relire les erreurs derrière un WER :
+/// `transcriptions/<moteur>-<réunion>.txt` à côté du rapport.
+fn write_transcript(
+    out: &Path,
+    engine: &str,
+    meeting: &str,
+    outcome: &ReplayOutcome,
+) -> anyhow::Result<()> {
+    use std::fmt::Write as _;
+    let dir = out.join("transcriptions");
+    std::fs::create_dir_all(&dir)?;
+    let mut text = String::new();
+    for s in outcome.finals() {
+        let source = match s.source {
+            Source::Moi => "moi",
+            Source::Eux => "eux",
+        };
+        writeln!(
+            text,
+            "[{:7.2} – {:7.2}] {source} : {}",
+            s.start, s.end, s.text
+        )?;
+    }
+    let path = dir.join(format!("{engine}-{meeting}.txt"));
+    std::fs::write(&path, text).with_context(|| format!("écriture de {}", path.display()))?;
+    Ok(())
 }
 
 fn duration(m: &Meeting) -> f64 {

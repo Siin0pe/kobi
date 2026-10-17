@@ -6,6 +6,8 @@ license.workspace = true
 
 [features]
 # Moteurs optionnels (bibliothèques natives téléchargées au build).
+# Kyutai STT 1B en_fr (candle, Rust pur).
+kyutai = ["kobi-stt/kyutai"]
 nemotron = ["kobi-stt/nemotron"]
 nemotron-shared = ["kobi-stt/nemotron-shared"]
 # Voxtral Realtime via transcribe.cpp ; TRANSCRIBE_DIR évite de recompiler le C++.

@@ -6,6 +6,8 @@
 //! tests et à la validation du harnais de benchmark.
 
 pub mod fake;
+#[cfg(feature = "kyutai")]
+pub mod kyutai;
 #[cfg(any(feature = "nemotron", feature = "nemotron-shared"))]
 pub mod nemotron;
 pub mod replay;
