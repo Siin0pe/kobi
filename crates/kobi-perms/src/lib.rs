@@ -6,6 +6,13 @@
 //! sur la boucle locale) : chaque appel devient une [`ApprovalRequest`] sur un
 //! canal, et l'appel reste bloqué jusqu'à la décision. Sans décision dans le
 //! délai, ou si la demande est abandonnée, la réponse est un refus.
+//!
+//! Côté interface, [`cards::Cards`] transforme les demandes en cartes
+//! numérotées et transmet la réponse de l'utilisateur.
+
+pub mod cards;
+
+pub use cards::{Card, Cards};
 
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -65,6 +72,11 @@ impl ApprovalRequest {
     pub fn decide(self, decision: Decision) {
         // Si l'appel a déjà expiré, la décision n'a plus d'effet.
         let _ = self.reply.send(decision);
+    }
+
+    /// L'appel n'attend plus de décision (délai dépassé, serveur arrêté).
+    pub fn is_abandoned(&self) -> bool {
+        self.reply.is_closed()
     }
 
     pub fn allow(self) {
