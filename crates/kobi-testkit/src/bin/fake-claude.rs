@@ -1,5 +1,11 @@
 //! Faux `claude -p --input-format stream-json --output-format stream-json`.
 //!
+//! `--version` et `auth status` répondent comme le vrai. Un fichier
+//! `<exécutable>.mode` à côté du binaire change ce comportement, pour les
+//! tests de détection : `logged-out` (pas connecté), `broken` (`--version`
+//! échoue), `hang` (ne répond pas), `auth-hang` (seul `auth status` ne répond pas),
+//! `old` (pas de commande `auth`).
+//!
 //! Sans scénario, il répond « reçu : <message> » en deux deltas : le message
 //! `crash` arrête le process en erreur, `erreur` donne un `result` avec
 //! `is_error`.
@@ -22,6 +28,12 @@ use serde_json::{json, Value};
 const PROTOCOL_VERSION: &str = "2025-11-25";
 
 fn main() {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if argv.first().map(String::as_str) == Some("--version")
+        || argv.first().map(String::as_str) == Some("auth")
+    {
+        status_command(&argv);
+    }
     let args = Args::parse();
     let mut out = Output(std::io::stdout());
     match &args.scenario {
@@ -38,6 +50,46 @@ fn main() {
                 vars: HashMap::new(),
             };
             player.run(&scenario);
+        }
+    }
+}
+
+/// `--version` et `auth status`, selon le fichier `.mode`.
+fn status_command(argv: &[String]) -> ! {
+    let mode = std::env::current_exe()
+        .ok()
+        .and_then(|exe| std::fs::read_to_string(exe.with_extension("mode")).ok())
+        .unwrap_or_default();
+    let mode = mode.trim();
+    if mode == "hang" || (mode == "auth-hang" && argv[0] == "auth") {
+        std::thread::sleep(Duration::from_secs(60));
+    }
+    if argv[0] == "--version" {
+        if mode == "broken" {
+            eprintln!("Error: Cannot find module '@anthropic-ai/claude-code/cli.js'");
+            std::process::exit(1);
+        }
+        println!("2.1.302 (Claude Code)");
+        std::process::exit(0);
+    }
+    match mode {
+        "old" => {
+            eprintln!("error: unknown command 'auth'");
+            std::process::exit(1);
+        }
+        "logged-out" => {
+            println!(
+                "{}",
+                json!({"loggedIn": false, "authMethod": "none", "apiProvider": "firstParty"})
+            );
+            std::process::exit(1);
+        }
+        _ => {
+            println!(
+                "{}",
+                json!({"loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty"})
+            );
+            std::process::exit(0);
         }
     }
 }
