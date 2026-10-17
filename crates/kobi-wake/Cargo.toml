@@ -14,9 +14,15 @@ ort-dynamic = ["ort/load-dynamic"]
 # pratique en développement, mais sous Linux il exige glibc >= 2.38.
 # S'utilise avec --no-default-features.
 ort-static = ["ort/download-binaries", "ort/copy-dylibs", "ort/tls-native"]
+# Candidat 2 du mot-clé (KOB-27). Hors des fonctions par défaut : rustpotter
+# tire candle 0.2, patché à la racine du workspace pour cohabiter avec
+# candle 0.9 (voir third_party/candle-core-0.2.2/KOBI.md).
+rustpotter = ["dep:rustpotter", "dep:hound"]
 
 [dependencies]
+hound = { version = "3.5", optional = true }
 ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "api-27"] }
+rustpotter = { version = "3.0.2", optional = true }
 thiserror = "2"
 
 [dev-dependencies]
@@ -25,3 +31,11 @@ hound = "3.5"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sysinfo = "0.39.6"
+
+[[example]]
+name = "rustpotter_train"
+required-features = ["rustpotter"]
+
+[[example]]
+name = "rustpotter_eval"
+required-features = ["rustpotter"]
