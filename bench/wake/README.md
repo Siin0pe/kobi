@@ -84,6 +84,16 @@ python -m venv ~/Kobi-bench/venv-wake
 ~/Kobi-bench/venv-wake/Scripts/python bench/wake/train_oww.py   # --device cpu sans GPU
 ```
 
+Sur une machine partagée, l'entraînement CPU se découpe en deux tronçons :
+`--features-only` calcule les features d'entraînement, les met en cache dans
+le dossier de sortie (`features-train-<clé>.npz`, la clé reprend le nombre de
+clips, l'augmentation et la graine) puis s'arrête ; la commande sans l'option
+repart du cache. Sur le homelab (i5-3470, 3 threads), le premier tronçon prend
+environ 35 min et le second environ 15 min.
+
+Sous Linux, le venv est dans `~/Kobi-bench/venv-wake/bin/` et torch s'installe
+depuis `https://download.pytorch.org/whl/cpu`.
+
 Chaîne openWakeWord : mel (`melspectrogram.onnx`) puis embeddings
 (`embedding_model.onnx`), tous deux de la release v0.5.1, téléchargés dans
 `~/Kobi-bench/models/openwakeword/` ; seul le petit modèle final (16 vecteurs

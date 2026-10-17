@@ -396,6 +396,9 @@ def main() -> None:
     parser.add_argument("--aug-neg", type=int, default=2, help="passages augmentés par négatif")
     parser.add_argument("--noise-clips", type=int, default=1500, help="clips de fond seul")
     parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument("--features-only", action="store_true",
+                        help="calcule les features d'entraînement, les met en cache et s'arrête "
+                        "(pour découper un long entraînement CPU en deux tronçons)")
     args = parser.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
     kobitts.limit_cpu(args.threads)
@@ -412,11 +415,24 @@ def main() -> None:
     babble = [read_wav(args.data / r["file"]) for r in train_rows if r["kind"] == "phrase"]
     aug = Augmenter(babble, args.seed)
 
-    print(f"features : {len(train_rows)} clips d'entraînement")
-    t0 = time.time()
-    x, y = build_training_set(train_rows, args.data, feats, aug, args.aug_pos, args.aug_neg, args.noise_clips, rng)
-    t_feat = time.time() - t0
-    print(f"  {len(x)} fenêtres ({int(y.sum())} positives) en {t_feat:.0f} s")
+    # Cache des features d'entraînement : la clé reprend tout ce qui les change.
+    key = f"{len(train_rows)}-{args.aug_pos}-{args.aug_neg}-{args.noise_clips}-{args.seed}"
+    cache = args.out / f"features-train-{key}.npz"
+    if cache.exists():
+        with np.load(cache) as z:
+            x, y, t_feat = z["x"], z["y"], float(z["t_feat"])
+        print(f"features : cache {cache.name}, {len(x)} fenêtres ({int(y.sum())} positives)")
+    else:
+        print(f"features : {len(train_rows)} clips d'entraînement")
+        t0 = time.time()
+        x, y = build_training_set(train_rows, args.data, feats, aug, args.aug_pos, args.aug_neg, args.noise_clips, rng)
+        t_feat = time.time() - t0
+        print(f"  {len(x)} fenêtres ({int(y.sum())} positives) en {t_feat:.0f} s")
+        args.out.mkdir(parents=True, exist_ok=True)
+        np.savez(cache, x=x, y=y, t_feat=t_feat)
+    if args.features_only:
+        print(f"features en cache : {cache.name}")
+        return
 
     print(f"entraînement sur {device}")
     t0 = time.time()
