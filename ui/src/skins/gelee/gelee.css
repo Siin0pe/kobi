@@ -1,0 +1,91 @@
+/* Skin Gelée. CSS et keyframes repris du prototype
+   docs/design/mascotte/Gelee.dc.html (noms préfixés par `ge-`). Les couleurs
+   des lumières passent par des variables, en fondu au changement d'état.
+   Polices embarquées (SIL OFL 1.1). */
+
+@font-face{font-family:'Geist';font-weight:400;font-display:block;src:url('../../fonts/geist-sans-latin-400-normal.woff2') format('woff2')}
+@font-face{font-family:'Geist';font-weight:600;font-display:block;src:url('../../fonts/geist-sans-latin-600-normal.woff2') format('woff2')}
+@font-face{font-family:'Geist';font-weight:800;font-display:block;src:url('../../fonts/geist-sans-latin-800-normal.woff2') format('woff2')}
+@font-face{font-family:'Geist Mono';font-weight:400;font-display:block;src:url('../../fonts/geist-mono-latin-400-normal.woff2') format('woff2')}
+@font-face{font-family:'Geist Mono';font-weight:500;font-display:block;src:url('../../fonts/geist-mono-latin-500-normal.woff2') format('woff2')}
+
+@keyframes ge-a1{0%,100%{transform:translate(-30px,-20px) scale(1)}50%{transform:translate(40px,30px) scale(1.25)}}
+@keyframes ge-a2{0%,100%{transform:translate(40px,30px) scale(1.1)}50%{transform:translate(-30px,-40px) scale(.85)}}
+@keyframes ge-a3{0%,100%{transform:translate(0,50px) scale(.9)}50%{transform:translate(10px,-30px) scale(1.2)}}
+@keyframes ge-spin{to{transform:rotate(360deg)}}
+@keyframes ge-jelly{0%,100%{transform:scale(1,1)}30%{transform:scale(1.08,.92)}50%{transform:scale(.95,1.06)}70%{transform:scale(1.03,.97)}}
+@keyframes ge-float{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
+@keyframes ge-jump{0%,100%{transform:translateY(0) scale(1,1)}20%{transform:translateY(0) scale(1.1,.88)}45%{transform:translateY(-26px) scale(.94,1.06)}70%{transform:translateY(0) scale(1.06,.94)}}
+@keyframes ge-halo{0%,100%{transform:scale(1);opacity:.5}50%{transform:scale(1.18);opacity:.9}}
+@keyframes ge-blink{0%,90%,100%{transform:scaleY(1)}94%{transform:scaleY(.1)}}
+@keyframes ge-fill{0%{width:0}80%,100%{width:100%}}
+@keyframes ge-popin{0%{transform:translate(-50%,10px) scale(.3);opacity:0}100%{transform:translate(-50%,0) scale(1);opacity:1}}
+/* Ajouts pour Oups : le bonbon tremble puis s'affaisse. */
+@keyframes ge-wobble{0%,100%{transform:translateX(0)}20%{transform:translateX(-10px) rotate(-2deg)}40%{transform:translateX(8px) rotate(2deg)}60%{transform:translateX(-5px)}80%{transform:translateX(3px)}}
+@keyframes ge-sag{to{transform:translateY(10px) scale(1.05,.9)}}
+
+.skin-gelee{position:absolute;left:470px;top:80px;width:300px;display:flex;flex-direction:column;align-items:center;font-family:'Geist',sans-serif;color:#1A1C24}
+.skin-gelee .wrap{position:relative;width:300px;height:320px;display:flex;align-items:center;justify-content:center}
+.skin-gelee .mover{animation:ge-float 4s ease-in-out infinite;transform-origin:50% 100%}
+.skin-gelee.m-answer .mover{animation:ge-jelly .7s ease-in-out infinite}
+.skin-gelee.m-suggest .mover{animation:ge-jump 1.1s ease-in-out infinite}
+.skin-gelee.m-done .mover{animation:ge-jump 1.1s ease-in-out 1,ge-float 4s ease-in-out 1.1s infinite}
+.skin-gelee.m-error .mover{animation:ge-wobble .5s ease-in-out 2,ge-sag .5s ease-out 1s forwards}
+.skin-gelee .halo{position:absolute;width:230px;height:230px;border-radius:70px;filter:blur(30px);opacity:0;background:var(--c1);transition:background-color .6s}
+.skin-gelee.m-listen .halo{opacity:.7;animation:ge-halo 1.2s ease-in-out infinite}
+.skin-gelee .squircle{position:relative;width:200px;height:200px;border-radius:68px;overflow:hidden;background:rgba(255,255,255,.3)}
+.skin-gelee .lights{position:absolute;inset:0;filter:blur(26px)}
+.skin-gelee.m-think .lights{animation:ge-spin 1.6s linear infinite}
+.skin-gelee.m-idle .lights{opacity:.45;filter:blur(30px) saturate(.4)}
+.skin-gelee .b{position:absolute;width:120px;height:120px;border-radius:50%;left:40px;top:40px;transition:background-color .6s}
+.skin-gelee .b1{animation:ge-a1 6s ease-in-out infinite;background:var(--c1)}
+.skin-gelee .b2{animation:ge-a2 7s ease-in-out infinite;background:var(--c2)}
+.skin-gelee .b3{animation:ge-a3 5s ease-in-out infinite;background:var(--c3)}
+.skin-gelee.m-listen .b,.skin-gelee.m-answer .b{animation-duration:1.8s}
+.skin-gelee.m-write .b3{animation-duration:2s}
+.skin-gelee .glass{position:absolute;inset:0;border-radius:68px;background:linear-gradient(160deg,rgba(255,255,255,.65) 0%,rgba(255,255,255,.12) 45%,rgba(255,255,255,.28) 100%);box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.8),inset 0 -14px 30px rgba(80,90,140,.18),inset 0 10px 24px rgba(255,255,255,.7)}
+.skin-gelee .face{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;gap:34px;transition:transform .45s cubic-bezier(.3,1.5,.5,1)}
+.skin-gelee.m-think .face{transform:translate(14px,-16px)}
+.skin-gelee.m-write .face{transform:translate(-8px,14px)}
+.skin-gelee.m-error .face{transform:translate(0,10px)}
+.skin-gelee .eye{width:22px;height:40px;border-radius:14px;background:#FFFFFF;box-shadow:0 4px 12px rgba(40,40,90,.35);transition:height .3s,border-radius .3s,transform .3s;animation:ge-blink 4.2s infinite}
+.skin-gelee.m-idle .eye{height:7px;animation:none}
+.skin-gelee.m-listen .eye{height:48px;width:26px}
+.skin-gelee.m-answer .eye,.skin-gelee.m-done .eye{height:14px;border-radius:14px 14px 4px 4px;animation:none}
+.skin-gelee.m-suggest .eye{height:46px}
+.skin-gelee.m-error .eye{height:10px;border-radius:5px;animation:none}
+.skin-gelee.m-error .eye:first-child{transform:rotate(18deg)}
+.skin-gelee.m-error .eye:last-child{transform:rotate(-18deg)}
+.skin-gelee .bars{position:absolute;left:40px;right:40px;bottom:30px;display:none;flex-direction:column;gap:6px}
+.skin-gelee.m-write .bars{display:flex}
+.skin-gelee .bar{height:6px;border-radius:4px;background:rgba(255,255,255,.85);animation:ge-fill 1.8s ease-out infinite}
+.skin-gelee .bar.k2{animation-delay:.3s;max-width:70%}
+.skin-gelee .plus{position:absolute;top:-4px;left:50%;width:50px;height:50px;border-radius:18px;display:none;align-items:center;justify-content:center;background:rgba(255,255,255,.55);box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.9),0 10px 24px rgba(60,180,80,.35);color:#166534;font:800 28px 'Geist',sans-serif;animation:ge-popin .5s cubic-bezier(.3,1.5,.5,1) both}
+.skin-gelee.m-suggest .plus,.skin-gelee.m-done .plus{display:flex}
+.skin-gelee .floor{width:150px;height:16px;border-radius:50%;background:radial-gradient(closest-side,rgba(60,70,120,.25),transparent)}
+.skin-gelee .status{margin-top:14px;font-family:'Geist Mono',monospace;font-size:13px;color:#3A3F4F}
+
+.skin-gelee.reduced-motion *{animation:none!important;transition:none!important}
+.skin-gelee.reduced-motion .plus{transform:translate(-50%,0)}
+.skin-gelee.reduced-motion .bar{width:100%}
+.skin-gelee.paused *{animation-play-state:paused!important}
+
+/* Thème des cartes communes : verre dépoli clair. */
+.stage[data-skin='gelee'] .bubbles .card{font-variation-settings:normal}
+.stage[data-skin='gelee'] .bubbles .kicker{font-family:'Geist Mono',monospace;font-variation-settings:normal;font-weight:500;color:#6A7083;letter-spacing:.1em}
+.stage[data-skin='gelee'] .card-question,
+.stage[data-skin='gelee'] .card-answer,
+.stage[data-skin='gelee'] .card-notes,
+.stage[data-skin='gelee'] .card-action,
+.stage[data-skin='gelee'] .card-error{background:rgba(255,255,255,.72);color:#1A1C24;border:none;border-radius:26px;box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.9),0 18px 40px rgba(60,70,120,.18);font-family:'Geist',sans-serif;font-size:16px;line-height:1.5}
+.stage[data-skin='gelee'] .card-question .lead{color:#4338CA;font-weight:800;font-variation-settings:normal}
+.stage[data-skin='gelee'] .card-answer .tag{background:#EEF0FF;color:#4338CA}
+.stage[data-skin='gelee'] .card-notes .body{font-family:'Geist Mono',monospace;font-variation-settings:normal;font-size:15px}
+.stage[data-skin='gelee'] .card-action .title{font-weight:800;font-variation-settings:normal;letter-spacing:-.02em}
+.stage[data-skin='gelee'] .card-action .btn{border:1.5px solid #C9CEDB;border-radius:16px;font:600 14px 'Geist',sans-serif;background:rgba(255,255,255,.6)}
+.stage[data-skin='gelee'] .card-action .btn-primary{background:#1A1C24;border-color:#1A1C24;color:#fff}
+.stage[data-skin='gelee'] .card-error{box-shadow:inset 0 0 0 1.5px #FCA5A5,0 18px 40px rgba(239,68,68,.18)}
+.stage[data-skin='gelee'] .card-error .kicker{color:#DC2626}
+.stage[data-skin='gelee'] .card-error .message{font-variation-settings:normal;font-weight:600;font-size:17px}
+.stage[data-skin='gelee'] .card-sources .source{border:none;background:rgba(255,255,255,.7);color:#1A1C24;box-shadow:inset 0 0 0 1.5px #C9CEDB;font-family:'Geist Mono',monospace;font-variation-settings:normal}
+.stage[data-skin='gelee'] .card-sources .source.found{background:#1A1C24;color:#fff}
