@@ -82,10 +82,12 @@
 .skin-kobi.m-idle.deep .ch{animation:none;font-variation-settings:"wght" 350,"CASL" 0,"slnt" 0}
 @keyframes kobi-zfloat-deep{0%{transform:translate(0,0) scale(.6);opacity:0}30%{opacity:1}100%{transform:translate(26px,-70px) scale(1.2);opacity:0}}
 .skin-kobi.m-idle.deep .zz span{animation-name:kobi-zfloat-deep;font-variation-settings:"wght" 650}
-/* En sommeil profond, 10 images/s suffisent pour un mouvement aussi lent :
-   sans GPU, chaque image coûte (WebKitGTK repeint et recompose la fenêtre). */
-.skin-kobi.m-idle.deep .pill{animation-timing-function:steps(15)}
-.skin-kobi.m-idle.deep .zz span{animation-timing-function:steps(26)}
+/* En sommeil profond, 8 images/s suffisent pour un mouvement aussi lent, et
+   un seul « z » s'envole : sans GPU, chaque image coûte (WebKitGTK repeint et
+   recompose la fenêtre), et chaque animation décalée ajoute ses images. */
+.skin-kobi.m-idle.deep .pill{animation-timing-function:steps(12)}
+.skin-kobi.m-idle.deep .zz span{animation-timing-function:steps(21)}
+.skin-kobi.m-idle.deep .zz span+span{visibility:hidden;animation:none}
 
 /* Réduire les animations : la mascotte garde ses expressions (yeux, mot,
    bouche, symboles), sans mouvement continu. */
