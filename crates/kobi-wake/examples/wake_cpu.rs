@@ -108,7 +108,14 @@ fn main() -> Result<()> {
     let mut detections = 0;
     let (cpu0, _) = cpu.sample();
     let start = Instant::now();
-    for (i, chunk) in audio.chunks_exact(CHUNK).cycle().take(n_chunks).enumerate() {
+    for (i, chunk) in audio
+        .as_chunks::<CHUNK>()
+        .0
+        .iter()
+        .cycle()
+        .take(n_chunks)
+        .enumerate()
+    {
         let t = Instant::now();
         detections += det.push(chunk)?.len();
         busy.push(t.elapsed());
