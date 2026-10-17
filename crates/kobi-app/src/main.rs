@@ -7,6 +7,7 @@
 mod placement;
 mod raccourci;
 mod session;
+mod tray;
 
 use std::sync::mpsc::Sender;
 use std::sync::Mutex;
@@ -99,6 +100,26 @@ fn main() {
             place(&window, placement::load(&file))?;
             app.manage(PositionSaver(Mutex::new(placement::spawn_saver(file))));
             window.show()?;
+            tray::install(app.handle())?;
+            // Essai de bout en bout du menu (sans barre système, par exemple en CI
+            // sous Xvfb) : chaque entrée est déclenchée une fois, « Quitter » en dernier.
+            if std::env::var_os("KOBI_ESSAI_MENU").is_some() {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    for id in [
+                        "start-meeting",
+                        "pause",
+                        "toggle-mascot",
+                        "toggle-mascot",
+                        "settings",
+                        "quit",
+                    ] {
+                        std::thread::sleep(std::time::Duration::from_millis(300));
+                        let h = handle.clone();
+                        let _ = handle.run_on_main_thread(move || tray::handle(&h, id));
+                    }
+                });
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
