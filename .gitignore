@@ -35,3 +35,6 @@ ui/test-results/
 ui/playwright-report/
 ui/captures/
 crates/kobi-app/gen/
+
+# Binaires externes copiés par windows/installeur.ps1 (KOB-161).
+/crates/kobi-app/binaries/

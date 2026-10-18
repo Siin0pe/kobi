@@ -9,6 +9,7 @@ mod bienvenue;
 mod carnet;
 mod cerveau;
 mod chef;
+mod controle;
 mod demarrage;
 mod diag;
 mod ecoute;
@@ -16,6 +17,7 @@ mod ecrivain;
 mod intentions;
 mod interpellation;
 mod lecture;
+mod mcp_config;
 mod mot_cle;
 mod notes;
 mod placement;
@@ -92,7 +94,39 @@ fn choose_webkit_renderer() {
     }
 }
 
+/// Sortie de la CLI dans le terminal qui a lancé `kobi` : l'app est un
+/// exécutable graphique sous Windows, sans console à elle. Une sortie déjà
+/// redirigée (tube de `kobi mcp`, fichier) est gardée telle quelle.
+#[cfg(windows)]
+fn attacher_console() {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn AttachConsole(pid: u32) -> i32;
+        fn GetStdHandle(id: u32) -> isize;
+    }
+    const ATTACH_PARENT_PROCESS: u32 = u32::MAX;
+    const STD_OUTPUT_HANDLE: u32 = -11i32 as u32;
+    // SAFETY : appels Win32 sans pointeur ; un échec laisse la sortie muette.
+    unsafe {
+        let sortie = GetStdHandle(STD_OUTPUT_HANDLE);
+        if sortie == 0 || sortie == -1 {
+            AttachConsole(ATTACH_PARENT_PROCESS);
+        }
+    }
+}
+
 fn main() {
+    // `kobi status`, `kobi mcp`… : la CLI de Kobi (KOB-161), qui parle à
+    // l'app en cours ; les options de l'app (`--carnet`…) lancent l'app.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args
+        .first()
+        .is_some_and(|a| kobi_ctl::cli::est_une_commande(a))
+    {
+        #[cfg(windows)]
+        attacher_console();
+        std::process::exit(kobi_ctl::cli::main_avec(&args));
+    }
     #[cfg(target_os = "linux")]
     choose_webkit_renderer();
     session::installer(tauri::Builder::default())
@@ -116,6 +150,8 @@ fn main() {
                 tracing::warn!(%problem, "config.toml");
             }
             demarrage::installer(app.handle());
+            // Interface de contrôle (KOB-161) : `kobi <commande>`, `kobi mcp`.
+            controle::installer(app.handle(), config_path.clone());
             stockage::installer(app.handle(), &config.config, config_path.clone());
             // Réponse à voix haute ou en texte (KOB-142) : la voix se charge en arrière-plan.
             voix::installer(app.handle(), &config.config.voice, config_path);

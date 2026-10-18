@@ -1,0 +1,500 @@
+//! Table des commandes, la même pour la CLI, le MCP et l'agent de Kobi.
+//!
+//! Chaque commande déclare son effet : c'est sur lui que s'appuient le MCP
+//! (`readOnlyHint`, outils exposés à l'agent) et la validation (KOB-156).
+
+use serde_json::{json, Map, Value};
+
+use crate::protocole::{Code, Erreur};
+
+/// Ce que change une commande.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Effet {
+    /// Ne change rien.
+    Lecture,
+    /// Change seulement ce qui est montré (fenêtres, mascotte).
+    Affichage,
+    /// Modifie des données, des réglages ou l'état (réunion, écoute, son).
+    Ecriture,
+}
+
+impl Effet {
+    pub fn cle(self) -> &'static str {
+        match self {
+            Effet::Lecture => "lecture",
+            Effet::Affichage => "affichage",
+            Effet::Ecriture => "ecriture",
+        }
+    }
+
+    /// Étiquette en tête de la description d'un outil MCP.
+    pub fn etiquette(self) -> &'static str {
+        match self {
+            Effet::Lecture => "[lecture]",
+            Effet::Affichage => "[affichage]",
+            Effet::Ecriture => "[écriture]",
+        }
+    }
+}
+
+/// Type d'un paramètre.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Genre {
+    Texte,
+    Booleen,
+    Entier,
+    /// N'importe quelle valeur JSON (`config.set`).
+    Json,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Param {
+    pub nom: &'static str,
+    pub genre: Genre,
+    pub requis: bool,
+    /// Se donne sans `--nom` dans la CLI (dans l'ordre de la table).
+    pub positionnel: bool,
+    /// Valeurs permises (vide : libre).
+    pub choix: &'static [&'static str],
+    pub description: &'static str,
+}
+
+const fn p(nom: &'static str, genre: Genre, description: &'static str) -> Param {
+    Param {
+        nom,
+        genre,
+        requis: false,
+        positionnel: false,
+        choix: &[],
+        description,
+    }
+}
+
+const fn requis(mut param: Param) -> Param {
+    param.requis = true;
+    param
+}
+
+const fn positionnel(mut param: Param) -> Param {
+    param.positionnel = true;
+    param
+}
+
+const fn choix(mut param: Param, choix: &'static [&'static str]) -> Param {
+    param.choix = choix;
+    param
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Commande {
+    /// Nom dans le protocole : mots séparés par des points (`meeting.start`).
+    pub nom: &'static str,
+    pub effet: Effet,
+    pub description: &'static str,
+    pub params: &'static [Param],
+    /// Effet difficile à annuler (`app.quit`).
+    pub destructive: bool,
+}
+
+const fn c(
+    nom: &'static str,
+    effet: Effet,
+    description: &'static str,
+    params: &'static [Param],
+) -> Commande {
+    Commande {
+        nom,
+        effet,
+        description,
+        params,
+        destructive: false,
+    }
+}
+
+use Effet::{Affichage, Ecriture, Lecture};
+use Genre::{Booleen, Entier, Json, Texte};
+
+/// Sections de l'app Kobi (KOB-159).
+pub const SECTIONS: &[&str] = &[
+    "notes",
+    "reunions",
+    "conversations",
+    "rappels",
+    "activite",
+    "reglages",
+    "a-propos",
+    "accueil",
+    // Ancien nom de « a-propos » (contrat v1).
+    "apropos",
+];
+
+const FORMAT_JSON_MD: &[&str] = &["json", "md"];
+const ID_REUNION: Param = positionnel(p(
+    "id",
+    Texte,
+    "Nom de la réunion (dossier du Carnet), ou « last » pour la dernière.",
+));
+const LIMITE: Param = p("limit", Entier, "Nombre maximal d'éléments.");
+
+pub const COMMANDES: &[Commande] = &[
+    c(
+        "status",
+        Lecture,
+        "État de Kobi : session, mascotte, réunion en cours, écoute, fenêtre.",
+        &[],
+    ),
+    c(
+        "app.open",
+        Affichage,
+        "Ouvre l'app Kobi sur une section (notes et réunions, rappels, activité, réglages, à propos, accueil).",
+        &[
+            requis(positionnel(choix(
+                p("section", Texte, "Section à ouvrir."),
+                SECTIONS,
+            ))),
+            p("panneau", Texte, "Panneau des réglages (par exemple « stockage »)."),
+            p("reunion", Texte, "Réunion à ouvrir dans les notes (son nom, voir « meetings list »)."),
+        ],
+    ),
+    c("mascot.show", Affichage, "Montre la mascotte.", &[]),
+    c("mascot.hide", Affichage, "Cache la mascotte (Kobi reste dans la barre système).", &[]),
+    c(
+        "mascot.discreet",
+        Affichage,
+        "Mode discret : la mascotte devient une petite pastille, ou revient.",
+        &[requis(positionnel(p("on", Booleen, "true : discret ; false : mascotte entière.")))],
+    ),
+    Commande {
+        destructive: true,
+        ..c("app.quit", Ecriture, "Quitte Kobi.", &[])
+    },
+    c(
+        "config.get",
+        Lecture,
+        "Lit un réglage (clé pointée, par exemple « voice.assistant »), ou tous les réglages.",
+        &[positionnel(p("key", Texte, "Clé pointée ; absente : tous les réglages."))],
+    ),
+    c(
+        "config.list",
+        Lecture,
+        "Liste les réglages : clé, valeur, application à chaud ou au redémarrage, description.",
+        &[],
+    ),
+    c(
+        "config.set",
+        Ecriture,
+        "Modifie un réglage : valeur vérifiée, écrite dans config.toml, appliquée à chaud quand c'est possible.",
+        &[
+            requis(positionnel(p("key", Texte, "Clé pointée (par exemple « voice.assistant »)."))),
+            requis(positionnel(p("value", Json, "Nouvelle valeur (JSON : true, 3, \"texte\", [\"C:/code\"])."))),
+        ],
+    ),
+    c("config.undo", Ecriture, "Annule le dernier changement de réglage.", &[]),
+    c("meeting.start", Ecriture, "Démarre l'enregistrement de la réunion (prise de notes).", &[]),
+    c("meeting.stop", Ecriture, "Termine la réunion ; le compte rendu s'écrit ensuite.", &[]),
+    c("meeting.pause", Ecriture, "Met l'enregistrement de la réunion en pause.", &[]),
+    c("meeting.resume", Ecriture, "Reprend l'enregistrement de la réunion.", &[]),
+    c(
+        "meeting.status",
+        Lecture,
+        "État de la réunion en cours : actif, pause, début, durée, nombre de notes, dernière note.",
+        &[],
+    ),
+    c(
+        "meetings.list",
+        Lecture,
+        "Liste les réunions enregistrées, la plus récente d'abord.",
+        &[LIMITE],
+    ),
+    c(
+        "meetings.get",
+        Lecture,
+        "Lit une réunion : compte rendu, notes, transcription, ou tout.",
+        &[
+            ID_REUNION,
+            choix(
+                p("part", Texte, "Partie : all (défaut), summary, notes, transcript."),
+                &["all", "summary", "notes", "transcript"],
+            ),
+            choix(p("format", Texte, "json (défaut) ou md."), FORMAT_JSON_MD),
+        ],
+    ),
+    c(
+        "notes.last",
+        Lecture,
+        "Notes et compte rendu de la dernière réunion.",
+        &[choix(p("format", Texte, "md (défaut) ou json."), FORMAT_JSON_MD)],
+    ),
+    c(
+        "meetings.export",
+        Lecture,
+        "Exporte une réunion en markdown (titre et texte complet).",
+        &[requis(ID_REUNION)],
+    ),
+    c(
+        "search",
+        Lecture,
+        "Cherche un mot dans les réunions (transcription, notes, compte rendu) et les conversations.",
+        &[
+            requis(positionnel(p("query", Texte, "Texte cherché."))),
+            LIMITE,
+        ],
+    ),
+    c(
+        "conversations.list",
+        Lecture,
+        "Liste les conversations du quotidien, la plus récente d'abord.",
+        &[LIMITE],
+    ),
+    c(
+        "conversations.get",
+        Lecture,
+        "Lit une conversation.",
+        &[
+            positionnel(p("id", Texte, "Identifiant, ou « last » pour la dernière.")),
+            choix(p("format", Texte, "json (défaut) ou md."), FORMAT_JSON_MD),
+        ],
+    ),
+    c(
+        "reminders.list",
+        Lecture,
+        "Liste les rappels et tâches à faire.",
+        &[p("all", Booleen, "Inclure les rappels faits.")],
+    ),
+    c(
+        "reminders.add",
+        Ecriture,
+        "Ajoute un rappel ou une tâche.",
+        &[
+            requis(positionnel(p("text", Texte, "Texte du rappel."))),
+            p("due", Texte, "Échéance : date RFC 3339 (2026-10-19T09:00:00+02:00) ou ms Unix."),
+        ],
+    ),
+    c(
+        "reminders.done",
+        Ecriture,
+        "Marque un rappel comme fait.",
+        &[requis(positionnel(p("id", Texte, "Identifiant du rappel.")))],
+    ),
+    c("listen.pause", Ecriture, "Met l'écoute en pause : micro coupé, plus de transcription.", &[]),
+    c("listen.resume", Ecriture, "Reprend l'écoute.", &[]),
+    c(
+        "voice.say",
+        Ecriture,
+        "Kobi dit un texte à voix haute.",
+        &[requis(positionnel(p("text", Texte, "Texte à dire.")))],
+    ),
+];
+
+/// Une commande se désigne par son nom.
+impl PartialEq for Commande {
+    fn eq(&self, autre: &Self) -> bool {
+        self.nom == autre.nom
+    }
+}
+
+pub fn trouver(nom: &str) -> Option<&'static Commande> {
+    COMMANDES.iter().find(|c| c.nom == nom)
+}
+
+/// Commande d'après le nom de son outil MCP (`meeting_start`).
+pub fn par_outil(outil: &str) -> Option<&'static Commande> {
+    COMMANDES.iter().find(|c| c.outil() == outil)
+}
+
+impl Commande {
+    /// Mots de la CLI (`meeting start`).
+    pub fn mots(&self) -> String {
+        self.nom.replace('.', " ")
+    }
+
+    /// Nom de l'outil MCP (`meeting_start`) ; Claude Code le voit comme
+    /// `mcp__kobi__meeting_start`.
+    pub fn outil(&self) -> String {
+        self.nom.replace('.', "_")
+    }
+
+    /// Schéma JSON des paramètres (MCP `inputSchema`).
+    pub fn schema(&self) -> Value {
+        let mut proprietes = Map::new();
+        for param in self.params {
+            let mut s = match param.genre {
+                Texte => json!({"type": "string"}),
+                Booleen => json!({"type": "boolean"}),
+                Entier => json!({"type": "integer", "minimum": 1}),
+                Json => json!({}),
+            };
+            s["description"] = param.description.into();
+            if !param.choix.is_empty() {
+                s["enum"] = json!(param.choix);
+            }
+            proprietes.insert(param.nom.into(), s);
+        }
+        let requis: Vec<&str> = self
+            .params
+            .iter()
+            .filter(|p| p.requis)
+            .map(|p| p.nom)
+            .collect();
+        json!({
+            "type": "object",
+            "properties": proprietes,
+            "required": requis,
+            "additionalProperties": false,
+        })
+    }
+
+    /// Vérifie les paramètres reçus ; `null` vaut un objet vide.
+    pub fn verifier(&self, params: &Value) -> Result<Map<String, Value>, Erreur> {
+        let invalide = |m: String| Erreur::new(Code::InvalidParams, m);
+        let params = match params {
+            Value::Null => Map::new(),
+            Value::Object(m) => m.clone(),
+            _ => return Err(invalide("les paramètres doivent être un objet JSON".into())),
+        };
+        for nom in params.keys() {
+            if !self.params.iter().any(|p| p.nom == nom) {
+                return Err(invalide(format!(
+                    "{} : paramètre inconnu « {nom} »",
+                    self.nom
+                )));
+            }
+        }
+        for param in self.params {
+            let Some(v) = params.get(param.nom).filter(|v| !v.is_null()) else {
+                if param.requis {
+                    return Err(invalide(format!(
+                        "{} : paramètre « {} » manquant",
+                        self.nom, param.nom
+                    )));
+                }
+                continue;
+            };
+            let bon_type = match param.genre {
+                Texte => v.is_string(),
+                Booleen => v.is_boolean(),
+                Entier => v.as_u64().is_some_and(|n| n >= 1),
+                Json => true,
+            };
+            if !bon_type {
+                return Err(invalide(format!(
+                    "{} : « {} » attend {}",
+                    self.nom,
+                    param.nom,
+                    match param.genre {
+                        Texte => "un texte",
+                        Booleen => "true ou false",
+                        Entier => "un entier positif",
+                        Json => "une valeur JSON",
+                    }
+                )));
+            }
+            if let (false, Some(s)) = (param.choix.is_empty(), v.as_str()) {
+                if !param.choix.contains(&s) {
+                    return Err(invalide(format!(
+                        "{} : « {} » vaut {}",
+                        self.nom,
+                        param.nom,
+                        param.choix.join(", ")
+                    )));
+                }
+            }
+        }
+        Ok(params)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn noms_uniques_et_outils_valides() {
+        let mut noms: Vec<_> = COMMANDES.iter().map(|c| c.outil()).collect();
+        noms.sort();
+        noms.dedup();
+        assert_eq!(noms.len(), COMMANDES.len());
+        for c in COMMANDES {
+            // Nom d'outil MCP accepté par Claude : [a-zA-Z0-9_-]{1,64}.
+            let outil = c.outil();
+            assert!(
+                outil.len() <= 64
+                    && outil
+                        .chars()
+                        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+            );
+            assert_eq!(par_outil(&outil).unwrap().nom, c.nom);
+            assert_eq!(trouver(c.nom).unwrap().nom, c.nom);
+            assert!(!c.description.is_empty());
+        }
+    }
+
+    #[test]
+    fn effets_du_contrat() {
+        let effet = |n| trouver(n).unwrap().effet;
+        for n in [
+            "status",
+            "config.get",
+            "config.list",
+            "meeting.status",
+            "meetings.list",
+            "meetings.get",
+            "notes.last",
+            "meetings.export",
+            "search",
+            "conversations.list",
+            "conversations.get",
+            "reminders.list",
+        ] {
+            assert_eq!(effet(n), Lecture, "{n}");
+        }
+        for n in ["app.open", "mascot.show", "mascot.hide", "mascot.discreet"] {
+            assert_eq!(effet(n), Affichage, "{n}");
+        }
+        for n in [
+            "app.quit",
+            "config.set",
+            "config.undo",
+            "meeting.start",
+            "meeting.stop",
+            "reminders.add",
+            "reminders.done",
+            "listen.pause",
+            "voice.say",
+        ] {
+            assert_eq!(effet(n), Ecriture, "{n}");
+        }
+        assert!(trouver("app.quit").unwrap().destructive);
+        assert!(COMMANDES.iter().filter(|c| c.destructive).count() == 1);
+    }
+
+    #[test]
+    fn verification_des_parametres() {
+        let get = trouver("meetings.get").unwrap();
+        assert!(get.verifier(&Value::Null).unwrap().is_empty());
+        assert!(get.verifier(&json!({"id": "last", "format": "md"})).is_ok());
+        let e = get.verifier(&json!({"format": "pdf"})).unwrap_err();
+        assert_eq!(e.code, Code::InvalidParams);
+        assert!(e.message.contains("json, md"), "{}", e.message);
+        assert!(get.verifier(&json!({"inconnu": 1})).is_err());
+        assert!(get.verifier(&json!([1])).is_err());
+        let set = trouver("config.set").unwrap();
+        assert!(set.verifier(&json!({"key": "voice.assistant"})).is_err());
+        assert!(set
+            .verifier(&json!({"key": "codebases", "value": ["C:/code"]}))
+            .is_ok());
+        let liste = trouver("meetings.list").unwrap();
+        assert!(liste.verifier(&json!({"limit": 0})).is_err());
+        assert!(liste.verifier(&json!({"limit": "3"})).is_err());
+        assert!(liste.verifier(&json!({"limit": 3})).is_ok());
+    }
+
+    #[test]
+    fn schema_mcp() {
+        let s = trouver("app.open").unwrap().schema();
+        assert_eq!(s["required"], json!(["section"]));
+        assert_eq!(s["properties"]["section"]["enum"][0], "notes");
+        assert_eq!(s["additionalProperties"], false);
+        assert_eq!(trouver("status").unwrap().schema()["properties"], json!({}));
+    }
+}

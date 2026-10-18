@@ -15,6 +15,7 @@ tauri-build = { version = "2.7", features = [] }
 [dependencies]
 kobi-audio = { path = "../kobi-audio" }
 kobi-brain = { path = "../kobi-brain" }
+kobi-ctl = { path = "../kobi-ctl" }
 kobi-session = { path = "../kobi-session" }
 kobi-stt = { path = "../kobi-stt", features = ["nemotron"] }
 kobi-tts = { path = "../kobi-tts", features = ["piper", "lecture"] }

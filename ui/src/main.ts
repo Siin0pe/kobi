@@ -4,7 +4,7 @@
 
 import { isMascotState, STATES, type MascotData, type MascotState } from './states';
 import { demoData, playDemo } from './demo';
-import { command, enableWindowDrag, followSession, type Command, type SessionState } from './native';
+import { command, enableWindowDrag, followSession, tauri, type Command, type SessionState } from './native';
 import { applyRecording, type RecordingState } from './recording';
 import { relierNotes } from './notes-lien';
 import { Stage } from './stage';
@@ -54,6 +54,8 @@ followReport(report);
 let stopDemo: () => void = () => {};
 
 if (params.get('discret') === '1') stage.setCompact(true);
+// Mode discret demandé par la CLI ou le MCP de Kobi (KOB-161).
+void tauri()?.event.listen<boolean>('kobi://discret', (e) => stage.setCompact(e.payload));
 const meeting = params.get('reunion');
 if (meeting !== null) stage.startMeeting({ title: meeting || undefined, startedAt: Date.now() - Number(params.get('depuis') ?? 0) * 1000 }, { consent: params.get('carte') !== '0' });
 
