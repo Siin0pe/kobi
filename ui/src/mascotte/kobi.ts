@@ -1081,11 +1081,11 @@ export class Kobi {
         { transform: 'translate(40px,-10px) scale(1.2)', offset: 0.9 },
         { transform: 'translate(40px,-10px) scale(2)' },
       ],
-      // Sans `fill` : la bulle se retire d'elle-même à la fin de son
-      // animation, même si la scène est coupée (KOB-171 : restée posée sur
-      // l'œil droit « o », on lisait « 8 »).
-      { duration: 2400 },
+      { duration: 2400, fill: 'forwards' },
     );
+    // La bulle se retire d'elle-même à la fin de son animation, même si la
+    // scène est coupée (KOB-171 : restée posée sur l'œil droit « o », on
+    // lisait « 8 »). Le `fill` évite une image à sa place de départ.
     grow.onfinish = () => bubble.remove();
     grow.oncancel = () => bubble.remove();
     this.life.after(2400, () => {
