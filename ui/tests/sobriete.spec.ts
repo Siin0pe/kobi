@@ -146,3 +146,25 @@ test('repos économe en réunion : tout bouge encore, au rythme d’un seul mét
   expect((await loops()).filter((a) => a.state === 'paused')).toEqual([]);
   await expectNoErrors(errors);
 });
+
+test('au repos, un geste (animation Web) suit le métronome puis se termine normalement', async ({ page }) => {
+  await page.clock.install();
+  const errors = await openUi(page, '');
+  await page.clock.runFor(23_000);
+  await expect(page.locator('.stage')).toHaveClass(/econome/);
+  const state = await page.evaluate(() => {
+    const w = window as unknown as { done: boolean; anim: Animation };
+    w.done = false;
+    w.anim = document.querySelector('.kobi .ch')!.animate([{ scale: 1 }, { scale: 1.2 }], { duration: 600 });
+    w.anim.onfinish = () => (w.done = true);
+    return w.anim.playState;
+  });
+  // Tenu par le métronome dès sa création : aucune image d'elle-même.
+  expect(state).toBe('paused');
+  await page.clock.runFor(400);
+  expect(await page.evaluate(() => (window as unknown as { anim: Animation }).anim.playState)).toBe('paused');
+  // Arrivé au bout, il est relâché et finit (onfinish).
+  await page.clock.runFor(800);
+  await expect.poll(() => page.evaluate(() => (window as unknown as { done: boolean }).done)).toBe(true);
+  await expectNoErrors(errors);
+});
