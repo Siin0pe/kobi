@@ -1,5 +1,6 @@
 //! kobi-session : machine à états, déclencheurs et fichiers de Kobi (`~/Kobi`).
 
+pub mod cles;
 pub mod config;
 pub mod donnees;
 pub mod etat;

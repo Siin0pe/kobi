@@ -13,6 +13,7 @@
 //! ce fichier, joué en temps réel puis suivi de silence (essais sans voix).
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -45,6 +46,9 @@ pub enum Commande {
     Raccourci,
     /// Met l'écoute en pause, ou la reprend.
     BasculerPause,
+    /// Met l'écoute en pause (`true`) ou la reprend (`false`), interface de
+    /// contrôle (KOB-161).
+    Pause(bool),
     /// Kobi vient de répondre : la conversation attend la suite.
     Suite,
 }
@@ -52,10 +56,15 @@ pub enum Commande {
 /// Canal vers le fil d'écoute.
 pub struct Ecoute(Mutex<Sender<Commande>>);
 
+/// L'écoute est en pause (micro coupé), tenu à jour par le fil d'écoute.
+#[derive(Default)]
+pub struct EnPause(pub AtomicBool);
+
 /// Lance le fil d'écoute.
 pub fn installer<R: Runtime>(app: &AppHandle<R>) {
     let (tx, rx) = mpsc::channel();
     app.manage(Ecoute(Mutex::new(tx)));
+    app.manage(EnPause::default());
     let app = app.clone();
     std::thread::Builder::new()
         .name("ecoute".into())
@@ -331,11 +340,22 @@ impl<R: Runtime> Fil<R> {
     }
 
     fn commande(&mut self, commande: Commande) {
+        self.executer_commande(commande);
+        if let Some(p) = self.app.try_state::<EnPause>() {
+            p.0.store(self.en_pause, Ordering::Relaxed);
+        }
+    }
+
+    fn executer_commande(&mut self, commande: Commande) {
         match commande {
             Commande::Suite => self.ecouteur.suite(self.t),
             Commande::BasculerPause => {
                 self.en_pause = !self.en_pause;
                 tracing::info!(pause = self.en_pause, "écoute continue");
+            }
+            Commande::Pause(pause) => {
+                self.en_pause = pause;
+                tracing::info!(pause, "écoute continue (contrôle)");
             }
             Commande::Raccourci => {
                 self.note("raccourci clavier");

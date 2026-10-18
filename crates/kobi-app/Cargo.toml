@@ -21,6 +21,7 @@ kobi-stt = { path = "../kobi-stt", features = ["nemotron"] }
 kobi-tts = { path = "../kobi-tts", features = ["piper", "lecture"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 bzip2 = "0.5"
+jiff = "0.2"
 tar = "0.4"
 toml = "0.9"
 serde = { version = "1", features = ["derive"] }

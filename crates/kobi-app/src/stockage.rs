@@ -181,6 +181,21 @@ pub fn regler_stockage<R: Runtime>(
     Ok(reglages(&config))
 }
 
+/// Bascule sur le dossier de `config`, déjà écrite dans `config.toml`
+/// (interface de contrôle, KOB-161).
+pub fn basculer<R: Runtime>(app: &AppHandle<R>, config: &Config) -> Result<(), String> {
+    let partage = app
+        .try_state::<StockagePartage>()
+        .ok_or("stockage indisponible")?;
+    let nouveau = Stockage::depuis_config(config).ok_or("dossier personnel introuvable")?;
+    nouveau
+        .preparer()
+        .map_err(|e| format!("{} : {e}", nouveau.racine().display()))?;
+    tracing::info!(racine = %nouveau.racine().display(), "stockage réglé (contrôle)");
+    *partage.stockage.write().unwrap_or_else(|e| e.into_inner()) = Some(nouveau);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

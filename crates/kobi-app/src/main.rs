@@ -9,6 +9,7 @@ mod bienvenue;
 mod carnet;
 mod cerveau;
 mod chef;
+mod controle;
 mod demarrage;
 mod diag;
 mod ecoute;
@@ -149,6 +150,8 @@ fn main() {
                 tracing::warn!(%problem, "config.toml");
             }
             demarrage::installer(app.handle());
+            // Interface de contrôle (KOB-161) : `kobi <commande>`, `kobi mcp`.
+            controle::installer(app.handle(), config_path.clone());
             stockage::installer(app.handle(), &config.config, config_path.clone());
             // Réponse à voix haute ou en texte (KOB-142) : la voix se charge en arrière-plan.
             voix::installer(app.handle(), &config.config.voice, config_path);
