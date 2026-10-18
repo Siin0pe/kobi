@@ -6,14 +6,30 @@
 // avancer ensemble : toutes les animations changent sur la même image, au
 // rythme choisi (3 images/s, puis 2 après une minute), quelle que soit leur
 // courbe. Mesuré dans l'app (WebKitGTK sans GPU, KOB-146) : le coût d'une
-// image varie peu avec ce qui bouge, c'est leur nombre qui compte. Les animations courtes (arrivées, gestes, lettres qui sautillent)
-// tournent normalement : elles sont rares et finissent vite.
+// image varie peu avec ce qui bouge, c'est leur nombre qui compte.
+//
+// Les gestes de la vie au repos (lettre qui sautille, bâillement, regard) sont
+// des animations Web lancées par `el.animate()` : elles suivent aussi le
+// métronome, puis sont relâchées à leur fin (leur `onfinish` se déclenche).
+// La boucle partagée (ticker.ts : lettres qui se brouillent) prend le même
+// rythme.
+
+import { setFrameInterval } from './ticker';
 
 /** Images par seconde du repos économe, puis du sommeil prolongé. */
 export const ECONOMY_FPS = 3;
 export const DEEP_FPS = 2;
 /** Délai avant le sommeil prolongé. */
 export const DEEP_AFTER_MS = 60_000;
+
+/** Métronomes actifs : ils adoptent les animations Web créées dans leur scène. */
+const active = new Set<Metronome>();
+const nativeAnimate = Element.prototype.animate;
+Element.prototype.animate = function (this: Element, ...args: Parameters<Element['animate']>): Animation {
+  const anim = nativeAnimate.apply(this, args);
+  for (const m of active) m.adopt(this, anim);
+  return anim;
+};
 
 function isLoop(a: Animation): boolean {
   return a instanceof CSSAnimation && a.effect?.getTiming().iterations === Infinity;
@@ -47,21 +63,29 @@ export class Metronome {
     return this.active ? this.fps : 0;
   }
 
+  /** Animation Web créée dans la scène pendant le repos : elle suit le métronome. */
+  adopt(el: Element, anim: Animation): void {
+    if (this.active && this.root.contains(el)) this.hold(anim);
+  }
+
   /** Entrée (ou sortie) du repos économe. */
-  setActive(active: boolean): void {
-    if (active === this.active) return;
-    this.active = active;
+  setActive(on: boolean): void {
+    if (on === this.active) return;
+    this.active = on;
     window.clearTimeout(this.slow);
-    if (active) {
+    if (on) {
+      active.add(this);
       this.fps = ECONOMY_FPS;
       for (const a of this.root.getAnimations({ subtree: true })) if (isLoop(a) && a.playState === 'running') this.hold(a);
       this.slow = window.setTimeout(() => this.setRate(DEEP_FPS), DEEP_AFTER_MS);
       this.run();
     } else {
+      active.delete(this);
       this.halt();
       for (const a of this.held) if (a.playState === 'paused') a.play();
       this.held.clear();
     }
+    setFrameInterval(this.active ? 1000 / this.fps : 0);
     this.onRate?.(this.rate);
   }
 
@@ -80,6 +104,7 @@ export class Metronome {
   private setRate(fps: number): void {
     this.fps = fps;
     if (this.tick) this.run();
+    setFrameInterval(1000 / fps);
     this.onRate?.(this.rate);
   }
 
@@ -112,7 +137,16 @@ export class Metronome {
         this.held.delete(a);
         continue;
       }
-      if (a.playState === 'paused') a.currentTime = Number(a.currentTime ?? 0) + dt;
+      if (a.playState !== 'paused') continue;
+      const next = Number(a.currentTime ?? 0) + dt;
+      const end = Number(a.effect!.getComputedTiming().endTime);
+      if (next >= end) {
+        // Fin d'une animation courte : posée sur sa dernière image et relâchée,
+        // elle se termine normalement (onfinish, fill).
+        a.currentTime = end;
+        a.play();
+        this.held.delete(a);
+      } else a.currentTime = next;
     }
   }
 }
