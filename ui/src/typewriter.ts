@@ -7,7 +7,13 @@
 // qui méritent l'œil (chiffres, chemins, noms de fichiers) sont mis en valeur.
 // Le DOM est complété au fil de la frappe, jamais reconstruit tant que le
 // texte ne fait que grandir.
+//
+// Tête de frappe brouillée (KOB-149) : tant que la frappe court, le dernier
+// caractère tapé s'affiche d'abord en symbole (`#%&@…`, comme le mot de Kobi)
+// et se pose à l'image suivante. Le texte garde sa longueur ; il est exact dès
+// que la frappe s'arrête.
 
+import { NOISE } from './mascotte/glyphs';
 import { onFrame } from './ticker';
 
 /** Retard (en caractères) au-delà duquel la vitesse augmente. */
@@ -15,6 +21,13 @@ const BACKLOG = 40;
 
 /** Mots mis en valeur : chiffres, chemins, noms de fichiers (`refresh.ts`). */
 export const HIGHLIGHT = /\d|[\\/]|\w\.[a-z]{1,5}\b/i;
+
+/** Dernier caractère d'un mot en cours de frappe : un symbole si c'est une lettre ou un chiffre. */
+function scrambled(word: string): string {
+  const last = word.slice(-1);
+  if (!/[\p{L}\p{N}]/u.test(last)) return last;
+  return NOISE.charAt((word.length * 7 + last.charCodeAt(0)) % NOISE.length);
+}
 
 export class Typewriter {
   private target: string[] = [];
@@ -25,8 +38,9 @@ export class Typewriter {
   private instant = false;
   /** Texte déjà dans le DOM. */
   private rendered = '';
-  /** Mot en cours de frappe. */
+  /** Mot en cours de frappe, et son texte exact (la tête peut être brouillée). */
   private word: HTMLElement | null = null;
+  private wordText = '';
 
   /**
    * @param node élément dont le texte est tapé
@@ -71,6 +85,7 @@ export class Typewriter {
   freeze(): void {
     this.target = this.target.slice(0, this.shown);
     this.stop();
+    if (this.word) this.word.textContent = this.wordText;
   }
 
   stop(): void {
@@ -127,16 +142,20 @@ export class Typewriter {
       if (!this.word) {
         this.word = document.createElement('span');
         this.word.className = this.instant ? 'w' : 'w w-in';
+        this.wordText = '';
         this.node.append(this.word);
       }
-      this.word.textContent += ch;
+      this.wordText += ch;
     }
     this.rendered = text;
     if (this.done) this.closeWord();
+    else if (this.word) this.word.textContent = this.wordText.slice(0, -1) + scrambled(this.wordText);
   }
 
   private closeWord(): void {
-    if (this.word && HIGHLIGHT.test(this.word.textContent ?? '')) this.word.classList.add('hl');
+    if (!this.word) return;
+    this.word.textContent = this.wordText;
+    if (HIGHLIGHT.test(this.wordText)) this.word.classList.add('hl');
     this.word = null;
   }
 }

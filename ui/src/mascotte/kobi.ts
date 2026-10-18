@@ -4,6 +4,7 @@
 // Calques, du plus extérieur au plus intérieur, chacun avec son propre
 // mouvement pour qu'ils se composent sans se battre :
 //
+//   .drag     ballotte quand on déplace la fenêtre (ressort, inertie)
 //   .lean     penché vers le curseur (transition CSS)
 //   .voice    suit le volume du micro en écoute
 //   .react    gestes ponctuels : anticipation, saut, rebond (motion.ts)
@@ -24,7 +25,7 @@
 import type { MascotData, MascotState } from '../states';
 import { onFrame } from '../ticker';
 import { Blinker, Scrambler, type Eyes } from './glyphs';
-import { GESTURES, Gestures, Inertia, morphEyes, type Gesture } from './motion';
+import { GESTURES, Gestures, Inertia, morphEyes, Sway, type Gesture } from './motion';
 import { Orbit } from './orbit';
 import './kobi.css';
 
@@ -49,6 +50,9 @@ export const LOOKS: Record<MascotState, Look> = {
   done: { eye: '^', word: 'fait !', mouth: '', enter: 'cheer', gaze: [0, 0] },
   error: { eye: 'x', word: 'oups', mouth: '~', enter: 'recoil', gaze: [0, 6] },
 };
+
+/** États où le survol fait sourire Kobi. */
+const HAPPY_ON_HOVER: ReadonlySet<MascotState> = new Set(['idle', 'listen', 'answer', 'suggest', 'done']);
 
 /** États où Kobi cligne des yeux. */
 const BLINKS: ReadonlySet<MascotState> = new Set(['listen', 'write', 'answer', 'done']);
@@ -79,6 +83,43 @@ const VOWELS = /[aeiouyàâéèêëîïôöùûü]/i;
 
 const rand = (min: number, max: number): number => min + Math.random() * (max - min);
 
+/**
+ * Répertoire de la veille (KOB-149) : petites scènes rares, tirées au hasard,
+ * jamais deux fois la même d'affilée. Le poids règle la fréquence.
+ */
+export const IDLE_EVENTS = {
+  glitch: 3,
+  peek: 2,
+  doze: 2,
+  yawn: 2,
+  shiver: 1,
+  look: 1,
+  whistle: 2,
+  juggle: 1,
+  tap: 2,
+  sneeze: 1,
+  hiccup: 1,
+  wink: 2,
+  snore: 1,
+  hum: 2,
+  reach: 2,
+  roll: 1,
+  twirl: 1,
+  dream: 1,
+} as const;
+export type IdleEvent = keyof typeof IDLE_EVENTS;
+
+/** Trajet d'un symbole qui s'envole, depuis le centre de la pilule (px). */
+interface Flight {
+  x: number;
+  y: number;
+  dx: number;
+  dy: number;
+  size?: number;
+  duration?: number;
+  rotate?: number;
+}
+
 function el(tag: string, className?: string, text?: string): HTMLElement {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -108,6 +149,7 @@ class Timers {
 export class Kobi {
   readonly root: HTMLElement;
   private readonly body: HTMLElement;
+  private readonly drag: HTMLElement;
   private readonly lean: HTMLElement;
   private readonly voice: HTMLElement;
   private readonly pill: HTMLElement;
@@ -121,6 +163,8 @@ export class Kobi {
   private readonly ring: HTMLElement;
   private readonly orbit = new Orbit();
   private readonly inertia: Inertia;
+  /** Ressort du calque `.drag` (déplacement de la fenêtre). */
+  private readonly sway: Sway;
   private readonly gestures: Gestures;
   private readonly scrambler: Scrambler;
   private readonly blinker: Blinker;
@@ -135,6 +179,14 @@ export class Kobi {
   private deep = false;
   /** Entrée et sortie du repos économe (la scène met ses bulles au même rythme). */
   onDeepChange: ((deep: boolean) => void) | null = null;
+  /**
+   * Une scène de la veille ou un ballottement se joue (`true`) ou se termine :
+   * pendant ce temps, la scène relâche son métronome (60 images/s), sans
+   * quitter le repos économe.
+   */
+  onLivelyChange: ((lively: boolean) => void) | null = null;
+  /** Raisons d'être à 60 images/s pendant le repos économe. */
+  private readonly lively = new Set<string>();
   private switchTimer = 0;
   private deepTimer = 0;
   private morph: Animation | null = null;
@@ -181,6 +233,7 @@ export class Kobi {
     drop.style.cssText = 'right:36px;top:4px';
     this.burst = el('div', 'burst');
 
+    this.drag = el('div', 'drag');
     this.lean = el('div', 'lean');
     this.voice = el('div', 'voice');
     const react = el('div', 'react');
@@ -198,16 +251,20 @@ export class Kobi {
     react.append(inertia);
     this.voice.append(react);
     this.lean.append(this.voice);
+    this.drag.append(this.lean);
+    this.sway = new Sway(this.drag);
     this.inertia = new Inertia(inertia, this.pill);
+    this.sway.onRest = () => this.setLively('sway', false);
     this.gestures = new Gestures(react);
 
-    this.body.append(this.orbit.root, zz, waves, bang, drop, this.lean, this.burst);
+    this.body.append(this.orbit.root, zz, waves, bang, drop, this.drag, this.burst);
     this.word = el('div', 'word');
     this.root.append(this.body, this.word);
     this.scrambler = new Scrambler(this.eyes, this.word);
     this.scrambler.setInstant(this.reduced);
     this.blinker = new Blinker((closed) => this.blink(closed));
     this.listenPointer();
+    this.listenWindow();
     this.applyFlags();
   }
 
@@ -228,6 +285,8 @@ export class Kobi {
     this.root.dataset.state = state;
 
     this.life.clear();
+    this.endScene();
+    delete this.root.dataset.pinched;
     this.awake = false;
     this.glance = null;
     this.stopLevel();
@@ -440,6 +499,7 @@ export class Kobi {
     this.scrambler.stop();
     this.orbit.stop();
     this.inertia.cancel();
+    this.sway.cancel();
     this.gestures.cancel();
     this.cleanups.forEach((fn) => fn());
     this.root.remove();
@@ -448,6 +508,7 @@ export class Kobi {
   /** Après une pause ou un changement de réglage : relance ou coupe la vie. */
   private refreshLife(): void {
     this.life.clear();
+    this.endScene();
     this.scrambler.express(null);
     this.awake = false;
     this.glance = null;
@@ -461,6 +522,7 @@ export class Kobi {
         if (!(anim instanceof CSSAnimation) && !(anim instanceof CSSTransition) && anim.effect?.getTiming().iterations !== Infinity) anim.finish();
       this.gestures.cancel();
       this.inertia.cancel();
+      this.sway.cancel();
       this.morph = null;
       this.stopLevel();
       this.pointer = null;
@@ -563,10 +625,16 @@ export class Kobi {
       if (!this.live || this.gestures.busy || now - this.lastBoop < 3000) return;
       this.lastBoop = now;
       this.gestures.play('boop');
+      // Content qu'on vienne le voir : les yeux sourient un instant.
+      if (this.state && HAPPY_ON_HOVER.has(this.state)) this.flash(['^', '^'], 520);
+    };
+    const onPress = (e: PointerEvent): void => {
+      if (e.button === 0) this.pinch();
     };
     doc.addEventListener('pointermove', onMove);
     doc.addEventListener('mouseout', onLeave);
     this.pill.addEventListener('pointerenter', onEnterPill);
+    this.pill.addEventListener('pointerdown', onPress);
     this.cleanups.push(() => {
       doc.removeEventListener('pointermove', onMove);
       doc.removeEventListener('mouseout', onLeave);
@@ -596,6 +664,7 @@ export class Kobi {
   private wake(): void {
     this.awake = true;
     this.life.clear();
+    this.endScene();
     window.clearTimeout(this.deepTimer);
     if (this.deep) {
       this.deep = false;
@@ -657,7 +726,23 @@ export class Kobi {
     const letters = [...this.word.children].filter((c) => (c.textContent ?? '').trim()) as HTMLElement[];
     if (letters.length === 0 || this.scrambler.scrambling) return;
     const i = Math.floor(Math.random() * letters.length);
-    if (Math.random() < 0.3) {
+    const roll = Math.random();
+    if (roll < 0.2 && letters.length > 1) {
+      // Ola : toutes les lettres sautent l'une après l'autre.
+      letters.forEach((letter, j) =>
+        letter.animate(
+          [
+            { transform: 'none' },
+            { transform: 'translateY(-18px) scale(.94,1.1)', offset: 0.4 },
+            { transform: 'translateY(2px) scale(1.06,.95)', offset: 0.75 },
+            { transform: 'none' },
+          ],
+          { duration: 520, delay: j * 80, easing: 'ease-in-out' },
+        ),
+      );
+      return;
+    }
+    if (roll < 0.45) {
       this.scrambler.glitch([...this.word.children].indexOf(letters[i]!));
       return;
     }
@@ -695,20 +780,123 @@ export class Kobi {
 
   /** Petite animation rare de la veille, tirée au hasard (jamais deux fois la même). */
   private idleEvent(): void {
-    const events: Array<[string, number, () => number]> = [
-      ['glitch', 3, () => (this.scrambler.glitch(Math.floor(Math.random() * 3)), 400)],
-      ['peek', 2, () => this.peek()],
-      ['doze', 2, () => (this.gestures.play('doze'), this.life.after(1500, () => this.flash(['o', 'o'], 520)), 2300)],
-      ['yawn', 2, () => this.yawn()],
-      ['shiver', 1, () => (this.gestures.play('shiver'), 600)],
-      ['look', 1, () => this.lookAroundAwake()],
-    ];
-    const pool = events.filter(([name]) => name !== this.lastIdleEvent);
+    const pool = (Object.entries(IDLE_EVENTS) as Array<[IdleEvent, number]>).filter(([name]) => name !== this.lastIdleEvent);
     let pick = Math.random() * pool.reduce((s, [, w]) => s + w, 0);
     const chosen = pool.find(([, w]) => (pick -= w) < 0) ?? pool[0]!;
-    this.lastIdleEvent = chosen[0];
-    const duration = chosen[2]();
-    this.life.after(duration, () => this.startLife());
+    this.runIdle(chosen[0]);
+  }
+
+  /** Noms des scènes de la veille (tests, vidéos). */
+  idleNames(): IdleEvent[] {
+    return Object.keys(IDLE_EVENTS) as IdleEvent[];
+  }
+
+  /** Joue une scène de la veille (tests, vidéos) ; sans effet hors veille ou sans animations. */
+  playIdle(name: IdleEvent): boolean {
+    if (!this.live || this.shown !== 'idle' || this.state !== 'idle') return false;
+    this.life.clear();
+    this.runIdle(name);
+    return true;
+  }
+
+  private runIdle(name: IdleEvent): void {
+    this.lastIdleEvent = name;
+    this.root.dataset.idle = name;
+    this.setLively('scene', true);
+    const duration = this.idleScene(name);
+    this.life.after(duration, () => {
+      delete this.root.dataset.idle;
+      this.setLively('scene', false);
+      this.startLife();
+    });
+  }
+
+  private setLively(reason: string, on: boolean): void {
+    const before = this.lively.size > 0;
+    if (on) this.lively.add(reason);
+    else this.lively.delete(reason);
+    const after = this.lively.size > 0;
+    if (after !== before) this.onLivelyChange?.(after);
+  }
+
+  /** Scène interrompue (changement d'état, réveil, pause) : regard, yeux et bouche reprennent leur place. */
+  private endScene(): void {
+    if (!this.root.dataset.idle) return;
+    delete this.root.dataset.idle;
+    this.setLively('scene', false);
+    this.glance = null;
+    this.scrambler.express(null);
+    if (this.shown) this.mouth.textContent = LOOKS[this.shown].mouth;
+    this.aim();
+  }
+
+  /** Lance la scène et renvoie sa durée (ms). */
+  private idleScene(name: IdleEvent): number {
+    switch (name) {
+      case 'glitch':
+        this.scrambler.glitch(Math.floor(Math.random() * 3));
+        return 400;
+      case 'peek':
+        return this.peek();
+      case 'doze':
+        this.gestures.play('doze');
+        this.life.after(1500, () => this.flash(['o', 'o'], 520));
+        return 2300;
+      case 'yawn':
+        return this.yawn();
+      case 'shiver':
+        this.gestures.play('shiver');
+        return 600;
+      case 'look':
+        return this.lookAroundAwake();
+      case 'whistle':
+        return this.whistle();
+      case 'juggle':
+        return this.juggle();
+      case 'tap':
+        return this.tapFoot();
+      case 'sneeze':
+        return this.sneeze();
+      case 'hiccup':
+        return this.hiccup();
+      case 'wink':
+        this.scrambler.express(['o', '–']);
+        this.mouth.textContent = 'u';
+        this.gestures.play('nod');
+        this.life.after(650, () => {
+          this.scrambler.express(null);
+          this.mouth.textContent = LOOKS.idle.mouth;
+        });
+        return 900;
+      case 'snore':
+        return this.snore();
+      case 'hum':
+        this.gestures.play('sway');
+        this.scrambler.express(['^', '^']);
+        this.mouth.textContent = '~';
+        this.life.after(500, () => this.fly('~', { x: 110, y: -30, dx: 70, dy: -90, size: 44, duration: 1300 }));
+        this.life.after(1300, () => this.fly('~', { x: 110, y: -30, dx: 90, dy: -110, size: 38, duration: 1300 }));
+        this.life.after(2150, () => {
+          this.scrambler.express(null);
+          this.mouth.textContent = LOOKS.idle.mouth;
+        });
+        return 2400;
+      case 'reach':
+        this.gestures.play('reach');
+        this.scrambler.express(['>', '<']);
+        this.life.after(1550, () => this.scrambler.express(null));
+        return 1900;
+      case 'roll':
+        return this.rollEyes();
+      case 'twirl':
+        this.gestures.play('twirl');
+        this.scrambler.express(['*', '*']);
+        this.life.after(560, () => this.confetti(['+', '·', '*', '·', '+'], 0.45));
+        this.life.after(1050, () => this.scrambler.express(null));
+        return 1300;
+      case 'dream':
+        return this.dream();
+    }
   }
 
   /** Un œil s'entrouvre, regarde à gauche puis à droite, se referme. */
@@ -764,6 +952,248 @@ export class Kobi {
       this.scrambler.express(null);
     });
     return 2300;
+  }
+
+  /** Sifflote : yeux rieurs, bouche en « o », des notes s'envolent. */
+  private whistle(): number {
+    this.gestures.play('sway');
+    this.scrambler.express(['^', '^']);
+    this.mouth.textContent = 'o';
+    ['♪', '♫', '♪', '♫'].forEach((n, i) =>
+      this.life.after(150 + i * 480, () => this.fly(n, { x: 100, y: -40, dx: rand(40, 90), dy: -rand(100, 150), size: rand(40, 52), duration: 1500, rotate: rand(-30, 30) })),
+    );
+    this.life.after(2100, () => {
+      this.mouth.textContent = LOOKS.idle.mouth;
+      this.scrambler.express(null);
+    });
+    return 2400;
+  }
+
+  /** Jongle avec les lettres de son nom ; les yeux suivent les lettres en l'air. */
+  private juggle(): number {
+    const lap = 900;
+    const laps = 3;
+    this.scrambler.express(['o', 'o']);
+    this.glance = [0, -14];
+    this.aim();
+    ['k', 'o', 'b'].forEach((letter, i) => {
+      const span = this.flyer(letter, 40);
+      const anim = span.animate(
+        [
+          { transform: 'translate(-60px,-50px) rotate(0deg)', easing: 'cubic-bezier(.2,.6,.4,1)' },
+          { transform: 'translate(0px,-190px) rotate(180deg)', offset: 0.5, easing: 'cubic-bezier(.6,0,.8,.4)' },
+          { transform: 'translate(60px,-50px) rotate(330deg)', offset: 0.85 },
+          { transform: 'translate(-60px,-50px) rotate(360deg)' },
+        ],
+        { duration: lap, delay: (i * lap) / 3, iterations: laps, fill: 'backwards' },
+      );
+      anim.onfinish = () => span.remove();
+      anim.oncancel = () => span.remove();
+    });
+    this.life.after(lap * laps + lap * 0.7, () => {
+      this.glance = null;
+      this.aim();
+      this.scrambler.express(null);
+      this.gestures.play('nod');
+    });
+    return lap * laps + lap;
+  }
+
+  /** Tape du pied en regardant ailleurs ; chaque coup soulève un peu de poussière. */
+  private tapFoot(): number {
+    this.gestures.play('footTap');
+    this.scrambler.express(['o', 'o']);
+    this.glance = [16, 4];
+    this.aim();
+    for (const t of [190, 590, 990, 1390]) this.life.after(t, () => this.fly('·', { x: 110, y: 92, dx: rand(10, 30), dy: -rand(10, 24), size: 30, duration: 500 }));
+    this.life.after(1650, () => {
+      this.glance = null;
+      this.aim();
+      this.scrambler.express(null);
+    });
+    return 1900;
+  }
+
+  /** A… a… atchoum ! */
+  private sneeze(): number {
+    this.gestures.play('sneeze');
+    this.scrambler.express(['>', '<']);
+    this.life.after(250, () => (this.mouth.textContent = 'o'));
+    this.life.after(650, () => (this.mouth.textContent = 'O'));
+    this.life.after(930, () => {
+      this.mouth.textContent = '>';
+      this.scrambler.express(['x', 'x']);
+      for (let i = 0; i < 7; i++) {
+        const side = i % 2 ? 1 : -1;
+        this.fly(i % 3 ? '*' : '·', { x: side * 60, y: 30, dx: side * rand(130, 220), dy: rand(-60, 50), size: rand(30, 44), duration: rand(650, 950), rotate: rand(-90, 90) });
+      }
+      this.scrambler.glitch(Math.floor(Math.random() * 3));
+    });
+    this.life.after(1450, () => {
+      this.mouth.textContent = LOOKS.idle.mouth;
+      this.scrambler.express(null);
+    });
+    return 1700;
+  }
+
+  /** Deux hoquets. */
+  private hiccup(): number {
+    this.gestures.play('hiccup');
+    for (const t of [60, 860]) {
+      this.life.after(t, () => {
+        this.flash(['O', 'O'], 280);
+        this.fly('hic', { x: 110, y: -70, dx: 50, dy: -60, size: 34, duration: 850 });
+      });
+    }
+    return 1600;
+  }
+
+  /** S'endort profondément (une bulle enfle au nez), la bulle éclate : réveil en sursaut. */
+  private snore(): number {
+    this.gestures.play('sink');
+    const bubble = this.flyer('o', 34);
+    const grow = bubble.animate(
+      [
+        { transform: 'translate(40px,-10px) scale(.3)', opacity: 0.6 },
+        { transform: 'translate(40px,-10px) scale(1.1)', opacity: 1, offset: 0.3 },
+        { transform: 'translate(40px,-10px) scale(.7)', offset: 0.5 },
+        { transform: 'translate(40px,-10px) scale(1.6)', offset: 0.8 },
+        { transform: 'translate(40px,-10px) scale(1.2)', offset: 0.9 },
+        { transform: 'translate(40px,-10px) scale(2)' },
+      ],
+      { duration: 2400, fill: 'forwards' },
+    );
+    grow.oncancel = () => bubble.remove();
+    this.life.after(2400, () => {
+      bubble.remove();
+      for (let i = 0; i < 5; i++) this.fly('·', { x: 40, y: -10, dx: rand(-50, 50), dy: rand(-50, 20), size: 26, duration: 450 });
+      this.gestures.play('startle');
+      this.scrambler.express(['O', 'O']);
+      this.glance = [-14, 0];
+      this.aim();
+    });
+    this.life.after(2900, () => {
+      this.glance = [14, 0];
+      this.aim();
+    });
+    this.life.after(3400, () => {
+      this.glance = null;
+      this.aim();
+      this.scrambler.express(['–', 'o']);
+    });
+    this.life.after(3700, () => this.scrambler.express(null));
+    return 3900;
+  }
+
+  /** Les yeux font un tour complet. */
+  private rollEyes(): number {
+    this.scrambler.express(['@', '@']);
+    const steps = 8;
+    for (let i = 0; i <= steps; i++) {
+      const a = (i / steps) * Math.PI * 2 - Math.PI / 2;
+      this.life.after(i * 140, () => {
+        this.glance = i === steps ? null : [Math.cos(a) * 16, Math.sin(a) * 12];
+        this.aim();
+      });
+    }
+    this.life.after(steps * 140 + 200, () => this.scrambler.express(null));
+    return steps * 140 + 400;
+  }
+
+  /** Rêve : des bulles de pensée montent, jusqu'à une question qui s'évapore. */
+  private dream(): number {
+    const path: Array<[number, string, number, number]> = [
+      [0, 'o', 60, -70],
+      [350, 'o', 80, -110],
+      [700, 'O', 100, -150],
+      [1100, '?', 110, -190],
+    ];
+    for (const [t, g, x, y] of path)
+      this.life.after(t, () => this.fly(g, { x, y, dx: rand(-8, 8), dy: -30, size: g === '?' ? 46 : 22 + t / 60, duration: 1500 }));
+    this.gestures.play('doze');
+    return 2700;
+  }
+
+  /** Clic sur Kobi : il se fait pincer (écrasé), puis sursaute de surprise. */
+  pinch(): void {
+    if (!this.live) return;
+    if (this.state === 'idle' && !this.awake) this.wake();
+    this.lastBoop = performance.now();
+    this.gestures.play('pinch');
+    this.scrambler.express(['>', '<']);
+    this.root.dataset.pinched = '1';
+    this.life.after(240, () => {
+      this.gestures.play('surprise');
+      this.scrambler.express(['O', 'O']);
+      this.fly('!', { x: 90, y: -70, dx: 30, dy: -60, size: 60, duration: 700, rotate: 15 });
+    });
+    this.life.after(1000, () => {
+      delete this.root.dataset.pinched;
+      this.scrambler.express(this.state === 'idle' && this.awake ? ['o', 'o'] : null);
+    });
+  }
+
+  /** La fenêtre s'est déplacée de (dx, dy) px : Kobi ballotte, les yeux s'arrondissent. */
+  jostle(dx: number, dy: number): void {
+    if (!this.live || (dx === 0 && dy === 0)) return;
+    this.setLively('sway', true);
+    this.sway.push(dx, dy);
+    if (Math.hypot(dx, dy) > 6) this.flash(['O', 'O'], 400);
+  }
+
+  /**
+   * Déplacement de la fenêtre native, en px physiques : `onMoved` de la
+   * fenêtre courante (l'événement `tauri://move` vise la fenêtre, une écoute
+   * globale ne le reçoit pas), sinon l'événement lui-même (coque simulée des tests).
+   */
+  private listenWindow(): void {
+    type Moved = (e: { payload: { x: number; y: number } }) => void;
+    type Unlisten = Promise<() => void>;
+    const api = (
+      window as unknown as {
+        __TAURI__?: {
+          window?: { getCurrentWindow?: () => { onMoved?: (h: Moved) => Unlisten } };
+          event?: { listen?: (event: string, h: Moved) => Unlisten };
+        };
+      }
+    ).__TAURI__;
+    if (!api) return;
+    let last: { x: number; y: number } | null = null;
+    const handler: Moved = (e) => {
+      const p = e.payload;
+      if (!p || typeof p.x !== 'number' || typeof p.y !== 'number') return;
+      const ratio = window.devicePixelRatio || 1;
+      if (last) this.jostle((p.x - last.x) / ratio, (p.y - last.y) / ratio);
+      last = { x: p.x, y: p.y };
+    };
+    const current = api.window?.getCurrentWindow?.();
+    const stop = current?.onMoved ? current.onMoved(handler) : api.event?.listen?.('tauri://move', handler);
+    if (stop) this.cleanups.push(() => void stop.then((fn) => fn()));
+  }
+
+  /** Symbole posé au centre de la pilule (calque de la gerbe), à animer. */
+  private flyer(text: string, size: number): HTMLElement {
+    const span = el('span', 'fly', text);
+    span.style.fontSize = `${size}px`;
+    this.burst.append(span);
+    return span;
+  }
+
+  /** Un symbole s'envole de (x, y) et s'efface. */
+  private fly(text: string, f: Flight): void {
+    if (!this.live) return;
+    const span = this.flyer(text, f.size ?? 34);
+    const r = f.rotate ?? 0;
+    const anim = span.animate(
+      [
+        { transform: `translate(${f.x}px,${f.y}px) scale(.4) rotate(0deg)`, opacity: 0 },
+        { transform: `translate(${f.x + f.dx * 0.3}px,${f.y + f.dy * 0.3}px) scale(1.1) rotate(${r * 0.4}deg)`, opacity: 1, offset: 0.25 },
+        { transform: `translate(${f.x + f.dx}px,${f.y + f.dy}px) scale(.9) rotate(${r}deg)`, opacity: 0 },
+      ],
+      { duration: f.duration ?? 1000, easing: 'cubic-bezier(.2,.7,.4,1)' },
+    );
+    anim.onfinish = () => span.remove();
+    anim.oncancel = () => span.remove();
   }
 
   /** Efface l'effet de l'état qui s'en va pendant l'anticipation. */
@@ -833,6 +1263,11 @@ export class Kobi {
   /** Passe le repos en mode économe : ondulation du mot par paliers, un seul « z ». */
   private deepSleep(): void {
     if (!this.state || !RESTING.has(this.state) || this.awake) return;
+    // Une scène de la veille se joue : le repos économe attend qu'elle finisse.
+    if (this.root.dataset.idle) {
+      this.deepTimer = window.setTimeout(() => this.deepSleep(), 1000);
+      return;
+    }
     // Les « z » changent d'animation : chacune reprend là où en était l'ancienne.
     const zs = [...this.root.querySelectorAll<HTMLElement>('.zz span')];
     const times = zs.map((z) => z.getAnimations()[0]?.currentTime ?? null);

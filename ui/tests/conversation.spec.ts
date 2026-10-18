@@ -199,6 +199,10 @@ test('toujours animé, sans faire bouger ce qui se clique ; « réduire les anim
   const b = await boxes(page, '.ecrire-champ');
   for (const x of b) expect(x).toEqual(b[0]);
 
+  // Réglage « Animations » de Kobi sur « comme Windows » (par défaut : toujours).
+  // Windows passe de « animé » à « réduit » en cours de route (quel que soit son état au départ).
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.evaluate(() => localStorage.setItem('kobi.animations', 'systeme'));
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await expect(page.locator('.stage')).toHaveClass(/reduced-motion/);
   expect(await live('.ecrire')).toBe(0);

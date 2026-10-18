@@ -7,3 +7,23 @@
   outline: 3px solid #d7ff3a;
   outline-offset: 3px;
 }
+
+/* Cliquables, donc immobiles une fois posées (on clique ce qui ne bouge
+   pas) : la fiche arrive puis ne flotte plus, l'étiquette ne flotte plus.
+   La vie passe par leurs enfants : le surtitre de la fiche se balance, le
+   texte se tape, le point rouge clignote, le compteur de notes bat.
+   Sélecteurs préfixés par `.stage` : cette feuille est chargée avant celles
+   des bulles et de la réunion. */
+.stage .bubbles .card-notes {
+  animation: deal 0.35s cubic-bezier(0.3, 1.4, 0.5, 1) both;
+}
+.stage .bubbles .card-notes .kicker {
+  animation: kicker-bob 2.8s ease-in-out infinite;
+}
+.stage .rec {
+  animation: none;
+}
+.stage.reduced-motion .bubbles .card-notes,
+.stage.reduced-motion .bubbles .card-notes .kicker {
+  animation: none;
+}

@@ -17,7 +17,9 @@ async function setHidden(page: Page, hidden: boolean): Promise<void> {
   }, hidden);
 }
 
-test('le réglage système « réduire les animations » est suivi, même en cours de route', async ({ page }) => {
+test('en mode « comme Windows », le réglage système « réduire les animations » est suivi, même en cours de route', async ({ page }) => {
+  // Réglage « Animations » de Kobi sur « comme Windows » (par défaut : toujours).
+  await page.addInitScript(() => localStorage.setItem('kobi.animations', 'systeme'));
   await page.emulateMedia({ reducedMotion: 'reduce' });
   const errors = await openUi(page, '');
   await expect(page.locator('.stage')).toHaveClass(/reduced-motion/);
@@ -120,8 +122,9 @@ test('repos économe en réunion : tout bouge encore, au rythme d’un seul mét
       return w.loops.map((a) => ({ name: (a as CSSAnimation).animationName, state: a.playState, t: Number(a.currentTime) }));
     });
   const before = await loops();
-  // Le mot, la pilule, l'anneau, l'étiquette REC et la fiche bougent toujours…
-  for (const name of ['kobi-wave', 'kobi-bob', 'kobi-scribble', 'kobi-rec', 'rec-float', 'card-float']) {
+  // Le mot, la pilule, l'anneau bougent toujours ; l'étiquette REC et la fiche,
+  // cliquables, restent immobiles, mais leur point rouge et leur surtitre vivent…
+  for (const name of ['kobi-wave', 'kobi-bob', 'kobi-scribble', 'kobi-rec', 'rec-blink', 'kicker-bob']) {
     expect(before.map((a) => a.name)).toContain(name);
   }
   // … mais aucune ne produit d'image d'elle-même : le métronome les fait avancer ensemble.

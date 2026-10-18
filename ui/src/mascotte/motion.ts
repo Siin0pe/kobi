@@ -1,4 +1,4 @@
-// Mouvement sans saut. Deux outils :
+// Mouvement sans saut. Trois outils :
 //
 // - `Inertia` : les animations CSS de la pilule repartent de zéro quand la
 //   classe d'état change ; la pilule sauterait de sa pose courante (penchée,
@@ -8,6 +8,9 @@
 // - `Gestures` : gestes ponctuels (anticipation, saut, rebond, sursaut…)
 //   joués sur leur propre calque. Un geste qui en interrompt un autre part de
 //   la pose courante : jamais de saut non plus.
+// - `Sway` : ressort du déplacement de la fenêtre (Kobi ballotte).
+
+import { onFrame } from '../ticker';
 
 const EASING = 'cubic-bezier(.2,.7,.3,1)';
 
@@ -241,6 +244,84 @@ export const GESTURES = {
     [0.8, 'translateY(1px) scale(1.02,.98)'],
     [1, 'none'],
   ]),
+  /** Clic : on se fait pincer, écrasé d'un coup (la surprise suit). */
+  pinch: def(240, 0, [
+    [0, 'none'],
+    [0.35, 'scale(1.2,.72)'],
+    [1, 'translateY(3px) scale(1.16,.78)'],
+  ]),
+  /** Après le pincement : sursaut de surprise, on se redresse trop haut. */
+  surprise: def(720, 0, [
+    [0, 'translateY(3px) scale(1.16,.78)'],
+    [0.28, 'translateY(-26px) scale(.88,1.16) rotate(3deg)'],
+    [0.55, 'translateY(0) scale(1.08,.92)'],
+    [0.75, 'translateY(-5px) scale(.98,1.02)'],
+    [1, 'none'],
+  ]),
+  /** Sifflote ou fredonne : balancement tranquille. */
+  sway: def(2200, 0, [
+    [0, 'none'],
+    [0.2, 'rotate(-4deg) translateX(-3px)'],
+    [0.45, 'rotate(4deg) translateX(3px)'],
+    [0.7, 'rotate(-3deg) translateX(-2px)'],
+    [0.9, 'rotate(1deg)'],
+    [1, 'none'],
+  ]),
+  /** Veille : tape du pied, petits rebonds réguliers. */
+  footTap: def(1600, 0, [
+    [0, 'none'],
+    [0.12, 'translateY(3px) scale(1.03,.97)'],
+    [0.25, 'none'],
+    [0.37, 'translateY(3px) scale(1.03,.97)'],
+    [0.5, 'none'],
+    [0.62, 'translateY(3px) scale(1.03,.97)'],
+    [0.75, 'none'],
+    [0.87, 'translateY(3px) scale(1.03,.97)'],
+    [1, 'none'],
+  ]),
+  /** Éternuement : on prend son élan en arrière (a… a…), puis le coup part. */
+  sneeze: def(1500, 0, [
+    [0, 'none'],
+    [0.25, 'translateY(-6px) rotate(5deg) scale(.97,1.05)'],
+    [0.55, 'translateY(-12px) rotate(9deg) scale(.94,1.09)'],
+    [0.64, 'translateY(6px) rotate(-8deg) scale(1.14,.84)'],
+    [0.78, 'translateY(-3px) rotate(2deg)'],
+    [1, 'none'],
+  ]),
+  /** Hoquet : deux petits sauts secs. */
+  hiccup: def(1400, 0, [
+    [0, 'none'],
+    [0.08, 'translateY(-12px) scale(.95,1.06)'],
+    [0.18, 'none'],
+    [0.55, 'none'],
+    [0.63, 'translateY(-14px) scale(.94,1.07) rotate(-2deg)'],
+    [0.74, 'none'],
+    [1, 'none'],
+  ]),
+  /** S'étire sur le côté, d'un bord puis de l'autre. */
+  reach: def(1800, 0, [
+    [0, 'none'],
+    [0.3, 'translateX(-10px) rotate(-9deg) scale(.96,1.06)'],
+    [0.62, 'translateX(10px) rotate(9deg) scale(.96,1.06)'],
+    [0.85, 'translateX(-2px) rotate(-1deg)'],
+    [1, 'none'],
+  ]),
+  /** Pirouette : on s'écrase, on saute et on tourne sur soi (retournement). */
+  twirl: def(1100, 0, [
+    [0, 'none'],
+    [0.15, 'translateY(4px) scale(1.08,.9)'],
+    [0.35, 'translateY(-30px) scale(.2,1.05)'],
+    [0.5, 'translateY(-34px) scale(-1,1)'],
+    [0.65, 'translateY(-22px) scale(.2,1.05)'],
+    [0.82, 'translateY(0) scale(1.08,.92)'],
+    [1, 'none'],
+  ]),
+  /** S'endort profondément : la tête tombe très lentement. */
+  sink: def(2400, 0, [
+    [0, 'none'],
+    [0.7, 'translateY(10px) rotate(-4deg) scale(1.05,.94)'],
+    [1, 'translateY(11px) rotate(-5deg) scale(1.05,.94)'],
+  ]),
 } satisfies Record<string, GestureDef>;
 
 export type Gesture = keyof typeof GESTURES;
@@ -308,4 +389,67 @@ export function morphEyes(eyes: HTMLElement, previous: Animation | null): Animat
     ],
     { duration: 540 },
   );
+}
+
+/**
+ * Kobi ballotte quand on déplace la fenêtre : le corps traîne derrière le
+ * mouvement (ressort amorti), penche dans le sens opposé, puis revient en
+ * dépassant un peu. La boucle ne tourne que tant que le ressort bouge.
+ */
+export class Sway {
+  private x = 0;
+  private y = 0;
+  private vx = 0;
+  private vy = 0;
+  private last = 0;
+  private stopTick: (() => void) | null = null;
+  /** Appelé quand le ressort revient au repos (ou est annulé). */
+  onRest: (() => void) | null = null;
+
+  constructor(private readonly layer: HTMLElement) {}
+
+  /** La fenêtre vient de se déplacer de (dx, dy) px : le corps reste en arrière. */
+  push(dx: number, dy: number): void {
+    const clamp = (v: number) => Math.max(-60, Math.min(60, v));
+    this.vx -= clamp(dx) * 14;
+    this.vy -= clamp(dy) * 14;
+    if (!this.stopTick) {
+      this.last = performance.now();
+      this.stopTick = onFrame(this.tick);
+    }
+  }
+
+  get moving(): boolean {
+    return this.stopTick !== null;
+  }
+
+  cancel(): void {
+    this.stopTick?.();
+    this.stopTick = null;
+    this.x = this.y = this.vx = this.vy = 0;
+    this.layer.style.transform = '';
+    this.onRest?.();
+  }
+
+  private readonly tick = (now: number): boolean => {
+    // Au retour d'une fenêtre masquée, pas de pas géant.
+    const dt = Math.min(now - this.last, 50) / 1000;
+    this.last = now;
+    // Ressort raide et peu amorti : un ou deux dépassements, puis repos.
+    const k = 120;
+    const c = 9;
+    this.vx += (-k * this.x - c * this.vx) * dt;
+    this.vy += (-k * this.y - c * this.vy) * dt;
+    this.x = Math.max(-40, Math.min(40, this.x + this.vx * dt));
+    this.y = Math.max(-30, Math.min(30, this.y + this.vy * dt));
+    if (Math.abs(this.x) < 0.2 && Math.abs(this.y) < 0.2 && Math.abs(this.vx) < 2 && Math.abs(this.vy) < 2) {
+      this.stopTick = null;
+      this.cancel();
+      return false;
+    }
+    // Penché à l'opposé du mouvement, écrasé dans l'axe de la vitesse.
+    const squash = Math.min(0.12, Math.hypot(this.vx, this.vy) / 4000);
+    this.layer.style.transform = `translate(${this.x.toFixed(1)}px,${this.y.toFixed(1)}px) rotate(${(this.x * 0.45).toFixed(2)}deg) scale(${(1 + squash).toFixed(3)},${(1 - squash).toFixed(3)})`;
+    return true;
+  };
 }

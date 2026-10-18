@@ -24,8 +24,9 @@
 .kobi .body{position:absolute;left:430px;top:170px;width:300px;height:176px}
 /* Calques de mouvement (voir kobi.ts) : penché vers le curseur, volume du
    micro, gestes, inertie. Chacun a sa propre transformation. */
-.kobi .lean,.kobi .voice,.kobi .react,.kobi .inertia{position:relative;width:300px;height:176px;transform-origin:50% 100%}
-.kobi .lean{z-index:2;transition:transform .7s cubic-bezier(.3,1.35,.45,1)}
+.kobi .drag,.kobi .lean,.kobi .voice,.kobi .react,.kobi .inertia{position:relative;width:300px;height:176px;transform-origin:50% 100%}
+.kobi .drag{z-index:2}
+.kobi .lean{transition:transform .7s cubic-bezier(.3,1.35,.45,1)}
 
 .kobi .pill{position:relative;z-index:2;width:300px;height:176px;border-radius:88px;background:#0B0B0B;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;transform-origin:50% 100%;
   /* Liseré vert : la pilule noire reste visible sur un bureau sombre (la
@@ -108,7 +109,13 @@
 
 /* Fait ! : gerbe de symboles, partie du centre de la pilule. */
 .kobi .burst{position:absolute;left:150px;top:70px;width:0;height:0;z-index:3;pointer-events:none}
+/* Symboles de la veille (notes sifflées, lettres jonglées, « hic », bulles) : même style que la gerbe. */
+.kobi .burst .fly{font-family:'Recursive','Segoe UI Symbol',monospace;font-size:34px;white-space:pre}
 .kobi .burst span{--halo:6px;position:absolute;left:-14px;top:-24px;font-size:44px;line-height:1;color:#0B0B0B;font-variation-settings:"wght" 900,"CASL" 1;will-change:transform,opacity}
+
+/* Écoute : les yeux grossissent avec la voix (propriété scale, qui s'ajoute
+   au morphing et au battement). --lv est posé par kobi.ts à chaque image. */
+.kobi.m-listen .eyes{scale:calc(1 + var(--lv,0) * .22)}
 
 /* Repos économe (après 20 s de veille ou de prise de notes) : tout continue
    de bouger, au rythme du métronome de la scène (econome.ts : 3 images/s,
