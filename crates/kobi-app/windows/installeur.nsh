@@ -4,6 +4,8 @@
 ; La valeur écrite est celle que lit et règle l'application
 ; (`crates/kobi-app/src/demarrage.rs`) : HKCU\…\Run, « Kobi ».
 ; En installation silencieuse (/S), le démarrage est activé.
+; Le choix est noté dans %USERPROFILE%\Kobi\demarrage.choisi : le premier
+; lancement de Kobi ne le change plus (sans ce fichier, il coche la case).
 
 !macro NSIS_HOOK_POSTINSTALL
   IfSilent kobi_demarrage_oui
@@ -15,6 +17,9 @@
   kobi_demarrage_oui:
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "Kobi" '"$INSTDIR\${MAINBINARYNAME}.exe" --demarrage'
   kobi_demarrage_fin:
+  CreateDirectory "$PROFILE\Kobi"
+  FileOpen $0 "$PROFILE\Kobi\demarrage.choisi" w
+  FileClose $0
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL

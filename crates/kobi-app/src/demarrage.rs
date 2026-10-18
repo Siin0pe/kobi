@@ -8,7 +8,7 @@
 //! l'installeur et celle des réglages ne font qu'un.
 
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use tauri::{AppHandle, Manager, Runtime};
 
@@ -89,6 +89,44 @@ pub fn demarrage_systeme<R: Runtime>(app: AppHandle<R>) -> Result<bool, String> 
     courant(&app)?.est_actif().map_err(|e| e.to_string())
 }
 
+/// Fichier de `~/Kobi` posé dès que l'utilisateur a choisi (installeur,
+/// premier lancement ou réglages) : le démarrage n'est plus jamais activé
+/// d'office.
+pub const CHOIX: &str = "demarrage.choisi";
+
+/// Dossier où noter le choix, si ce n'est pas `~/Kobi` (tests).
+pub struct DossierDuChoix(pub PathBuf);
+
+fn dossier_du_choix<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
+    app.try_state::<DossierDuChoix>()
+        .map(|d| d.0.clone())
+        .or_else(kobi_session::config::kobi_dir)
+}
+
+fn choix_fait(kobi_dir: &Path) -> bool {
+    kobi_dir.join(CHOIX).exists()
+}
+
+fn noter_choix(kobi_dir: &Path) {
+    let ecrit =
+        std::fs::create_dir_all(kobi_dir).and_then(|_| std::fs::write(kobi_dir.join(CHOIX), b""));
+    if let Err(e) = ecrit {
+        tracing::warn!(erreur = %e, "choix du démarrage non mémorisé");
+    }
+}
+
+/// Premier lancement : sans choix antérieur, le démarrage avec le système
+/// est activé (case cochée par défaut, décision du propriétaire) et le choix
+/// est noté ; ensuite, l'état est laissé tel quel.
+pub fn par_defaut(d: &Demarrage, kobi_dir: &Path) -> io::Result<bool> {
+    if !choix_fait(kobi_dir) {
+        d.regler(true)?;
+        noter_choix(kobi_dir);
+        tracing::info!("démarrage avec le système activé par défaut");
+    }
+    d.est_actif()
+}
+
 /// Active ou coupe le démarrage avec le système ; renvoie l'état relu.
 #[tauri::command]
 pub fn regler_demarrage_systeme<R: Runtime>(
@@ -97,8 +135,20 @@ pub fn regler_demarrage_systeme<R: Runtime>(
 ) -> Result<bool, String> {
     let d = courant(&app)?;
     d.regler(actif).map_err(|e| e.to_string())?;
+    if let Some(dir) = dossier_du_choix(&app) {
+        noter_choix(&dir);
+    }
     tracing::info!(actif, "démarrage avec le système réglé");
     d.est_actif().map_err(|e| e.to_string())
+}
+
+/// État du démarrage pour le premier lancement : coché par défaut tant que
+/// l'utilisateur n'a pas choisi (voir [`par_defaut`]).
+#[tauri::command]
+pub fn demarrage_par_defaut<R: Runtime>(app: AppHandle<R>) -> Result<bool, String> {
+    let d = courant(&app)?;
+    let dir = dossier_du_choix(&app).ok_or("dossier personnel introuvable")?;
+    par_defaut(&d, &dir).map_err(|e| e.to_string())
 }
 
 #[cfg(windows)]
@@ -245,6 +295,31 @@ mod tests {
         d.regler(false).unwrap();
     }
 
+    /// Premier lancement : activé par défaut une seule fois ; un choix
+    /// (décoché) n'est jamais repris, même en rejouant le parcours.
+    #[test]
+    fn active_par_defaut_tant_que_rien_n_est_choisi() {
+        let dir = tempfile::tempdir().unwrap();
+        let kobi = dir.path().join("Kobi");
+        let d = Demarrage::new(
+            PathBuf::from("/opt/Kobi/kobi"),
+            Some(dir.path().join("kobi.desktop")),
+        );
+        assert!(par_defaut(&d, &kobi).unwrap(), "profil neuf : coché");
+        assert!(kobi.join(CHOIX).exists());
+        // L'utilisateur décoche, puis rejoue le parcours.
+        d.regler(false).unwrap();
+        assert!(!par_defaut(&d, &kobi).unwrap(), "décoché : le reste");
+        // Choix fait ailleurs (installeur : « Non ») : rien n'est activé.
+        let autre = dir.path().join("Autre");
+        noter_choix(&autre);
+        let d2 = Demarrage::new(
+            PathBuf::from("kobi"),
+            Some(dir.path().join("autre.desktop")),
+        );
+        assert!(!par_defaut(&d2, &autre).unwrap());
+    }
+
     #[test]
     fn desactive_par_le_bureau() {
         let dir = tempfile::tempdir().unwrap();
@@ -270,6 +345,8 @@ mod tests {
             PathBuf::from("/opt/Kobi/kobi"),
             Some(f.clone()),
         ));
+        let kobi = dir.path().join("Kobi");
+        app.manage(DossierDuChoix(kobi.clone()));
         let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
             .build()
             .unwrap();
@@ -298,6 +375,10 @@ mod tests {
             "regler_demarrage_systeme",
             serde_json::json!({ "actif": false })
         ));
+        assert!(!f.exists());
+        // Le choix est noté : le premier lancement ne réactive rien.
+        assert!(kobi.join(CHOIX).exists());
+        assert!(!appel("demarrage_par_defaut", serde_json::json!({})));
         assert!(!f.exists());
     }
 

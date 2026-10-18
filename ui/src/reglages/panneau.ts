@@ -18,6 +18,11 @@ export interface Contexte {
   notifier(texte: string, ton?: Ton): void;
   /** État du réglage, montré par le premier lancement à côté de l'étape. */
   signaler?(statut: Statut, resume: string): void;
+  /**
+   * Monté par le premier lancement (et non par la fenêtre Réglages) : un
+   * panneau peut y proposer sa valeur par défaut (démarrage coché).
+   */
+  parcours?: boolean;
 }
 
 export interface Panneau {

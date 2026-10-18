@@ -18,7 +18,13 @@ function fakeTauri(o: Options): void {
   w.__appels = appels;
   w.__emit = emit;
   let codebases: string[] = [];
-  let demarrage = false;
+  // Démarrage avec le système, gardé d'un chargement à l'autre (parcours rejoué).
+  const demarrage = (): { actif: boolean; choisi: boolean } =>
+    JSON.parse(sessionStorage.getItem('kobi-demarrage') ?? '{"actif":false,"choisi":false}');
+  const garder = (d: { actif: boolean; choisi: boolean }) => {
+    sessionStorage.setItem('kobi-demarrage', JSON.stringify(d));
+    return d;
+  };
   let modele = o.modele ? '/home/neuf/Kobi/models/sherpa-onnx-nemotron' : null;
   const absente = (cmd: string) => {
     throw `Command ${cmd} not found`;
@@ -57,10 +63,14 @@ function fakeTauri(o: Options): void {
           case 'choisir_dossier':
             return '/home/neuf/code/kobi';
           case 'demarrage_systeme':
-            return demarrage;
+            return demarrage().actif;
           case 'regler_demarrage_systeme':
-            demarrage = Boolean(args.actif);
-            return demarrage;
+            return garder({ actif: Boolean(args.actif), choisi: true }).actif;
+          case 'demarrage_par_defaut': {
+            // Profil neuf : coché par défaut, une seule fois.
+            const d = demarrage();
+            return (d.choisi ? d : garder({ actif: true, choisi: true })).actif;
+          }
           case 'raccourcis':
             return { parler: 'Ctrl+Shift+Space', reunion: 'Ctrl+Shift+R' };
           case 'terminer_bienvenue':
@@ -128,8 +138,7 @@ test('Kobi se présente, puis le parcours complet mène à « C’est parti »',
   expect(await appels(page)).toContainEqual(['set_codebases', { dossiers: ['/home/neuf/code/kobi'] }]);
   expect(await appels(page)).toContainEqual(['choisir_dossier', { titre: 'Dossier de code à lire' }]);
   await page.getByRole('button', { name: 'Suivant' }).click();
-  // 5. Démarrage avec le système.
-  await page.getByRole('switch').click();
+  // 5. Démarrage avec le système : coché par défaut au premier lancement.
   await expect(page.getByRole('switch')).toHaveAttribute('aria-checked', 'true');
   await page.getByRole('button', { name: 'Suivant' }).click();
   // 6. Essai : la question transcrite puis la réponse de Kobi.
@@ -172,10 +181,49 @@ test('une commande absente : l’étape le dit et ne bloque pas le parcours', as
   await page.locator('.etape[data-etape="dossiers-code"] button').click();
   await expect(page.locator('.etat[data-statut="attente"]')).toContainText('prochaine version');
   await page.getByRole('button', { name: 'Suivant' }).click();
-  await expect(page.getByRole('switch')).toHaveAttribute('aria-checked', 'false');
+  await expect(page.getByRole('switch')).toHaveAttribute('aria-checked', 'true');
   // La fin ne liste que ce qui est à revoir : « en attente » n'en fait pas partie.
   await page.evaluate(() => window.bienvenue.aller(8));
   await expect(page.locator('.panneau')).toContainText('Tout est en ordre.');
+  await expectNoErrors(errors);
+});
+
+test('profil neuf : le démarrage avec le système est coché et activé par défaut', async ({ page }) => {
+  const errors = await ouvrir(page, { dependances: true, modele: true });
+  await expect(etape(page, 'demarrage').locator('.etape-resume')).toHaveText('activé');
+  await page.locator('.etape[data-etape="demarrage"] button').click();
+  await expect(page.getByRole('switch')).toHaveAttribute('aria-checked', 'true');
+  const faits = (await appels(page)).map(([c]) => c);
+  expect(faits).toContain('demarrage_par_defaut');
+  expect(faits).not.toContain('regler_demarrage_systeme');
+  expect(await page.evaluate(() => sessionStorage.getItem('kobi-demarrage'))).toBe('{"actif":true,"choisi":true}');
+  await expectNoErrors(errors);
+});
+
+test('décoché puis parcours rejoué : le démarrage reste décoché', async ({ page }) => {
+  const errors = await ouvrir(page, { dependances: true, modele: true });
+  await page.locator('.etape[data-etape="demarrage"] button').click();
+  await expect(page.getByRole('switch')).toHaveAttribute('aria-checked', 'true');
+  await page.getByRole('switch').click();
+  await expect(page.getByRole('switch')).toHaveAttribute('aria-checked', 'false');
+  // Le parcours est rejoué (Réglages → Premier lancement) : nouvelle fenêtre.
+  await page.reload();
+  await expect(etape(page, 'demarrage').locator('.etape-resume')).toHaveText('désactivé');
+  await page.locator('.etape[data-etape="demarrage"] button').click();
+  await expect(page.getByRole('switch')).toHaveAttribute('aria-checked', 'false');
+  expect(await page.evaluate(() => sessionStorage.getItem('kobi-demarrage'))).toBe('{"actif":false,"choisi":true}');
+  await expectNoErrors(errors);
+});
+
+test('la fenêtre Réglages montre l’état sans rien activer d’office', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(String(e)));
+  await page.addInitScript(fakeTauri, { dependances: true, modele: true });
+  await page.goto('/reglages.html?panneau=demarrage');
+  await expect(page.getByRole('switch')).toHaveAttribute('aria-checked', 'false');
+  const faits = (await appels(page)).map(([c]) => c);
+  expect(faits).toContain('demarrage_systeme');
+  expect(faits).not.toContain('demarrage_par_defaut');
   await expectNoErrors(errors);
 });
 

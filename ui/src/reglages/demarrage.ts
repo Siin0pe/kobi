@@ -1,6 +1,11 @@
 // Panneau « Démarrage » (KOB-143) : Kobi se lance à l'ouverture de session,
 // en veille et sans fenêtre de bienvenue. L'état vit là où le système le
 // lit (clé Run, autostart XDG, LaunchAgent), pas dans `config.toml`.
+//
+// Au premier lancement, la case est cochée par défaut (décision du
+// propriétaire) : `demarrage_par_defaut` l'active si l'utilisateur n'a
+// encore jamais choisi, ni dans l'installeur ni ici. Dans les Réglages, on
+// montre seulement l'état.
 
 import { h } from '../dom';
 import { invoke, message } from '../ipc';
@@ -41,7 +46,7 @@ export const DEMARRAGE: Panneau = {
       );
       ctx.signaler?.('ok', actif ? 'activé' : 'désactivé');
     };
-    invoke<boolean>('demarrage_systeme').then(dessiner, (e) => {
+    invoke<boolean>(ctx.parcours ? 'demarrage_par_defaut' : 'demarrage_systeme').then(dessiner, (e) => {
       zone.replaceChildren(h('p', { class: 'erreur' }, message(e)));
       ctx.signaler?.('erreur', 'erreur');
     });

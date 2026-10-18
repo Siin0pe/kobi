@@ -229,6 +229,7 @@ pub fn installer<R: Runtime>(builder: Builder<R>) -> Builder<R> {
             crate::stockage::regler_stockage,
             crate::demarrage::demarrage_systeme,
             crate::demarrage::regler_demarrage_systeme,
+            crate::demarrage::demarrage_par_defaut,
             crate::carnet::ouvrir_carnet,
             crate::carnet::carnet_index,
             crate::carnet::carnet_reunion,
