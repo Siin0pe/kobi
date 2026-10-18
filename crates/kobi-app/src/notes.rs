@@ -10,7 +10,7 @@
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 
-use kobi_session::stockage::{CompteRendu, Stockage};
+use kobi_session::stockage::Stockage;
 use serde::Serialize;
 use tauri::{AppHandle, Manager, PhysicalPosition, Runtime, WebviewUrl, WebviewWindowBuilder};
 
@@ -65,37 +65,118 @@ fn puces(notes: &str) -> impl Iterator<Item = &str> {
     })
 }
 
-/// Découpe le markdown des notes. Des notes sans titre de section vont dans
-/// une seule section « Notes ».
+/// Puce qui dit seulement qu'il n'y a rien (« Aucune question ouverte. ») :
+/// la section est vide, ce n'est pas une note.
+fn rien_a_noter(puce: &str) -> bool {
+    let p = sans_marques(puce).to_lowercase();
+    [
+        "aucun ",
+        "aucune ",
+        "rien ",
+        "néant",
+        "pas de ",
+        "pas encore",
+    ]
+    .iter()
+    .any(|debut| p.starts_with(debut))
+}
+
+fn sans_marques(texte: &str) -> String {
+    texte.replace("**", "").replace('`', "")
+}
+
+/// Titre de section : `## Titre`, ou une ligne seule en gras (`**Titre**`,
+/// `**Titre :**`), comme Claude écrit souvent ses notes.
+fn titre_de_section(ligne: &str) -> Option<&str> {
+    let l = ligne.trim();
+    if let Some(t) = l.strip_prefix('#') {
+        return Some(t.trim_start_matches('#').trim());
+    }
+    let t = l
+        .strip_prefix("**")?
+        .trim_end_matches(':')
+        .trim_end()
+        .strip_suffix("**")?;
+    (!t.contains("**")).then(|| t.trim().trim_end_matches(':').trim())
+}
+
+/// Où ranger une section, d'après son titre.
+fn cle(titre: &str) -> &'static str {
+    let t = kobi_session::reunion::nettoyer_titre(titre);
+    if t.contains("decision") {
+        "decisions"
+    } else if t.contains("action")
+        || t.contains("a-faire")
+        || t.contains("todo")
+        || t.contains("tache")
+    {
+        "actions"
+    } else if t.contains("question") {
+        "questions"
+    } else {
+        "autre"
+    }
+}
+
+/// Découpe le markdown des notes par section (titres `##` ou en gras). Le
+/// texte hors section va dans « Notes » ; un titre sans contenu propre (le
+/// titre général des notes) disparaît ; les puces « rien à noter » aussi.
 pub fn decouper(
     reunion: &str,
     titre: Option<String>,
     debut_ms: Option<u64>,
     notes: &str,
 ) -> NotesEnCours {
-    let mut cr = CompteRendu::depuis_markdown(notes);
-    let sans_section = !notes.lines().any(|l| l.starts_with("## "));
-    if sans_section && !notes.trim().is_empty() {
-        cr.autres = vec![("Notes".into(), notes.trim().to_owned())];
+    let mut blocs: Vec<(Option<String>, String)> = vec![(None, String::new())];
+    for ligne in notes.lines() {
+        match titre_de_section(ligne) {
+            Some(t) => blocs.push((Some(t.to_owned()), String::new())),
+            None => {
+                let puce = puces(ligne).next();
+                if puce.is_some_and(rien_a_noter) {
+                    continue;
+                }
+                let corps = &mut blocs.last_mut().expect("au moins un bloc").1;
+                corps.push_str(ligne);
+                corps.push('\n');
+            }
+        }
     }
-    // « Résumé » n'est pas attendu dans des notes en cours : on le garde.
-    if !cr.resume.is_empty() {
-        cr.autres.insert(0, ("Résumé".into(), cr.resume.clone()));
-    }
-    NotesEnCours {
+    let mut n = NotesEnCours {
         reunion: reunion.to_owned(),
         titre,
         debut_ms,
-        decisions: cr.decisions,
-        actions: cr.actions,
-        questions: cr.questions,
-        autres: cr.autres,
-        derniere_note: puces(notes)
-            .last()
-            .map(|p| p.replace("**", "").replace('`', "")),
-        lignes: puces(notes).count(),
+        decisions: String::new(),
+        actions: String::new(),
+        questions: String::new(),
+        autres: Vec::new(),
+        derniere_note: None,
+        lignes: 0,
         ecrit_ms: None,
+    };
+    for (t, corps) in blocs {
+        let corps = corps.trim().to_owned();
+        let k = t.as_deref().map_or("autre", cle);
+        let cible = match k {
+            "decisions" => &mut n.decisions,
+            "actions" => &mut n.actions,
+            "questions" => &mut n.questions,
+            _ => {
+                if !corps.is_empty() {
+                    n.autres.push((t.unwrap_or_else(|| "Notes".into()), corps));
+                }
+                continue;
+            }
+        };
+        if !cible.is_empty() && !corps.is_empty() {
+            cible.push('\n');
+        }
+        cible.push_str(&corps);
     }
+    let toutes: Vec<&str> = puces(notes).filter(|p| !rien_a_noter(p)).collect();
+    n.derniere_note = toutes.last().map(|p| sans_marques(p));
+    n.lignes = toutes.len();
+    n
 }
 
 fn ecrit_ms(chemin: &Path) -> Option<u64> {
@@ -260,6 +341,31 @@ mod tests {
         assert_eq!(n.derniere_note.as_deref(), Some("Date du séminaire ?"));
         assert_eq!(n.lignes, 4);
         assert!(n.autres.is_empty());
+    }
+
+    /// Notes réelles de Claude (essai sous Xvfb) : titre général en `##`,
+    /// sections en gras, puce « aucune » à ignorer.
+    #[test]
+    fn notes_en_gras_comme_claude_les_ecrit() {
+        let notes = "## Notes de réunion : point hebdo\n\n**Décisions**\n- Tester une nouvelle buse lundi.\n\n**Actions**\n- Sophie : commander la buse.\n- Thomas : banc d'essai.\n\n**Questions ouvertes**\n- Aucune question ouverte relevée.\n";
+        let n = decouper("r", None, None, notes);
+        assert_eq!(n.decisions, "- Tester une nouvelle buse lundi.");
+        assert_eq!(
+            n.actions,
+            "- Sophie : commander la buse.\n- Thomas : banc d'essai."
+        );
+        assert_eq!(n.questions, "");
+        assert!(n.autres.is_empty(), "{:?}", n.autres);
+        assert_eq!(n.derniere_note.as_deref(), Some("Thomas : banc d'essai."));
+        assert_eq!(n.lignes, 3);
+        // Titres avec deux-points, dans ou hors du gras.
+        let n = decouper(
+            "r",
+            None,
+            None,
+            "**Décisions :**\n- A\n**Actions** :\n- B\n",
+        );
+        assert_eq!((n.decisions.as_str(), n.actions.as_str()), ("- A", "- B"));
     }
 
     #[test]

@@ -93,13 +93,33 @@ function dessiner(n: NotesEnCours | null): void {
   const nom = n.titre ?? (n.debut_ms ? `Réunion ${libelleDuJour(cleDuJour(n.debut_ms)).toLowerCase()}` : 'Réunion');
   if (titre.getAttribute('aria-label') !== nom) poserTitre(titre, nom);
   tic();
-  const ancienne = derniere.dataset.texte;
-  if (n.derniere_note) {
-    if (ancienne !== n.derniere_note) {
-      derniere.dataset.texte = n.derniere_note;
+  const blocs = [
+    section('decisions', 'Décisions', n.decisions, 'Aucune décision pour l’instant.'),
+    section('actions', 'Actions', n.actions, 'Aucune action pour l’instant.'),
+    section('questions', 'Questions', n.questions, 'Aucune question ouverte.'),
+    ...n.autres.map(([t, texte], i) => section(`autre-${i}`, t, texte, '')),
+  ];
+  sections.replaceChildren(...blocs);
+  const nouvelles: HTMLElement[] = [];
+  for (const li of sections.querySelectorAll('li')) {
+    const cle = li.textContent ?? '';
+    if (!vues.has(cle)) {
+      if (!premierAffichage) {
+        li.classList.add('nouvelle');
+        nouvelles.push(li);
+      }
+      vues.add(cle);
+    }
+  }
+  // La dernière note est la dernière puce apparue (une décision ajoutée en
+  // haut compte autant qu'une question en bas), sinon la dernière du fichier.
+  const texte = nouvelles.at(-1)?.textContent?.trim() || n.derniere_note;
+  if (texte) {
+    if (derniere.dataset.texte !== texte) {
+      derniere.dataset.texte = texte;
       derniere.replaceChildren(
         h('p', { class: 'derniere-etiquette' }, 'Dernière note', n.ecrit_ms ? h('span', { class: 'quand' }, ` · ${heure(n.ecrit_ms)}`) : null),
-        h('p', { class: 'derniere-texte' }, n.derniere_note),
+        h('p', { class: 'derniere-texte' }, texte),
       );
       if (!premierAffichage) {
         // Relance l'animation d'arrivée.
@@ -111,20 +131,6 @@ function dessiner(n: NotesEnCours | null): void {
   } else {
     delete derniere.dataset.texte;
     derniere.replaceChildren(h('p', { class: 'vide' }, 'J’écoute… les premières notes arrivent dans une minute.'));
-  }
-  const blocs = [
-    section('decisions', 'Décisions', n.decisions, 'Aucune décision pour l’instant.'),
-    section('actions', 'Actions', n.actions, 'Aucune action pour l’instant.'),
-    section('questions', 'Questions', n.questions, 'Aucune question ouverte.'),
-    ...n.autres.map(([t, texte], i) => section(`autre-${i}`, t, texte, '')),
-  ];
-  sections.replaceChildren(...blocs);
-  for (const li of sections.querySelectorAll('li')) {
-    const cle = li.textContent ?? '';
-    if (!vues.has(cle)) {
-      if (!premierAffichage) li.classList.add('nouvelle');
-      vues.add(cle);
-    }
   }
   premierAffichage = false;
 }
