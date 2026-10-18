@@ -10,6 +10,13 @@
 //! `crash` arrête le process en erreur, `erreur` donne un `result` avec
 //! `is_error`.
 //!
+//! Pannes du cerveau (KOB-68), déclenchées par un marqueur dans le message :
+//! `#plante` arrête le process une fois (le fichier `<exécutable>.plante`
+//! garde la trace : la relance répond), `#lent` attend `KOBI_FAUX_LENT`
+//! secondes (60 par défaut) avant de répondre, `#limite` renvoie la limite
+//! d'usage, `#reseau` une erreur réseau tant que `<exécutable>.hors-ligne`
+//! existe.
+//!
 //! Avec `--scenario <fichier.json>`, il rejoue un flux stream-json
 //! enregistré, un tour par message reçu (format décrit dans
 //! `scenarios/README.md`). Les directives `{"fake": …}` du scénario appellent
@@ -166,10 +173,39 @@ fn user_messages() -> impl Iterator<Item = String> {
 
 fn echo(out: &mut Output) {
     let session = "fake-session";
+    let exe = std::env::current_exe().unwrap_or_default();
+    let a_cote = |ext: &str| exe.with_extension(ext);
     for content in user_messages() {
         if content == "crash" {
             eprintln!("faux plantage");
             std::process::exit(3);
+        }
+        if content.contains("#plante") && !a_cote("plante").exists() {
+            let _ = std::fs::write(a_cote("plante"), b"");
+            eprintln!("faux plantage (une fois)");
+            std::process::exit(3);
+        }
+        if content.contains("#lent") {
+            let secondes = std::env::var("KOBI_FAUX_LENT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(60);
+            std::thread::sleep(Duration::from_secs(secondes));
+        }
+        let panne = if content.contains("#limite") {
+            Some("Claude AI usage limit reached|1792339200")
+        } else if content.contains("#reseau") && a_cote("hors-ligne").exists() {
+            Some("API Error: Connection error.")
+        } else {
+            None
+        };
+        if let Some(message) = panne {
+            out.emit(
+                &json!({"duration_api_ms":1,"session_id":session,"type":"result",
+                "subtype":"error_during_execution","is_error":true,"result":message,"num_turns":1})
+                .to_string(),
+            );
+            continue;
         }
         out.emit(
             &json!({"type":"system","subtype":"init","session_id":session,"model":"fake"})

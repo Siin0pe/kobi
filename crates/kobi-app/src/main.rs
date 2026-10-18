@@ -25,6 +25,7 @@ mod mcp_config;
 mod menu;
 mod mot_cle;
 mod notes;
+mod pannes;
 mod placement;
 mod porte;
 mod raccourci;
