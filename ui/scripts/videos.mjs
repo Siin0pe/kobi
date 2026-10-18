@@ -391,6 +391,58 @@ const CLIPS = [
     },
   ],
   [
+    'bulles-entree-sortie',
+    'backdrop=1',
+    async (page) => {
+      // KOB-150 : chaque carte sort de Kobi (distribuée, rebond) et y retourne
+      // quand la suivante arrive ; les puces de sources sortent une à une.
+      await wait(page, 600);
+      for (const s of ['listen', 'think', 'answer', 'suggest', 'done', 'error', 'idle']) {
+        await set(page, s);
+        await wait(page, 2200);
+      }
+    },
+  ],
+  [
+    'prise-de-notes-lettres',
+    'backdrop=1',
+    async (page) => {
+      // KOB-150 : à chaque note, ses lettres volent de Kobi vers la fiche où un
+      // crayon gratte ; les chiffres REC roulent, le point pulse.
+      const debut = Date.now() - 125_000;
+      const notes = ['Décision : budget validé', 'Action : devis (Sophie)', 'Question : date du séminaire ?', 'Décision : Annecy en juin', 'Action : réserver la salle'];
+      await wait(page, 600);
+      await page.evaluate((debut) => window.kobi.recording({ actif: true, pause: false, debut_ms: debut, notes: 0, titre: null, derniere_note: null }), debut);
+      await wait(page, 2500);
+      for (let i = 0; i < notes.length; i++) {
+        await page.evaluate(([n, note, debut]) => window.kobi.recording({ actif: true, pause: false, debut_ms: debut, notes: n, titre: null, derniere_note: note }), [i + 1, notes[i], debut]);
+        await wait(page, 3000);
+      }
+    },
+  ],
+  [
+    'notifications-historique',
+    'backdrop=1',
+    async (page) => {
+      // KOB-150 : les notifications partent de Kobi et y retournent ;
+      // l'historique sort de Kobi, ses échanges entrent en cascade, puis il y retourne.
+      const b = (tour, statut, reponse = '') => ({ tour, question: ['où est le refresh token ?', 'liste les appels à refresh', 'et côté mobile ?'][tour - 1], reponse, statut, clavier: tour === 3 });
+      await wait(page, 600);
+      await page.evaluate((x) => window.kobi.conversation(x), [b(1, 'fini', 'Dans api/src/auth/refresh.ts, ligne 88.')]);
+      await page.evaluate((x) => window.kobi.conversation(x), [b(1, 'fini', 'Dans api/src/auth/refresh.ts, ligne 88.'), b(2, 'tache', 'Je m’en occupe.')]);
+      await wait(page, 2500);
+      await page.evaluate((x) => window.kobi.conversation(x), [b(1, 'fini', 'Dans api/src/auth/refresh.ts, ligne 88.'), b(2, 'fini', '7 appels : api (3), mobile (2), web (2).'), b(3, 'fini', 'Dans app/lib/session.dart, ligne 41.')]);
+      await wait(page, 3000);
+      await page.mouse.move(600, 260);
+      await page.mouse.wheel(0, -300);
+      await wait(page, 3000);
+      await page.keyboard.press('Escape');
+      await wait(page, 1500);
+      await page.locator('.notif').first().click();
+      await wait(page, 2500);
+    },
+  ],
+  [
     'lisibilite-fond-sombre',
     'backdrop=sombre',
     async (page) => {
