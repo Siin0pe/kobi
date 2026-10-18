@@ -90,7 +90,8 @@ pub enum NotesMode {
     Continuous,
 }
 
-/// Durée de conservation des réunions : 30, 90 ou 365 jours, ou illimitée.
+/// Durée de conservation des réunions ou des conversations : 30, 90 ou 365
+/// jours, ou illimitée (le défaut).
 ///
 /// En TOML : un entier (`retention_days = 90`) ou `"unlimited"`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -220,21 +221,14 @@ pub struct MeetingsConfig {
 }
 
 /// Conversations du quotidien, rangées à part des réunions (KOB-141).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Conservées sans limite par défaut (décision du propriétaire : « on
+/// conserve »), la durée restant réglable.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ConversationsConfig {
     pub retention_days: Retention,
     #[serde(flatten)]
     pub extra: toml::Table,
-}
-
-impl Default for ConversationsConfig {
-    fn default() -> Self {
-        Self {
-            retention_days: Retention::Days(90),
-            extra: toml::Table::new(),
-        }
-    }
 }
 
 /// Destination de publication d'un type de document, par un serveur MCP.
@@ -491,7 +485,7 @@ mod tests {
         assert!(c.voice.assistant);
         assert!(!c.voice.meeting);
         assert_eq!(c.meetings.retention_days, Retention::Unlimited);
-        assert_eq!(c.conversations.retention_days, Retention::Days(90));
+        assert_eq!(c.conversations.retention_days, Retention::Unlimited);
         assert_eq!(c.stockage.dossier, None);
         assert_eq!(c.stockage.racine(), kobi_dir());
         assert!(!c.stockage.publication.reunions.est_reglee());

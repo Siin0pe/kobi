@@ -1241,6 +1241,30 @@ mod tests {
     }
 
     #[test]
+    fn par_defaut_rien_n_est_purge() {
+        let (_d, st) = stockage();
+        let aujourdhui = Date {
+            annee: 2026,
+            mois: 10,
+            jour: 18,
+        };
+        let vieux = st.dossier_conversations().join("2020-01-01");
+        fs::create_dir_all(&vieux).unwrap();
+        fs::write(vieux.join("100000.jsonl"), "").unwrap();
+        let config = Config::default();
+        let partis = st
+            .purger(
+                config.meetings.retention_days,
+                config.conversations.retention_days,
+                aujourdhui,
+                None,
+            )
+            .unwrap();
+        assert!(partis.is_empty(), "conservation illimitée par défaut");
+        assert!(vieux.exists());
+    }
+
+    #[test]
     fn suppressions_et_noms_refuses() {
         let (_d, st) = stockage();
         let mut c = st.nouvelle_conversation(T0);

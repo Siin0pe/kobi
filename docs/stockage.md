@@ -30,9 +30,9 @@ lancement. Dates et heures des noms de dossier : heure locale.
   disque ; un arrêt brutal ne perd que la ligne en cours, ignorée à la relecture.
 * Les autres fichiers sont écrits dans un `.tmp` puis renommés.
 * Une conversation n'existe sur le disque qu'à partir de son premier tour.
-* Conservation : `[meetings] retention_days` (défaut illimité) et
-  `[conversations] retention_days` (défaut 90), parmi 30, 90, 365 ou
-  `"unlimited"` ; purge au démarrage, d'après la date du nom de dossier. La
+* Conservation : `[meetings] retention_days` et `[conversations]
+  retention_days`, illimitée par défaut pour les deux (« on conserve »),
+  réglable parmi 30, 90, 365 ou `"unlimited"` ; purge au démarrage, d'après la date du nom de dossier. La
   réunion en cours n'est jamais purgée.
 * Changer de dossier vaut tout de suite pour la réunion ou la conversation
   suivante ; celle en cours finit là où elle a commencé.
