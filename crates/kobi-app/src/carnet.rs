@@ -232,7 +232,11 @@ pub fn carnet_supprimer<R: Runtime>(
 
 #[tauri::command]
 pub fn carnet_rappel_fait<R: Runtime>(app: AppHandle<R>, id: String) -> Result<bool, String> {
-    stockage(&app)?.marquer_fait(&id).map_err(|e| e.to_string())
+    let fait = stockage(&app)?
+        .marquer_fait(&id)
+        .map_err(|e| e.to_string())?;
+    crate::rappels::reveiller(&app);
+    Ok(fait)
 }
 
 /// Sélecteur de dossier natif (dossier de Kobi, dossiers de code). `None`

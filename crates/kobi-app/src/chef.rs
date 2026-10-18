@@ -79,6 +79,8 @@ pub enum Message {
     Cerveau(Retour),
     /// Nouvelle de l'écrivain (fichiers créés, compte rendu rangé, erreur).
     Disque(Nouvelle),
+    /// Rappel arrivé à l'heure dite (KOB-145).
+    Rappel(crate::rappels::RappelUi),
 }
 
 /// État de l'enregistrement envoyé à l'interface (événement
@@ -399,6 +401,12 @@ impl<R: Runtime> Chef<R> {
             Message::Interrompre => self.interrompre(),
             Message::Cerveau(r) => self.retour(r),
             Message::Disque(c) => self.disque(c),
+            Message::Rappel(r) => {
+                tracing::info!(id = %r.id, "rappel livré à l'interface");
+                let _ = self.app.emit(crate::rappels::EVENEMENT_RAPPEL, &r);
+                // À voix haute aussi, si la voix est active (KOB-142).
+                crate::voix::dire(&self.app, &format!("Rappel : {}", r.texte));
+            }
         }
     }
 
@@ -439,6 +447,26 @@ impl<R: Runtime> Chef<R> {
         }
         if intention(&texte) == Some(Intention::Interrompre) {
             self.interrompre();
+            return;
+        }
+        // « Rappelle-moi … », « ajoute … à ma liste » (KOB-145) : rangé sur place.
+        if let Some(reponse) = self.rappel(&texte) {
+            // Affichée comme une réponse : on lit la confirmation, puis la
+            // conversation attend la suite.
+            self.calme_a = None;
+            self.transition(&[Evenement::QuestionEnvoyee, Evenement::ReponseCommence]);
+            let _ = self.app.emit(EVENEMENT_REPONSE, &reponse);
+            crate::voix::dire(&self.app, &reponse);
+            self.lire(&reponse);
+            self.tour += 1;
+            self.dernier = self.tour;
+            self.ajouter(Bulle {
+                tour: self.tour,
+                question: texte,
+                reponse,
+                statut: "fini",
+                clavier: !voix,
+            });
             return;
         }
         if let Some(i) = intention(&texte) {
@@ -485,6 +513,22 @@ impl<R: Runtime> Chef<R> {
             statut: "attente",
             clavier: !voix,
         });
+    }
+
+    /// Demande de rappel, de tâche ou de liste : rangée, avec sa réponse.
+    fn rappel(&mut self, texte: &str) -> Option<String> {
+        let stockage = crate::stockage::actuel(&self.app)?;
+        let source = self
+            .reunion
+            .as_ref()
+            .and_then(|r| r.dossier.as_ref())
+            .and_then(|d| d.file_name())
+            .map(|n| n.to_string_lossy().into_owned());
+        let reponse =
+            crate::rappels::traiter(&stockage, texte, &jiff::Zoned::now(), source.as_deref())?;
+        tracing::info!("rappel ou tâche rangé");
+        crate::rappels::reveiller(&self.app);
+        Some(reponse)
     }
 
     /// Range un tour de la conversation du quotidien. En réunion, la
