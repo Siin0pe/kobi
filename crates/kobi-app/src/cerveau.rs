@@ -23,8 +23,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use kobi_brain::{
-    ApprovalRequest, Ask, Brain, BrainError, BrainEvent, NotesUpdate, ReportRequest, Turn,
+    Action, ApprovalRequest, Ask, Brain, BrainError, BrainEvent, DemandeOutil, NotesUpdate,
+    ReportRequest, Turn,
 };
+use kobi_session::stockage::maintenant_ms;
 use tokio::sync::mpsc;
 
 /// Sans texte après ce délai (ou dès un appel d'outil), le tour est annoncé
@@ -118,6 +120,12 @@ pub enum Retour {
         carte: u64,
         outil: String,
         entree: serde_json::Value,
+    },
+    /// Outil appelé par le tour (fil d'activité, KOB-152), reçu à `at_ms`
+    /// (ms depuis l'époque Unix).
+    Activite {
+        demande: Box<DemandeOutil>,
+        at_ms: u64,
     },
     /// Carte décidée, ou expirée (`accepte = None`).
     CarteFermee {
@@ -380,8 +388,9 @@ async fn suivre(
                     texte.push_str(&t);
                     sortie(Retour::Texte { tour, texte: texte.clone() });
                 }
-                Some(BrainEvent::ToolCall { name, .. }) if !OUTILS_INTERNES.contains(&name.as_str()) => {
+                Some(BrainEvent::ToolCall { id, name, action, .. }) if !interne(&action) => {
                     journaliser_outil(&name);
+                    activite(tour, id, action, sortie);
                     sortie(Retour::Detache { tour, annonce: true });
                     return Suivi::Detache(turn, texte);
                 }
@@ -423,7 +432,14 @@ async fn finir(tour: u64, mut turn: Turn, mut texte: String, sortie: &Sortie, ca
         match evenement {
             BrainEvent::Text(t) => texte.push_str(&t),
             BrainEvent::Permission(demande) => carte(tour, demande, sortie, cartes),
-            BrainEvent::ToolCall { name, .. } => journaliser_outil(&name),
+            BrainEvent::ToolCall {
+                id, name, action, ..
+            } => {
+                journaliser_outil(&name);
+                if !interne(&action) {
+                    activite(tour, id, action, sortie);
+                }
+            }
             BrainEvent::Done(fin) => {
                 let texte = if fin.text.is_empty() { texte } else { fin.text };
                 sortie(Retour::Resultat { tour, texte });
@@ -438,6 +454,19 @@ async fn finir(tour: u64, mut turn: Turn, mut texte: String, sortie: &Sortie, ca
             }
         }
     }
+}
+
+/// Outil interne du harness (liste de tâches, recherche d'outils) : ni tâche
+/// longue, ni ligne du fil d'activité.
+fn interne(action: &Action) -> bool {
+    matches!(action, Action::Autre { nom, .. } if OUTILS_INTERNES.contains(&nom.as_str()))
+}
+
+fn activite(tour: u64, id: String, action: Action, sortie: &Sortie) {
+    sortie(Retour::Activite {
+        demande: Box::new(DemandeOutil { id, tour, action }),
+        at_ms: maintenant_ms(),
+    });
 }
 
 /// Chaque outil appelé est journalisé : seuls Read, Grep et Glob doivent
@@ -730,6 +759,61 @@ mod tests {
                 carte,
                 accepte: Some(true)
             }));
+    }
+
+    #[tokio::test]
+    async fn chaque_outil_part_au_fil_d_activite() {
+        let (s, recus) = sortie();
+        let outil = |id: &str, name: &str, input: serde_json::Value| Step::ToolCall {
+            id: id.into(),
+            name: name.into(),
+            input,
+        };
+        let travail = vec![vec![
+            outil(
+                "t1",
+                "Grep",
+                serde_json::json!({"pattern": "fabrique_claude"}),
+            ),
+            outil("t2", "TodoWrite", serde_json::json!({})),
+            outil(
+                "t3",
+                "Read",
+                serde_json::json!({"file_path": "C:/k/chef.rs"}),
+            ),
+            Step::Text("Dans chef.rs.".into()),
+        ]];
+        let c = Cerveau::lancer(fabrique(vec![travail]), s);
+        c.demander(question(1, "où est fabrique_claude ?"));
+        attendre(&recus, |r| matches!(r, Retour::Resultat { tour: 1, .. })).await;
+        let recus = recus.lock().unwrap();
+        let ids: Vec<_> = recus
+            .iter()
+            .filter_map(|(_, r)| match r {
+                Retour::Activite { demande, at_ms } => {
+                    assert_eq!(demande.tour, 1);
+                    assert!(*at_ms > 0);
+                    Some(demande.id.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        // L'outil interne n'apparaît pas ; l'ordre est celui des appels.
+        assert_eq!(ids, ["t1", "t3"]);
+        let premiere = recus
+            .iter()
+            .position(|(_, r)| matches!(r, Retour::Activite { .. }))
+            .unwrap();
+        let annonce = recus
+            .iter()
+            .position(|(_, r)| matches!(r, Retour::Detache { annonce: true, .. }))
+            .unwrap();
+        assert!(premiere < annonce, "{recus:?}");
+        assert!(recus.iter().any(|(_, r)| matches!(
+            r,
+            Retour::Activite { demande, .. }
+                if demande.action == Action::LireFichier { chemin: "C:/k/chef.rs".into() }
+        )));
     }
 
     #[tokio::test]

@@ -6,6 +6,7 @@
 // que la coque publie (événement `conversation`, commande `historique` au
 // chargement). Rien n'est gardé ici.
 
+import { etapeLigne, type Etape } from './activite';
 import { tauri } from './native';
 import type { Stage } from './stage';
 
@@ -18,6 +19,8 @@ export interface Bulle {
   statut: 'attente' | 'reponse' | 'tache' | 'fini' | 'erreur';
   /** Question tapée au clavier. */
   clavier: boolean;
+  /** Étapes du tour (outils appelés, KOB-152), repliées sous la réponse. */
+  etapes?: Etape[];
 }
 
 /** Fermeture automatique de l'historique sans interaction. */
@@ -127,11 +130,30 @@ export class Conversation {
       item.querySelector('.ex-who')!.textContent = b.clavier ? 'tapé' : 'dit';
       item.querySelector('.ex-q .ex-text')!.textContent = b.question;
       item.querySelector('.ex-a')!.textContent = b.reponse || (b.statut === 'attente' ? '…' : '');
+      this.renderSteps(item, b.etapes ?? []);
     }
     for (const item of [...this.list.querySelectorAll<HTMLElement>('.ex')]) {
       if (!seen.has(Number(item.dataset.tour))) item.remove();
     }
     if (wasAtBottom) this.list.scrollTop = this.list.scrollHeight;
+  }
+
+  /** Étapes du tour, repliées sous la réponse ; on les déplie d'un clic. */
+  private renderSteps(item: HTMLElement, etapes: readonly Etape[]): void {
+    let box = item.querySelector<HTMLDetailsElement>('.ex-steps');
+    if (etapes.length === 0) {
+      box?.remove();
+      return;
+    }
+    if (!box) {
+      box = el('details', 'ex-steps');
+      box.append(el('summary'), el('div', 'ex-steps-list'));
+      item.append(box);
+    }
+    if (box.dataset.n === String(etapes.length)) return;
+    box.dataset.n = String(etapes.length);
+    box.querySelector('summary')!.textContent = etapes.length === 1 ? '1 étape' : `${etapes.length} étapes`;
+    box.querySelector('.ex-steps-list')!.replaceChildren(...etapes.map((e) => etapeLigne(e)));
   }
 }
 

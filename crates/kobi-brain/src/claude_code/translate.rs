@@ -27,10 +27,15 @@ impl TurnTranslator {
                 .into_iter()
                 .flatten()
                 .filter(|block| block.get("type").and_then(|t| t.as_str()) == Some("tool_use"))
-                .map(|block| BrainEvent::ToolCall {
-                    id: str_field(block, "id"),
-                    name: str_field(block, "name"),
-                    input: block.get("input").cloned().unwrap_or_default(),
+                .map(|block| {
+                    let name = str_field(block, "name");
+                    let input = block.get("input").cloned().unwrap_or_default();
+                    BrainEvent::ToolCall {
+                        id: str_field(block, "id"),
+                        action: super::outils::action(&name, &input),
+                        name,
+                        input,
+                    }
                 })
                 .collect(),
             Event::Result(result) if result.is_error => {
@@ -103,8 +108,9 @@ mod tests {
         ]);
         assert!(matches!(
             &events[0],
-            BrainEvent::ToolCall { id, name, input }
+            BrainEvent::ToolCall { id, name, input, action }
                 if id == "toolu_1" && name == "mcp__linear__list_issues" && input["project"] == "API"
+                    && matches!(action, crate::Action::Mcp { serveur, .. } if serveur == "linear")
         ));
         assert!(matches!(&events[1], BrainEvent::Text(t) if t == "Trois "));
         assert!(matches!(&events[2], BrainEvent::Text(t) if t == "tickets."));

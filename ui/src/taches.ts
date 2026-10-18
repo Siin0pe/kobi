@@ -4,7 +4,8 @@
 // Aucun événement dédié : la coque passe la bulle de l'historique au statut
 // `tache` quand elle détache un tour, puis à `fini` (résultat) ou `erreur`.
 // Une notification « livrée » se clique pour afficher le résultat dans la
-// bulle de réponse.
+// bulle de réponse. Pendant que Kobi s'en occupe (état `work`), la
+// notification « en cours » se tait : le fil sous Kobi suffit (KOB-152).
 
 import type { Bulle } from './conversation';
 import { tauri } from './native';
@@ -12,6 +13,8 @@ import type { Stage } from './stage';
 
 /** Une notification de livraison reste affichée ce temps-là sans clic. */
 const DELIVERED_MS = 20_000;
+/** Délai pour voir si Kobi montre déjà le résultat dans sa bulle (la coque change d'état juste après l'historique). */
+const DELIVER_CHECK_MS = 400;
 /** Au plus deux notifications à la fois (la plus ancienne s’en va) : elles tiennent au-dessus des bulles. */
 const MAX_NOTIFS = 2;
 
@@ -65,10 +68,22 @@ export class Tasks {
       }
       if (b.statut === before) continue;
       if (b.statut === 'tache') this.show(b, 'running');
-      else if (before === 'tache' && b.statut === 'fini') this.show(b, 'delivered');
+      else if (before === 'tache' && b.statut === 'fini') this.deliver(b);
       else if (before === 'tache' && b.statut === 'erreur') this.show(b, 'failed');
     }
     this.first = false;
+  }
+
+  /**
+   * Résultat d'une tâche : Kobi le montre lui-même dans sa bulle s'il est
+   * libre ; la notification ne sert que si la bulle est prise (Kobi écoute
+   * une autre question), pour ne pas afficher deux fois la même réponse.
+   */
+  private deliver(b: Bulle): void {
+    this.dismiss(b.tour);
+    window.setTimeout(() => {
+      if (this.stage.currentState !== 'answer') this.show(b, 'delivered');
+    }, DELIVER_CHECK_MS);
   }
 
   private show(b: Bulle, kind: Kind): void {

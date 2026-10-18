@@ -149,7 +149,12 @@ async fn play(
                 text.push_str(&t);
                 BrainEvent::Text(t)
             }
-            Step::ToolCall { id, name, input } => BrainEvent::ToolCall { id, name, input },
+            Step::ToolCall { id, name, input } => BrainEvent::ToolCall {
+                action: crate::claude_code::outils::action(&name, &input),
+                id,
+                name,
+                input,
+            },
             Step::Permission(request) => {
                 let tool = request.tool_name.clone();
                 let (pending, answer) = ApprovalRequest::new(request.clone());
@@ -168,6 +173,7 @@ async fn play(
                 }
                 BrainEvent::ToolCall {
                     id: request.tool_use_id.unwrap_or_default(),
+                    action: crate::claude_code::outils::action(&request.tool_name, &request.input),
                     name: request.tool_name,
                     input: request.input,
                 }

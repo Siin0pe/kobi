@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { expectNoErrors, openUi } from './helpers';
 
-const STATES = ['idle', 'listen', 'think', 'write', 'answer', 'suggest', 'done', 'error'] as const;
+const STATES = ['idle', 'listen', 'think', 'write', 'answer', 'suggest', 'done', 'error', 'work'] as const;
 const CARDS: Record<(typeof STATES)[number], string | null> = {
   idle: null,
   listen: 'question',
@@ -11,6 +11,7 @@ const CARDS: Record<(typeof STATES)[number], string | null> = {
   suggest: 'action',
   done: 'action',
   error: 'error',
+  work: null,
 };
 
 test('chaque état affiche sa carte, sans erreur ni requête externe', async ({ page }) => {

@@ -54,6 +54,7 @@ impl From<Etat> for EtatUi {
             Activite::Propose => "propose",
             Activite::Fait => "fait",
             Activite::Oups => "oups",
+            Activite::Occupe => "occupe",
         };
         let (nom, activite) = match etat {
             Etat::Veille => ("veille", None),
@@ -226,6 +227,8 @@ pub fn installer<R: Runtime>(builder: Builder<R>) -> Builder<R> {
             crate::voix::etat_voix_ui,
             crate::voix::regler_voix,
             crate::voix::basculer_voix,
+            // Fil d'activité affiché (KOB-152) : délai mesuré dans le journal.
+            crate::chef::activite_affichee,
             // Dossiers de code lisibles (KOB-138), pour la fenêtre des réglages.
             crate::lecture::get_codebases,
             crate::lecture::set_codebases,

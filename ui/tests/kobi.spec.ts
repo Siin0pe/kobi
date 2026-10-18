@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { expectNoErrors, openUi } from './helpers';
 
-const STATES = ['idle', 'listen', 'think', 'write', 'answer', 'suggest', 'done', 'error'] as const;
+const STATES = ['idle', 'listen', 'think', 'write', 'answer', 'suggest', 'done', 'error', 'work'] as const;
 const LOOKS: Record<(typeof STATES)[number], { eye: string; word: string }> = {
   idle: { eye: '–', word: 'zzz' },
   listen: { eye: 'O', word: 'oui ?' },
@@ -11,6 +11,8 @@ const LOOKS: Record<(typeof STATES)[number], { eye: string; word: string }> = {
   suggest: { eye: '*', word: 'idée !' },
   done: { eye: '^', word: 'fait !' },
   error: { eye: 'x', word: 'oups' },
+  // Données de démo : Kobi cherche, ses yeux deviennent des loupes.
+  work: { eye: 'o', word: 'occupé' },
 };
 
 /** Matrice visuelle de la pilule : enveloppe d'inertie × animation de la pilule. */
@@ -25,7 +27,7 @@ function pose(page: Page): Promise<number[]> {
   });
 }
 
-test('Kobi passe les 8 états sans erreur', async ({ page }) => {
+test('Kobi passe les 9 états sans erreur', async ({ page }) => {
   const errors = await openUi(page, 'backdrop=1');
   const kobi = page.locator('.kobi');
   for (const state of STATES) {

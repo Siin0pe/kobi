@@ -395,3 +395,49 @@ button {
     transform: translateY(8px);
   }
 }
+
+/* Activité (KOB-152) : étapes des derniers échanges. */
+.vue-activite .journal {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 20px;
+}
+.vue-activite .journal-vide {
+  margin: 0;
+  opacity: 0.7;
+}
+.vue-activite .journal-tour {
+  padding: 14px 18px;
+  border-radius: 16px;
+  background: var(--ink);
+  color: var(--papier);
+}
+.vue-activite .journal-question {
+  margin: 0 0 8px;
+  font-variation-settings: 'CASL' 1, 'wght' 650;
+}
+.vue-activite .journal-etapes {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 14px;
+}
+.vue-activite .step {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+.vue-activite .step-icon {
+  flex: none;
+  width: 18px;
+  color: var(--acide);
+  font-variation-settings: 'MONO' 1, 'wght' 900;
+}
+.vue-activite .step-text {
+  overflow-wrap: anywhere;
+  font-variation-settings: 'MONO' 1, 'wght' 500;
+}
+.vue-activite .step[data-classe='refus'] .step-text {
+  text-decoration: line-through;
+}

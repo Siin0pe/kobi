@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { expectEconomicalFont, expectNoErrors, openUi } from './helpers';
 
-const STATES = ['idle', 'listen', 'think', 'write', 'answer', 'suggest', 'done', 'error'] as const;
+const STATES = ['idle', 'listen', 'think', 'write', 'answer', 'suggest', 'done', 'error', 'work'] as const;
 
 /** Animations (CSS et Web Animations) en cours dans la page. */
 function running(page: Page): Promise<number> {

@@ -26,10 +26,13 @@ pub enum Activite {
     Fait,
     /// Erreur affichée.
     Oups,
+    /// « Je m'en occupe » (KOB-152) : Claude travaille avec ses outils
+    /// (tâche longue), le fil d'activité montre chaque étape.
+    Occupe,
 }
 
 impl Activite {
-    pub const TOUTES: [Activite; 8] = [
+    pub const TOUTES: [Activite; 9] = [
         Activite::Calme,
         Activite::Ecoute,
         Activite::Reflechit,
@@ -38,6 +41,7 @@ impl Activite {
         Activite::Propose,
         Activite::Fait,
         Activite::Oups,
+        Activite::Occupe,
     ];
 }
 
@@ -96,10 +100,13 @@ pub enum Evenement {
     TerminerReunion,
     /// Compte rendu écrit (ou abandonné) : retour en veille.
     CompteRenduEcrit,
+    /// Le tour devient une tâche longue, ou une tâche longue tourne encore
+    /// au retour au calme : Kobi s'en occupe (KOB-152).
+    TacheLongue,
 }
 
 impl Evenement {
-    pub const TOUS: [Evenement; 18] = [
+    pub const TOUS: [Evenement; 19] = [
         Evenement::DemarrerReunion,
         Evenement::Interpellation,
         Evenement::QuestionEnvoyee,
@@ -118,6 +125,7 @@ impl Evenement {
         Evenement::Reprendre,
         Evenement::TerminerReunion,
         Evenement::CompteRenduEcrit,
+        Evenement::TacheLongue,
     ];
 }
 
@@ -151,6 +159,7 @@ pub enum Mascotte {
     Suggest,
     Done,
     Error,
+    Work,
 }
 
 impl Mascotte {
@@ -165,6 +174,7 @@ impl Mascotte {
             Mascotte::Suggest => "suggest",
             Mascotte::Done => "done",
             Mascotte::Error => "error",
+            Mascotte::Work => "work",
         }
     }
 }
@@ -190,6 +200,7 @@ impl Etat {
             // Hors réunion : une interpellation ouvre un échange, qui se
             // referme en veille. Ni notes, ni pause, ni fin de réunion.
             (Veille, E::Interpellation) => Some(Assistant(A::Ecoute)),
+            (Veille, E::TacheLongue) => Some(Assistant(A::Occupe)),
             (Assistant(_), E::Erreur) => Some(Assistant(A::Oups)),
             (Assistant(_), E::NotesCommencent | E::NotesTerminees) => None,
             (Assistant(a), e) => activite_suivante(a, e).map(|a| match a {
@@ -225,6 +236,7 @@ impl Etat {
                 Activite::Propose => Mascotte::Suggest,
                 Activite::Fait => Mascotte::Done,
                 Activite::Oups => Mascotte::Error,
+                Activite::Occupe => Mascotte::Work,
             },
         }
     }
@@ -256,7 +268,7 @@ fn activite_suivante(activite: Activite, evenement: Evenement) -> Option<Activit
         // On peut interpeller Kobi à tout moment (KOB-134) : la réponse en
         // cours continue dans l'historique, la carte reste cliquable, la
         // nouvelle question passe après.
-        (Calme | Note | Fait | Oups | Reflechit | Repond | Propose, E::Interpellation) => {
+        (Calme | Note | Fait | Oups | Reflechit | Repond | Propose | Occupe, E::Interpellation) => {
             Some(Ecoute)
         }
         (Ecoute, E::Interpellation) => Some(Ecoute),
@@ -266,11 +278,22 @@ fn activite_suivante(activite: Activite, evenement: Evenement) -> Option<Activit
         // Réponse vide (ou seulement une action) : retour au calme.
         (Reflechit | Repond, E::ReponseTerminee) => Some(Calme),
 
+        // Tâche longue (KOB-152) : Kobi reste « je m'en occupe » jusqu'au
+        // résultat, ou jusqu'à ce qu'on l'interpelle ; il y revient au calme
+        // tant qu'une tâche tourne.
+        (Reflechit | Repond | Calme, E::TacheLongue) => Some(Occupe),
+        (Occupe, E::TacheLongue) => Some(Occupe),
+        (Occupe, E::ReponseCommence) => Some(Repond),
+        (Occupe, E::ReponseTerminee) => Some(Calme),
+        (Occupe, E::PermissionDemandee) => Some(Propose),
+
         // Les notes ne démarrent qu'au calme ; leur fin ramène au calme.
         (Calme, E::NotesCommencent) => Some(Note),
         (Note, E::NotesTerminees) => Some(Calme),
         // Notes terminées pendant qu'autre chose s'affiche : rien ne change.
-        (Ecoute | Reflechit | Repond | Propose | Fait | Oups, E::NotesTerminees) => Some(activite),
+        (Ecoute | Reflechit | Repond | Propose | Fait | Oups | Occupe, E::NotesTerminees) => {
+            Some(activite)
+        }
 
         // Une écriture peut être demandée pendant la réflexion, la réponse
         // ou les notes (mode continu).
@@ -300,6 +323,7 @@ mod tests {
             (Pause, E::TerminerReunion, Fin),
             (Fin, E::CompteRenduEcrit, Veille),
             (Veille, E::Interpellation, Assistant(A::Ecoute)),
+            (Veille, E::TacheLongue, Assistant(A::Occupe)),
             (Reunion(A::Calme), E::Interpellation, Reunion(A::Ecoute)),
             (Reunion(A::Note), E::Interpellation, Reunion(A::Ecoute)),
             (Reunion(A::Fait), E::Interpellation, Reunion(A::Ecoute)),
@@ -344,6 +368,18 @@ mod tests {
             (Reunion(A::Repond), E::ActionReussie, Reunion(A::Fait)),
             (Reunion(A::Fait), E::Acquitter, Reunion(A::Calme)),
             (Reunion(A::Oups), E::Acquitter, Reunion(A::Calme)),
+            (Reunion(A::Occupe), E::Interpellation, Reunion(A::Ecoute)),
+            (Reunion(A::Reflechit), E::TacheLongue, Reunion(A::Occupe)),
+            (Reunion(A::Repond), E::TacheLongue, Reunion(A::Occupe)),
+            (Reunion(A::Calme), E::TacheLongue, Reunion(A::Occupe)),
+            (Reunion(A::Occupe), E::TacheLongue, Reunion(A::Occupe)),
+            (Reunion(A::Occupe), E::ReponseCommence, Reunion(A::Repond)),
+            (Reunion(A::Occupe), E::ReponseTerminee, Reunion(A::Calme)),
+            (
+                Reunion(A::Occupe),
+                E::PermissionDemandee,
+                Reunion(A::Propose),
+            ),
         ];
         // Hors réunion, les mêmes transitions d'activité, le calme valant veille.
         let reunion: Vec<_> = t
@@ -403,8 +439,8 @@ mod tests {
                 refusees += 1;
             }
         }
-        // 19 états × 18 événements, moins les autorisées.
-        assert_eq!(refusees + table.len(), 19 * 18);
+        // 21 états × 19 événements, moins les autorisées.
+        assert_eq!(refusees + table.len(), 21 * 19);
     }
 
     #[test]
