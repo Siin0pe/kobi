@@ -154,7 +154,9 @@ pub fn installer<R: Runtime>(builder: Builder<R>) -> Builder<R> {
             crate::lecture::get_codebases,
             crate::lecture::set_codebases,
             crate::stockage::reglages_stockage,
-            crate::stockage::regler_stockage
+            crate::stockage::regler_stockage,
+            crate::demarrage::demarrage_systeme,
+            crate::demarrage::regler_demarrage_systeme
         ])
 }
 
