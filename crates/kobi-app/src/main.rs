@@ -118,6 +118,34 @@ fn attacher_console() {
     }
 }
 
+/// Exécutable graphique sous Windows : sans console, la sortie d'erreur
+/// (WebView2, bibliothèques natives) se perd. Elle va dans
+/// `logs/stderr.log` (KOB-167).
+#[cfg(all(windows, not(debug_assertions)))]
+fn rediriger_sortie_erreur(dir: &std::path::Path) {
+    use std::os::windows::io::IntoRawHandle;
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn SetStdHandle(id: u32, handle: isize) -> i32;
+    }
+    const STD_ERROR_HANDLE: u32 = -12i32 as u32;
+    let fichier = match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("stderr.log"))
+    {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::warn!(erreur = %e, "sortie d'erreur non redirigée");
+            return;
+        }
+    };
+    // SAFETY : le descripteur reste ouvert pour toute la vie du processus.
+    unsafe {
+        SetStdHandle(STD_ERROR_HANDLE, fichier.into_raw_handle() as isize);
+    }
+}
+
 fn main() {
     // `kobi status`, `kobi mcp`… : la CLI de Kobi (KOB-161), qui parle à
     // l'app en cours ; les options de l'app (`--carnet`…) lancent l'app.
@@ -139,6 +167,10 @@ fn main() {
                 if let Err(e) = kobi_session::logs::init(&dir) {
                     eprintln!("journal {} indisponible : {e}", dir.display());
                 }
+                // Une panique ou une sortie d'erreur ne se perd plus (KOB-167).
+                kobi_session::logs::installer_crochet_panique(&dir);
+                #[cfg(all(windows, not(debug_assertions)))]
+                rediriger_sortie_erreur(&dir);
             }
             let config_path = kobi_session::config::default_path();
             let config = match &config_path {
@@ -193,6 +225,13 @@ fn main() {
             }
             // Essai de bout en bout du menu (sans barre système, par exemple en CI
             // sous Xvfb) : les entrées de la coque sont déclenchées, « Quitter » en dernier.
+            // Essai du crochet de panique (KOB-167) : un fil panique exprès,
+            // la panique doit se lire dans kobi.log et un `crash-*.txt`.
+            if std::env::var_os("KOBI_ESSAI_PANIQUE").is_some() {
+                let _ = std::thread::Builder::new()
+                    .name("essai-panique".into())
+                    .spawn(|| panic!("panique provoquée exprès (KOBI_ESSAI_PANIQUE)"));
+            }
             if std::env::var_os("KOBI_ESSAI_MENU").is_some() {
                 let handle = app.handle().clone();
                 std::thread::spawn(move || {

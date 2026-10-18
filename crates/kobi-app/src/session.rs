@@ -262,6 +262,7 @@ pub fn installer<R: Runtime>(builder: Builder<R>) -> Builder<R> {
             crate::reglages::ouvrir_reglages,
             crate::app::ouvrir_app,
             crate::app::a_propos,
+            crate::app::erreur_interface,
             crate::bienvenue::ouvrir_bienvenue,
             crate::bienvenue::terminer_bienvenue,
             crate::bienvenue::etat_claude,

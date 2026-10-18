@@ -2,6 +2,7 @@
 // captures) : `state`, `backdrop=1|sombre|clair`, `reduced=1`, `discret=1`,
 // `reunion=<titre>` (+ `depuis=<s>`, `carte=0`).
 
+import './erreurs';
 import { isMascotState, STATES, type MascotData, type MascotState } from './states';
 import { demoData, playDemo } from './demo';
 import { command, enableWindowDrag, followSession, tauri, type Command, type SessionState } from './native';
