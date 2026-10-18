@@ -100,7 +100,7 @@ async function ouvrir(page: Page, o: Options = {}): Promise<string[]> {
   });
   await page.addInitScript(fakeTauri, o);
   await page.setViewportSize({ width: 900, height: 640 });
-  await page.goto('/bienvenue.html');
+  await page.goto('/app.html#accueil');
   await page.evaluate(() => document.fonts.ready);
   return errors;
 }
@@ -246,7 +246,7 @@ test('la fenêtre Réglages monte les mêmes étapes et rejoue le parcours', asy
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(String(e)));
   await page.addInitScript(fakeTauri, { dependances: true, modele: true });
-  await page.goto('/reglages.html?panneau=micro');
+  await page.goto('/app.html#reglages/micro');
   await expect(page.locator('.titre')).toHaveText('Micro');
   await expect(page.getByRole('radio', { name: /Celui du système/ })).toHaveAttribute('aria-checked', 'true');
   await page.locator('.menu-entree[data-panneau="premier-lancement"]').click();

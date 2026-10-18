@@ -1,17 +1,35 @@
-// Liste des panneaux de réglages, dans l'ordre de la fenêtre Réglages, et
-// les étapes du premier lancement (KOB-144), faites des mêmes panneaux.
-// Mode de réponse (KOB-142) viendra s'ajouter ici.
+// Panneaux de la section Réglages de l'app Kobi (KOB-159), dans l'ordre, et
+// étapes du premier lancement (KOB-144), faites des mêmes panneaux.
+//
+// Ajouter un écran aux Réglages : écrire un module qui exporte un `Panneau`
+// (voir panneau.ts), puis l'ajouter à la liste ci-dessous, ou l'enregistrer
+// depuis son module avec `ajouterPanneau(MON_PANNEAU)` (importé par l'app).
+// L'app n'a rien d'autre à changer : son menu suit cette liste.
 
 import { DEMARRAGE } from './demarrage';
 import { CLAUDE, DOSSIERS, ESSAI, MICRO, MODELE, PARCOURS, RACCOURCIS } from './etapes';
 import type { Panneau } from './panneau';
 import { STOCKAGE } from './stockage';
 
-export const PANNEAUX: readonly Panneau[] = [STOCKAGE, DOSSIERS, MICRO, MODELE, CLAUDE, DEMARRAGE, RACCOURCIS, PARCOURS];
+const liste: Panneau[] = [STOCKAGE, DOSSIERS, MICRO, MODELE, CLAUDE, DEMARRAGE, RACCOURCIS, PARCOURS];
+
+/** Panneaux de la section Réglages, dans l'ordre du menu. */
+export const PANNEAUX: readonly Panneau[] = liste;
 
 /** Le premier lancement, dans l'ordre du parcours UX (section 1). */
 export const ETAPES: readonly Panneau[] = [CLAUDE, MICRO, MODELE, DOSSIERS, DEMARRAGE, ESSAI, RACCOURCIS];
 
 export function panneau(id: string | null | undefined): Panneau | undefined {
   return PANNEAUX.find((p) => p.id === id);
+}
+
+/**
+ * Enregistre un écran dans les Réglages, à la fin ou après le panneau
+ * `apres`. Un identifiant déjà présent est remplacé (rechargement à chaud).
+ */
+export function ajouterPanneau(p: Panneau, apres?: string): void {
+  const deja = liste.findIndex((x) => x.id === p.id);
+  if (deja >= 0) liste.splice(deja, 1);
+  const i = apres ? liste.findIndex((x) => x.id === apres) : -1;
+  liste.splice(i >= 0 ? i + 1 : liste.length, 0, p);
 }

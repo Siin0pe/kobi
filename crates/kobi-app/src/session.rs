@@ -246,6 +246,8 @@ pub fn installer<R: Runtime>(builder: Builder<R>) -> Builder<R> {
             crate::carnet::carnet_rappel_fait,
             crate::carnet::choisir_dossier,
             crate::reglages::ouvrir_reglages,
+            crate::app::ouvrir_app,
+            crate::app::a_propos,
             crate::bienvenue::ouvrir_bienvenue,
             crate::bienvenue::terminer_bienvenue,
             crate::bienvenue::etat_claude,

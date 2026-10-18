@@ -148,7 +148,7 @@ async function ouvrirCarnet(page: Page): Promise<string[]> {
   });
   await page.addInitScript(fakeTauri);
   await page.setViewportSize({ width: 1120, height: 740 });
-  await page.goto('/carnet.html');
+  await page.goto('/app.html#notes');
   await page.evaluate(() => document.fonts.ready);
   await expect(page.locator('.element')).toHaveCount(3);
   return errors;
@@ -283,8 +283,10 @@ test('un rappel se coche comme fait', async ({ page }) => {
 
 test('panneau Stockage : dossier, sélecteur, conservation, publication en lecture seule', async ({ page }) => {
   const errors = await ouvrirCarnet(page);
+  // Le bouton du pied du Carnet mène à Réglages › Stockage, dans l'app.
   await page.getByRole('button', { name: 'Stockage' }).click();
-  await expect(page.locator('.feuille .titre')).toHaveText('Stockage');
+  await expect(page).toHaveURL(/#reglages\/stockage$/);
+  await expect(page.locator('.vue-reglages .titre')).toHaveText('Stockage');
   await expect(page.locator('.chemin')).toHaveText('/home/test/Kobi');
   await expect(page.locator('.dossier .puce')).toHaveText('par défaut');
   // Conservation illimitée par défaut.
@@ -303,18 +305,21 @@ test('panneau Stockage : dossier, sélecteur, conservation, publication en lectu
   // Sélecteur natif, puis le dossier change et l'index suit.
   await page.getByRole('button', { name: 'Choisir un dossier…' }).click();
   await expect(page.locator('.chemin')).toHaveText('/home/test/Ailleurs');
-  await expect(page.locator('.racine')).toHaveText('/home/test/Ailleurs');
   expect(await appels(page)).toContainEqual(['regler_stockage', { changement: { dossier: '/home/test/Ailleurs' } }]);
+  // De retour dans les notes, l'index suit le nouveau dossier.
+  await page.getByRole('button', { name: 'Notes et réunions' }).click();
+  await expect(page.locator('.racine')).toHaveText('/home/test/Ailleurs');
+  await page.getByRole('button', { name: 'Réglages' }).click();
   await page.getByRole('button', { name: 'Revenir au dossier par défaut' }).click();
   await expect(page.locator('.chemin')).toHaveText('/home/test/Kobi');
   await expectNoErrors(errors);
 });
 
-test('la fenêtre Réglages monte les mêmes panneaux', async ({ page }) => {
+test('la section Réglages de l’app monte les mêmes panneaux', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(String(e)));
   await page.addInitScript(fakeTauri);
-  await page.goto('/reglages.html?panneau=stockage');
+  await page.goto('/app.html#reglages/stockage');
   await expect(page.locator('.menu-entree[aria-current="true"]')).toContainText('Stockage');
   await expect(page.locator('.titre')).toHaveText('Stockage');
   await expect(page.locator('.chemin')).toHaveText('/home/test/Kobi');
@@ -325,7 +330,7 @@ test('panneau Démarrage des Réglages : interrupteur branché sur le démarrage
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(String(e)));
   await page.addInitScript(fakeTauri);
-  await page.goto('/reglages.html?panneau=demarrage');
+  await page.goto('/app.html#reglages/demarrage');
   await expect(page.locator('.titre')).toHaveText('Démarrage');
   const interrupteur = page.getByRole('switch', { name: 'Lancer Kobi à l’ouverture de session' });
   await expect(interrupteur).toHaveAttribute('aria-checked', 'false');
@@ -350,7 +355,7 @@ test('animations réduites : titres posés sans brouillage, rien ne bouge', asyn
 test('hors de Kobi, le Carnet le dit au lieu de planter', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(String(e)));
-  await page.goto('/carnet.html');
-  await expect(page.locator('.notif')).toHaveText('Ouvrez le Carnet depuis Kobi.');
+  await page.goto('/app.html#notes');
+  await expect(page.locator('.notif', { hasText: 'Ouvrez le Carnet depuis Kobi.' })).toBeVisible();
   await expectNoErrors(errors);
 });

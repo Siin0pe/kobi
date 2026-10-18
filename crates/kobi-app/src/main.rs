@@ -4,6 +4,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod app;
 mod bienvenue;
 mod carnet;
 mod cerveau;
@@ -133,10 +134,12 @@ fn main() {
             tray::install(app.handle())?;
             // Après la mascotte : la bienvenue se range à côté d'elle.
             bienvenue::installer(app.handle());
-            // `kobi --carnet` / `--reglages` / `--bienvenue` : ouvre la fenêtre au
-            // lancement (raccourci du menu Démarrer, essai sous Xvfb).
+            // `kobi --app` / `--carnet` / `--reglages` / `--bienvenue` : ouvre
+            // l'app (sur sa section) au lancement (raccourci du menu
+            // Démarrer, essai sous Xvfb).
             for arg in std::env::args().skip(1) {
                 let ouverte = match arg.as_str() {
+                    "--app" => app::ouvrir(app.handle(), None),
                     "--carnet" => carnet::ouvrir(app.handle()),
                     "--reglages" => reglages::ouvrir(app.handle(), None),
                     "--bienvenue" => bienvenue::ouvrir(app.handle()),
