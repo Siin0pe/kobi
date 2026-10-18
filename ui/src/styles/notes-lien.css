@@ -1,0 +1,9 @@
+/* La fiche de notes et l'étiquette REC s'ouvrent d'un clic (KOB-73). */
+.rec,
+.card-notes {
+  cursor: pointer;
+}
+.rec:focus-visible {
+  outline: 3px solid #d7ff3a;
+  outline-offset: 3px;
+}

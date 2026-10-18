@@ -30,7 +30,7 @@ export function enableWindowDrag(root: HTMLElement): void {
   root.addEventListener('mousedown', (e) => {
     if (e.button !== 0) return;
     const target = e.target as Element | null;
-    if (target?.closest('button, a, input, textarea, select, .card')) return;
+    if (target?.closest('button, a, input, textarea, select, .card, .rec')) return;
     e.preventDefault();
     void api.window.getCurrentWindow().startDragging();
   });

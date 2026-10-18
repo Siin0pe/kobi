@@ -16,6 +16,7 @@ mod intentions;
 mod interpellation;
 mod lecture;
 mod mot_cle;
+mod notes;
 mod placement;
 mod porte;
 mod raccourci;
