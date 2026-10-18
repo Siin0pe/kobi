@@ -1,5 +1,5 @@
-//! Machine à états de la session : veille, réunion (avec l'activité de la
-//! mascotte), pause, fin.
+//! Machine à états de la session : veille, échange hors réunion (assistant),
+//! réunion (avec l'activité de la mascotte), pause, fin.
 //!
 //! Les transitions sont pures : [`Etat::suivant`] ne fait aucune entrée-sortie
 //! et se teste sans audio ni Claude. La session applique l'état retourné et
@@ -46,6 +46,9 @@ impl Activite {
 pub enum Etat {
     /// Hors réunion : seul le mot-clé écoute, rien n'est transcrit.
     Veille,
+    /// Hors réunion, Kobi a été interpellé : même activité qu'en réunion,
+    /// mais rien n'est écrit. Le retour au calme ramène en veille.
+    Assistant(Activite),
     /// Réunion en cours.
     Reunion(Activite),
     /// Réunion en pause : ni transcription ni mot-clé en réunion.
@@ -184,6 +187,16 @@ impl Etat {
 
             (Reunion(a), e) => activite_suivante(a, e).map(Reunion),
 
+            // Hors réunion : une interpellation ouvre un échange, qui se
+            // referme en veille. Ni notes, ni pause, ni fin de réunion.
+            (Veille, E::Interpellation) => Some(Assistant(A::Ecoute)),
+            (Assistant(_), E::Erreur) => Some(Assistant(A::Oups)),
+            (Assistant(_), E::NotesCommencent | E::NotesTerminees) => None,
+            (Assistant(a), e) => activite_suivante(a, e).map(|a| match a {
+                A::Calme => Veille,
+                a => Assistant(a),
+            }),
+
             (Pause, E::Reprendre) => Some(Reunion(A::Calme)),
             (Pause, E::TerminerReunion) => Some(Fin),
 
@@ -203,7 +216,7 @@ impl Etat {
             Etat::Veille | Etat::Pause => Mascotte::Idle,
             // Le compte rendu s'écrit : Kobi note.
             Etat::Fin => Mascotte::Write,
-            Etat::Reunion(a) => match a {
+            Etat::Reunion(a) | Etat::Assistant(a) => match a {
                 Activite::Calme => Mascotte::Idle,
                 Activite::Ecoute => Mascotte::Listen,
                 Activite::Reflechit => Mascotte::Think,
@@ -231,6 +244,7 @@ impl Etat {
         [Etat::Veille, Etat::Pause, Etat::Fin]
             .into_iter()
             .chain(Activite::TOUTES.into_iter().map(Etat::Reunion))
+            .chain(Activite::TOUTES.into_iter().map(Etat::Assistant))
     }
 }
 
@@ -283,6 +297,7 @@ mod tests {
             (Pause, E::Reprendre, Reunion(A::Calme)),
             (Pause, E::TerminerReunion, Fin),
             (Fin, E::CompteRenduEcrit, Veille),
+            (Veille, E::Interpellation, Assistant(A::Ecoute)),
             (Reunion(A::Calme), E::Interpellation, Reunion(A::Ecoute)),
             (Reunion(A::Note), E::Interpellation, Reunion(A::Ecoute)),
             (Reunion(A::Fait), E::Interpellation, Reunion(A::Ecoute)),
@@ -325,7 +340,23 @@ mod tests {
             (Reunion(A::Fait), E::Acquitter, Reunion(A::Calme)),
             (Reunion(A::Oups), E::Acquitter, Reunion(A::Calme)),
         ];
+        // Hors réunion, les mêmes transitions d'activité, le calme valant veille.
+        let reunion: Vec<_> = t
+            .iter()
+            .filter_map(|&(e, ev, s)| match (e, s) {
+                (Reunion(a), Reunion(b)) if ev != E::NotesCommencent && ev != E::NotesTerminees => {
+                    Some((
+                        Assistant(a),
+                        ev,
+                        if b == A::Calme { Veille } else { Assistant(b) },
+                    ))
+                }
+                _ => None,
+            })
+            .collect();
+        t.extend(reunion);
         for a in Activite::TOUTES {
+            t.push((Assistant(a), E::Erreur, Assistant(A::Oups)));
             t.push((Reunion(a), E::Erreur, Reunion(A::Oups)));
             t.push((Reunion(a), E::Pause, Pause));
             t.push((Reunion(a), E::TerminerReunion, Fin));
@@ -367,8 +398,8 @@ mod tests {
                 refusees += 1;
             }
         }
-        // 11 états × 18 événements, moins les autorisées.
-        assert_eq!(refusees + table.len(), 11 * 18);
+        // 19 états × 18 événements, moins les autorisées.
+        assert_eq!(refusees + table.len(), 19 * 18);
     }
 
     #[test]
@@ -388,8 +419,14 @@ mod tests {
     fn hors_reunion_rien_ne_reveille_la_transcription() {
         for evenement in Evenement::TOUS {
             if let Ok(suivant) = Veille.suivant(evenement) {
-                assert_eq!(evenement, E::DemarrerReunion);
-                assert!(suivant.transcrit());
+                assert_eq!(suivant.transcrit(), evenement == E::DemarrerReunion);
+            }
+        }
+        for a in Activite::TOUTES {
+            for evenement in Evenement::TOUS {
+                if let Ok(suivant) = Assistant(a).suivant(evenement) {
+                    assert!(!suivant.transcrit() && !suivant.en_reunion());
+                }
             }
         }
         assert!(!Veille.transcrit());
@@ -430,6 +467,23 @@ mod tests {
             assert_eq!(etat.mascotte(), mascotte, "après {evenement:?}");
         }
         assert_eq!(etat, Veille);
+    }
+
+    #[test]
+    fn question_hors_reunion_puis_veille() {
+        let parcours = [
+            (E::Interpellation, Mascotte::Listen),
+            (E::QuestionEnvoyee, Mascotte::Think),
+            (E::ReponseCommence, Mascotte::Answer),
+            (E::ReponseTerminee, Mascotte::Idle),
+        ];
+        let mut etat = Veille;
+        for (evenement, mascotte) in parcours {
+            etat = etat.suivant(evenement).unwrap();
+            assert_eq!(etat.mascotte(), mascotte, "après {evenement:?}");
+        }
+        assert_eq!(etat, Veille);
+        assert_eq!(Assistant(A::Ecoute).suivant(E::PasDeQuestion), Ok(Veille));
     }
 
     #[test]

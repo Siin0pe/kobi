@@ -32,6 +32,10 @@ pub struct NemotronConfig {
     /// Silence qui clôt un énoncé non vide, en secondes.
     pub endpoint_silence: f32,
     pub provider: Provider,
+    /// Pénalité du symbole vide du transducteur : au-dessus de 0, moins de
+    /// mots sautés (les noms propres inconnus du modèle), au prix de
+    /// quelques insertions.
+    pub blank_penalty: f32,
 }
 
 /// Fournisseur d'exécution onnxruntime.
@@ -72,6 +76,7 @@ impl NemotronConfig {
             num_threads: 4,
             endpoint_silence: 0.8,
             provider: Provider::Cpu,
+            blank_penalty: 0.0,
         }
     }
 
@@ -134,6 +139,7 @@ impl NemotronEngine {
         rc.model_config.num_threads = config.num_threads;
         rc.model_config.provider = Some(config.provider.as_str().into());
         rc.decoding_method = Some("greedy_search".into());
+        rc.blank_penalty = config.blank_penalty;
         rc.enable_endpoint = true;
         // Règle 1 : silence long sans aucun mot ; règle 2 : silence après un
         // énoncé non vide ; règle 3 : énoncé trop long.

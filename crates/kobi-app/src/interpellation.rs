@@ -1,26 +1,24 @@
-//! Interpellation de bout en bout (KOB-67) : raccourci, micro, Nemotron,
-//! Claude Code, réponse dans la bulle.
+//! Interpellation de bout en bout (KOB-67, KOB-132) : de la question
+//! repérée dans l'écoute continue à la réponse dans la bulle.
 //!
-//! Un fil dédié garde le modèle Nemotron chargé et une session Claude Code
-//! ouverte (config isolée, prompt système de Kobi), pour que chaque question
-//! ne paie ni le chargement du modèle ni le démarrage de `claude`. Le
-//! raccourci lui envoie un signal ; il écoute le micro jusqu'à la fin de la
-//! phrase, envoie la question et pousse la réponse en flux vers la webview.
+//! Un fil dédié garde une session Claude Code ouverte (config isolée, prompt
+//! système de Kobi), pour que chaque question ne paie pas le démarrage de
+//! `claude`. Il reçoit les questions du fil d'écoute ([`crate::ecoute`]), qui
+//! garde le modèle Nemotron chargé et le micro ouvert, et pousse la réponse
+//! en flux vers la webview.
 
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::Mutex;
+use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
-use kobi_audio::{Capture, CaptureOptions};
 use kobi_brain::{ClaudeCode, ClaudeOptions, Detection, SYSTEM_PROMPT};
 use kobi_session::etat::Evenement;
 use kobi_stt::nemotron::{NemotronConfig, NemotronEngine};
-use kobi_stt::SttEngine;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, Runtime};
+use tauri::{AppHandle, Emitter, Runtime};
 
-use crate::session::{appliquer, etat};
+use crate::ecoute::{self, Commande};
+use crate::session::appliquer;
 
 /// Question en cours de transcription (texte complet à chaque fois).
 pub const EVENEMENT_QUESTION: &str = "question";
@@ -29,23 +27,24 @@ pub const EVENEMENT_REPONSE: &str = "answer";
 /// Erreur à afficher dans la carte d'erreur.
 pub const EVENEMENT_ERREUR: &str = "erreur";
 
-/// Durée maximale d'une question.
-const ECOUTE_MAX: Duration = Duration::from_secs(15);
-/// Sans aucun mot reconnu après ce délai, l'écoute s'arrête.
-const SANS_PAROLE: Duration = Duration::from_secs(6);
 /// Temps de lecture minimal d'une réponse avant le retour au calme.
 const LECTURE_MIN: Duration = Duration::from_secs(5);
 /// Temps d'affichage d'une erreur.
 const ERREUR_AFFICHEE: Duration = Duration::from_secs(6);
-/// Threads de Nemotron : la moitié d'un processeur de bureau courant.
-const THREADS_STT: i32 = 4;
+/// Threads de Nemotron. L'écoute est continue : mesuré sur ce PC (6 cœurs)
+/// en parole continue, 4 fils prennent 1,6 cœur, 2 fils 0,8 et 1 fil 0,45
+/// (KOB-132, cible : moins d'un cœur).
+const THREADS_STT: i32 = 2;
+/// Pénalité du symbole vide de Nemotron, voir [`NemotronConfig`]. Mesuré
+/// sur un corpus synthétique (KOB-132) : sans elle, « Kobi » n'est
+/// presque jamais écrit ; à 2, 16 phrases sur 18 sont repérées, aucune
+/// fausse alerte sur 4 min de réunion, et les mots sautés baissent (erreurs
+/// de mots 10 % → 4 %).
+const BLANK_PENALTY: f32 = 2.0;
 /// Modèle des interpellations (KOB-30, KOB-123 : ~1 s au premier mot).
 const MODELE_CLAUDE: &str = "haiku";
 /// Outils interdits pendant une réunion (KOB-61).
 const OUTILS_INTERDITS: &str = "Bash,Edit,Write,NotebookEdit,MultiEdit";
-
-/// Canal vers le fil d'interpellation.
-pub struct Pilote(Mutex<Sender<()>>);
 
 #[derive(Debug, Clone, Serialize)]
 struct ErreurUi {
@@ -79,35 +78,24 @@ pub fn modele_nemotron() -> Option<PathBuf> {
     dirs.into_iter().next()
 }
 
-/// Lance le fil d'interpellation.
+/// Lance le fil d'interpellation et le fil d'écoute qui l'alimente.
 pub fn installer<R: Runtime>(app: &AppHandle<R>) {
     let (tx, rx) = mpsc::channel();
-    app.manage(Pilote(Mutex::new(tx)));
-    let app = app.clone();
+    let fil = app.clone();
     std::thread::Builder::new()
         .name("interpellation".into())
-        .spawn(move || travailleur(app, rx))
+        .spawn(move || travailleur(fil, rx))
         .expect("fil d'interpellation");
+    ecoute::installer(app, tx);
 }
 
-/// Interpelle Kobi depuis le raccourci : démarre la réunion si besoin (le
-/// mode assistant hors réunion arrive au J4), passe en Écoute et réveille le
-/// fil d'interpellation.
+/// Interpelle Kobi depuis le raccourci, secours du mot-clé : la phrase
+/// suivante est la question.
 pub fn declencher<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
-    if etat(app).etat == "veille" {
-        appliquer(app, &[Evenement::DemarrerReunion])?;
-    }
-    // Le délai de secours couvre toute l'écoute : c'est le fil qui conclut.
-    crate::raccourci::interpeller(app, ECOUTE_MAX + Duration::from_secs(10))?;
-    app.state::<Pilote>()
-        .0
-        .lock()
-        .map_err(|e| e.to_string())?
-        .send(())
-        .map_err(|e| e.to_string())
+    ecoute::commander(app, Commande::Raccourci)
 }
 
-fn travailleur<R: Runtime>(app: AppHandle<R>, rx: Receiver<()>) {
+fn travailleur<R: Runtime>(app: AppHandle<R>, rx: Receiver<String>) {
     let rt = match tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -120,102 +108,39 @@ fn travailleur<R: Runtime>(app: AppHandle<R>, rx: Receiver<()>) {
         }
     };
 
-    let mut stt = charger_stt();
     let mut claude = rt.block_on(demarrer_claude());
     match &claude {
         Ok(_) => tracing::info!("session Claude Code prête"),
         Err(e) => tracing::warn!(erreur = %e, "Claude Code indisponible"),
     }
 
-    while rx.recv().is_ok() {
-        // Plusieurs appuis rapprochés ne lancent qu'une écoute.
-        while rx.try_recv().is_ok() {}
-
-        if stt.is_err() {
-            stt = charger_stt();
-        }
-        let question = match stt.as_mut() {
-            Ok(engine) => ecouter(&app, engine),
-            Err(e) => Err(e.clone()),
-        };
-        match question {
-            Ok(None) => {
-                let _ = appliquer(&app, &[Evenement::PasDeQuestion]);
-            }
-            Ok(Some(question)) => {
-                tracing::info!(longueur = question.len(), "question transcrite");
-                if appliquer(&app, &[Evenement::QuestionEnvoyee]).is_ok() {
-                    let _ = app.emit(EVENEMENT_QUESTION, &question);
-                    repondre(&app, &rt, &mut claude, &question);
-                }
-            }
-            Err(e) => erreur(&app, "Micro ou transcription", &e),
-        }
+    while let Ok(question) = rx.recv() {
+        repondre(&app, &rt, &mut claude, &question);
     }
 }
 
-fn charger_stt() -> Result<NemotronEngine, String> {
+pub fn charger_stt() -> Result<NemotronEngine, String> {
     let dir = modele_nemotron().ok_or_else(|| {
         "modèle Nemotron introuvable : placer le paquet sherpa-onnx-nemotron-… dans ~/Kobi/models"
             .to_string()
     })?;
     let mut config = NemotronConfig::new(&dir);
-    config.num_threads = THREADS_STT;
+    config.num_threads = std::env::var("KOBI_STT_THREADS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(THREADS_STT);
+    // Sans pénalité, Nemotron saute « Kobi », nom inconnu de son vocabulaire
+    // (KOB-132).
+    config.blank_penalty = std::env::var("KOBI_BLANK_PENALTY")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(BLANK_PENALTY);
+    // Langue imposée (`fr`, `en`…) ; détection automatique sinon.
+    config.language = std::env::var("KOBI_LANGUE").ok().filter(|l| !l.is_empty());
     let debut = Instant::now();
     let engine = NemotronEngine::new(config).map_err(|e| e.to_string())?;
     tracing::info!(modele = %dir.display(), ms = debut.elapsed().as_millis() as u64, "Nemotron chargé");
     Ok(engine)
-}
-
-/// Écoute le micro jusqu'à la fin de la phrase. `None` : rien n'a été dit.
-fn ecouter<R: Runtime>(
-    app: &AppHandle<R>,
-    engine: &mut NemotronEngine,
-) -> Result<Option<String>, String> {
-    engine.reset();
-    let capture = Capture::start(&CaptureOptions {
-        sources: vec![kobi_audio::Source::Moi],
-        mic: None,
-        output: None,
-    })
-    .map_err(|e| format!("micro indisponible : {e}"))?;
-
-    let debut = Instant::now();
-    let mut texte = String::new();
-    let mut finale: Option<String> = None;
-    while finale.is_none() {
-        if debut.elapsed() > ECOUTE_MAX || (texte.is_empty() && debut.elapsed() > SANS_PAROLE) {
-            break;
-        }
-        match capture.frames().recv_timeout(Duration::from_millis(200)) {
-            Ok(frame) => {
-                let frame = kobi_stt::AudioFrame {
-                    source: kobi_stt::Source::Moi,
-                    samples: frame.samples,
-                    t: frame.t.as_secs_f64(),
-                };
-                for segment in engine.push(&frame).map_err(|e| e.to_string())? {
-                    texte.clone_from(&segment.text);
-                    let _ = app.emit(EVENEMENT_QUESTION, &texte);
-                    if segment.is_final {
-                        finale = Some(segment.text);
-                    }
-                }
-            }
-            Err(RecvTimeoutError::Timeout) => continue,
-            Err(RecvTimeoutError::Disconnected) => break,
-        }
-    }
-    drop(capture);
-
-    if finale.is_none() && !texte.is_empty() {
-        for segment in engine.finish().map_err(|e| e.to_string())? {
-            finale = Some(segment.text);
-        }
-    }
-    Ok(finale
-        .or((!texte.is_empty()).then_some(texte))
-        .filter(|t| !t.trim().is_empty()))
 }
 
 async fn demarrer_claude() -> Result<ClaudeCode, String> {
@@ -294,7 +219,7 @@ fn repondre<R: Runtime>(
     }
 }
 
-fn erreur<R: Runtime>(app: &AppHandle<R>, titre: &str, message: &str) {
+pub fn erreur<R: Runtime>(app: &AppHandle<R>, titre: &str, message: &str) {
     tracing::warn!(%titre, %message, "interpellation en erreur");
     let _ = appliquer(app, &[Evenement::Erreur]);
     let _ = app.emit(

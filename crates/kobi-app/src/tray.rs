@@ -92,8 +92,14 @@ pub fn handle<R: Runtime>(app: &AppHandle<R>, id: &str) {
             }
         }
         MenuAction::Quit => app.exit(0),
-        // Réunion et pause : la session (J1) écoutera l'événement.
-        MenuAction::StartMeeting | MenuAction::Pause => {}
+        // Pause : ni micro ni transcription jusqu'au prochain clic (KOB-132).
+        MenuAction::Pause => {
+            if let Err(e) = crate::ecoute::commander(app, crate::ecoute::Commande::BasculerPause) {
+                tracing::warn!(erreur = %e, "menu : pause de l'écoute impossible");
+            }
+        }
+        // Réunion : la session (J1) écoutera l'événement.
+        MenuAction::StartMeeting => {}
     }
 }
 
