@@ -48,7 +48,7 @@ impl MenuAction {
         match self {
             MenuAction::StartMeeting => "Démarrer une réunion",
             MenuAction::Pause => "Pause",
-            MenuAction::OpenNotebook => "Ouvrir le Carnet",
+            MenuAction::OpenNotebook => "Ouvrir Kobi",
             MenuAction::OpenSettings => "Réglages…",
             MenuAction::ToggleVoice => "Réponse à voix haute / en texte",
             MenuAction::ToggleMascot => "Afficher/masquer Kobi",
@@ -105,9 +105,10 @@ pub fn handle<R: Runtime>(app: &AppHandle<R>, id: &str) {
                 };
             }
         }
+        // L'app Kobi (KOB-159) : notes, rappels, activité, réglages.
         MenuAction::OpenNotebook => {
-            if let Err(e) = crate::carnet::ouvrir(app) {
-                tracing::warn!(erreur = %e, "carnet");
+            if let Err(e) = crate::app::ouvrir(app, None) {
+                tracing::warn!(erreur = %e, "app");
             }
         }
         MenuAction::OpenSettings => {
@@ -176,7 +177,7 @@ mod tests {
             [
                 "Démarrer une réunion",
                 "Pause",
-                "Ouvrir le Carnet",
+                "Ouvrir Kobi",
                 "Réglages…",
                 "Réponse à voix haute / en texte",
                 "Afficher/masquer Kobi",

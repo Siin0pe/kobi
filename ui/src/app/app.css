@@ -1,0 +1,397 @@
+/* L'app Kobi (KOB-159) : navigation noire à gauche, sections à droite. Les
+   sections gardent leurs propres styles, limités à `.vue-<section>`. */
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--papier);
+  color: var(--ink);
+  font-family: var(--font);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+#app {
+  height: 100%;
+}
+button {
+  font-family: inherit;
+}
+
+.app {
+  display: grid;
+  grid-template-columns: 216px 1fr;
+  height: 100%;
+}
+.app[data-accueil='true'] {
+  grid-template-columns: 1fr;
+}
+.app[data-accueil='true'] .nav,
+.app[data-accueil='true'] .contenu {
+  display: none;
+}
+
+/* ----- Navigation ----- */
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 20px 12px;
+  background: var(--ink);
+  color: var(--papier);
+  -webkit-user-select: none;
+  user-select: none;
+}
+.nav-kobi {
+  align-self: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 140px;
+  height: 82px;
+  border-radius: 41px;
+  background: var(--ink);
+  color: var(--acide);
+  box-shadow: 0 0 0 3px var(--acide);
+  animation: app-respire 3s ease-in-out infinite;
+}
+.nav-yeux {
+  display: flex;
+  gap: 18px;
+}
+.nav-kobi .g {
+  display: inline-block;
+  width: 28px;
+  text-align: center;
+  font-size: 38px;
+  line-height: 1;
+  font-variation-settings: 'wght' 700, 'CASL' 1;
+}
+.nav-kobi .mot {
+  height: 18px;
+  font-size: 15px;
+  line-height: 18px;
+  white-space: pre;
+  font-variation-settings: 'wght' 900, 'CASL' 1;
+}
+.nav-kobi .mot .ch {
+  display: inline-block;
+}
+.nav-sections {
+  display: grid;
+  gap: 4px;
+}
+.nav-entree {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  border-radius: 14px;
+  padding: 10px 12px;
+  background: transparent;
+  color: var(--papier);
+  font-size: 14.5px;
+  font-variation-settings: 'wght' 650;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s, transform 0.3s var(--ressort);
+}
+.nav-entree:hover {
+  background: rgba(215, 255, 58, 0.12);
+  transform: translateX(4px);
+}
+.nav-entree[aria-current='page'] {
+  background: var(--acide);
+  color: var(--ink);
+  font-variation-settings: 'wght' 850, 'CASL' 1;
+}
+.nav-entree:focus-visible {
+  outline: 3px solid var(--acide);
+  outline-offset: 2px;
+}
+.nav-glyphe {
+  flex: none;
+  width: 22px;
+  text-align: center;
+  font-size: 17px;
+  font-variation-settings: 'wght' 800;
+}
+
+/* ----- Sections ----- */
+
+.contenu {
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+}
+.vue {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+.vue[hidden] {
+  display: none;
+}
+.vue:not([hidden]) {
+  animation: app-arrive 0.35s var(--ressort);
+}
+.vue-accueil {
+  grid-column: 1 / -1;
+}
+
+/* Sections simples : Rappels, Activité, À propos. */
+.vue-rappels,
+.vue-activite,
+.vue-a-propos {
+  overflow-y: auto;
+  background:
+    repeating-linear-gradient(to bottom, transparent 0 31px, rgba(11, 11, 11, 0.045) 31px 32px),
+    var(--papier);
+}
+.vue-rappels .feuille,
+.vue-activite .feuille,
+.vue-a-propos .feuille {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 34px 44px 60px;
+}
+.vue-rappels .surtitre,
+.vue-activite .surtitre,
+.vue-a-propos .surtitre {
+  margin: 0 0 6px;
+  font-size: 12.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  font-variation-settings: 'wght' 700, 'MONO' 1;
+}
+.vue-rappels .titre,
+.vue-activite .titre,
+.vue-a-propos .titre {
+  margin: 0 0 6px;
+  font-size: 38px;
+  line-height: 1.08;
+  font-variation-settings: 'wght' 900, 'CASL' 1;
+  min-height: 1.08em;
+}
+.vue-rappels .groupe {
+  margin: 24px 0 8px;
+  font-size: 12.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-variation-settings: 'wght' 850, 'MONO' 1;
+}
+.vue-rappels .rappel {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  margin: 6px 0;
+  border: 2px solid var(--ink);
+  border-radius: 16px;
+  background: #fff;
+  animation: entre 0.4s var(--ressort) backwards;
+  animation-delay: calc(var(--i, 0) * 40ms);
+  transition: opacity 0.4s, transform 0.4s var(--ressort);
+}
+.vue-rappels .rappel[data-retard='true'] {
+  border-color: var(--danger);
+}
+.vue-rappels .rappel[data-fait='true'] {
+  opacity: 0.6;
+  background: transparent;
+}
+.vue-rappels .rappel.fait {
+  opacity: 0;
+  transform: translateX(-30px) scale(0.96);
+}
+.vue-rappels .coche {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin-top: 1px;
+  border: 2px solid var(--ink);
+  border-radius: 7px;
+  background: transparent;
+  cursor: pointer;
+  position: relative;
+}
+.vue-rappels .rappel[data-fait='true'] .coche {
+  background: var(--ink);
+  cursor: default;
+}
+.vue-rappels .coche:focus-visible {
+  outline: 3px solid var(--ink);
+  outline-offset: 2px;
+}
+.vue-rappels .rappel-corps {
+  display: grid;
+  gap: 2px;
+}
+.vue-rappels .rappel-texte {
+  font-size: 15px;
+  font-variation-settings: 'wght' 650;
+}
+.vue-rappels .rappel-quand {
+  font-size: 12.5px;
+  color: var(--muted);
+  font-variation-settings: 'MONO' 1;
+}
+.vue-rappels .vide {
+  color: var(--muted);
+}
+.vue-activite .bientot {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin-top: 24px;
+  padding: 18px 20px;
+  border: 2px dashed var(--ink);
+  border-radius: 18px;
+}
+.vue-activite .bientot-yeux {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 70px;
+  height: 42px;
+  border-radius: 21px;
+  background: var(--ink);
+  color: var(--acide);
+  font-size: 22px;
+  font-variation-settings: 'wght' 900;
+}
+.vue-a-propos .infos {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 8px 20px;
+  margin: 24px 0;
+}
+.vue-a-propos dt {
+  font-variation-settings: 'wght' 800;
+}
+.vue-a-propos dd {
+  margin: 0;
+}
+.vue-a-propos .principes li {
+  margin: 6px 0;
+}
+
+/* ----- Réglages (repris de l'ancienne fenêtre) ----- */
+
+.vue-reglages .reglages {
+  height: 100%;
+}
+.vue-reglages .reglages {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+}
+.vue-reglages .cote {
+  background: var(--acide);
+  border-right: 3px solid var(--ink);
+  padding: 18px 12px;
+}
+.vue-reglages .marque {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 8px 16px;
+}
+.vue-reglages .mini-kobi {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 50px;
+  height: 30px;
+  border-radius: 15px;
+  background: var(--ink);
+  color: var(--acide);
+  font-size: 18px;
+  font-variation-settings: 'wght' 800, 'CASL' 1;
+}
+.vue-reglages .oeil {
+  display: inline-block;
+  width: 12px;
+  text-align: center;
+}
+.vue-reglages .marque-mot {
+  font-size: 24px;
+  font-variation-settings: 'wght' 900, 'CASL' 1, 'slnt' -6;
+}
+.vue-reglages .menu {
+  display: grid;
+  gap: 4px;
+}
+.vue-reglages .menu-entree {
+  display: grid;
+  text-align: left;
+  border: 0;
+  border-radius: 14px;
+  padding: 10px 12px;
+  background: transparent;
+  color: var(--ink);
+  font-family: inherit;
+  cursor: pointer;
+  transition: background-color 0.15s, transform 0.3s var(--ressort);
+}
+.vue-reglages .menu-entree:hover {
+  background: rgba(11, 11, 11, 0.07);
+  transform: translateX(4px);
+}
+.vue-reglages .menu-entree[aria-current='true'] {
+  background: var(--ink);
+  color: var(--acide);
+}
+.vue-reglages .menu-entree:focus-visible {
+  outline: 3px solid var(--ink);
+  outline-offset: 2px;
+}
+.vue-reglages .menu-titre {
+  font-size: 15px;
+  font-variation-settings: 'wght' 800, 'CASL' 1;
+}
+.vue-reglages .menu-sous-titre {
+  font-size: 12px;
+  opacity: 0.75;
+}
+.vue-reglages .page {
+  overflow-y: auto;
+}
+.vue-reglages .feuille {
+  max-width: 680px;
+  padding: 30px 40px 60px;
+}
+.vue-reglages .surtitre {
+  margin: 0 0 4px;
+  font-size: 12.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  font-variation-settings: 'wght' 700, 'MONO' 1;
+}
+.vue-reglages .titre {
+  margin: 0 0 12px;
+  font-size: 34px;
+  font-variation-settings: 'wght' 900, 'CASL' 1;
+  min-height: 1.1em;
+}
+
+.vue-reglages .page {
+  height: 100%;
+}
+
+@keyframes app-respire {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.035, 0.965); }
+}
+@keyframes app-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}

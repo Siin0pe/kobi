@@ -231,13 +231,13 @@
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation: none !important;
-    transition: none !important;
-  }
+/* « Animations : réduites » (réglage de Kobi, KOB-149) : la classe
+   `reduced-motion` sur l'élément racine coupe tout. */
+.reduced-motion *,
+.reduced-motion *::before,
+.reduced-motion *::after {
+  animation: none !important;
+  transition: none !important;
 }
 
 /* ----- Étapes du premier lancement, aussi montées dans les Réglages ----- */

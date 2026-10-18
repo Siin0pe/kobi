@@ -1,4 +1,5 @@
-//! Premier lancement guidé (KOB-144) : la fenêtre « bienvenue » vérifie
+//! Premier lancement guidé (KOB-144) : l'écran d'accueil de l'app Kobi
+//! (KOB-159) vérifie
 //! Claude Code, le micro, le modèle de transcription (téléchargé avec sa
 //! progression), les dossiers de code, le démarrage avec le système, fait
 //! dire « Kobi, bonjour » et rappelle les raccourcis.
@@ -17,10 +18,7 @@ use std::sync::Arc;
 use kobi_session::config;
 use kobi_session::modeles::{self, Http, Modele, Progression};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewUrl, WebviewWindowBuilder};
-
-/// Libellé de la fenêtre du premier lancement.
-pub const FENETRE: &str = "bienvenue";
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 /// Fichier posé dans `~/Kobi` quand le parcours est terminé.
 const MARQUE: &str = "premier-lancement.fait";
@@ -96,26 +94,10 @@ pub fn installer<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
-/// Ouvre la bienvenue, ou la ramène devant.
+/// Ouvre l'app Kobi sur l'écran d'accueil (KOB-159).
 pub fn ouvrir<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
-    if let Some(w) = app.get_webview_window(FENETRE) {
-        let _ = w.unminimize();
-        w.show()?;
-        return w.set_focus();
-    }
-    crate::placement::a_cote_de_kobi_ou_centre(
-        app,
-        WebviewWindowBuilder::new(app, FENETRE, WebviewUrl::App("bienvenue.html".into()))
-            .title("Bienvenue — Kobi")
-            .inner_size(900.0, 640.0)
-            .min_inner_size(680.0, 520.0)
-            .visible(true)
-            .focused(true),
-        (900.0, 640.0),
-    )
-    .build()?;
     tracing::info!("premier lancement ouvert");
-    Ok(())
+    crate::app::ouvrir(app, Some(crate::app::Section::Accueil))
 }
 
 #[tauri::command]
@@ -128,15 +110,13 @@ fn marquer_fait(kobi_dir: &Path) -> io::Result<()> {
     fs::write(kobi_dir.join(MARQUE), b"")
 }
 
-/// Fin du parcours : il ne se rouvrira plus tout seul.
+/// Fin du parcours : il ne se rouvrira plus tout seul. L'app passe ensuite
+/// aux notes (côté interface).
 #[tauri::command]
-pub fn terminer_bienvenue<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+pub fn terminer_bienvenue() -> Result<(), String> {
     let dir = config::kobi_dir().ok_or("dossier personnel introuvable")?;
     marquer_fait(&dir).map_err(|e| format!("{} : {e}", dir.display()))?;
     tracing::info!("premier lancement terminé");
-    if let Some(w) = app.get_webview_window(FENETRE) {
-        let _ = w.close();
-    }
     Ok(())
 }
 
@@ -658,7 +638,7 @@ mod tests {
             .build(mock_context(noop_assets()))
             .unwrap();
         app.manage(Telechargement::default());
-        let w = WebviewWindowBuilder::new(&app, FENETRE, Default::default())
+        let w = tauri::WebviewWindowBuilder::new(&app, crate::app::FENETRE, Default::default())
             .build()
             .unwrap();
 

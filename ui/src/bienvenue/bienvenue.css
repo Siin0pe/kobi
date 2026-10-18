@@ -1,29 +1,16 @@
 /* Premier lancement : Kobi en grand sur le vert, les étapes dessous, la
    page papier à droite. */
 
-html,
-body {
-  margin: 0;
-  height: 100%;
-  background: var(--papier);
-  color: var(--ink);
-  font-family: var(--font);
-  -webkit-font-smoothing: antialiased;
-  overflow: hidden;
-}
-#app,
-.bienvenue {
+.vue-accueil .bienvenue {
   height: 100%;
 }
-button {
-  font-family: inherit;
-}
-.bienvenue {
+
+.vue-accueil .bienvenue {
   display: grid;
   grid-template-columns: 300px 1fr;
 }
 
-.rail {
+.vue-accueil .rail {
   display: flex;
   flex-direction: column;
   align-items: stretch;
@@ -37,7 +24,7 @@ button {
 }
 
 /* Kobi : la pilule de la mascotte, en plus petit. */
-.grand-kobi {
+.vue-accueil .grand-kobi {
   align-self: center;
   display: flex;
   flex-direction: column;
@@ -50,13 +37,13 @@ button {
   background: var(--ink);
   color: var(--acide);
   box-shadow: 0 0 0 4px var(--acide), 10px 10px 0 rgba(11, 11, 11, 0.18);
-  animation: respire 3s ease-in-out infinite;
+  animation: accueil-respire 3s ease-in-out infinite;
 }
-.grand-kobi .yeux {
+.vue-accueil .grand-kobi .yeux {
   display: flex;
   gap: 26px;
 }
-.grand-kobi .g {
+.vue-accueil .grand-kobi .g {
   display: inline-block;
   width: 40px;
   text-align: center;
@@ -64,34 +51,34 @@ button {
   line-height: 1;
   font-variation-settings: 'wght' 700, 'CASL' 1;
 }
-.grand-kobi .mot {
+.vue-accueil .grand-kobi .mot {
   height: 26px;
   font-size: 22px;
   line-height: 26px;
   white-space: pre;
   font-variation-settings: 'wght' 900, 'CASL' 1;
 }
-.grand-kobi .mot .ch {
+.vue-accueil .grand-kobi .mot .ch {
   display: inline-block;
-  animation: vague-lettre 2.4s ease-in-out infinite;
+  animation: accueil-vague-lettre 2.4s ease-in-out infinite;
 }
-@keyframes vague-lettre {
+@keyframes accueil-vague-lettre {
   0%, 100% { font-variation-settings: 'wght' 900, 'CASL' 1; }
   50% { font-variation-settings: 'wght' 500, 'CASL' 0.3, 'slnt' -10; }
 }
-@keyframes respire {
+@keyframes accueil-respire {
   0%, 100% { transform: scale(1); }
   50% { transform: scale(1.035, 0.965); }
 }
 
-.etapes {
+.vue-accueil .etapes {
   list-style: none;
   margin: 0;
   padding: 0;
   display: grid;
   gap: 2px;
 }
-.etape button {
+.vue-accueil .etape button {
   display: flex;
   gap: 12px;
   align-items: flex-start;
@@ -107,39 +94,39 @@ button {
   animation-delay: calc(var(--i, 0) * 50ms + 0.2s);
   transition: background-color 0.15s, transform 0.3s var(--ressort);
 }
-.etape button:hover {
+.vue-accueil .etape button:hover {
   background: rgba(11, 11, 11, 0.07);
   transform: translateX(4px);
 }
-.etape button[aria-current='step'] {
+.vue-accueil .etape button[aria-current='step'] {
   background: var(--ink);
   color: var(--papier);
   transform: translateX(6px);
 }
-.etape button[aria-current='step'] .pastille {
+.vue-accueil .etape button[aria-current='step'] .pastille {
   border-color: var(--acide);
 }
-.etape button:focus-visible {
+.vue-accueil .etape button:focus-visible {
   outline: 3px solid var(--ink);
   outline-offset: 2px;
 }
-.etape-corps {
+.vue-accueil .etape-corps {
   display: grid;
 }
-.etape-titre {
+.vue-accueil .etape-titre {
   font-size: 15px;
   font-variation-settings: 'wght' 750, 'CASL' 0.6;
 }
-.etape-resume {
+.vue-accueil .etape-resume {
   font-size: 12px;
   opacity: 0.7;
   font-variation-settings: 'MONO' 0.6;
 }
-.etape-resume:empty::before {
+.vue-accueil .etape-resume:empty::before {
   content: '…';
 }
 
-.scene {
+.vue-accueil .scene {
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -147,12 +134,12 @@ button {
     repeating-linear-gradient(to bottom, transparent 0 31px, rgba(11, 11, 11, 0.045) 31px 32px),
     var(--papier);
 }
-.feuille {
+.vue-accueil .feuille {
   flex: 1;
   overflow-y: auto;
   padding: 34px 44px 24px;
 }
-.surtitre {
+.vue-accueil .surtitre {
   margin: 0 0 6px;
   font-size: 12.5px;
   text-transform: uppercase;
@@ -160,31 +147,31 @@ button {
   color: var(--muted);
   font-variation-settings: 'wght' 700, 'MONO' 1;
 }
-.titre {
+.vue-accueil .titre {
   margin: 0 0 4px;
   font-size: 38px;
   line-height: 1.08;
   font-variation-settings: 'wght' 900, 'CASL' 1;
   min-height: 1.08em;
 }
-.sous-titre {
+.vue-accueil .sous-titre {
   margin: 0 0 20px;
   color: var(--muted);
   font-size: 15px;
 }
-.sous-titre:empty {
+.vue-accueil .sous-titre:empty {
   margin-bottom: 12px;
 }
-.panneau.entre {
-  animation: feuille 0.45s var(--ressort);
+.vue-accueil .panneau.entre {
+  animation: accueil-feuille 0.45s var(--ressort);
 }
-@keyframes feuille {
+@keyframes accueil-feuille {
   from {
     opacity: 0;
     transform: translateX(22px);
   }
 }
-.bulle {
+.vue-accueil .bulle {
   position: relative;
   max-width: 54ch;
   margin: 8px 0 20px;
@@ -197,12 +184,12 @@ button {
   box-shadow: 6px 6px 0 var(--acide);
   animation: entre 0.5s var(--ressort) 0.3s backwards;
 }
-.a-revoir ul {
+.vue-accueil .a-revoir ul {
   margin: 6px 0 0;
   padding-left: 20px;
 }
 
-.pied {
+.vue-accueil .pied {
   display: flex;
   justify-content: space-between;
   gap: 10px;
@@ -210,31 +197,31 @@ button {
   border-top: 3px solid var(--ink);
   background: var(--papier);
 }
-.pied .bouton[hidden] {
+.vue-accueil .pied .bouton[hidden] {
   visibility: hidden;
   display: inline-block;
 }
-.pied .bouton.plein {
+.vue-accueil .pied .bouton.plein {
   margin-left: auto;
   font-size: 15.5px;
   padding: 9px 24px;
 }
 
 @media (max-width: 760px) {
-  .bienvenue {
+  .vue-accueil .bienvenue {
     grid-template-columns: 1fr;
     grid-template-rows: auto 1fr;
   }
-  .etapes {
+  .vue-accueil .etapes {
     display: none;
   }
-  .feuille,
-  .pied {
+  .vue-accueil .feuille,
+.vue-accueil .pied {
     padding-left: 18px;
     padding-right: 18px;
   }
 }
 /* Étape courante (fond noir) : la pastille « ok » passe au vert. */
-.etape[data-statut='ok'] button[aria-current='step'] .pastille {
+.vue-accueil .etape[data-statut='ok'] button[aria-current='step'] .pastille {
   background: var(--acide);
 }

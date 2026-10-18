@@ -57,7 +57,13 @@ export function normaliser(texte: string): string {
   return texte.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
 }
 
-/** Les animations sont-elles réduites (réglage du système) ? */
+/**
+ * Les animations sont-elles réduites ? Seul le réglage « Animations » de
+ * Kobi en décide (KOB-149, défaut « toujours ») : il pose la classe
+ * `reduced-motion` sur l'élément racine. Le média `prefers-reduced-motion`
+ * n'est jamais lu directement (les effets de Windows désactivés figeaient
+ * Kobi).
+ */
 export function animationsReduites(): boolean {
-  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  return document.documentElement.classList.contains('reduced-motion');
 }

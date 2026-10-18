@@ -1,11 +1,11 @@
 // Structure commune des réglages de Kobi. Chaque sujet (stockage, démarrage
-// avec Windows, dossiers de code, mode de réponse…) est un `Panneau`
-// autonome, monté dans la fenêtre Réglages (`reglages.html`) ou dans une
-// autre fenêtre qui en a besoin (le Carnet monte « Stockage », le premier
-// lancement pourra monter « Dossiers de code »).
+// avec le système, dossiers de code, MCP…) est un `Panneau` autonome, monté
+// dans la section Réglages de l'app Kobi (KOB-159) et, pour les étapes, dans
+// l'écran d'accueil du premier lancement.
 //
 // Ajouter un réglage : écrire un module qui exporte un `Panneau`, puis
-// l'ajouter à `PANNEAUX` (ui/src/reglages/panneaux.ts).
+// l'ajouter à `PANNEAUX` ou l'enregistrer avec `ajouterPanneau`
+// (ui/src/reglages/panneaux.ts).
 
 export type Ton = 'ok' | 'erreur';
 

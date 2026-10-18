@@ -13,37 +13,28 @@ use kobi_session::stockage::{
     Stockage, Trouve,
 };
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, Runtime, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Runtime};
 use tauri_plugin_dialog::DialogExt;
-
-/// Libellé de la fenêtre du Carnet.
-pub const FENETRE: &str = "carnet";
 
 /// Une réunion marquée « en cours » mais sans écriture depuis ce délai est
 /// une réunion interrompue (arrêt brutal) : on peut la supprimer.
 const EN_COURS_ACTIVE: Duration = Duration::from_secs(10 * 60);
 
-/// Ouvre le Carnet, ou le ramène devant s'il est déjà ouvert. Utilisable
-/// depuis le menu, la barre système ou une intention vocale.
+/// Ouvre le Carnet, la section « Notes et réunions » de l'app (KOB-159).
+/// Utilisable depuis le menu, la barre système ou une intention vocale.
 pub fn ouvrir<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
-    if let Some(w) = app.get_webview_window(FENETRE) {
-        let _ = w.unminimize();
-        w.show()?;
-        return w.set_focus();
-    }
-    crate::placement::a_cote_de_kobi_ou_centre(
-        app,
-        WebviewWindowBuilder::new(app, FENETRE, WebviewUrl::App("carnet.html".into()))
-            .title("Carnet de Kobi")
-            .inner_size(1120.0, 740.0)
-            .min_inner_size(720.0, 480.0)
-            .visible(true)
-            .focused(true),
-        (1120.0, 740.0),
-    )
-    .build()?;
-    tracing::info!("carnet ouvert");
-    Ok(())
+    ouvrir_sur(app, None)
+}
+
+/// Ouvre le Carnet sur une réunion, onglet Compte rendu (carte « Compte
+/// rendu prêt », KOB-74) ; un nom douteux ouvre simplement le Carnet.
+pub fn ouvrir_sur<R: Runtime>(app: &AppHandle<R>, reunion: Option<&str>) -> tauri::Result<()> {
+    let section = match reunion {
+        Some(r) => crate::app::Section::lire(&format!("notes/{r}"))
+            .unwrap_or(crate::app::Section::Notes { reunion: None }),
+        None => crate::app::Section::Notes { reunion: None },
+    };
+    crate::app::ouvrir(app, Some(section))
 }
 
 fn stockage<R: Runtime>(app: &AppHandle<R>) -> Result<Stockage, String> {
@@ -68,8 +59,8 @@ pub struct Index {
 }
 
 #[tauri::command]
-pub fn ouvrir_carnet<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
-    ouvrir(&app).map_err(|e| e.to_string())
+pub fn ouvrir_carnet<R: Runtime>(app: AppHandle<R>, reunion: Option<String>) -> Result<(), String> {
+    ouvrir_sur(&app, reunion.as_deref()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -365,9 +356,10 @@ mod tests {
             .build(mock_context(noop_assets()))
             .unwrap();
         crate::stockage::installer(app.handle(), &config, None);
-        let webview = WebviewWindowBuilder::new(&app, FENETRE, Default::default())
-            .build()
-            .unwrap();
+        let webview =
+            tauri::WebviewWindowBuilder::new(&app, crate::app::FENETRE, Default::default())
+                .build()
+                .unwrap();
         let appel = |cmd: &str, corps| appeler(&webview, cmd, corps);
 
         let index = appel("carnet_index", json!({})).unwrap();
@@ -442,27 +434,5 @@ mod tests {
         .unwrap_err();
         assert!(refus.as_str().unwrap().contains("en cours"), "{refus}");
         assert!(en_cours.dossier().is_dir());
-    }
-
-    /// `ouvrir_carnet` et `ouvrir_reglages` créent leur fenêtre une seule fois.
-    #[test]
-    fn fenetres_ouvertes_une_seule_fois() {
-        use crate::test_ipc::appeler;
-        use serde_json::json;
-        use tauri::test::{mock_builder, mock_context, noop_assets};
-
-        let app = crate::session::installer(mock_builder())
-            .build(mock_context(noop_assets()))
-            .unwrap();
-        let main = WebviewWindowBuilder::new(&app, "main", Default::default())
-            .build()
-            .unwrap();
-        for _ in 0..2 {
-            appeler(&main, "ouvrir_carnet", json!({})).unwrap();
-            appeler(&main, "ouvrir_reglages", json!({ "panneau": "stockage" })).unwrap();
-        }
-        let mut fenetres: Vec<_> = app.webview_windows().into_keys().collect();
-        fenetres.sort();
-        assert_eq!(fenetres, ["carnet", "main", "reglages"]);
     }
 }

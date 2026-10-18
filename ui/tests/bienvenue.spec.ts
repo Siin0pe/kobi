@@ -100,7 +100,7 @@ async function ouvrir(page: Page, o: Options = {}): Promise<string[]> {
   });
   await page.addInitScript(fakeTauri, o);
   await page.setViewportSize({ width: 900, height: 640 });
-  await page.goto('/bienvenue.html');
+  await page.goto('/app.html#accueil');
   await page.evaluate(() => document.fonts.ready);
   return errors;
 }
@@ -215,11 +215,11 @@ test('décoché puis parcours rejoué : le démarrage reste décoché', async ({
   await expectNoErrors(errors);
 });
 
-test('la fenêtre Réglages montre l’état sans rien activer d’office', async ({ page }) => {
+test('la section Réglages montre l’état sans rien activer d’office', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(String(e)));
   await page.addInitScript(fakeTauri, { dependances: true, modele: true });
-  await page.goto('/reglages.html?panneau=demarrage');
+  await page.goto('/app.html#reglages/demarrage');
   await expect(page.getByRole('switch')).toHaveAttribute('aria-checked', 'false');
   const faits = (await appels(page)).map(([c]) => c);
   expect(faits).toContain('demarrage_systeme');
@@ -246,7 +246,7 @@ test('la fenêtre Réglages monte les mêmes étapes et rejoue le parcours', asy
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(String(e)));
   await page.addInitScript(fakeTauri, { dependances: true, modele: true });
-  await page.goto('/reglages.html?panneau=micro');
+  await page.goto('/app.html#reglages/micro');
   await expect(page.locator('.titre')).toHaveText('Micro');
   await expect(page.getByRole('radio', { name: /Celui du système/ })).toHaveAttribute('aria-checked', 'true');
   await page.locator('.menu-entree[data-panneau="premier-lancement"]').click();
@@ -256,7 +256,12 @@ test('la fenêtre Réglages monte les mêmes étapes et rejoue le parcours', asy
 });
 
 test('animations réduites : Kobi et les titres posés sans brouillage', async ({ page }) => {
-  await page.emulateMedia({ reducedMotion: 'reduce' });
+  // Réglage « Animations : réduites » de Kobi : la classe sur l'élément racine.
+  await page.addInitScript(() => {
+    const poser = () => document.documentElement?.classList.add('reduced-motion');
+    poser();
+    document.addEventListener('readystatechange', poser);
+  });
   const errors = await ouvrir(page, { dependances: true, modele: true });
   expect(await page.locator('.titre').textContent()).toBe('Salut, moi c’est Kobi.');
   expect(await page.locator('.grand-kobi .mot').textContent()).toBe('salut');
