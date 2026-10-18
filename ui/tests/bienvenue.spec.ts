@@ -215,11 +215,11 @@ test('décoché puis parcours rejoué : le démarrage reste décoché', async ({
   await expectNoErrors(errors);
 });
 
-test('la fenêtre Réglages montre l’état sans rien activer d’office', async ({ page }) => {
+test('la section Réglages montre l’état sans rien activer d’office', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(String(e)));
   await page.addInitScript(fakeTauri, { dependances: true, modele: true });
-  await page.goto('/reglages.html?panneau=demarrage');
+  await page.goto('/app.html#reglages/demarrage');
   await expect(page.getByRole('switch')).toHaveAttribute('aria-checked', 'false');
   const faits = (await appels(page)).map(([c]) => c);
   expect(faits).toContain('demarrage_systeme');
