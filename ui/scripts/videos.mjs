@@ -392,7 +392,7 @@ const CLIPS = [
   ],
   [
     'bulles-entree-sortie',
-    'backdrop=1',
+    '',
     async (page) => {
       // KOB-150 : chaque carte sort de Kobi (distribuée, rebond) et y retourne
       // quand la suivante arrive ; les puces de sources sortent une à une.
@@ -405,7 +405,7 @@ const CLIPS = [
   ],
   [
     'prise-de-notes-lettres',
-    'backdrop=1',
+    '',
     async (page) => {
       // KOB-150 : à chaque note, ses lettres volent de Kobi vers la fiche où un
       // crayon gratte ; les chiffres REC roulent, le point pulse.
@@ -422,7 +422,7 @@ const CLIPS = [
   ],
   [
     'notifications-historique',
-    'backdrop=1',
+    '',
     async (page) => {
       // KOB-150 : les notifications partent de Kobi et y retournent ;
       // l'historique sort de Kobi, ses échanges entrent en cascade, puis il y retourne.
@@ -474,6 +474,12 @@ async function record(browser, name, query, scenario) {
   rmSync(tmp, { recursive: true, force: true });
   const context = await browser.newContext({ viewport: { width: W, height: H }, recordVideo: { dir: tmp, size: { width: W, height: H } } });
   const page = await context.newPage();
+  // Sans bureau de test (`backdrop`), la page est transparente comme la
+  // fenêtre de Kobi (règle du propriétaire : jamais de fond, même pour filmer).
+  if (!query.includes('backdrop')) {
+    const cdp = await context.newCDPSession(page);
+    await cdp.send('Emulation.setDefaultBackgroundColorOverride', { color: { r: 0, g: 0, b: 0, a: 0 } });
+  }
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
   await page.goto(`${base}?${query}`);

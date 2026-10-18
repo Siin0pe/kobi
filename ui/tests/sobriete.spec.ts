@@ -123,8 +123,9 @@ test('repos économe en réunion : tout bouge encore, au rythme d’un seul mét
     });
   const before = await loops();
   // Le mot, la pilule, l'anneau bougent toujours ; l'étiquette REC et la fiche,
-  // cliquables, restent immobiles, mais leur point rouge et leur surtitre vivent…
-  for (const name of ['kobi-wave', 'kobi-bob', 'kobi-scribble', 'kobi-rec', 'rec-blink', 'kicker-bob']) {
+  // cliquables, restent immobiles, mais leur point rouge (clignote, onde), leur
+  // surtitre, leur libellé et le crayon vivent…
+  for (const name of ['kobi-wave', 'kobi-bob', 'kobi-scribble', 'kobi-rec', 'rec-blink', 'rec-onde', 'kicker-bob', 'crayon-gratte']) {
     expect(before.map((a) => a.name)).toContain(name);
   }
   // … mais aucune ne produit d'image d'elle-même : le métronome les fait avancer ensemble.

@@ -100,7 +100,8 @@ test('notifications : elles partent de Kobi et y retournent ; l’historique sor
   await expect(page.locator('.notif[data-kind=delivered]')).toBeVisible();
 
   await emit(page, 'conversation', [bulle(1, 'fini', 'Résultat.'), bulle(2, 'fini', 'Deux.'), bulle(3, 'fini', 'Trois.')]);
-  await page.getByRole('textbox', { name: 'Écrire à Kobi' }).press('ArrowUp');
+  await page.mouse.move(600, 260);
+  await page.mouse.wheel(0, -300);
   const history = page.getByRole('log', { name: 'Échanges récents avec Kobi' });
   await expect(history).toBeVisible();
   expect(await web(page, '.card-history')).toBe(1);
@@ -126,5 +127,24 @@ test('« réduire les animations » (classe de Kobi) : ni envol, ni lettres, ni 
   await page.clock.runFor(1_000);
   expect(await page.locator('.rec-time .chiffre').evaluateAll((s) => s.reduce((n, x) => n + x.getAnimations().length, 0))).toBe(0);
   expect(await page.locator('.scene').evaluate((n) => n.getAnimations({ subtree: true }).filter((a) => a.playState === 'running').length)).toBe(0);
+  await expectNoErrors(errors);
+});
+
+test('sobriété : une seule notification visible, les autres attendent leur tour (rappel d’abord, puis résultat, puis annonce)', async ({ page }) => {
+  await mockTauri(page);
+  const errors = await openUi(page, '');
+  const bulle = (tour: number, statut: string, reponse = '') => ({ tour, question: `question ${tour}`, reponse, statut, clavier: false });
+  await emit(page, 'conversation', [bulle(1, 'tache'), bulle(2, 'tache')]);
+  const visibles = page.locator('.notifs .notif:not(.leaving):visible');
+  await expect(visibles).toHaveCount(1);
+  await expect(visibles).toContainText('question 1');
+  // Un résultat passe devant l'annonce encore en cours.
+  await emit(page, 'conversation', [bulle(1, 'tache'), bulle(2, 'fini', 'Deux.')]);
+  await expect(visibles).toHaveCount(1);
+  await expect(visibles).toContainText('Résultat prêt');
+  // Cliqué, il s'en va : l'annonce qui attendait sort de Kobi.
+  await visibles.click();
+  await expect(visibles).toHaveCount(1);
+  await expect(visibles).toContainText('Je m’en occupe');
   await expectNoErrors(errors);
 });
