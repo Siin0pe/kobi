@@ -18,6 +18,8 @@ export interface RecordingState {
   debut_ms: number;
   notes: number;
   titre: string | null;
+  /** Dernière note prise (facultatif), tapée dans la fiche de Kobi. */
+  derniere_note?: string | null;
 }
 
 interface TauriGlobal {
@@ -31,7 +33,7 @@ export function applyRecording(stage: Stage, r: RecordingState): void {
     stage.endMeeting();
     return;
   }
-  const info = { title: r.titre ?? undefined, startedAt: r.debut_ms, paused: r.pause, notes: r.notes };
+  const info = { title: r.titre ?? undefined, startedAt: r.debut_ms, paused: r.pause, notes: r.notes, lastNote: r.derniere_note ?? undefined };
   if (stage.currentMeeting) stage.updateMeeting(info);
   else stage.startMeeting(info, { consent: false });
 }

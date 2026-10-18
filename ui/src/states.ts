@@ -79,6 +79,8 @@ export interface MeetingInfo {
   paused?: boolean;
   /** Nombre de notes prises depuis le début de la réunion. */
   notes?: number;
+  /** Texte de la dernière note prise, tapé dans la fiche pendant l'enregistrement. */
+  lastNote?: string;
 }
 
 export type ConsentLang = 'fr' | 'en';

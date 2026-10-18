@@ -15,6 +15,9 @@ import {
   type MascotState,
 } from './states';
 
+/** Fiche de notes pendant un enregistrement, tant que la coque n'envoie pas la dernière note. */
+export const NOTES_PLACEHOLDER = 'J’écoute et je prends des notes.';
+
 /** Taille logique de la scène, en px ; elle est mise à l'échelle de la fenêtre. */
 export const SCENE_WIDTH = 820;
 export const SCENE_HEIGHT = 560;
@@ -49,8 +52,12 @@ export class Stage {
   /** Appelé quand l'utilisateur déplie la pastille (la coque peut agrandir la fenêtre). */
   onCompactChange: ((compact: boolean) => void) | null = null;
   readonly kobi: Kobi;
+  /** État affiché (Note au lieu de Veille pendant un enregistrement). */
   private state: MascotState = 'idle';
   private data: MascotData = {};
+  /** État demandé par la session ou l'appelant, et ses données. */
+  private requested: MascotState = 'idle';
+  private requestedData: MascotData = {};
   private spoken: MascotState | null = null;
   private paused = false;
   private windowHidden = false;
@@ -131,6 +138,25 @@ export class Stage {
 
   /** Change d'état. Les données remplacent les précédentes. */
   setState(state: MascotState, data: MascotData = {}): void {
+    this.requested = state;
+    this.requestedData = { ...data };
+    this.show();
+  }
+
+  /**
+   * Pendant un enregistrement (hors pause), le repos de Kobi est la prise de
+   * notes : une demande de Veille affiche Note, avec la dernière note tapée
+   * dans la fiche. Les autres états (Écoute, Réfléchit, Répond…) s'affichent
+   * tels quels, puis Kobi retourne à ses notes.
+   */
+  private show(): void {
+    const taking = this.requested === 'idle' && this.meeting !== null && !this.meeting.paused;
+    const state: MascotState = taking ? 'write' : this.requested;
+    const data = taking ? { notes: this.meeting?.lastNote ?? NOTES_PLACEHOLDER } : this.requestedData;
+    if (state === this.state && taking) {
+      this.update(data);
+      return;
+    }
     this.state = state;
     this.data = { ...data };
     this.root.dataset.state = state;
@@ -194,12 +220,15 @@ export class Stage {
   }
 
   private setMeeting(info: MeetingInfo | null): void {
+    const wasTaking = this.state === 'write' && this.requested === 'idle';
     this.meeting = info;
     this.rec.set(info);
     this.kobi.setRecording(info === null ? null : { paused: Boolean(info.paused) });
     this.root.classList.toggle('in-meeting', info !== null);
     this.dot.classList.toggle('recording', info !== null && !info.paused);
     this.paintDot();
+    const taking = this.requested === 'idle' && info !== null && !info.paused;
+    if (taking || wasTaking) this.show();
   }
 
   private openConsent(lang: ConsentLang): void {

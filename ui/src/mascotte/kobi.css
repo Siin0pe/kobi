@@ -100,6 +100,9 @@
    opacité, sans graisse animée : la veille ne redessine presque plus de texte.
    La pilule continue de respirer. */
 .kobi.m-idle.deep .ch{animation:none;font-variation-settings:"wght" 350,"CASL" 0,"slnt" 0}
+/* Prise de notes, repos pendant un enregistrement : même économie pour le
+   mot ; le griffonnage (2 images par 0,3 s) et les coups d'œil continuent. */
+.kobi.m-write.deep .ch{animation:none;font-variation-settings:"wght" 650,"CASL" 1,"slnt" 0}
 @keyframes kobi-zfloat-deep{0%{transform:translate(0,0) scale(.6);opacity:0}30%{opacity:1}100%{transform:translate(26px,-70px) scale(1.2);opacity:0}}
 .kobi.m-idle.deep .zz span{animation-name:kobi-zfloat-deep;font-variation-settings:"wght" 650}
 /* En sommeil profond, 8 images/s suffisent pour un mouvement aussi lent, et

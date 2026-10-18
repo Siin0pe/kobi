@@ -64,6 +64,11 @@ const FX: Partial<Record<MascotState, string>> = {
 
 /** Délai avant le sommeil profond (veille économe, voir kobi.css). */
 export const DEEP_SLEEP_MS = 20_000;
+/**
+ * États de repos qui passent en mode économe : la veille, et la prise de
+ * notes, repos de Kobi pendant un enregistrement (des heures).
+ */
+const RESTING: ReadonlySet<MascotState> = new Set(['idle', 'write']);
 
 /** Une image de bouche toutes les 110 ms quand Kobi parle. */
 const MOUTH_MS = 110;
@@ -261,7 +266,7 @@ export class Kobi {
     this.aim();
     this.syncTimers();
     this.startLife();
-    if (state === 'idle') this.deepTimer = window.setTimeout(() => this.deepSleep(), DEEP_SLEEP_MS);
+    if (RESTING.has(state)) this.deepTimer = window.setTimeout(() => this.deepSleep(), DEEP_SLEEP_MS);
   }
 
   /** Classes de la racine : état affiché et réglages. */
@@ -433,7 +438,7 @@ export class Kobi {
     this.awake = false;
     this.glance = null;
     window.clearTimeout(this.deepTimer);
-    if (this.live && this.shown === 'idle' && !this.deep) this.deepTimer = window.setTimeout(() => this.deepSleep(), DEEP_SLEEP_MS);
+    if (this.live && this.shown && RESTING.has(this.shown) && !this.deep) this.deepTimer = window.setTimeout(() => this.deepSleep(), DEEP_SLEEP_MS);
     if (!this.live) {
       this.scrambler.finish();
       // Gestes, rebonds de lettres, gerbe… : les animations ponctuelles se
@@ -768,9 +773,9 @@ export class Kobi {
     });
   }
 
-  /** Passe la veille en sommeil profond, en posant le mot sans à-coup. */
+  /** Passe le repos en mode économe, en posant le mot sans à-coup. */
   private deepSleep(): void {
-    if (this.state !== 'idle' || this.awake) return;
+    if (!this.state || !RESTING.has(this.state) || this.awake) return;
     const letters = [...this.word.children] as HTMLElement[];
     const from = letters.map((l) => getComputedStyle(l).fontVariationSettings);
     // Les « z » changent d'animation : chacune reprend là où en était l'ancienne.

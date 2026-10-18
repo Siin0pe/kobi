@@ -216,3 +216,66 @@ test('le mot reste lisible sur un fond sombre : contour vert sous le texte noir'
   expect(style.color).toBe('rgb(11, 11, 11)');
   await expectNoErrors(errors);
 });
+
+test('pendant l’enregistrement, le repos de Kobi est la prise de notes, puis il y revient après avoir répondu', async ({ page }) => {
+  const errors = await openUi(page, 'backdrop=1');
+  const kobi = page.locator('.kobi');
+  const rec = (r: { notes: number; pause?: boolean; note?: string; actif?: boolean }) =>
+    page.evaluate(
+      (r) =>
+        window.kobi.recording({ actif: r.actif ?? true, pause: Boolean(r.pause), debut_ms: Date.now() - 60_000, notes: r.notes, titre: 'Point hebdo', derniere_note: r.note ?? null }),
+      r,
+    );
+  await expect(kobi).toHaveAttribute('data-state', 'idle');
+  // L'enregistrement commence : Kobi se met à prendre des notes, la fiche se tape.
+  await rec({ notes: 0 });
+  await expect(kobi).toHaveAttribute('data-state', 'write');
+  await expect(kobi).toHaveClass(/m-write/);
+  await expect(page.locator('[data-card=notes] .text')).toHaveText('J’écoute et je prends des notes.');
+  await expect(page.locator('.kobi .rec-ring')).toBeVisible();
+  // La dernière note prise, quand la coque l'envoie, est tapée dans la fiche.
+  await rec({ notes: 1, note: 'Décision : refresh token à 30 jours' });
+  await expect(page.locator('[data-card=notes] .text')).toHaveText('Décision : refresh token à 30 jours');
+  await expect(page.locator('.rec-notes')).toHaveText('1 note');
+  // Une question : Kobi réfléchit, répond, puis retourne à ses notes.
+  for (const s of ['listen', 'think', 'answer'] as const) {
+    await page.evaluate((s) => window.kobi.setState(s, window.kobi.demoData(s)), s);
+    await expect(kobi).toHaveAttribute('data-state', s);
+  }
+  await page.evaluate(() => window.kobi.setState('idle'));
+  await expect(kobi).toHaveAttribute('data-state', 'write');
+  await expect(page.locator('[data-card=notes] .text')).toHaveText('Décision : refresh token à 30 jours');
+  // En pause, plus de transcription : Kobi se repose ; à la reprise, il reprend ses notes.
+  await rec({ notes: 1, pause: true });
+  await expect(kobi).toHaveAttribute('data-state', 'idle');
+  await rec({ notes: 1 });
+  await expect(kobi).toHaveAttribute('data-state', 'write');
+  // Fin de la réunion : veille.
+  await rec({ notes: 1, actif: false });
+  await expect(kobi).toHaveAttribute('data-state', 'idle');
+  await expect(page.locator('[data-card]')).toHaveCount(0);
+  await expectNoErrors(errors);
+});
+
+test('la prise de notes passe en mode économe après 20 s : le mot cesse d’onduler', async ({ page }) => {
+  await page.clock.install();
+  const errors = await openUi(page, '');
+  await page.evaluate(() => window.kobi.recording({ actif: true, pause: false, debut_ms: Date.now(), notes: 0, titre: null }));
+  const kobi = page.locator('.kobi');
+  await expect(kobi).toHaveClass(/m-write/);
+  await page.clock.runFor(21_000);
+  await expect(kobi).toHaveClass(/deep/);
+  await page.clock.runFor(1_500);
+  await page.waitForTimeout(1_400);
+  const fontAnimations = await page.evaluate(
+    () =>
+      document
+        .getAnimations()
+        .filter((a) => a.playState === 'running')
+        .filter((a) => (a.effect as KeyframeEffect).getKeyframes().some((k) => 'fontVariationSettings' in k)).length,
+  );
+  expect(fontAnimations).toBe(0);
+  // Le griffonnage continue.
+  expect(await page.locator('.kobi .pill').evaluate((n) => n.getAnimations().length)).toBe(1);
+  await expectNoErrors(errors);
+});

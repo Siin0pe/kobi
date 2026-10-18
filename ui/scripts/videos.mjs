@@ -127,12 +127,44 @@ const CLIPS = [
     },
   ],
   [
+    'reunion-prise-de-notes',
+    'backdrop=1',
+    async (page) => {
+      // Pendant l'enregistrement, le repos de Kobi est la prise de notes ; il
+      // répond à une question puis retourne à ses notes.
+      const debut = Date.now() - 754_000;
+      const rec = (notes, note = null, pause = false) =>
+        page.evaluate(([notes, note, pause, debut]) => window.kobi.recording({ actif: true, pause, debut_ms: debut, notes, titre: 'Point hebdo', derniere_note: note }), [notes, note, pause, debut]);
+      await wait(page, 800);
+      await rec(0);
+      await wait(page, 3500);
+      await rec(1, 'Décision : refresh token à 30 jours');
+      await wait(page, 3500);
+      await rec(2, 'Action : mettre à jour la doc API (Léa)');
+      await wait(page, 2500);
+      await play(page, 'listen');
+      await wait(page, 2400);
+      await play(page, 'think');
+      await wait(page, 2800);
+      await play(page, 'answer');
+      await wait(page, 3500);
+      await set(page, 'idle');
+      await wait(page, 2500);
+      await rec(3, 'Question : impact sur le mobile ?');
+      await wait(page, 3500);
+    },
+  ],
+  [
     'lisibilite-fond-sombre',
     'backdrop=sombre',
     async (page) => {
-      await page.evaluate(() => window.kobi.recording({ actif: true, pause: false, debut_ms: Date.now() - 754_000, notes: 3, titre: 'Point hebdo' }));
+      // La veille d'abord (pendant un enregistrement, le repos est la prise de notes).
       for (const s of STATES) {
         await play(page, s);
+        if (s === 'idle') {
+          await wait(page, 1800);
+          await page.evaluate(() => window.kobi.recording({ actif: true, pause: false, debut_ms: Date.now() - 754_000, notes: 3, titre: 'Point hebdo' }));
+        }
         await wait(page, 1800);
       }
     },
