@@ -196,6 +196,10 @@ test('fenêtre agrandie vers le côté libre : Kobi ne bouge pas, la réponse se
   await page.waitForTimeout(400);
   const before = await fromCorner();
   await page.screenshot({ path: test.info().outputPath('agrandie-avant.png') });
+  // Une tâche longue vient d'être livrée : sa notification ne reste pas par-dessus la réponse (sobriété).
+  await emit(page, 'conversation', [{ tour: 1, question: 'explique le mutex', reponse: '', statut: 'tache', clavier: true }]);
+  await emit(page, 'conversation', [{ tour: 1, question: 'explique le mutex', reponse: RICHE, statut: 'fini', clavier: true }]);
+  await expect(page.locator('.notif')).toBeVisible();
   await emit(page, 'state', { etat: 'assistant', activite: 'repond', mascotte: 'answer', transcrit: false });
   await emit(page, 'answer', RICHE + '\n\n' + mots(300));
   await expect(page.locator('.stage')).toHaveClass(/agrandie/, { timeout: 10_000 });
@@ -212,6 +216,7 @@ test('fenêtre agrandie vers le côté libre : Kobi ne bouge pas, la réponse se
   const c = (await card(page).boundingBox())!;
   const k = (await pill())!;
   expect(c.x + c.width).toBeLessThanOrEqual(k.x + 1);
+  await expect(page.locator('.notifs')).toBeHidden();
   await page.screenshot({ path: test.info().outputPath('agrandie-reponse.png') });
   expect(await calls(page)).toContainEqual(['agrandir_kobi', { grand: true, appliquer: true }]);
   // Fin de la réponse : la fenêtre reprend sa taille, Kobi n'a pas bougé.

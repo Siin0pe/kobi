@@ -196,6 +196,12 @@
 .stage.agrandie.vers-droite.vers-bas .scene {
   transform-origin: 0 0;
 }
+/* Sobriété : en plus de Kobi et de sa bulle, une seule chose à la fois. La
+   réponse se lit en grand : les notifications des tâches (« Résultat prêt »,
+   déjà affiché) s'effacent le temps de la lecture. */
+.stage.agrandie .notifs {
+  visibility: hidden;
+}
 /* La bulle de réponse, à sa vraie taille (le zoom compense l'échelle), à
    côté de Kobi dans la place gagnée ; ses positions sont en unités de scène
    divisées par le zoom. */
