@@ -22,7 +22,7 @@ async function opened(page: Page): Promise<void> {
 }
 
 test('au repos, rien d’autre que Kobi : aucune barre, aucun champ visible', async ({ page }) => {
-  const errors = await openUi(page, 'backdrop=1');
+  const errors = await openUi(page, '');
   await page.waitForTimeout(600);
   await expect(bulle(page)).toBeHidden();
   await expect(champ(page)).toBeHidden();
@@ -32,7 +32,7 @@ test('au repos, rien d’autre que Kobi : aucune barre, aucun champ visible', as
 });
 
 test('clic sur Kobi : la bulle grandit depuis sa bouche avec un rebond, pointe vers lui', async ({ page }) => {
-  const errors = await openUi(page, 'backdrop=1');
+  const errors = await openUi(page, '');
   await page.waitForTimeout(500);
   const mouth = await page.locator('.kobi .mouth').boundingBox();
   await page.mouse.click(580, 250);
@@ -67,7 +67,7 @@ test('clic sur Kobi : la bulle grandit depuis sa bouche avec un rebond, pointe v
 });
 
 test('n’importe quelle touche ouvre la bulle et la lettre y arrive', async ({ page }) => {
-  const errors = await openUi(page, 'backdrop=1');
+  const errors = await openUi(page, '');
   await away(page);
   await page.keyboard.type('bonjour');
   await expect(champ(page)).toHaveValue('bonjour');
@@ -76,9 +76,30 @@ test('n’importe quelle touche ouvre la bulle et la lettre y arrive', async ({ 
   await expectNoErrors(errors);
 });
 
+test('la touche qui ouvre la bulle est écrite dedans, une seule fois (KOB-163)', async ({ page }) => {
+  const errors = await openUi(page, '');
+  await away(page);
+  // Une vraie frappe : la première lettre n'est ni avalée ni doublée.
+  await page.keyboard.press('k');
+  await expect(champ(page)).toHaveValue('k');
+  await page.keyboard.type('obi');
+  await expect(champ(page)).toHaveValue('kobi');
+  await expect(page.locator('.ecrire-miroir')).toHaveText('kobi​');
+  await page.keyboard.press('Escape');
+  await expect(bulle(page)).toBeHidden();
+  // Cas de WebView2 : la touche n'est pas redirigée vers le champ qui vient
+  // d'apparaître (événement non natif ici) ; la bulle l'écrit quand même.
+  await page.evaluate(() => document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'é', bubbles: true, cancelable: true })));
+  await expect(champ(page)).toHaveValue('é');
+  await expect(champ(page)).toBeFocused();
+  await page.keyboard.type('crire');
+  await expect(champ(page)).toHaveValue('écrire');
+  await expectNoErrors(errors);
+});
+
 test('entrée « Écrire à Kobi » du menu (événement kobi:ecrire) et raccourci global (événement ecrire de la coque)', async ({ page }) => {
   await mockTauri(page);
-  const errors = await openUi(page, 'backdrop=1');
+  const errors = await openUi(page, '');
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('kobi:ecrire')));
   await opened(page);
   await page.keyboard.press('Escape');
@@ -94,7 +115,7 @@ test('entrée « Écrire à Kobi » du menu (événement kobi:ecrire) et raccour
 });
 
 test('pendant la frappe : lettres brouillées puis posées, Kobi suit le curseur des yeux et sursaute', async ({ page }) => {
-  const errors = await openUi(page, 'backdrop=1');
+  const errors = await openUi(page, '');
   await away(page);
   await page.evaluate(() => window.kobi.ecrire());
   await opened(page);
@@ -135,7 +156,7 @@ test('pendant la frappe : lettres brouillées puis posées, Kobi suit le curseur
 
 test('copier-coller marche dans la bulle ; le texte s’y sélectionne, pas le reste de Kobi', async ({ page, context }) => {
   await context.grantPermissions(['clipboard-read', 'clipboard-write']);
-  const errors = await openUi(page, 'backdrop=1');
+  const errors = await openUi(page, '');
   await page.evaluate(() => window.kobi.ecrire());
   await opened(page);
   await page.keyboard.type('refresh token');
@@ -152,7 +173,7 @@ test('copier-coller marche dans la bulle ; le texte s’y sélectionne, pas le r
 
 test('Entrée : le texte est aspiré dans Kobi qui l’avale, puis réfléchit ; envoyer_texte part', async ({ page }) => {
   await mockTauri(page);
-  const errors = await openUi(page, 'backdrop=1');
+  const errors = await openUi(page, '');
   await page.evaluate(() => window.kobi.ecrire());
   await opened(page);
   await page.keyboard.type('où est géré le refresh token ?');
@@ -189,7 +210,7 @@ test('Entrée : le texte est aspiré dans Kobi qui l’avale, puis réfléchit ;
 test('conversation : la bulle reste ouverte entre deux échanges et se range seule à la fin', async ({ page }) => {
   await mockTauri(page);
   await page.clock.install();
-  const errors = await openUi(page, 'backdrop=1');
+  const errors = await openUi(page, '');
   await page.evaluate(() => window.kobi.ecrire());
   await page.clock.runFor(1_000);
   await page.keyboard.type('bonjour');
@@ -208,7 +229,7 @@ test('conversation : la bulle reste ouverte entre deux échanges et se range seu
 });
 
 test('Échap : la bulle se dégonfle et rentre dans Kobi', async ({ page }) => {
-  const errors = await openUi(page, 'backdrop=1');
+  const errors = await openUi(page, '');
   await page.evaluate(() => window.kobi.ecrire());
   await opened(page);
   await page.keyboard.type('finalement non');
@@ -236,7 +257,7 @@ test('Échap : la bulle se dégonfle et rentre dans Kobi', async ({ page }) => {
 
 test('bulle vide pendant 8 s : elle se range seule ; du texte la garde ouverte', async ({ page }) => {
   await page.clock.install();
-  const errors = await openUi(page, 'backdrop=1');
+  const errors = await openUi(page, '');
   await page.evaluate(() => window.kobi.ecrire());
   await page.clock.runFor(7_000);
   await expect(bulle(page)).toBeVisible();
@@ -255,7 +276,7 @@ test('bulle vide pendant 8 s : elle se range seule ; du texte la garde ouverte',
 
 test('réduire les animations : apparition et disparition en fondu court, rien ne bouge', async ({ page }) => {
   await mockTauri(page);
-  const errors = await openUi(page, 'backdrop=1&reduced=1');
+  const errors = await openUi(page, 'reduced=1');
   await page.evaluate(() => window.kobi.ecrire());
   const anims = await bulle(page).evaluate((n) =>
     n.getAnimations().map((a) => (a.effect as KeyframeEffect).getKeyframes().map((k) => Object.keys(k).filter((x) => !['offset', 'easing', 'composite', 'computedOffset'].includes(x)))),

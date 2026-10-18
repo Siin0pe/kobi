@@ -70,7 +70,7 @@ async function lisible(page: Page, fontPx: number): Promise<void> {
 }
 
 test('50 mots : la bulle grandit avec la réponse, sans défilement ni dégradé', async ({ page }) => {
-  const errors = await openUi(page, 'backdrop=1');
+  const errors = await openUi(page, '');
   await answer(page, mots(50));
   await typed(page);
   await lisible(page, 18);
@@ -83,7 +83,7 @@ test('50 mots : la bulle grandit avec la réponse, sans défilement ni dégradé
 });
 
 test('300 mots : hauteur maximale, puis défilement doux qui suit le flux ; on remonte, il s’arrête ; en bas, il reprend', async ({ page }) => {
-  const errors = await openUi(page, 'backdrop=1');
+  const errors = await openUi(page, '');
   const full = mots(300);
   // En flux, morceau par morceau, comme la coque.
   await page.evaluate(() => window.kobi.setState('answer', { answer: '' }));
@@ -131,7 +131,7 @@ test('300 mots : hauteur maximale, puis défilement doux qui suit le flux ; on r
 
 test('1 500 mots : début lisible, défilement, et « Tout lire dans l’app » qui ouvre l’app', async ({ page }) => {
   await mockTauri(page);
-  const errors = await openUi(page, 'backdrop=1');
+  const errors = await openUi(page, '');
   await answer(page, mots(1500));
   await typed(page);
   await lisible(page, 18);
@@ -148,7 +148,7 @@ test('1 500 mots : début lisible, défilement, et « Tout lire dans l’app » 
 });
 
 test('mise en forme : paragraphes, liste, code en bloc qui défile à part, chemins et adresses coupés', async ({ page }) => {
-  const errors = await openUi(page, 'backdrop=1');
+  const errors = await openUi(page, '');
   await answer(page, RICHE);
   await typed(page);
   const md = card(page).locator('.md');
@@ -186,7 +186,7 @@ test('fenêtre agrandie vers le côté libre : Kobi ne bouge pas, la réponse se
       return args?.grand ? { gauche: true, haut: true } : null;
     };
   });
-  const errors = await openUi(page, 'backdrop=1');
+  const errors = await openUi(page, '');
   const pill = () => page.locator('.kobi .pill').boundingBox();
   const fromCorner = async () => {
     const b = (await pill())!;
@@ -226,7 +226,7 @@ test('fenêtre agrandie vers le côté libre : Kobi ne bouge pas, la réponse se
 });
 
 test('réduire les animations : pas de glissement ni de dégradé animé, le texte est posé et lisible', async ({ page }) => {
-  const errors = await openUi(page, 'backdrop=1&reduced=1');
+  const errors = await openUi(page, 'reduced=1');
   await answer(page, mots(300));
   await typed(page);
   await lisible(page, 18);
