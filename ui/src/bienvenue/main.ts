@@ -119,7 +119,7 @@ function aller(n: number): void {
   suivant.textContent = n === ETAPES.length ? 'Terminer' : 'Suivant';
   suivant.dataset.action = 'suivant';
   corps.dataset.panneau = p.id;
-  demonter = p.monter(corps, { notifier, signaler: (s, r) => signaler(p.id, s, r) });
+  demonter = p.monter(corps, { notifier, signaler: (s, r) => signaler(p.id, s, r), parcours: true });
 }
 
 function presentation(): void {
@@ -173,7 +173,7 @@ function precontroler(): void {
   for (const p of ETAPES as Panneau[]) {
     if (p.id === 'essai') continue;
     const hors = document.createElement('div');
-    const arret = p.monter(hors, { notifier: () => {}, signaler: (s, r) => signaler(p.id, s, r) });
+    const arret = p.monter(hors, { notifier: () => {}, signaler: (s, r) => signaler(p.id, s, r), parcours: true });
     if (typeof arret === 'function') window.setTimeout(arret, 15_000);
   }
 }
