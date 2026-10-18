@@ -19,6 +19,7 @@ use kobi_stt::Source;
 use serde_json::{json, Map, Value};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
+use crate::app::Section;
 use crate::chef::{ChefPartage, Enregistrement};
 use crate::intentions::Intention;
 
@@ -132,6 +133,7 @@ pub fn executer<R: Runtime>(
             app,
             texte(&params, "section").unwrap_or("notes"),
             texte(&params, "panneau"),
+            texte(&params, "reunion"),
         ),
         "mascot.show" | "mascot.hide" => {
             let w = app
@@ -413,20 +415,36 @@ fn statut<R: Runtime>(app: &AppHandle<R>) -> Value {
 
 // ----- App -----
 
-/// Ouvre une section de l'app Kobi. En attendant l'app (KOB-159) : les
-/// Réglages pour `reglages`, le Carnet pour le reste.
+/// Section de l'app Kobi (KOB-159) d'après la commande `app.open`. Les noms
+/// du contrat (`reunions`, `conversations`, `apropos`) mènent à leur
+/// section.
+fn section_de(section: &str, panneau: Option<&str>, reunion: Option<&str>) -> Option<Section> {
+    let detail = |d: Option<&str>| d.map(|d| format!("/{d}")).unwrap_or_default();
+    let adresse = match section {
+        "notes" | "reunions" | "conversations" => format!("notes{}", detail(reunion)),
+        "reglages" => format!("reglages{}", detail(panneau)),
+        "apropos" => "a-propos".into(),
+        autre => autre.into(),
+    };
+    Section::lire(&adresse)
+}
+
+/// Ouvre l'app Kobi sur une section, ou la ramène devant sur cette section.
 fn ouvrir_section<R: Runtime>(
     app: &AppHandle<R>,
     section: &str,
     panneau: Option<&str>,
+    reunion: Option<&str>,
 ) -> Result<Value, Erreur> {
-    let fenetre = if section == "reglages" {
-        crate::reglages::ouvrir(app, panneau).map(|()| crate::reglages::FENETRE)
-    } else {
-        crate::carnet::ouvrir(app).map(|()| crate::carnet::FENETRE)
-    }
-    .map_err(|e| erreur(Code::Internal, e.to_string()))?;
-    Ok(json!({ "fenetre": fenetre, "section": section, "provisoire": true }))
+    let cible = section_de(section, panneau, reunion).ok_or_else(|| {
+        erreur(
+            Code::InvalidValue,
+            "panneau ou réunion illisible : lettres, chiffres, tirets et soulignés seulement",
+        )
+    })?;
+    let adresse = cible.adresse();
+    crate::app::ouvrir(app, Some(cible)).map_err(|e| erreur(Code::Internal, e.to_string()))?;
+    Ok(json!({ "fenetre": crate::app::FENETRE, "section": adresse }))
 }
 
 // ----- Réunion -----
@@ -941,6 +959,59 @@ mod tests {
         assert_eq!(
             cli(&e, "mascot.show", json!({})).unwrap_err().code,
             Code::Unavailable
+        );
+    }
+
+    /// `app.open` vise les sections de l'app (KOB-159), noms du contrat compris.
+    #[test]
+    fn sections_de_l_app() {
+        let s =
+            |section, panneau, reunion| section_de(section, panneau, reunion).map(|s| s.adresse());
+        assert_eq!(s("notes", None, None).as_deref(), Some("notes"));
+        assert_eq!(
+            s("reunions", None, Some("2026-10-18-point")).as_deref(),
+            Some("notes/2026-10-18-point")
+        );
+        assert_eq!(s("conversations", None, None).as_deref(), Some("notes"));
+        assert_eq!(s("rappels", None, None).as_deref(), Some("rappels"));
+        assert_eq!(s("activite", None, None).as_deref(), Some("activite"));
+        assert_eq!(
+            s("reglages", Some("stockage"), None).as_deref(),
+            Some("reglages/stockage")
+        );
+        assert_eq!(s("apropos", None, None).as_deref(), Some("a-propos"));
+        assert_eq!(s("a-propos", None, None).as_deref(), Some("a-propos"));
+        assert_eq!(s("accueil", None, None).as_deref(), Some("accueil"));
+        assert_eq!(s("reglages", Some("../index"), None), None);
+        // Toutes les sections permises par la CLI mènent quelque part.
+        for section in kobi_ctl::commandes::SECTIONS {
+            assert!(section_de(section, None, None).is_some(), "{section}");
+        }
+    }
+
+    #[test]
+    fn app_ouverte_sur_la_section() {
+        let e = essai();
+        let r = cli(
+            &e,
+            "app.open",
+            json!({"section": "reglages", "panneau": "stockage"}),
+        )
+        .unwrap();
+        assert_eq!(r, json!({"fenetre": "app", "section": "reglages/stockage"}));
+        assert!(e.app.get_webview_window(crate::app::FENETRE).is_some());
+        // Déjà ouverte : ramenée devant, sur la nouvelle section.
+        let r = cli(&e, "app.open", json!({"section": "rappels"})).unwrap();
+        assert_eq!(r["section"], "rappels");
+        assert_eq!(
+            cli(
+                &e,
+                "app.open",
+                json!({"section": "notes", "reunion": "a b"})
+            )
+            .unwrap_err()
+            .code,
+            Code::InvalidValue
         );
     }
 

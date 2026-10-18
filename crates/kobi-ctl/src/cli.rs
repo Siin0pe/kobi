@@ -416,18 +416,7 @@ pub fn lisible(commande: &Commande, r: &Value) -> String {
             "Mascotte cachée (Kobi reste dans la barre système)."
         }
         .into(),
-        "app.open" => format!(
-            "Ouvert : {}{}",
-            s(&r["section"]),
-            if r["provisoire"] == true {
-                format!(
-                    " (dans la fenêtre {}, en attendant l'app Kobi)",
-                    s(&r["fenetre"])
-                )
-            } else {
-                String::new()
-            }
-        ),
+        "app.open" => format!("App Kobi ouverte : {}", s(&r["section"])),
         _ if r.as_object().is_some_and(Map::is_empty) || r.is_null() => "OK".into(),
         _ => serde_json::to_string_pretty(r).unwrap_or_default(),
     }

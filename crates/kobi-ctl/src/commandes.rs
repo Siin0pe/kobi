@@ -122,6 +122,9 @@ pub const SECTIONS: &[&str] = &[
     "rappels",
     "activite",
     "reglages",
+    "a-propos",
+    "accueil",
+    // Ancien nom de « a-propos » (contrat v1).
     "apropos",
 ];
 
@@ -143,13 +146,14 @@ pub const COMMANDES: &[Commande] = &[
     c(
         "app.open",
         Affichage,
-        "Ouvre l'app Kobi sur une section (notes, réunions, conversations, rappels, activité, réglages, à propos).",
+        "Ouvre l'app Kobi sur une section (notes et réunions, rappels, activité, réglages, à propos, accueil).",
         &[
             requis(positionnel(choix(
                 p("section", Texte, "Section à ouvrir."),
                 SECTIONS,
             ))),
             p("panneau", Texte, "Panneau des réglages (par exemple « stockage »)."),
+            p("reunion", Texte, "Réunion à ouvrir dans les notes (son nom, voir « meetings list »)."),
         ],
     ),
     c("mascot.show", Affichage, "Montre la mascotte.", &[]),
