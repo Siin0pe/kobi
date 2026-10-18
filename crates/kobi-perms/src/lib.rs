@@ -13,6 +13,7 @@
 //! sans carte.
 
 pub mod cards;
+pub mod commande;
 pub mod rules;
 
 pub use cards::{Card, Cards};
