@@ -231,6 +231,9 @@ impl Etat {
             Etat::Veille | Etat::Pause => Mascotte::Idle,
             // Le compte rendu s'écrit : Kobi rédige, l'enregistrement est fini.
             Etat::Fin => Mascotte::Compose,
+            // Pas de prise de notes hors réunion (état inatteignable, gardé
+            // pour que `write` ne s'affiche jamais hors enregistrement).
+            Etat::Assistant(Activite::Note) => Mascotte::Idle,
             Etat::Reunion(a) | Etat::Assistant(a) => match a {
                 Activite::Calme => Mascotte::Idle,
                 Activite::Ecoute => Mascotte::Listen,
@@ -547,7 +550,10 @@ mod tests {
     fn prise_de_notes_seulement_pendant_l_enregistrement() {
         for etat in Etat::tous() {
             if etat.mascotte() == Mascotte::Write {
-                assert!(etat.transcrit(), "{etat:?} affiche la prise de notes hors enregistrement");
+                assert!(
+                    etat.transcrit(),
+                    "{etat:?} affiche la prise de notes hors enregistrement"
+                );
             }
         }
         assert_eq!(Fin.mascotte(), Mascotte::Compose);
