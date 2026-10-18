@@ -61,6 +61,47 @@
 .rec-time {
   font-variant-numeric: tabular-nums;
 }
+/* Chiffres qui roulent (meeting.ts) : chacun arrive par le haut, coupé par
+   son compteur comme sur un compteur mécanique. */
+.rec-time,
+.rec-notes {
+  overflow: hidden;
+  vertical-align: bottom;
+}
+.rec-time {
+  display: inline-block;
+}
+.rec .chiffre {
+  display: inline-block;
+}
+/* Le point rouge pulse : une onde blanche s'en échappe. */
+@keyframes rec-onde {
+  0% {
+    scale: 1;
+    opacity: 0.85;
+  }
+  70%,
+  100% {
+    scale: 2.6;
+    opacity: 0;
+  }
+}
+.rec-dot {
+  position: relative;
+}
+.rec-dot::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: 50%;
+  border: 2px solid #ffffff;
+  animation: rec-onde 1.6s ease-out infinite;
+}
+.rec.is-paused .rec-dot::after,
+.reduced-motion .rec-dot::after {
+  animation: none;
+  opacity: 0;
+}
 .rec-time::before,
 .rec-notes::before {
   content: '· ';
@@ -215,13 +256,17 @@
     scale: 1.12;
   }
 }
-.rec {
+/* L'étiquette REC s'ouvre d'un clic (panneau des notes, KOB-73) : elle reste
+   immobile ; son libellé se balance, son point pulse, ses chiffres roulent. */
+.rec-label {
+  display: inline-block;
   animation: rec-float 3.8s ease-in-out infinite;
 }
 .rec-notes {
   animation: rec-tick 3s ease-in-out infinite;
 }
 .reduced-motion .rec,
+.reduced-motion .rec-label,
 .reduced-motion .rec-notes,
 .reduced-motion .card-consent,
 .reduced-motion .card-consent *,

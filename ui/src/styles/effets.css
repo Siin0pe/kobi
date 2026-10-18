@@ -1,0 +1,16 @@
+/* Effets des bulles, cartes et notifications (KOB-150, effets.ts). Chargé
+   après les autres feuilles : les entrées et sorties sont des animations Web
+   (tenues par le métronome au repos), elles remplacent les entrées CSS. */
+
+/* Les notifications partent de Kobi et y retournent. */
+.notifs .notif {
+  animation: none;
+}
+.notifs .notif.leaving {
+  pointer-events: none;
+}
+
+/* Sobriété : une seule notification visible, les autres attendent leur tour (taches.ts). */
+.notifs .notif.en-attente {
+  display: none;
+}

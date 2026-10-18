@@ -1,7 +1,10 @@
 // Bulles et cartes de Kobi : question, sources consultées,
 // fiche de notes, réponse, carte d'action, carte d'erreur. Elles prennent les
-// couleurs et la police de Kobi (variables CSS de la scène).
+// couleurs et la police de Kobi (variables CSS de la scène). Elles sortent de
+// Kobi et y retournent (effets.ts) ; pendant la prise de notes, les lettres de
+// chaque nouvelle note volent de Kobi vers la fiche, où un crayon gratte.
 
+import { dealFromKobi, flyLetters, leaveToKobi } from './effets';
 import type { ActionCard, MascotData, MascotState } from './states';
 import { Typewriter } from './typewriter';
 
@@ -15,8 +18,6 @@ type Kind = 'question' | 'sources' | 'notes' | 'answer' | 'action' | 'error';
 /** Vitesses de frappe du prototype, en caractères par seconde. */
 const TYPING_CPS: Partial<Record<Kind, number>> = { question: 18, notes: 22, answer: 25 };
 
-/** Durée de la sortie d'une carte remplacée (voir `.leaving` dans bubbles.css). */
-const LEAVE_MS = 180;
 
 /** Carte visible pour un état donné, ou rien. */
 export function cardKind(state: MascotState, data: MascotData): Kind | null {
@@ -54,6 +55,8 @@ export class Bubbles {
   private actionKey = '';
   private typer: Typewriter | null = null;
   private reduced = false;
+  /** Texte de la fiche de notes déjà montré (lettres qui volent à la note suivante). */
+  private notesShown = '';
 
   constructor() {
     this.root = el('div', 'bubbles');
@@ -68,7 +71,11 @@ export class Bubbles {
       this.card = kind ? this.create(kind) : null;
       this.kind = kind;
       this.actionKey = '';
-      if (this.card) this.root.append(this.card);
+      this.notesShown = '';
+      if (this.card) {
+        this.root.append(this.card);
+        dealFromKobi(this.card);
+      }
     }
     if (this.card && kind) this.fill(kind, this.card, data);
   }
@@ -97,7 +104,7 @@ export class Bubbles {
       return;
     }
     card.classList.add('leaving');
-    window.setTimeout(() => card.remove(), LEAVE_MS);
+    leaveToKobi(card, () => card.remove());
   }
 
   private typed(card: HTMLElement, kind: Kind, text: string): void {
@@ -122,7 +129,8 @@ export class Bubbles {
         break;
       case 'notes':
         card.append(el('div', 'kicker', 'Notes · en cours'), el('div', 'body'));
-        card.querySelector('.body')!.append(el('span', 'text'), el('span', 'caret'));
+        card.querySelector('.body')!.append(el('span', 'text'), el('span', 'caret'), el('span', 'crayon', '✎'));
+        card.querySelector('.crayon')!.setAttribute('aria-hidden', 'true');
         break;
       case 'answer':
         card.append(el('span', 'text'), el('span', 'caret'), el('div', 'tags'));
@@ -141,9 +149,14 @@ export class Bubbles {
       case 'question':
         this.typed(card, kind, data.question ?? '');
         break;
-      case 'notes':
-        this.typed(card, kind, data.notes ?? '');
+      case 'notes': {
+        const notes = data.notes ?? '';
+        // Une note de plus (pas la première fiche) : ses lettres volent de Kobi vers la fiche.
+        if (this.notesShown && notes !== this.notesShown) flyLetters(this.root, card.querySelector('.body')!, notes.split('\n').pop() ?? notes);
+        this.notesShown = notes;
+        this.typed(card, kind, notes);
         break;
+      }
       case 'answer': {
         this.typed(card, kind, data.answer ?? '');
         const tags = card.querySelector<HTMLElement>('.tags')!;
@@ -178,6 +191,7 @@ export class Bubbles {
         pill = el('div', 'card source');
         pill.append(el('span', 'icon'), el('span', 'label'));
         card.append(pill);
+        dealFromKobi(pill);
       }
       pill.classList.toggle('found', s.found);
       setText(pill.querySelector('.icon')!, s.found ? '→' : (s.icon ?? '·'));

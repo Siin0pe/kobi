@@ -9,14 +9,21 @@
 
 import type { Bulle } from './conversation';
 import { tauri } from './native';
+import { dealFromKobi, leaveToKobi } from './effets';
 import type { Stage } from './stage';
 
 /** Une notification de livraison reste affichée ce temps-là sans clic. */
 const DELIVERED_MS = 20_000;
 /** Délai pour voir si Kobi montre déjà le résultat dans sa bulle (la coque change d'état juste après l'historique). */
 const DELIVER_CHECK_MS = 400;
-/** Au plus deux notifications à la fois (la plus ancienne s’en va) : elles tiennent au-dessus des bulles. */
-const MAX_NOTIFS = 2;
+/**
+ * Sobriété (règle du propriétaire) : une seule notification visible à la fois.
+ * Les autres attendent leur tour, par priorité (rappel, puis résultat ou
+ * échec, puis annonce) ; au-delà de `MAX_NOTIFS` en attente, la plus ancienne
+ * annonce s'en va.
+ */
+const MAX_NOTIFS = 4;
+const RANG: Record<string, number> = { reminder: 0, delivered: 1, failed: 1, running: 2 };
 
 type Kind = 'running' | 'delivered' | 'failed';
 
@@ -107,6 +114,8 @@ export class Tasks {
       this.dismiss(b.tour);
     });
     this.root.append(n);
+    // Elle part de Kobi.
+    dealFromKobi(n);
     this.keep();
     if (kind !== 'running') this.timers.set(String(b.tour), window.setTimeout(() => this.dismiss(b.tour), DELIVERED_MS));
   }
@@ -131,20 +140,47 @@ export class Tasks {
     n.setAttribute('aria-label', `Rappel : ${r.texte}`);
     n.addEventListener('click', () => this.dismiss(key));
     this.root.append(n);
+    dealFromKobi(n);
     this.keep();
     if (this.stage.root.dataset.state === 'idle') this.stage.setState('answer', { answer: `Rappel : ${r.texte}` });
   }
 
-  /** Au plus `MAX_NOTIFS` à la fois : la plus ancienne s'en va. */
+  /**
+   * Une seule notification visible : la plus prioritaire (la plus ancienne à
+   * rang égal). Les autres attendent, cachées ; celle qui prend la place sort
+   * de Kobi. Celles qui partent ne comptent plus.
+   */
   private keep(): void {
-    while (this.root.children.length > MAX_NOTIFS) this.dismiss((this.root.firstElementChild as HTMLElement).dataset.tour ?? '');
+    const all = () => [...this.root.querySelectorAll<HTMLElement>('.notif[data-tour]')];
+    while (all().length > MAX_NOTIFS) {
+      const annonce = all().find((n) => n.dataset.kind === 'running') ?? all()[0]!;
+      this.dismiss(annonce.dataset.tour ?? '');
+    }
+    const rang = (n: HTMLElement) => RANG[n.dataset.kind ?? 'running'] ?? 2;
+    const visible = [...all()].sort((a, b) => rang(a) - rang(b))[0];
+    for (const n of all()) {
+      const attend = n !== visible;
+      const attendait = n.classList.contains('en-attente');
+      n.classList.toggle('en-attente', attend);
+      if (attendait && !attend) dealFromKobi(n);
+    }
   }
 
+  /** La notification retourne dans Kobi, puis quitte le DOM. */
   private dismiss(tour: number | string): void {
     const key = String(tour);
     window.clearTimeout(this.timers.get(key));
     this.timers.delete(key);
-    this.root.querySelector(`[data-tour="${key}"]`)?.remove();
+    const n = this.root.querySelector<HTMLElement>(`[data-tour="${key}"]`);
+    if (!n) return;
+    delete n.dataset.tour;
+    // Une notification en attente n'était pas visible : elle part sans effet.
+    if (n.classList.contains('en-attente')) n.remove();
+    else {
+      n.classList.add('leaving');
+      leaveToKobi(n, () => n.remove());
+    }
+    this.keep();
   }
 }
 

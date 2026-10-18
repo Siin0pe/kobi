@@ -25,7 +25,7 @@
   color: var(--paper);
   box-shadow: 8px 8px 0 var(--accent);
   transform: rotate(var(--r));
-  animation: deal 0.35s cubic-bezier(0.3, 1.4, 0.5, 1) both;
+  /* Sort de Kobi et y retourne : animations Web (effets.ts, KOB-150). */
 }
 .card-history[hidden] {
   display: none;
