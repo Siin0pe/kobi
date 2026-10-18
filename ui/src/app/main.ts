@@ -17,13 +17,14 @@ import '../reglages/reglages.css';
 import './app.css';
 import { monterAccueil } from '../bienvenue/main';
 import { monterCarnet, type VueCarnet } from '../carnet/main';
-import { h } from '../dom';
+import { animationsReduites, h } from '../dom';
 import { disponible, ecouter } from '../ipc';
 import { creerNotifieur } from '../notif';
+import { vivreTitres } from '../titre';
 import { monterNotesEnDirect, type VueDirect } from '../notes/direct';
 import { ajouterPanneau } from '../reglages/panneaux';
 import { monterReglages, type VueReglages } from '../reglages/vue';
-import { monterMiniKobi } from './mini-kobi';
+import { monterMiniKobi, reagir } from './mini-kobi';
 import { monterBandeauRec } from './rec';
 import { monterActivite, monterAPropos, monterRappels, type VueActivite, type VueRappels } from './sections';
 
@@ -50,7 +51,12 @@ export const SECTIONS: readonly Entree[] = [
   { id: 'a-propos', titre: 'À propos', glyphe: '?', mot: 'kobi' },
 ];
 
-const notifier = creerNotifieur(document.body);
+const notifierBase = creerNotifieur(document.body);
+/** Notification de l'app : le petit Kobi réagit aussi (noté, ou oups). */
+const notifier: typeof notifierBase = (texte, ton) => {
+  notifierBase(texte, ton);
+  reagir(ton === 'erreur' ? 'erreur' : 'enregistre');
+};
 
 // ----- Squelette -----
 
@@ -66,7 +72,9 @@ const bandeau = monterBandeauRec(
     app.dataset.rec = String(!!r);
   },
 );
-contenu.append(bandeau.element);
+// Les sections s'empilent : celle qui part joue sa sortie sous celle qui arrive.
+const pile = h('div', { class: 'pile' });
+contenu.append(bandeau.element, pile);
 const accueil = h('div', { class: 'vue vue-accueil', hidden: true });
 const app = h(
   'div',
@@ -83,6 +91,23 @@ const app = h(
 document.getElementById('app')!.append(app);
 
 const miniKobi = monterMiniKobi(app.querySelector<HTMLElement>('.nav-kobi')!, yeux, mot);
+// Fenêtre masquée : les animations CSS s'arrêtent aussi, et celles posées
+// en JavaScript (lettres du brouilleur) se mettent en pause.
+let enPause: Animation[] = [];
+const masquer = () => {
+  document.documentElement.classList.toggle('app-masquee', document.hidden);
+  if (document.hidden) {
+    enPause = document.getAnimations().filter((a) => a.playState === 'running' && !(a instanceof CSSAnimation));
+    enPause.forEach((a) => a.pause());
+  } else {
+    enPause.forEach((a) => a.play());
+    enPause = [];
+  }
+};
+document.addEventListener('visibilitychange', masquer);
+masquer();
+// Titres vivants : une lettre d'un titre visible se brouille de temps en temps.
+vivreTitres(contenu, '.titre, .marque-mot');
 
 const vues = new Map<IdSection, HTMLElement>();
 for (const s of SECTIONS) {
@@ -96,7 +121,7 @@ for (const s of SECTIONS) {
   );
   const vue = h('section', { class: `vue vue-${s.id}`, 'data-section': s.id, 'aria-label': s.titre, hidden: true });
   vues.set(s.id, vue);
-  contenu.append(vue);
+  pile.append(vue);
 }
 
 // ----- Sections, montées à la première visite -----
@@ -143,7 +168,7 @@ export function aller(adresse: string): void {
   cacherAccueil();
   monter(id);
   if (id !== courante) {
-    for (const [cle, vue] of vues) vue.hidden = cle !== id;
+    transition(courante, id);
     for (const b of nav.children) {
       if (b.getAttribute('data-section') === id) b.setAttribute('aria-current', 'page');
       else b.removeAttribute('aria-current');
@@ -165,6 +190,34 @@ export function aller(adresse: string): void {
   if (id === 'notes' && detail) void carnet?.ouvrirReunion(detail);
   const ancre = `#${detail ? `${id}/${detail}` : id}`;
   if (location.hash !== ancre) history.replaceState(null, '', ancre);
+}
+
+/**
+ * Change de section : la nouvelle entre du côté où elle est dans la
+ * navigation (d'en bas si elle est plus bas), l'ancienne s'efface en
+ * glissant de l'autre côté. Elle est déjà `hidden` pendant sa sortie (pour
+ * les lecteurs d'écran et les clics) ; `.sort` la garde dessinée.
+ */
+function transition(de: IdSection | null, vers: IdSection): void {
+  const rang = (x: IdSection | null) => SECTIONS.findIndex((s) => s.id === x);
+  const sens = rang(vers) >= rang(de) ? 'bas' : 'haut';
+  for (const [cle, vue] of vues) {
+    vue.hidden = cle !== vers;
+    if (cle === vers) {
+      vue.classList.remove('sort');
+      vue.dataset.sens = sens;
+    } else if (cle === de && !animationsReduites()) {
+      vue.dataset.sens = sens;
+      vue.classList.add('sort');
+      const fin = (e: AnimationEvent) => {
+        // Les animations des enfants remontent aussi : seule la sortie compte.
+        if (e.target !== vue) return;
+        vue.classList.remove('sort');
+        vue.removeEventListener('animationend', fin);
+      };
+      vue.addEventListener('animationend', fin);
+    }
+  }
 }
 
 // ----- Accueil (premier lancement) -----

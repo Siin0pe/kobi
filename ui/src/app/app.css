@@ -55,7 +55,12 @@ button {
   background: var(--ink);
   color: var(--acide);
   box-shadow: 0 0 0 3px var(--acide);
-  animation: app-respire 3s ease-in-out infinite;
+}
+/* Il respire de temps en temps (un souffle posé par la vie au repos), pas en
+   continu : une animation sans fin repeint la fenêtre 60 fois par seconde
+   (garde-fou CPU de KOB-146). */
+.nav-kobi[data-souffle] {
+  animation: app-respire 1.6s ease-in-out;
 }
 .nav-yeux {
   display: flex;
@@ -84,6 +89,7 @@ button {
   gap: 4px;
 }
 .nav-entree {
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -97,11 +103,21 @@ button {
   font-size: 14.5px;
   font-variation-settings: 'wght' 650;
   cursor: pointer;
-  transition: background-color 0.15s, color 0.15s, transform 0.3s var(--ressort);
+  transition: background-color 0.15s, color 0.15s;
 }
 .nav-entree:hover {
   background: rgba(215, 255, 58, 0.12);
+}
+/* Survol : la boîte ne bouge pas (on clique ce qui est immobile), son
+   contenu glisse et le glyphe se dandine. */
+.nav-entree > * {
+  transition: transform 0.3s var(--ressort);
+}
+.nav-entree:hover > * {
   transform: translateX(4px);
+}
+.nav-entree:hover .nav-glyphe {
+  animation: app-dandine 0.5s var(--ressort);
 }
 .nav-entree[aria-current='page'] {
   background: var(--acide);
@@ -126,12 +142,20 @@ button {
   box-shadow: 0 0 0 3px var(--danger);
   color: var(--danger);
 }
+/* Il réagit à ce qu'on fait : un petit bond, ou un recul sur une erreur. */
+.nav-kobi[data-reaction] {
+  animation: app-bond 0.5s var(--ressort);
+}
+.nav-kobi[data-reaction='erreur'],
+.nav-kobi[data-reaction='supprime'] {
+  animation-name: app-recul;
+}
 .nav-kobi[data-etat='listen'] {
   animation: app-ecoute 1.1s ease-in-out infinite;
 }
 .app[data-rec='true'] .nav-entree[data-section='direct'] .nav-glyphe {
   color: var(--danger);
-  animation: app-pulse-rec 1.2s ease-in-out infinite;
+  animation: app-pulse-rec 1.2s steps(2) infinite;
 }
 .nav-entree[hidden] {
   display: none;
@@ -158,13 +182,18 @@ button {
 .bandeau-rec[hidden] {
   display: none;
 }
+.bandeau-rec.part {
+  pointer-events: none;
+  animation: app-bandeau-part 0.25s ease-in forwards;
+}
 .bandeau-rec .rec-point {
   flex: none;
   width: 10px;
   height: 10px;
   border-radius: 50%;
   background: var(--danger);
-  animation: app-pulse-rec 1.2s ease-in-out infinite;
+  /* Clignote en deux temps : deux images par cycle, pas soixante. */
+  animation: app-pulse-rec 1.2s steps(2) infinite;
 }
 .bandeau-rec[data-pause='true'] .rec-point {
   animation: none;
@@ -176,7 +205,12 @@ button {
   font-variation-settings: 'wght' 900, 'MONO' 1;
 }
 .bandeau-rec .rec-duree {
+  display: inline-flex;
+  overflow: hidden;
   font-variation-settings: 'wght' 600, 'MONO' 1;
+}
+.bandeau-rec .chiffre.roule {
+  animation: app-roule 0.32s var(--ressort);
 }
 .bandeau-rec .rec-titre {
   min-width: 0;
@@ -219,19 +253,48 @@ button {
   display: flex;
   flex-direction: column;
 }
-.vue {
+.pile {
   flex: 1;
   min-height: 0;
+  position: relative;
+}
+.vue {
+  position: absolute;
+  inset: 0;
   overflow: hidden;
 }
 .vue[hidden] {
   display: none;
 }
+/* Transitions entre sections : l'arrivée vient du côté de la section dans
+   la navigation, la sortie part de l'autre côté, sans disparition sèche. */
 .vue:not([hidden]) {
-  animation: app-arrive 0.35s var(--ressort);
+  animation: app-arrive 0.38s var(--ressort);
+}
+.vue[data-sens='haut']:not([hidden]) {
+  animation-name: app-arrive-haut;
+}
+.vue[hidden].sort {
+  display: block;
+  pointer-events: none;
+  z-index: 0;
+  animation: app-sort 0.18s ease-in forwards;
+}
+.vue[hidden].sort[data-sens='haut'] {
+  animation-name: app-sort-haut;
+}
+.vue:not([hidden]) {
+  z-index: 1;
+}
+/* Fenêtre masquée : tout s'arrête (garde-fou CPU de KOB-146). */
+.app-masquee *,
+.app-masquee *::before,
+.app-masquee *::after {
+  animation-play-state: paused !important;
 }
 .vue-accueil {
   grid-column: 1 / -1;
+  position: static;
 }
 
 /* Sections simples : Rappels, Activité, À propos. */
@@ -467,24 +530,6 @@ button {
   gap: 10px;
   padding: 0 8px 16px;
 }
-.vue-reglages .mini-kobi {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  width: 50px;
-  height: 30px;
-  border-radius: 15px;
-  background: var(--ink);
-  color: var(--acide);
-  font-size: 18px;
-  font-variation-settings: 'wght' 800, 'CASL' 1;
-}
-.vue-reglages .oeil {
-  display: inline-block;
-  width: 12px;
-  text-align: center;
-}
 .vue-reglages .marque-mot {
   font-size: 24px;
   font-variation-settings: 'wght' 900, 'CASL' 1, 'slnt' -6;
@@ -494,6 +539,7 @@ button {
   gap: 4px;
 }
 .vue-reglages .menu-entree {
+  box-sizing: border-box;
   display: grid;
   text-align: left;
   border: 0;
@@ -503,10 +549,15 @@ button {
   color: var(--ink);
   font-family: inherit;
   cursor: pointer;
-  transition: background-color 0.15s, transform 0.3s var(--ressort);
+  transition: background-color 0.15s;
 }
 .vue-reglages .menu-entree:hover {
   background: rgba(11, 11, 11, 0.07);
+}
+.vue-reglages .menu-entree > * {
+  transition: transform 0.3s var(--ressort);
+}
+.vue-reglages .menu-entree:hover > * {
   transform: translateX(4px);
 }
 .vue-reglages .menu-entree[aria-current='true'] {
@@ -622,4 +673,46 @@ button {
   30% { transform: translateX(2px); }
   60% { background: var(--acide); }
   100% { background: #fff; }
+}
+@keyframes app-arrive-haut {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+}
+@keyframes app-sort {
+  to {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.99);
+  }
+}
+@keyframes app-sort-haut {
+  to {
+    opacity: 0;
+    transform: translateY(10px) scale(0.99);
+  }
+}
+@keyframes app-dandine {
+  30% { transform: rotate(-14deg) scale(1.15); }
+  65% { transform: rotate(8deg); }
+}
+@keyframes app-bond {
+  35% { transform: translateY(-6px) scale(1.04, 0.96); }
+  70% { transform: translateY(1px) scale(0.98, 1.02); }
+}
+@keyframes app-recul {
+  30% { transform: translateX(-5px) rotate(-4deg); }
+  60% { transform: translateX(3px) rotate(2deg); }
+}
+@keyframes app-roule {
+  from {
+    transform: translateY(-90%);
+    opacity: 0;
+  }
+}
+@keyframes app-bandeau-part {
+  to {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
 }

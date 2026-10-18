@@ -29,33 +29,11 @@
   gap: 12px;
   padding: 18px 20px 10px;
 }
-.vue-notes .mini-kobi {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  width: 58px;
-  height: 34px;
-  border-radius: 17px;
-  background: var(--ink);
-  color: var(--acide);
-  font-size: 22px;
-  line-height: 1;
-  font-variation-settings: 'wght' 800, 'CASL' 1;
-  box-shadow: 4px 4px 0 rgba(11, 11, 11, 0.18);
-  animation: notes-respire 3s ease-in-out infinite;
-}
-.vue-notes .oeil {
-  display: inline-block;
-  width: 14px;
-  text-align: center;
-}
 .vue-notes .marque-mot {
   margin: 0;
   font-size: 30px;
   letter-spacing: -0.02em;
   font-variation-settings: 'wght' 900, 'CASL' 1, 'slnt' -6;
-  animation: notes-vague 6s ease-in-out infinite;
 }
 
 .vue-notes .recherche {
@@ -111,10 +89,10 @@
   border-radius: 999px;
   padding: 4px 12px;
   cursor: pointer;
-  transition: background-color 0.2s, color 0.2s, transform 0.3s var(--ressort);
+  transition: background-color 0.2s, color 0.2s, font-variation-settings 0.3s;
 }
 .vue-notes .filtre:hover {
-  transform: translateY(-2px);
+  font-variation-settings: 'wght' 600, 'CASL' 1, 'slnt' -8;
 }
 .vue-notes .filtre[aria-pressed='true'] {
   background: var(--ink);
@@ -155,6 +133,7 @@
 }
 
 .vue-notes .element {
+  box-sizing: border-box;
   display: flex;
   gap: 10px;
   width: 100%;
@@ -167,10 +146,18 @@
   cursor: pointer;
   animation: entre 0.4s var(--ressort) backwards;
   animation-delay: calc(var(--i, 0) * 25ms);
-  transition: background-color 0.15s, transform 0.3s var(--ressort);
+  transition: background-color 0.15s;
 }
 .vue-notes .element:hover {
   background: rgba(11, 11, 11, 0.07);
+}
+/* Survol : la boîte reste où on clique, son contenu glisse. */
+.vue-notes .element > *,
+.vue-notes .extrait > * {
+  transition: transform 0.3s var(--ressort);
+}
+.vue-notes .element:hover > *,
+.vue-notes .extrait:hover > * {
   transform: translateX(4px);
 }
 .vue-notes .element:focus-visible,
@@ -275,10 +262,10 @@
   background: transparent;
   cursor: pointer;
   position: relative;
-  transition: transform 0.25s var(--ressort);
+  transition: background-color 0.2s;
 }
 .vue-notes .coche:hover {
-  transform: scale(1.15) rotate(-6deg);
+  background: var(--acide);
 }
 .vue-notes .coche:hover::after,
 .vue-notes .rappel.fait .coche::after {
@@ -338,6 +325,7 @@
   white-space: nowrap;
 }
 .vue-notes .extrait {
+  box-sizing: border-box;
   display: grid;
   grid-template-columns: 64px 1fr;
   gap: 8px;
@@ -350,11 +338,10 @@
   padding: 6px 8px;
   border-radius: 12px;
   cursor: pointer;
-  transition: background-color 0.15s, transform 0.3s var(--ressort);
+  transition: background-color 0.15s;
 }
 .vue-notes .extrait:hover {
   background: rgba(11, 11, 11, 0.07);
-  transform: translateX(4px);
 }
 .vue-notes .extrait-ou {
   font-size: 11.5px;
@@ -493,10 +480,10 @@
   border: 0;
   padding: 10px 14px 12px;
   cursor: pointer;
-  transition: font-variation-settings 0.3s, transform 0.3s var(--ressort);
+  transition: font-variation-settings 0.3s;
 }
 .vue-notes .onglet:hover {
-  transform: translateY(-2px);
+  font-variation-settings: 'wght' 600, 'CASL' 1, 'slnt' -8;
 }
 .vue-notes .onglet[aria-selected='true'] {
   font-variation-settings: 'wght' 900, 'CASL' 1;
@@ -693,21 +680,6 @@
   min-height: 70vh;
   text-align: center;
 }
-.vue-notes .grand-kobi {
-  display: inline-flex;
-  gap: 26px;
-  align-items: center;
-  justify-content: center;
-  width: 190px;
-  height: 110px;
-  border-radius: 55px;
-  background: var(--ink);
-  color: var(--acide);
-  font-size: 54px;
-  font-variation-settings: 'wght' 700, 'CASL' 1;
-  box-shadow: 0 0 0 4px var(--acide), 10px 10px 0 rgba(11, 11, 11, 0.16);
-  animation: notes-respire 3s ease-in-out infinite;
-}
 .vue-notes .vide-titre {
   margin: 26px 0 6px;
   font-size: 32px;
@@ -727,16 +699,6 @@
   left: -9999px;
 }
 
-@keyframes notes-respire {
-  0%,
-  100% { transform: scale(1); }
-  50% { transform: scale(1.04, 0.96); }
-}
-@keyframes notes-vague {
-  0%,
-  100% { font-variation-settings: 'wght' 900, 'CASL' 1, 'slnt' -6; }
-  50% { font-variation-settings: 'wght' 700, 'CASL' 0.4, 'slnt' 0; }
-}
 @keyframes notes-clignote {
   50% { opacity: 0.35; }
 }
