@@ -17,6 +17,17 @@ pub enum Intention {
     Interrompre,
     /// « Ouvre le carnet » (KOB-140).
     OuvrirCarnet,
+    /// « Répète » : la dernière réponse, sans Claude.
+    Repeter,
+    /// « Plus court », « développe », « en anglais » : Claude reprend sa
+    /// dernière réponse.
+    PlusCourt,
+    Developpe,
+    EnAnglais,
+    /// « Où en est… ? » : avancement des tâches longues.
+    OuEnEst,
+    /// « Annule » : arrête la dernière tâche longue.
+    Annuler,
 }
 
 /// Question en minuscules, sans accents ni ponctuation, mots séparés par une
@@ -116,6 +127,58 @@ const STOP: &[&str] = &[
     " silence ",
 ];
 
+/// Formules retirées avant de comparer aux ordres brefs.
+const POLITESSE: &[&str] = &[" s il te plait ", " s il vous plait ", " stp ", " please "];
+
+/// Ordres brefs reconnus tels quels (après la politesse) : reprise de la
+/// dernière réponse et suivi des tâches longues. Une phrase plus longue
+/// (« annule ma réunion de demain », « où en est le projet ? ») va à Claude.
+const BREFS: &[(&str, Intention)] = &[
+    ("repete", Intention::Repeter),
+    ("repete ca", Intention::Repeter),
+    ("tu peux repeter", Intention::Repeter),
+    ("peux tu repeter", Intention::Repeter),
+    ("redis", Intention::Repeter),
+    ("redis le", Intention::Repeter),
+    ("redis moi", Intention::Repeter),
+    ("repeat", Intention::Repeter),
+    ("say that again", Intention::Repeter),
+    ("plus court", Intention::PlusCourt),
+    ("plus courte", Intention::PlusCourt),
+    ("en plus court", Intention::PlusCourt),
+    ("fais plus court", Intention::PlusCourt),
+    ("version courte", Intention::PlusCourt),
+    ("shorter", Intention::PlusCourt),
+    ("developpe", Intention::Developpe),
+    ("developpe un peu", Intention::Developpe),
+    ("developpe plus", Intention::Developpe),
+    ("detaille", Intention::Developpe),
+    ("plus de details", Intention::Developpe),
+    ("en detail", Intention::Developpe),
+    ("tell me more", Intention::Developpe),
+    ("en anglais", Intention::EnAnglais),
+    ("dis le en anglais", Intention::EnAnglais),
+    ("redis le en anglais", Intention::EnAnglais),
+    ("traduis en anglais", Intention::EnAnglais),
+    ("in english", Intention::EnAnglais),
+    ("ou en est", Intention::OuEnEst),
+    ("ou en es tu", Intention::OuEnEst),
+    ("tu en es ou", Intention::OuEnEst),
+    ("t en es ou", Intention::OuEnEst),
+    ("ou ca en est", Intention::OuEnEst),
+    ("ca avance", Intention::OuEnEst),
+    ("alors ca avance", Intention::OuEnEst),
+    ("ou en est la tache", Intention::OuEnEst),
+    ("ou en est ta tache", Intention::OuEnEst),
+    ("ou en est la recherche", Intention::OuEnEst),
+    ("ou en est ta recherche", Intention::OuEnEst),
+    ("annule", Intention::Annuler),
+    ("annule ca", Intention::Annuler),
+    ("annule la tache", Intention::Annuler),
+    ("annule la recherche", Intention::Annuler),
+    ("cancel", Intention::Annuler),
+];
+
 /// Mots qui font d'une phrase une vraie question, pas un ordre
 /// (« comment démarrer la réunion ? »).
 const QUESTIONS: &[&str] = &[
@@ -134,6 +197,29 @@ pub fn intention(question: &str) -> Option<Intention> {
     let mots = n.split_whitespace().count();
     if mots > 12 || QUESTIONS.iter().any(|q| n.contains(q)) {
         return None;
+    }
+    let mut bref = n.clone();
+    for p in POLITESSE {
+        bref = bref.replace(p, " ");
+    }
+    if let Some((_, i)) = BREFS.iter().find(|(b, _)| *b == bref.trim()) {
+        return Some(*i);
+    }
+    let mots_bref: Vec<&str> = bref.split_whitespace().collect();
+    // « Annule » en dernier mot d'un ordre bref : Nemotron écorche souvent ce
+    // qui précède (« Covid annule » pour « Kobi, annule »).
+    if mots_bref.len() <= 3 && mots_bref.last() == Some(&"annule") {
+        return Some(Intention::Annuler);
+    }
+    // « Où en est la tâche ? » mal transcrit (« où on est la tâche ») : la
+    // tâche ou la recherche, et « où » ou « avance », en phrase courte.
+    if mots_bref.len() <= 6
+        && mots_bref.iter().any(|m| *m == "tache" || *m == "recherche")
+        && mots_bref
+            .iter()
+            .any(|m| *m == "ou" || m.starts_with("avance"))
+    {
+        return Some(Intention::OuEnEst);
     }
     let contient = |motifs: &[&str]| motifs.iter().any(|m| n.contains(m));
     // Terminer avant démarrer : « arrête d'enregistrer » contient « enregistre ».
@@ -188,6 +274,22 @@ mod tests {
             ("c'est la fin de la réunion, merci", TerminerReunion),
             ("c'est fini", TerminerReunion),
             ("bon, on a fini", TerminerReunion),
+            ("Répète.", Repeter),
+            ("tu peux répéter s'il te plaît ?", Repeter),
+            ("redis-le", Repeter),
+            ("plus court", PlusCourt),
+            ("Développe.", Developpe),
+            ("développe un peu", Developpe),
+            ("dis-le en anglais", EnAnglais),
+            ("en anglais", EnAnglais),
+            ("où en est la tâche ?", OuEnEst),
+            ("t'en es où ?", OuEnEst),
+            ("ça avance ?", OuEnEst),
+            ("annule", Annuler),
+            ("annule la recherche", Annuler),
+            ("Covid annule", Annuler),
+            ("où on est la tâche", OuEnEst),
+            ("la recherche avance ?", OuEnEst),
         ] {
             assert_eq!(intention(texte), Some(attendu), "{texte}");
         }
@@ -207,6 +309,11 @@ mod tests {
             "on fait une pause café dans dix minutes ?",
             "reprends l'explication du budget depuis le début",
             "qu'est-ce que tu ranges dans le carnet de la réunion de lundi ?",
+            "développe une application mobile",
+            "répète après moi : bonjour",
+            "annule ma réunion de demain",
+            "où en est le projet Kobi ?",
+            "explique-moi ça en anglais et en espagnol",
             "",
         ] {
             assert_eq!(intention(texte), None, "{texte}");

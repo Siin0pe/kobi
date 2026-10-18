@@ -250,6 +250,15 @@ impl ClaudeCodeBrain {
     }
 }
 
+/// Session abandonnée (tour interrompu ou tâche annulée) : la boucle est
+/// arrêtée net et le process `claude` tué avec elle (`kill_on_drop`).
+/// Après [`ClaudeCodeBrain::close`], la boucle est déjà finie.
+impl Drop for ClaudeCodeBrain {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
 impl Brain for ClaudeCodeBrain {
     fn name(&self) -> &str {
         "claude-code"

@@ -78,6 +78,10 @@ pub enum Demande {
     Interrompre {
         tour: u64,
     },
+    /// « Annule » : la tâche longue s'arrête et sa session est fermée.
+    Annuler {
+        tour: u64,
+    },
 }
 
 /// Ce que le cerveau renvoie.
@@ -128,6 +132,8 @@ pub enum Retour {
 pub type Sortie = Arc<dyn Fn(Retour) + Send + Sync>;
 
 type Cartes = Arc<Mutex<HashMap<u64, ApprovalRequest>>>;
+/// Tâches longues en arrière-plan, par tour.
+type Taches = Arc<Mutex<HashMap<u64, tokio::task::AbortHandle>>>;
 
 /// Poignée de l'acteur : on lui envoie des [`Demande`].
 #[derive(Clone)]
@@ -136,6 +142,7 @@ pub struct Cerveau {
     arrets: mpsc::UnboundedSender<u64>,
     notes: mpsc::UnboundedSender<Demande>,
     cartes: Cartes,
+    taches: Taches,
     sortie: Sortie,
 }
 
@@ -143,6 +150,7 @@ impl Cerveau {
     /// Lance les deux sessions sur le runtime courant.
     pub fn lancer(fabrique: Fabrique, sortie: Sortie) -> Self {
         let cartes: Cartes = Arc::default();
+        let taches: Taches = Arc::default();
         let (questions, rx_q) = mpsc::unbounded_channel();
         let (notes, rx_n) = mpsc::unbounded_channel();
         let (arrets, rx_a) = mpsc::unbounded_channel();
@@ -152,6 +160,7 @@ impl Cerveau {
             rx_a,
             sortie.clone(),
             cartes.clone(),
+            taches.clone(),
         ));
         tokio::spawn(prise_de_notes(fabrique, rx_n, sortie.clone()));
         Self {
@@ -159,6 +168,7 @@ impl Cerveau {
             arrets,
             notes,
             cartes,
+            taches,
             sortie,
         }
     }
@@ -190,6 +200,18 @@ impl Cerveau {
             Demande::Interrompre { tour } => {
                 let _ = self.arrets.send(tour);
             }
+            Demande::Annuler { tour } => {
+                let tache = self
+                    .taches
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(&tour);
+                tracing::info!(tour, existait = tache.is_some(), "tâche annulée");
+                // La tâche et sa session tombent : le process `claude` est tué.
+                if let Some(t) = tache {
+                    t.abort();
+                }
+            }
             d @ Demande::Question { .. } => {
                 let _ = self.questions.send(d);
             }
@@ -220,6 +242,7 @@ async fn conversation(
     mut arrets: mpsc::UnboundedReceiver<u64>,
     sortie: Sortie,
     cartes: Cartes,
+    taches: Taches,
 ) {
     let mut session: Option<Session> = None;
     let mut suivante = reserve(&fabrique);
@@ -250,7 +273,7 @@ async fn conversation(
                     annonce: true,
                 });
                 let (sortie, cartes) = (sortie.clone(), cartes.clone());
-                tokio::spawn(async move {
+                detacher(&taches, tour, async move {
                     match prete
                         .await
                         .unwrap_or_else(|e| Err(BrainError::Crashed(e.to_string())))
@@ -293,27 +316,39 @@ async fn conversation(
         match suivre(tour, turn, annonce, &sortie, &cartes, &mut arrets).await {
             Suivi::Fini => {}
             Suivi::Casse => session = None,
-            Suivi::Interrompu(mut turn) => {
-                // Le tour finit en silence sur sa session ; la conversation
-                // continue sur la réserve.
-                let detachee = session.take();
-                tokio::spawn(async move {
-                    let _session = detachee;
-                    while turn.next().await.is_some() {}
-                });
+            Suivi::Interrompu(turn) => {
+                // La session est fermée avec son tour (le process `claude`
+                // s'arrête) ; la conversation continue sur la réserve.
+                drop(turn);
+                session = None;
             }
             Suivi::Detache(turn, texte) => {
                 // Le tour garde sa session jusqu'au bout ; la conversation
                 // continue sur la réserve.
                 let detachee = session.take();
                 let (sortie, cartes) = (sortie.clone(), cartes.clone());
-                tokio::spawn(async move {
+                detacher(&taches, tour, async move {
                     let _session = detachee;
                     finir(tour, turn, texte, &sortie, &cartes).await;
                 });
             }
         }
     }
+}
+
+/// Lance une tâche longue en arrière-plan, annulable par son tour.
+fn detacher(taches: &Taches, tour: u64, tache: impl Future<Output = ()> + Send + 'static) {
+    let liste = taches.clone();
+    let mut taches = taches.lock().unwrap_or_else(|e| e.into_inner());
+    // Inscrite avant de démarrer : la fin de la tâche la retire.
+    let poignee = tokio::spawn(async move {
+        tache.await;
+        liste
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&tour);
+    });
+    taches.insert(tour, poignee.abort_handle());
 }
 
 enum Suivi {
@@ -629,6 +664,32 @@ mod tests {
         let reponse = position(&|r| matches!(r, Retour::Fin { tour: 2, .. }));
         let resultat = position(&|r| matches!(r, Retour::Resultat { tour: 1, .. }));
         assert!(annonce < reponse && reponse < resultat, "{recus:?}");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tache_longue_annulee() {
+        let (s, recus) = sortie();
+        let longue = vec![vec![
+            Step::Wait(Duration::from_secs(30)),
+            Step::Text("résultat".into()),
+        ]];
+        let c = Cerveau::lancer(fabrique(vec![longue]), s);
+        c.demander(question(1, "lis toute la codebase"));
+        attendre(&recus, |r| matches!(r, Retour::Detache { tour: 1, .. })).await;
+        c.demander(Demande::Annuler { tour: 1 });
+        // Kobi reste disponible, et le résultat de la tâche n'arrive jamais.
+        c.demander(question(2, "quelle heure ?"));
+        attendre(&recus, |r| matches!(r, Retour::Fin { tour: 2, .. })).await;
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        assert!(
+            !recus
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(_, r)| matches!(r, Retour::Resultat { tour: 1, .. })),
+            "{:?}",
+            recus.lock().unwrap()
+        );
     }
 
     #[tokio::test]
