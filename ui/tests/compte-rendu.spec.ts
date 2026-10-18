@@ -80,3 +80,22 @@ test('toujours animée sans bouger ce qui se clique ; « réduire les animations
   await expect(card).toBeVisible();
   await expectNoErrors(errors);
 });
+
+test('sobriété : une seule chose à la fois en plus de Kobi et de sa bulle (carte, pastille, notification)', async ({ page }) => {
+  await mockTauri(page);
+  const errors = await openUi(page, '');
+  await emit(page, 'compte_rendu', CR);
+  // Carte ouverte : une tâche longue annoncée attend derrière.
+  await emit(page, 'conversation', [{ tour: 1, question: 'liste les appels', reponse: '', statut: 'tache', clavier: false }]);
+  await expect(page.locator('.notifs')).toBeHidden();
+  // Carte repliée : la notification passe, la pastille s'efface tant qu'elle est là.
+  await page.getByRole('button', { name: 'Plus tard' }).click();
+  await expect(page.locator('.notif[data-kind=running]')).toBeVisible();
+  await expect(page.locator('.rapport-pastille')).toBeHidden();
+  // Plus de notification : la pastille revient.
+  await emit(page, 'conversation', [{ tour: 1, question: 'liste les appels', reponse: 'Fini.', statut: 'fini', clavier: false }]);
+  await page.locator('.notif[data-kind=delivered]').click();
+  await expect(page.locator('.notif')).toHaveCount(0);
+  await expect(page.locator('.rapport-pastille')).toBeVisible();
+  await expectNoErrors(errors);
+});

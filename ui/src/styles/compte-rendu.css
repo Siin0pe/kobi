@@ -24,9 +24,17 @@
 .rapport-pastille[hidden] {
   display: none;
 }
-/* La carte passe devant : les bulles attendent. */
-.rapport-open .bubbles .card {
+/* Sobriété (règle du propriétaire) : en plus de Kobi et de sa bulle, une
+   seule chose à la fois. La carte passe devant : bulles et notifications
+   attendent. La pastille repliée s'efface tant qu'une notification ou
+   l'historique est à l'écran. */
+.rapport-open .bubbles .card,
+.rapport-open .notifs {
   visibility: hidden;
+}
+.stage:has(.notifs .notif:not(.leaving)) .rapport-pastille,
+.history-open .rapport-pastille {
+  display: none;
 }
 .card-rapport .kicker {
   font-size: 12px;
