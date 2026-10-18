@@ -638,7 +638,7 @@ mod tests {
             .build(mock_context(noop_assets()))
             .unwrap();
         app.manage(Telechargement::default());
-        let w = WebviewWindowBuilder::new(&app, crate::app::FENETRE, Default::default())
+        let w = tauri::WebviewWindowBuilder::new(&app, crate::app::FENETRE, Default::default())
             .build()
             .unwrap();
 

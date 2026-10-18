@@ -342,7 +342,8 @@ test('panneau Démarrage des Réglages : interrupteur branché sur le démarrage
 });
 
 test('animations réduites : titres posés sans brouillage, rien ne bouge', async ({ page }) => {
-  await page.emulateMedia({ reducedMotion: 'reduce' });
+  // Réglage « Animations : réduites » de Kobi : la classe sur l'élément racine.
+  await page.addInitScript(() => document.documentElement.classList.add('reduced-motion'));
   const errors = await ouvrirCarnet(page);
   await page.locator('.element[data-genre="reunion"]').click();
   // Posé tout de suite, sans passer par les symboles.

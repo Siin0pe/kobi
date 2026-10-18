@@ -256,7 +256,8 @@ test('la fenêtre Réglages monte les mêmes étapes et rejoue le parcours', asy
 });
 
 test('animations réduites : Kobi et les titres posés sans brouillage', async ({ page }) => {
-  await page.emulateMedia({ reducedMotion: 'reduce' });
+  // Réglage « Animations : réduites » de Kobi : la classe sur l'élément racine.
+  await page.addInitScript(() => document.documentElement.classList.add('reduced-motion'));
   const errors = await ouvrir(page, { dependances: true, modele: true });
   expect(await page.locator('.titre').textContent()).toBe('Salut, moi c’est Kobi.');
   expect(await page.locator('.grand-kobi .mot').textContent()).toBe('salut');

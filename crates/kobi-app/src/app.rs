@@ -26,11 +26,15 @@ const TAILLE: (f64, f64) = (1180.0, 760.0);
 pub enum Section {
     /// Notes et réunions (le Carnet), éventuellement sur une réunion
     /// (son compte rendu, carte « Compte rendu prêt » de KOB-74).
-    Notes { reunion: Option<String> },
+    Notes {
+        reunion: Option<String>,
+    },
     Rappels,
     Activite,
     /// Réglages, éventuellement sur un panneau (`stockage`, `micro`…).
-    Reglages { panneau: Option<String> },
+    Reglages {
+        panneau: Option<String>,
+    },
     APropos,
     /// Écran d'accueil du premier lancement.
     Accueil,
@@ -189,7 +193,12 @@ mod tests {
             .build()
             .unwrap();
         appeler(&main, "ouvrir_carnet", json!({})).unwrap();
-        appeler(&main, "ouvrir_carnet", json!({ "reunion": "2026-10-18-point" })).unwrap();
+        appeler(
+            &main,
+            "ouvrir_carnet",
+            json!({ "reunion": "2026-10-18-point" }),
+        )
+        .unwrap();
         appeler(&main, "ouvrir_reglages", json!({ "panneau": "stockage" })).unwrap();
         appeler(&main, "ouvrir_bienvenue", json!({})).unwrap();
         appeler(&main, "ouvrir_app", json!({ "section": "rappels" })).unwrap();

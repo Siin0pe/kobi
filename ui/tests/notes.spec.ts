@@ -143,7 +143,8 @@ test('depuis Kobi, un clic sur REC ou sur la fiche de notes ouvre le panneau', a
 });
 
 test('animations réduites : rien ne bouge dans le panneau', async ({ page }) => {
-  await page.emulateMedia({ reducedMotion: 'reduce' });
+  // Réglage « Animations : réduites » de Kobi : la classe sur l'élément racine.
+  await page.addInitScript(() => document.documentElement.classList.add('reduced-motion'));
   const errors = await ouvrirNotes(page, NOTES);
   await expect(page.locator('.titre')).toHaveText('Point hebdo');
   const animees = await page.evaluate(() => document.getAnimations().filter((a) => a.playState === 'running').length);

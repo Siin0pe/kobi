@@ -356,9 +356,10 @@ mod tests {
             .build(mock_context(noop_assets()))
             .unwrap();
         crate::stockage::installer(app.handle(), &config, None);
-        let webview = WebviewWindowBuilder::new(&app, crate::app::FENETRE, Default::default())
-            .build()
-            .unwrap();
+        let webview =
+            tauri::WebviewWindowBuilder::new(&app, crate::app::FENETRE, Default::default())
+                .build()
+                .unwrap();
         let appel = |cmd: &str, corps| appeler(&webview, cmd, corps);
 
         let index = appel("carnet_index", json!({})).unwrap();
