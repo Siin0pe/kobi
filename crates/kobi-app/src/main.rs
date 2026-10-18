@@ -4,6 +4,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod bienvenue;
 mod carnet;
 mod cerveau;
 mod chef;
@@ -117,6 +118,7 @@ fn main() {
                 config.config.notes.interval_min,
                 config.config.codebases.clone(),
             );
+            bienvenue::installer(app.handle());
             raccourci::installer(app.handle(), &config.config)?;
             let window = app
                 .get_webview_window("main")
@@ -126,12 +128,13 @@ fn main() {
             app.manage(PositionSaver(Mutex::new(placement::spawn_saver(file))));
             window.show()?;
             tray::install(app.handle())?;
-            // `kobi --carnet` / `kobi --reglages` : ouvre la fenêtre au
+            // `kobi --carnet` / `--reglages` / `--bienvenue` : ouvre la fenêtre au
             // lancement (raccourci du menu Démarrer, essai sous Xvfb).
             for arg in std::env::args().skip(1) {
                 let ouverte = match arg.as_str() {
                     "--carnet" => carnet::ouvrir(app.handle()),
                     "--reglages" => reglages::ouvrir(app.handle(), None),
+                    "--bienvenue" => bienvenue::ouvrir(app.handle()),
                     _ => continue,
                 };
                 if let Err(e) = ouverte {

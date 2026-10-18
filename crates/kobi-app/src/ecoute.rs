@@ -102,7 +102,8 @@ impl Entree {
         }
         let capture = Capture::start(&CaptureOptions {
             sources: vec![kobi_audio::Source::Moi],
-            mic: None,
+            // Micro choisi au premier lancement (KOB-144), sinon celui du système.
+            mic: crate::bienvenue::micro_choisi(),
             output: None,
         })
         .map_err(|e| e.to_string())?;

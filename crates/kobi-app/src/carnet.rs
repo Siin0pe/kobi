@@ -241,10 +241,17 @@ pub fn carnet_rappel_fait<R: Runtime>(app: AppHandle<R>, id: String) -> Result<b
     stockage(&app)?.marquer_fait(&id).map_err(|e| e.to_string())
 }
 
-/// Sélecteur de dossier natif, pour le dossier racine. `None` si annulé.
+/// Sélecteur de dossier natif (dossier de Kobi, dossiers de code). `None`
+/// si annulé.
 #[tauri::command]
-pub async fn choisir_dossier<R: Runtime>(app: AppHandle<R>) -> Result<Option<PathBuf>, String> {
-    let mut dialogue = app.dialog().file().set_title("Dossier de Kobi");
+pub async fn choisir_dossier<R: Runtime>(
+    app: AppHandle<R>,
+    titre: Option<String>,
+) -> Result<Option<PathBuf>, String> {
+    let mut dialogue = app
+        .dialog()
+        .file()
+        .set_title(titre.as_deref().unwrap_or("Dossier de Kobi"));
     if let Ok(st) = stockage(&app) {
         dialogue = dialogue.set_directory(st.racine());
     }
