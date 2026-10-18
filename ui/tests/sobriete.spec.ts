@@ -108,15 +108,17 @@ test('repos économe en réunion : tout bouge encore, au rythme d’un seul mét
   const stage = page.locator('.stage');
   await expect(stage).toHaveClass(/econome/);
   await expect(stage).toHaveAttribute('data-fps', '3');
-  /** Boucles CSS de la scène : nom, état, temps courant. */
+  // Les boucles relevées sont gardées dans la page : on suit les mêmes objets
+  // (une boucle relancée par un petit événement de vie est un nouvel objet).
   const loops = () =>
-    page.evaluate(() =>
-      document
+    page.evaluate(() => {
+      const w = window as unknown as { loops?: Animation[] };
+      w.loops ??= document
         .querySelector('.scene')!
         .getAnimations({ subtree: true })
-        .filter((a) => a instanceof CSSAnimation && a.effect?.getTiming().iterations === Infinity)
-        .map((a) => ({ name: (a as CSSAnimation).animationName, state: a.playState, t: Number(a.currentTime) })),
-    );
+        .filter((a) => a instanceof CSSAnimation && a.effect?.getTiming().iterations === Infinity);
+      return w.loops.map((a) => ({ name: (a as CSSAnimation).animationName, state: a.playState, t: Number(a.currentTime) }));
+    });
   const before = await loops();
   // Le mot, la pilule, l'anneau, l'étiquette REC, la fiche et le champ bougent toujours…
   for (const name of ['kobi-wave', 'kobi-bob', 'kobi-scribble', 'kobi-rec', 'rec-float', 'card-float', 'say-chevron']) {
@@ -126,21 +128,17 @@ test('repos économe en réunion : tout bouge encore, au rythme d’un seul mét
   expect(before.filter((a) => a.state !== 'paused')).toEqual([]);
   await page.clock.runFor(1_000);
   const after = await loops();
-  // Comparées par nom ; une boucle relancée entre deux relevés (petit
-  // événement de la vie de Kobi) repart de zéro et ne compte pas.
-  const byName = (list: typeof before) => new Map(list.map((a) => [a.name, a.t]));
-  const t0 = byName(before);
-  const advanced = [...byName(after)].filter(([name, t]) => t0.has(name) && t >= t0.get(name)!);
-  expect(advanced.length).toBeGreaterThan(5);
-  for (const [name, t] of advanced) {
-    expect(t - t0.get(name)!, name).toBeGreaterThan(950);
-    expect(t - t0.get(name)!, name).toBeLessThan(1_050);
+  // Toujours tenues (pas relancées entre-temps), elles ont avancé d'une seconde.
+  const kept = after.map((a, i) => ({ ...a, d: a.t - before[i]!.t })).filter((a) => a.state === 'paused');
+  expect(kept.length).toBeGreaterThan(5);
+  for (const a of kept) {
+    expect(a.d, a.name).toBeGreaterThan(950);
+    expect(a.d, a.name).toBeLessThan(1_050);
   }
   // Toutes avancent exactement du même pas : elles changent sur les mêmes images.
   await page.clock.runFor(300);
   const later = await loops();
-  const t1 = byName(after);
-  const steps = new Set([...byName(later)].filter(([name, t]) => t1.has(name) && t >= t1.get(name)!).map(([name, t]) => Math.round(t - t1.get(name)!)));
+  const steps = new Set(later.map((a, i) => (a.state === 'paused' && after[i]!.state === 'paused' ? Math.round(a.t - after[i]!.t) : null)).filter((d) => d !== null));
   expect(steps.size).toBe(1);
   expect([...steps][0]).toBeGreaterThan(0);
   // Après une minute, 2 images/s.
