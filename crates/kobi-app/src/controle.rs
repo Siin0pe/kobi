@@ -733,6 +733,10 @@ fn regler<R: Runtime>(
             _ => {}
         }
     }
+    // Son de l'ordinateur (KOB-164) : la piste « eux » suit à chaud.
+    if cle.starts_with("audio.") && !crate::son_ordi::recharger(app, &m.config) {
+        application = Application::AuRedemarrage;
+    }
     if cle.starts_with("stockage.") {
         if let Err(e) = crate::stockage::basculer(app, &m.config) {
             tracing::warn!(erreur = %e, "contrôle : dossier écrit, bascule au redémarrage");

@@ -276,6 +276,9 @@ pub fn installer<R: Runtime>(builder: Builder<R>) -> Builder<R> {
             crate::bienvenue::etat_claude,
             crate::bienvenue::micros,
             crate::bienvenue::choisir_micro,
+            // Son de l'ordinateur en réunion (KOB-164).
+            crate::son_ordi::son_ordi,
+            crate::son_ordi::regler_son_ordi,
             crate::bienvenue::raccourcis,
             crate::bienvenue::etat_modele,
             crate::bienvenue::telecharger_modele,

@@ -30,6 +30,7 @@ function fakeTauri(o: Options): void {
     return d;
   };
   let mcp: unknown[] = [];
+  let sonOrdi = false;
   let modele = o.modele ? '/home/neuf/Kobi/models/sherpa-onnx-nemotron' : null;
   const absente = (cmd: string) => {
     throw `Command ${cmd} not found`;
@@ -77,6 +78,11 @@ function fakeTauri(o: Options): void {
                 { nom: 'notes', chemin: '/home/neuf/code/notes', branche: null, langage: null },
               ];
             return [{ nom: 'kobi', chemin: args.dossier, branche: 'main', langage: 'Rust' }];
+          case 'son_ordi':
+            return { actif: sonOrdi, sortie: null, capte: false, sorties: ['Haut-parleurs', 'Casque USB'], defaut: 'Haut-parleurs' };
+          case 'regler_son_ordi':
+            sonOrdi = Boolean(args.actif);
+            return { actif: sonOrdi, sortie: args.sortie ?? null, capte: false, sorties: ['Haut-parleurs', 'Casque USB'], defaut: 'Haut-parleurs' };
           case 'demarrage_systeme':
             return demarrage().actif;
           case 'regler_demarrage_systeme':
@@ -150,12 +156,17 @@ test('Kobi se présente, puis le parcours complet mène à « C’est parti »',
   await expect(page.getByRole('radio', { name: /Casque USB/ })).toHaveAttribute('aria-checked', 'true');
   expect(await appels(page)).toContainEqual(['choisir_micro', { nom: 'Casque USB' }]);
   await page.getByRole('button', { name: 'Suivant' }).click();
-  // 3. Modèle : taille annoncée, progression, installé.
+  // 3. Son de l'ordinateur (KOB-164) : proposé, décoché ; rien n'est réglé si on passe.
+  await expect(page.getByRole('switch', { name: 'Écouter aussi le son de l’ordinateur' })).toHaveAttribute('aria-checked', 'false');
+  await expect(etape(page, 'son-ordi')).toHaveAttribute('data-statut', 'attente');
+  await page.getByRole('button', { name: 'Suivant' }).click();
+  expect((await appels(page)).map(([c]) => c)).not.toContain('regler_son_ordi');
+  // 4. Modèle : taille annoncée, progression, installé.
   await page.getByRole('button', { name: 'Télécharger (453 Mo)' }).click();
   await expect(page.locator('.etat[data-statut="ok"]')).toContainText('Le modèle de transcription est installé.');
   await expect(etape(page, 'modele')).toHaveAttribute('data-statut', 'ok');
   await page.getByRole('button', { name: 'Suivant' }).click();
-  // 4. Dossiers de code.
+  // 5. Dossiers de code.
   await page.getByRole('button', { name: 'Ajouter un dossier…' }).click();
   await expect(page.locator('.dossier-code code')).toHaveText('/home/neuf/code/kobi');
   expect(await appels(page)).toContainEqual(['set_codebases', { dossiers: ['/home/neuf/code/kobi'] }]);

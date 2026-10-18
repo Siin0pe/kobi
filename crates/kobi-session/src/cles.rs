@@ -55,8 +55,13 @@ pub const CLES: &[(&str, Application, &str)] = &[
     ),
     (
         "audio.sources",
-        AuRedemarrage,
-        "Sources écoutées en réunion : mic, system ou both.",
+        AChaud,
+        "Son de l'ordinateur en réunion (la voix des autres en visio) : mic (micro seul, défaut) ou both.",
+    ),
+    (
+        "audio.sortie",
+        AChaud,
+        "Sortie audio captée pour le son de l'ordinateur ; vide : celle du système.",
     ),
     (
         "stt.engine",

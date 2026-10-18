@@ -56,9 +56,24 @@ export function followRecording(stage: Stage): void {
   if (!api) return;
   // Dès que la coque parle d'enregistrement, l'état de session ne sert plus.
   let explicit = false;
+  // Son de l'ordinateur capté (KOB-164) : indicateur discret sur REC.
+  let sonOrdi = false;
+  const marquer = () => stage.updateMeeting({ computerAudio: sonOrdi });
+  void api.event.listen<boolean>('son_ordi', (e) => {
+    sonOrdi = e.payload;
+    marquer();
+  });
+  api.core.invoke<{ capte: boolean }>('son_ordi').then(
+    (s) => {
+      sonOrdi = s.capte;
+      marquer();
+    },
+    () => {},
+  );
   void api.event.listen<RecordingState>('enregistrement', (e) => {
     explicit = true;
     applyRecording(stage, e.payload);
+    marquer();
   });
   void api.event.listen<SessionState>('state', (e) => {
     if (!explicit) applySession(stage, e.payload);
@@ -68,6 +83,7 @@ export function followRecording(stage: Stage): void {
     .then((r) => {
       explicit = true;
       applyRecording(stage, r);
+      marquer();
     })
     .catch(() => api.core.invoke<SessionState>('etat_session').then((s) => !explicit && applySession(stage, s), () => {}));
 }

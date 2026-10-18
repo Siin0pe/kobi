@@ -35,6 +35,7 @@ mod raccourci;
 mod rappels;
 mod reglages;
 mod session;
+mod son_ordi;
 mod stockage;
 #[cfg(test)]
 mod test_ipc;
@@ -203,6 +204,8 @@ fn main() {
             controle::installer(app.handle(), config_path.clone());
             stockage::installer(app.handle(), &config.config, config_path.clone());
             activite::installer(app.handle());
+            // Son de l'ordinateur en réunion (KOB-164), désactivé par défaut.
+            son_ordi::installer(app.handle(), &config.config, config_path.clone());
             // Réponse à voix haute ou en texte (KOB-142) : la voix se charge en arrière-plan.
             voix::installer(app.handle(), &config.config.voice, config_path);
             rappels::installer(app.handle());
