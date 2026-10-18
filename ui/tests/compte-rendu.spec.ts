@@ -73,7 +73,8 @@ test('toujours animée sans bouger ce qui se clique ; « réduire les animations
   expect(await running('.card-rapport', true)).toBeGreaterThanOrEqual(4);
   expect(await running('.card-rapport', false)).toBe(0);
   expect(await running('.card-rapport .btn-primary', false)).toBe(0);
-  await page.emulateMedia({ reducedMotion: 'reduce' });
+  // Réglage « Animations : réduites » de Kobi : la classe reduced-motion (pas le média du système).
+  await page.evaluate(() => window.kobi.stage.setReducedMotion(true));
   await expect(page.locator('.stage')).toHaveClass(/reduced-motion/);
   expect(await running('.card-rapport', true)).toBe(0);
   await expect(card).toBeVisible();
