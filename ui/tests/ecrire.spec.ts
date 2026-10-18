@@ -97,6 +97,25 @@ test('la touche qui ouvre la bulle est écrite dedans, une seule fois (KOB-163)'
   await expectNoErrors(errors);
 });
 
+test('frappe rapide sans ouvrir la bulle : aucune des premières touches n’est perdue (KOB-163)', async ({ page }) => {
+  const errors = await openUi(page, '');
+  await away(page);
+  // Vraie frappe, sans délai entre les touches.
+  await page.keyboard.type('Dans le dossier', { delay: 0 });
+  await expect(champ(page)).toHaveValue('Dans le dossier');
+  await page.keyboard.press('Escape');
+  await expect(bulle(page)).toBeHidden();
+  // Cas de WebView2 : le focus du champ n'est pas encore pris, les trois
+  // premières touches arrivent encore sur la page, d'un seul coup.
+  await page.evaluate(() => {
+    for (const key of ['D', 'a', 'n']) document.body.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+  });
+  await page.keyboard.type('s le dossier', { delay: 0 });
+  await expect(champ(page)).toHaveValue('Dans le dossier');
+  await expect(page.locator('.ecrire-miroir')).toHaveText('Dans le dossier​');
+  await expectNoErrors(errors);
+});
+
 test('entrée « Écrire à Kobi » du menu (événement kobi:ecrire) et raccourci global (événement ecrire de la coque)', async ({ page }) => {
   await mockTauri(page);
   const errors = await openUi(page, '');
