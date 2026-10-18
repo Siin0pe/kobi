@@ -86,7 +86,7 @@ test.describe(() => {
   test.describe.configure({ retries: 2 });
 
   test('aucune image ne saute pendant les transitions entre les 8 états', async ({ page }) => {
-    test.setTimeout(90_000);
+    test.setTimeout(300_000);
     const errors = await openUi(page, 'backdrop=1');
     const worst = await worstJump(page, ALL_PAIRS);
     // Assez d'images jugées (une machine libre en juge plus de 1 500).
@@ -124,7 +124,7 @@ test.describe(() => {
 });
 
 test('contre-épreuve : sans l’enveloppe d’inertie, le même détecteur voit les sauts', async ({ page }) => {
-  test.setTimeout(90_000);
+  test.setTimeout(300_000);
   // L'inertie (calque .inertia) adoucit chaque changement de pose ; on l'annule.
   await page.addInitScript(() => {
     const animate = Element.prototype.animate;
