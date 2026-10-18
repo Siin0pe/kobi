@@ -640,6 +640,7 @@ impl<R: Runtime> Chef<R> {
                 reponse,
                 statut: "fini",
                 clavier: !voix,
+                etapes: Vec::new(),
             });
             return;
         }
