@@ -73,9 +73,10 @@ const CLIPS = [
     },
   ],
   // KOB-149 : répertoire de la veille, pincement, fenêtre déplacée, voix, frappe.
+  // Sans fond : seul Kobi flotte, comme dans l'app (fenêtre transparente).
   [
     'veille-repertoire',
-    'backdrop=1',
+    '',
     async (page) => {
       await wait(page, 800);
       const names = await page.evaluate(() => window.kobi.stage.kobi.idleNames());
@@ -88,7 +89,7 @@ const CLIPS = [
   ],
   [
     'pincement-survol',
-    'backdrop=1',
+    '',
     async (page) => {
       await wait(page, 800);
       for (const s of ['idle', 'listen', 'done', 'answer']) {
@@ -109,7 +110,7 @@ const CLIPS = [
   ],
   [
     'fenetre-deplacee',
-    'backdrop=1',
+    '',
     async (page) => {
       // Comme l'événement tauri://move de la fenêtre native : on secoue la fenêtre.
       await wait(page, 800);
@@ -125,7 +126,7 @@ const CLIPS = [
   ],
   [
     'ecoute-volume',
-    'backdrop=1&state=listen',
+    'state=listen',
     async (page) => {
       await wait(page, 900);
       for (let i = 0; i < 160; i++) {
@@ -138,7 +139,7 @@ const CLIPS = [
   ],
   [
     'frappe-brouillee',
-    'backdrop=1',
+    '',
     async (page) => {
       await wait(page, 600);
       await page.evaluate(() => window.kobi.setState('answer', { question: 'Où est le rafraîchissement du jeton ?', answer: '' }));
