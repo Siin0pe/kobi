@@ -3,6 +3,7 @@
 pub mod detect;
 mod event;
 mod meeting;
+pub mod outils;
 mod session;
 mod translate;
 

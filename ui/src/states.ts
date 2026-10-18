@@ -4,8 +4,11 @@
 // et les cartes (question, sources, notes, réponse, action, erreur) sont
 // dessinées par la scène.
 
-/** Les 8 états de la mascotte, dans l'ordre du document « mascotte et skins ». */
-export const STATES = ['idle', 'listen', 'think', 'write', 'answer', 'suggest', 'done', 'error'] as const;
+/**
+ * Les états de la mascotte : les 8 du document « mascotte et skins », puis
+ * « je m'en occupe » (KOB-152), tant que Claude travaille avec ses outils.
+ */
+export const STATES = ['idle', 'listen', 'think', 'write', 'answer', 'suggest', 'done', 'error', 'work'] as const;
 
 export type MascotState = (typeof STATES)[number];
 
@@ -23,6 +26,7 @@ export const STATE_LABELS: Record<MascotState, string> = {
   suggest: 'Propose',
   done: 'Fait',
   error: 'Oups',
+  work: 'Je m’en occupe',
 };
 
 /** Phrase lue par les lecteurs d'écran à chaque changement d'état. */
@@ -35,6 +39,7 @@ export const STATE_SPOKEN: Record<MascotState, string> = {
   suggest: 'Kobi propose une action, à confirmer.',
   done: 'Action faite.',
   error: 'Kobi a rencontré un problème.',
+  work: 'Kobi s’en occupe et montre chaque étape.',
 };
 
 /** Une source consultée pendant la réflexion (codebase, MCP, web…). */
@@ -91,6 +96,9 @@ export const CONSENT_MESSAGES: Record<ConsentLang, string> = {
   en: 'Heads-up: I’m using Kobi, an assistant that transcribes this meeting locally on my computer to help me take notes. The audio never leaves my machine. Let me know if you’d rather I turn it off.',
 };
 
+/** Famille de l'outil en cours (événement `activite` de la coque, KOB-152). */
+export type ToolKind = 'lecture' | 'recherche' | 'commande' | 'mcp' | 'ecriture' | 'reglage';
+
 /** Données affichées avec l'état. Tous les champs sont facultatifs. */
 export interface MascotData {
   /** Question en cours de transcription (Écoute). */
@@ -107,6 +115,8 @@ export interface MascotData {
   action?: ActionCard;
   /** Erreur à expliquer en une phrase (Oups). */
   error?: ErrorInfo;
+  /** Outil en cours (Je m'en occupe) : l'animation de Kobi le suit. */
+  tool?: ToolKind;
 }
 
 /** Couleurs de la pastille du mode discret, une par état. */
@@ -119,4 +129,5 @@ export const DOT_COLORS: Record<MascotState, string> = {
   suggest: '#F59E0B',
   done: '#16A34A',
   error: '#EF4444',
+  work: '#6366F1',
 };

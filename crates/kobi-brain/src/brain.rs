@@ -12,6 +12,7 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 
 use crate::claude_code::Usage;
+use crate::outils::Action;
 
 /// Interpellation : « Kobi, … ».
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -77,11 +78,14 @@ pub struct TurnSummary {
 pub enum BrainEvent {
     /// Morceau de texte, à afficher dès qu'il arrive.
     Text(String),
-    /// Outil appelé (lecture MCP, ou écriture autorisée).
+    /// Outil appelé (lecture MCP, ou écriture autorisée). `name` et `input`
+    /// sont ceux du harness ; `action` est leur traduction normalisée, seule
+    /// à servir aux règles de Kobi (KOB-157).
     ToolCall {
         id: String,
         name: String,
         input: Value,
+        action: Action,
     },
     /// Le cerveau attend une confirmation avant un outil. Abandonner la
     /// demande (la laisser tomber) vaut refus.

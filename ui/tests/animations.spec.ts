@@ -3,7 +3,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { expectEconomicalFont, expectNoErrors, openUi } from './helpers';
 
-const STATES = ['idle', 'listen', 'think', 'write', 'answer', 'suggest', 'done', 'error'] as const;
+const STATES = ['idle', 'listen', 'think', 'write', 'answer', 'suggest', 'done', 'error', 'work'] as const;
 
 /** Images séparées de plus de 2,5 images à 60 Hz : trop espacées pour juger un saut. */
 const DENSE_MS = 2.5 * 16.7;

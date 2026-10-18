@@ -1,0 +1,168 @@
+/* Fil d'activité (KOB-152) : sous Kobi, une seule ligne courte, l'étape en
+   cours. Pas de carte ni de fond : du texte noir cerné de vert, comme le mot
+   de Kobi, lisible sur n'importe quel bureau (la fenêtre reste transparente). */
+
+.fil {
+  position: absolute;
+  left: 320px;
+  top: 392px;
+  z-index: 6;
+  width: 500px;
+  height: 40px;
+  color: var(--ink);
+  font-size: 19px;
+  line-height: 40px;
+  pointer-events: none;
+  visibility: hidden;
+  opacity: 0;
+  transition:
+    opacity 0.25s ease-out,
+    visibility 0s linear 0.25s;
+}
+.fil.shown {
+  visibility: visible;
+  opacity: 1;
+  transition: opacity 0.25s ease-out;
+}
+/* L'historique ouvert, un autre panneau passe devant. */
+.history-open .fil {
+  visibility: hidden;
+}
+
+.fil-list {
+  position: relative;
+  height: 100%;
+}
+
+.step {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  min-width: 0;
+}
+.fil .step {
+  position: absolute;
+  inset: 0;
+  justify-content: center;
+  animation: step-in 0.32s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+}
+/* L'étape remplacée monte et s'efface pendant que la nouvelle arrive. */
+.fil .step.leaving {
+  animation: step-out 0.32s ease-in forwards;
+}
+@keyframes step-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+}
+@keyframes step-out {
+  to {
+    opacity: 0;
+    transform: translateY(-14px);
+  }
+}
+.fil .step-text,
+.fil .step-icon {
+  paint-order: stroke fill;
+  -webkit-text-stroke: 4px var(--accent);
+}
+.step-text {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-variation-settings: 'MONO' 1, 'wght' 700;
+}
+.step[data-classe='refus'] .step-text {
+  text-decoration: line-through;
+  text-decoration-color: var(--danger);
+}
+
+/* Icône animée par famille d'outil. */
+.step-icon {
+  flex: none;
+  display: inline-flex;
+  justify-content: center;
+  width: 20px;
+  font-variation-settings: 'MONO' 1, 'wght' 900;
+}
+.fil .step-icon {
+  animation: step-icon-read 1.2s ease-in-out infinite;
+}
+.fil .step[data-type='recherche'] .step-icon {
+  animation-name: step-icon-search;
+}
+.fil .step[data-type='commande'] .step-icon {
+  animation: step-icon-blink 0.7s steps(1) infinite;
+}
+.fil .step[data-type='mcp'] .step-icon {
+  animation-name: step-icon-spin;
+  animation-timing-function: linear;
+}
+.fil .step[data-type='ecriture'] .step-icon,
+.fil .step[data-type='reglage'] .step-icon {
+  animation-name: step-icon-scribble;
+  animation-duration: 0.4s;
+}
+@keyframes step-icon-read {
+  50% {
+    transform: translateY(-3px) scaleY(1.2);
+  }
+}
+@keyframes step-icon-search {
+  0%,
+  100% {
+    transform: translateX(-2px) rotate(-12deg);
+  }
+  50% {
+    transform: translateX(3px) rotate(12deg);
+  }
+}
+@keyframes step-icon-blink {
+  50% {
+    opacity: 0.2;
+  }
+}
+@keyframes step-icon-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes step-icon-scribble {
+  50% {
+    transform: translate(2px, 1px) rotate(15deg);
+  }
+}
+
+/* Une seule chose à la fois : pendant que Kobi s'en occupe, la notification
+   « en cours » se tait, le fil sous Kobi suffit. */
+.stage[data-state='work'] .notif-running {
+  display: none;
+}
+
+/* Étapes repliées sous une réponse de l'historique. */
+.ex-steps {
+  margin-top: 6px;
+  font-size: 12px;
+}
+.ex-steps summary {
+  cursor: pointer;
+  opacity: 0.7;
+  font-variation-settings: 'MONO' 1, 'wght' 600;
+}
+.ex-steps .step {
+  opacity: 0.8;
+}
+.ex-steps .step-text {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* Réduire les animations : même texte, sans mouvement. */
+.reduced-motion .fil,
+.reduced-motion .fil *,
+.reduced-motion .ex-steps * {
+  animation: none !important;
+  transition: none !important;
+}

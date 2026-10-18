@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { expectNoErrors, openUi } from './helpers';
 
-const STATES = ['idle', 'listen', 'think', 'write', 'answer', 'suggest', 'done', 'error'] as const;
+const STATES = ['idle', 'listen', 'think', 'write', 'answer', 'suggest', 'done', 'error', 'work'] as const;
 
 test('l’indicateur REC reste visible pendant toute la réunion, avec sa durée', async ({ page }) => {
   await page.clock.install();

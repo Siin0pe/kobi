@@ -12,6 +12,7 @@ pub mod actions;
 pub mod brain;
 pub mod claude_code;
 pub mod fake;
+pub mod outils;
 pub mod transcript;
 
 pub use brain::{
@@ -22,3 +23,4 @@ pub use claude_code::{
     MeetingConfig, TurnResult, TurnTranslator, Usage, SYSTEM_PROMPT, SYSTEM_PROMPT_VERSION,
 };
 pub use kobi_perms::{ApprovalRequest, Decision, PermissionRequest};
+pub use outils::{Action, DemandeOutil, Etape, Famille, Shell};

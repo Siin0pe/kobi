@@ -13,6 +13,7 @@ import { Conversation, followConversation, type Bulle } from './conversation';
 import { Tasks, followRappels, type Rappel } from './taches';
 import { Ecrire } from './ecrire';
 import { followReport, ReportCard, type CompteRenduUi } from './compte-rendu';
+import { Activite, followActivite, type Etape } from './activite';
 import './styles/fonts.css';
 import './styles/stage.css';
 import './styles/bubbles.css';
@@ -20,6 +21,7 @@ import './styles/meeting.css';
 import './styles/conversation.css';
 import './styles/ecrire.css';
 import './styles/compte-rendu.css';
+import './styles/activite.css';
 
 const params = new URLSearchParams(location.search);
 
@@ -39,6 +41,9 @@ followSession(stage);
 // Conversation (KOB-133), tâches longues (KOB-135), cartes et interruption.
 const conversation = new Conversation(stage);
 const tasks = new Tasks(stage);
+// Fil d'activité sous Kobi (KOB-152).
+const activite = new Activite(stage);
+followActivite(activite);
 followConversation(conversation, (bulles) => tasks.update(bulles));
 followRappels(tasks);
 // Écrire à Kobi (KOB-147) : la bulle qui sort de Kobi.
@@ -96,6 +101,8 @@ declare global {
       ecrire(): void;
       /** Compte rendu de fin de réunion, comme l'événement `compte_rendu` de la coque. */
       compteRendu(c: CompteRenduUi): void;
+      /** Étape du fil d'activité, comme l'événement `activite` de la coque. */
+      activite(etape: Etape): void;
     };
   }
 }
@@ -124,6 +131,7 @@ window.kobi = {
   interrupt: () => stage.interrupt(),
   ecrire: () => ecrire.open(),
   compteRendu: (c) => report.show(c),
+  activite: (etape) => activite.push(etape),
   play: (state) => {
     stopDemo();
     stopDemo = playDemo(

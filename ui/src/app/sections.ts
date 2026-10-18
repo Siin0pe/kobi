@@ -5,7 +5,9 @@
 import { carnet, type Rappel } from '../carnet/donnees';
 import { echeance } from '../carnet/format';
 import { animationsReduites, h } from '../dom';
-import { invoke, message } from '../ipc';
+import { etapeLigne } from '../activite';
+import type { Bulle } from '../conversation';
+import { ecouter, invoke, message } from '../ipc';
 import type { Ton } from '../reglages/panneau';
 import { poserTitre } from '../titre';
 
@@ -84,21 +86,45 @@ export function monterRappels(racine: HTMLElement, notifier: Notifier): VueRappe
 
 // ----- Activité -----
 
-/** Journal des actions et validations (KOB-152, KOB-156) : arrive à l'étape 2. */
+/**
+ * Ce que Kobi a fait (KOB-152) : chaque échange récent avec ses étapes
+ * (fichiers lus, recherches, commandes, appels MCP), tenu à jour en direct
+ * par l'événement `conversation`. Les validations viendront avec KOB-156.
+ */
 export function monterActivite(racine: HTMLElement): void {
+  const journal = h('div', { class: 'journal', role: 'log', 'aria-label': 'Étapes des derniers échanges' });
   racine.append(
     h(
       'article',
       { class: 'feuille' },
       entete('Activité', 'Ce que Kobi a fait', 'Le journal des recherches, des actions proposées et de tes validations.'),
+      journal,
       h(
         'div',
         { class: 'bientot' },
         h('span', { class: 'bientot-yeux', 'aria-hidden': 'true' }, '- -'),
-        h('p', {}, 'Le journal arrive bientôt. Pour l’instant, Kobi ne fait que lire : rien n’est écrit ni envoyé sans toi.'),
+        h('p', {}, 'Pour l’instant, Kobi ne fait que lire : rien n’est écrit ni envoyé sans toi. Les actions que tu valides apparaîtront ici.'),
       ),
     ),
   );
+  const afficher = (bulles: unknown) => {
+    if (!Array.isArray(bulles)) return;
+    const avec = (bulles as Bulle[]).filter((b) => (b.etapes ?? []).length > 0).reverse();
+    journal.replaceChildren(
+      ...(avec.length === 0
+        ? [h('p', { class: 'journal-vide' }, 'Aucune étape pour l’instant : pose une question sur ton code, chaque fichier lu et chaque recherche s’afficheront ici.')]
+        : avec.map((b) =>
+            h(
+              'section',
+              { class: 'journal-tour', 'data-tour': b.tour },
+              h('p', { class: 'journal-question' }, b.question),
+              h('div', { class: 'journal-etapes' }, ...(b.etapes ?? []).map((e) => etapeLigne(e))),
+            ),
+          )),
+    );
+  };
+  invoke<Bulle[]>('historique').then(afficher, () => afficher([]));
+  ecouter<Bulle[]>('conversation', afficher);
 }
 
 // ----- À propos -----

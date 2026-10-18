@@ -34,6 +34,21 @@ function fakeTauri(): void {
             };
           case 'a_propos':
             return { version: '0.1.0', dossier: '/home/test/Kobi' };
+          case 'historique':
+            return [
+              { tour: 1, question: 'quelle heure est-il ?', reponse: '14 h 05.', statut: 'fini', clavier: false, etapes: [] },
+              {
+                tour: 2,
+                question: 'où est fabrique_claude ?',
+                reponse: 'Dans chef.rs.',
+                statut: 'fini',
+                clavier: true,
+                etapes: [
+                  { tour: 2, id: 't1', outil: 'recherche', type: 'recherche', resume: 'Je cherche « fabrique_claude » dans kobi', chemin_relatif: 'kobi', classe: 'lecture', at_ms: 0 },
+                  { tour: 2, id: 't2', outil: 'lecture', type: 'lecture', resume: 'Je lis crates/kobi-app/src/chef.rs', chemin_relatif: 'crates/kobi-app/src/chef.rs', classe: 'lecture', at_ms: 0 },
+                ],
+              },
+            ];
           default:
             // Les étapes de l'accueil ont leurs propres tests (bienvenue.spec.ts).
             throw `Command ${cmd} not found`;
@@ -134,5 +149,27 @@ test('un écran s’ajoute aux Réglages sans toucher à l’app (ajouterPanneau
   await expect(page.locator('.vue-reglages .panneau')).toHaveText('Panneau ajouté.');
   // Rangé juste après Stockage dans le menu.
   await expect(page.locator('.vue-reglages .menu-entree').nth(1)).toHaveAttribute('data-panneau', 'mcp');
+  await expectNoErrors(errors);
+});
+
+test('Activité : les étapes des derniers échanges (KOB-152), à jour en direct', async ({ page }) => {
+  const errors = await ouvrirApp(page, '#activite');
+  const journal = page.getByRole('log', { name: 'Étapes des derniers échanges' });
+  // Seuls les échanges qui ont des étapes, le plus récent d'abord.
+  await expect(journal.locator('.journal-question')).toHaveText(['où est fabrique_claude ?']);
+  await expect(journal.locator('.step-text')).toHaveText(['Je cherche « fabrique_claude » dans kobi', 'Je lis crates/kobi-app/src/chef.rs']);
+  await page.evaluate(() =>
+    (window as unknown as { __emit(e: string, p: unknown): void }).__emit('conversation', [
+      {
+        tour: 3,
+        question: 'et les tests ?',
+        reponse: '',
+        statut: 'tache',
+        clavier: false,
+        etapes: [{ tour: 3, id: 'u1', outil: 'recherche', type: 'recherche', resume: 'Je parcours kobi/ui/tests/**/*.ts', chemin_relatif: null, classe: 'lecture', at_ms: 0 }],
+      },
+    ]),
+  );
+  await expect(journal.locator('.journal-question')).toHaveText(['et les tests ?']);
   await expectNoErrors(errors);
 });

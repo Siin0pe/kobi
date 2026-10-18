@@ -39,6 +39,8 @@ pub const EVENEMENT_CARTE: &str = "carte";
 pub const EVENEMENT_NOTES: &str = "notes";
 /// Compte rendu de fin de réunion, prêt à ouvrir dans le Carnet (KOB-74).
 pub const EVENEMENT_COMPTE_RENDU: &str = "compte_rendu";
+/// Étape d'un tour : outil appelé par Claude (fil d'activité, KOB-152).
+pub const EVENEMENT_ACTIVITE: &str = "activite";
 
 /// Premier bloc de notes après ce délai, puis toutes les `interval_min`.
 const PREMIER_BLOC: Duration = Duration::from_secs(60);
@@ -48,6 +50,8 @@ const LECTURE_MIN: Duration = Duration::from_secs(5);
 const ERREUR_AFFICHEE: Duration = Duration::from_secs(6);
 /// Bulles gardées dans l'historique.
 const HISTORIQUE: usize = 12;
+/// Étapes gardées sous chaque bulle de l'historique.
+const ETAPES: usize = 24;
 /// Une conversation du quotidien est close après ce temps en veille sans
 /// nouveau tour : lecture de la réponse (25 s au plus) et suite possible
 /// sans redire « Kobi » (20 s, KOB-133).
@@ -120,6 +124,53 @@ pub struct Bulle {
     pub statut: &'static str,
     /// Question tapée au clavier.
     pub clavier: bool,
+    /// Étapes du tour (outils appelés), repliées sous la réponse (KOB-152).
+    pub etapes: Vec<ActiviteUi>,
+}
+
+/// Une étape du fil d'activité (événement [`EVENEMENT_ACTIVITE`], contrat
+/// commun des permissions, section 5).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ActiviteUi {
+    pub tour: u64,
+    pub id: String,
+    /// Serveur pour un outil MCP, sinon la famille.
+    pub outil: String,
+    /// `lecture`, `recherche`, `commande`, `mcp`, `ecriture`, `reglage`.
+    #[serde(rename = "type")]
+    pub famille: kobi_brain::Famille,
+    pub resume: String,
+    pub chemin_relatif: Option<String>,
+    /// `lecture`, `ecriture`, `refus`.
+    pub classe: &'static str,
+    /// `accepte`, `refuse`, `delai` : réponse à une carte, s'il y en a eu une.
+    pub decision: Option<&'static str>,
+    /// Appel reçu de Claude, en ms depuis l'époque Unix.
+    pub at_ms: u64,
+}
+
+impl ActiviteUi {
+    pub fn nouvelle(demande: &kobi_brain::DemandeOutil, at_ms: u64, dossiers: &[PathBuf]) -> Self {
+        let etape = demande.action.etape(dossiers);
+        let outil = match &demande.action {
+            kobi_brain::Action::Mcp { serveur, .. } => serveur.clone(),
+            _ => serde_json::to_value(etape.famille)
+                .ok()
+                .and_then(|v| v.as_str().map(String::from))
+                .unwrap_or_default(),
+        };
+        Self {
+            tour: demande.tour,
+            id: demande.id.clone(),
+            outil,
+            famille: etape.famille,
+            resume: etape.resume,
+            chemin_relatif: etape.chemin_relatif,
+            classe: crate::lecture::classe(&demande.action),
+            decision: None,
+            at_ms,
+        }
+    }
 }
 
 /// Compte rendu de fin de réunion, résumé pour la carte de Kobi : un clic
@@ -218,7 +269,8 @@ pub struct Chef<R: Runtime> {
     suite_apres_voix: bool,
     /// Dernière question répondue et sa réponse (« répète », « plus court »…).
     derniere: Option<(String, String)>,
-    /// Tâches longues en cours : début et question (« où en est… ? »).
+    /// Tâches longues en cours : début et question (« où en est… ? ») ;
+    /// tant qu'il en reste, Kobi revient à « je m'en occupe » (KOB-152).
     taches: BTreeMap<u64, (Instant, String)>,
     /// Tours abandonnés : ce qui en revient encore est ignoré.
     interrompus: HashSet<u64>,
@@ -506,6 +558,7 @@ impl<R: Runtime> Chef<R> {
                     reponse: confirmation.into(),
                     statut: "fini",
                     clavier: !voix,
+                    etapes: Vec::new(),
                 });
                 return;
             }
@@ -562,6 +615,7 @@ impl<R: Runtime> Chef<R> {
                 reponse,
                 statut: "fini",
                 clavier: !voix,
+                etapes: Vec::new(),
             });
             return;
         }
@@ -576,6 +630,7 @@ impl<R: Runtime> Chef<R> {
                 reponse: reponse.clone(),
                 statut: "fini",
                 clavier: !voix,
+                etapes: Vec::new(),
             });
             return;
         }
@@ -608,6 +663,7 @@ impl<R: Runtime> Chef<R> {
             reponse: String::new(),
             statut: "attente",
             clavier: !voix,
+            etapes: Vec::new(),
         });
     }
 
@@ -799,6 +855,7 @@ impl<R: Runtime> Chef<R> {
             reponse: reponse.clone(),
             statut: "fini",
             clavier: !voix,
+            etapes: Vec::new(),
         });
         self.lire(&reponse);
     }
@@ -944,7 +1001,6 @@ impl<R: Runtime> Chef<R> {
                         }
                     }
                     if tour == self.dernier {
-                        self.transition(&[Evenement::ReponseCommence]);
                         let _ = self.app.emit(EVENEMENT_REPONSE, MESSAGE_ANNONCE);
                         // L'annonce remplace ce qui se disait du tour.
                         if self.voix.as_ref().is_some_and(|(t, _)| *t == tour) {
@@ -952,6 +1008,12 @@ impl<R: Runtime> Chef<R> {
                         }
                         crate::voix::dire(&self.app, MESSAGE_ANNONCE);
                         self.lire(MESSAGE_ANNONCE);
+                        // Kobi reste « je m'en occupe » jusqu'au résultat
+                        // (KOB-152), sans retour au calme après l'annonce.
+                        self.calme_a = None;
+                        if !self.transition(&[Evenement::TacheLongue]) {
+                            self.transition(&[Evenement::ReponseCommence]);
+                        }
                     }
                     self.emettre_historique();
                 }
@@ -970,7 +1032,7 @@ impl<R: Runtime> Chef<R> {
                 // Livré dans la bulle si Kobi n'est pas en train d'écouter.
                 if matches!(
                     self.activite(),
-                    Some("calme" | "fait" | "reflechit" | "repond") | None
+                    Some("calme" | "fait" | "reflechit" | "repond" | "occupe") | None
                 ) {
                     if let Some(q) = question {
                         let _ = self.app.emit(EVENEMENT_QUESTION, &q);
@@ -984,11 +1046,11 @@ impl<R: Runtime> Chef<R> {
                 }
             }
             Retour::Erreur { tour, message } => {
-                self.taches.remove(&tour);
                 tracing::warn!(tour, %message, "tour en erreur");
                 if self.voix.as_ref().is_some_and(|(t, _)| *t == tour) {
                     self.voix = None;
                 }
+                self.taches.remove(&tour);
                 if let Some(b) = self.bulle(tour) {
                     b.reponse.clone_from(&message);
                     b.statut = "erreur";
@@ -1027,8 +1089,28 @@ impl<R: Runtime> Chef<R> {
                     Evenement::PermissionRefusee
                 }]);
             }
+            Retour::Activite { demande, at_ms } => self.activite_outil(&demande, at_ms),
             Retour::Notes(resultat) => self.notes(resultat),
             Retour::CompteRendu(resultat) => self.compte_rendu(resultat),
+        }
+    }
+
+    /// Outil appelé : une ligne du fil sous Kobi, gardée sous la bulle.
+    fn activite_outil(&mut self, demande: &kobi_brain::DemandeOutil, at_ms: u64) {
+        let ui = ActiviteUi::nouvelle(demande, at_ms, &dossiers_de_code());
+        tracing::info!(
+            tour = ui.tour,
+            famille = ?ui.famille,
+            classe = ui.classe,
+            resume = %ui.resume,
+            "activité"
+        );
+        let _ = self.app.emit(EVENEMENT_ACTIVITE, &ui);
+        if let Some(b) = self.bulle(demande.tour) {
+            b.etapes.push(ui);
+            let trop = b.etapes.len().saturating_sub(ETAPES);
+            b.etapes.drain(..trop);
+            self.emettre_historique();
         }
     }
 
@@ -1123,6 +1205,7 @@ impl<R: Runtime> Chef<R> {
                     reponse: format!("Compte rendu écrit : {}", chemin.display()),
                     statut: "fini",
                     clavier: false,
+                    etapes: Vec::new(),
                 });
             }
             Nouvelle::Erreur(message) => {
@@ -1182,6 +1265,14 @@ impl<R: Runtime> Chef<R> {
             self.suite_apres_voix = false;
             let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::Suite);
         }
+        // Revenu au calme alors qu'une tâche tourne encore : Kobi s'en occupe.
+        if !self.taches.is_empty()
+            && self.calme_a.is_none()
+            && matches!(self.activite(), Some("calme") | None)
+            && matches!(etat(&self.app).etat, "veille" | "reunion")
+        {
+            self.transition(&[Evenement::TacheLongue]);
+        }
         // Longtemps en veille : la prochaine question ouvre une autre conversation.
         if self
             .conversation
@@ -1211,6 +1302,22 @@ impl<R: Runtime> Chef<R> {
 /// Où sont les réunions passées, lu à l'ouverture de chaque session : le
 /// dossier du stockage se règle à chaud (KOB-141).
 pub type SourceMemoire = Arc<dyn Fn() -> Option<crate::lecture::Memoire> + Send + Sync>;
+/// L'interface a dessiné une étape du fil d'activité : le délai depuis
+/// l'appel d'outil reçu de Claude part au journal (critère de KOB-152,
+/// moins de 300 ms).
+#[tauri::command]
+pub fn activite_affichee(id: String, at_ms: u64) {
+    let latence_ms = maintenant_ms().saturating_sub(at_ms);
+    tracing::info!(%id, latence_ms, "activité affichée");
+}
+
+/// Dossiers de code déclarés (`codebases`), pour raccourcir les chemins du
+/// fil d'activité ; relus à chaque étape, ils suivent les Réglages.
+fn dossiers_de_code() -> Vec<PathBuf> {
+    kobi_session::config::default_path()
+        .map(|p| kobi_session::config::load_or_create(&p).config.codebases)
+        .unwrap_or_default()
+}
 
 /// Sessions Claude Code réelles, en lecture seule (KOB-138) : Read, Grep et
 /// Glob sur les `codebases` et la mémoire des réunions (KOB-76), le MCP de

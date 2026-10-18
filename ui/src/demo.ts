@@ -48,6 +48,8 @@ export function demoData(state: MascotState): MascotData {
           message: 'Je réessaie dans 5 s. Le ticket est gardé dans le compte rendu.',
         },
       };
+    case 'work':
+      return { tool: 'recherche' };
   }
 }
 
@@ -97,6 +99,13 @@ export function playDemo(
       const message = (n: number) => `Je réessaie dans ${n} s. Le ticket est gardé dans le compte rendu.`;
       apply(state, { error: { ...full.error!, message: message(5) } });
       for (let n = 4; n >= 1; n--) at((5 - n) * 720, () => update({ error: { ...full.error!, message: message(n) } }));
+      break;
+    }
+    case 'work': {
+      // Kobi enchaîne les outils, comme sur une vraie question de code.
+      const tools = ['recherche', 'lecture', 'commande', 'mcp', 'lecture'] as const;
+      apply(state, {});
+      tools.forEach((tool, i) => at(600 + i * 1400, () => update({ tool })));
       break;
     }
     default:

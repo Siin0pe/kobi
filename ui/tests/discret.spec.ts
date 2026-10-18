@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { expectNoErrors, openUi } from './helpers';
 
-const STATES = ['idle', 'listen', 'think', 'write', 'answer', 'suggest', 'done', 'error'] as const;
+const STATES = ['idle', 'listen', 'think', 'write', 'answer', 'suggest', 'done', 'error', 'work'] as const;
 
 test('mode discret : pastille de 32 px colorée selon l’état', async ({ page }) => {
   const errors = await openUi(page, 'discret=1');

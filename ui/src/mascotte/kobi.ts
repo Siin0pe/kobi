@@ -27,6 +27,7 @@ import { onFrame } from '../ticker';
 import { Blinker, Scrambler, type Eyes } from './glyphs';
 import { GESTURES, Gestures, Inertia, morphEyes, Sway, type Gesture } from './motion';
 import { Orbit } from './orbit';
+import { Travail, WORK_EYES } from './travail';
 import './kobi.css';
 
 interface Look {
@@ -49,6 +50,7 @@ export const LOOKS: Record<MascotState, Look> = {
   suggest: { eye: '*', word: 'idée !', mouth: '', enter: 'pop', gaze: [-12, -6] },
   done: { eye: '^', word: 'fait !', mouth: '', enter: 'cheer', gaze: [0, 0] },
   error: { eye: 'x', word: 'oups', mouth: '~', enter: 'recoil', gaze: [0, 6] },
+  work: { eye: WORK_EYES.fouille, word: 'occupé', mouth: '', enter: 'lean', gaze: [-10, 16] },
 };
 
 /** États où le survol fait sourire Kobi. */
@@ -65,6 +67,7 @@ const FX: Partial<Record<MascotState, string>> = {
   suggest: '.bang',
   done: '.bang',
   error: '.drop',
+  work: '.travail',
 };
 
 /** Délai avant le sommeil profond (veille économe, voir kobi.css). */
@@ -162,6 +165,7 @@ export class Kobi {
   /** Anneau rouge de l'enregistrement, autour de la pilule. */
   private readonly ring: HTMLElement;
   private readonly orbit = new Orbit();
+  private readonly travail = new Travail();
   private readonly inertia: Inertia;
   /** Ressort du calque `.drag` (déplacement de la fenêtre). */
   private readonly sway: Sway;
@@ -257,7 +261,7 @@ export class Kobi {
     this.sway.onRest = () => this.setLively('sway', false);
     this.gestures = new Gestures(react);
 
-    this.body.append(this.orbit.root, zz, waves, bang, drop, this.drag, this.burst);
+    this.body.append(this.orbit.root, this.travail.root, zz, waves, bang, drop, this.drag, this.burst);
     this.word = el('div', 'word');
     this.root.append(this.body, this.word);
     this.scrambler = new Scrambler(this.eyes, this.word);
@@ -324,6 +328,7 @@ export class Kobi {
 
     if (state === 'think') this.orbit.start(this.reduced);
     else this.orbit.stop();
+    if (state === 'work') this.setTool(this.data.tool, false);
     if (this.paused) this.orbit.pause(true);
     if (animated) {
       this.popIn(state);
@@ -358,6 +363,8 @@ export class Kobi {
   setData(data: Readonly<MascotData>): void {
     const before = this.data;
     this.data = { ...data };
+    // L'outil change même sans animation : yeux et icône suivent (réduire les animations).
+    if (this.state === 'work' && data.tool !== before.tool) this.setTool(data.tool, true);
     if (!this.live) return;
     switch (this.state) {
       case 'answer': {
@@ -387,6 +394,15 @@ export class Kobi {
         if (data.error?.message !== before.error?.message && !this.gestures.busy) this.gestures.play('flinch');
         break;
     }
+  }
+
+  /** Je m'en occupe : le geste et les yeux suivent l'outil en cours. */
+  private setTool(tool: MascotData['tool'], animated: boolean): void {
+    const changed = this.travail.set(tool);
+    this.root.dataset.outil = this.travail.outil;
+    if (!changed && animated) return;
+    this.scrambler.show(WORK_EYES[tool ?? 'fouille'], LOOKS.work.word);
+    if (animated && this.live && !this.gestures.busy) this.gestures.play('nod');
   }
 
   /**

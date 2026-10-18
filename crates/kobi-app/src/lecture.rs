@@ -191,6 +191,17 @@ pub fn outils_appeles(event: &Event) -> Vec<String> {
         .collect()
 }
 
+/// Classe d'un appel pour le fil d'activité (`lecture`, `ecriture`,
+/// `refus`) : en lecture seule, tout ce qui n'est pas une lecture est refusé.
+/// Le classement de `kobi_perms` (KOB-154, KOB-156) prendra le relais.
+pub fn classe(action: &kobi_brain::Action) -> &'static str {
+    use kobi_brain::Action;
+    match action {
+        Action::LireFichier { .. } | Action::Chercher { .. } | Action::Lister { .. } => "lecture",
+        _ => "refus",
+    }
+}
+
 /// L'outil est-il permis en lecture seule ?
 pub fn permis(outil: &str) -> bool {
     OUTILS_LECTURE.contains(&outil)
