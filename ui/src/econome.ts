@@ -41,6 +41,8 @@ export class Metronome {
   private tick = 0;
   private slow = 0;
   private active = false;
+  /** Geste en cours (scène de la veille, ballottement) : voir `setLively`. */
+  private lively = false;
   private suspended = false;
   private fps = ECONOMY_FPS;
   private readonly onStart = (e: Event): void => {
@@ -64,7 +66,7 @@ export class Metronome {
 
   /** Animation Web créée dans la scène pendant le repos : elle suit le métronome. */
   adopt(el: Element, anim: Animation): void {
-    if (this.active && this.root.contains(el)) this.hold(anim);
+    if (this.active && !this.lively && this.root.contains(el)) this.hold(anim);
   }
 
   /** Entrée (ou sortie) du repos économe. */
@@ -84,7 +86,7 @@ export class Metronome {
       for (const a of this.held.keys()) if (a.playState === 'paused') a.play();
       this.held.clear();
     }
-    setFrameInterval(this.active ? 1000 / this.fps : 0);
+    this.frameInterval();
     this.onRate?.(this.rate);
   }
 
@@ -100,10 +102,29 @@ export class Metronome {
     this.root.removeEventListener('animationstart', this.onStart);
   }
 
+  /**
+   * Geste au repos (scène de la veille, ballottement, KOB-149) : il se joue à
+   * pleine vitesse (ses animations Web ne sont plus tenues, la boucle
+   * partagée tourne à chaque image), mais les boucles de fond restent au
+   * rythme du métronome. Relâcher tout le métronome faisait repartir à
+   * 60 images/s l'ondulation de la police, qui refait la mise en page à chaque
+   * image : trois fois plus de calcul au repos pour le même mouvement (KOB-170).
+   */
+  setLively(on: boolean): void {
+    if (on === this.lively) return;
+    this.lively = on;
+    this.frameInterval();
+  }
+
+  /** La boucle partagée suit le métronome, sauf pendant un geste. */
+  private frameInterval(): void {
+    setFrameInterval(this.active && !this.lively ? 1000 / this.fps : 0);
+  }
+
   private setRate(fps: number): void {
     this.fps = fps;
     if (this.tick) this.run();
-    setFrameInterval(1000 / fps);
+    this.frameInterval();
     this.onRate?.(this.rate);
   }
 

@@ -106,7 +106,7 @@ test('la frappe passe par un symbole brouillé en tête, puis le texte est exact
   await expectNoErrors(errors);
 });
 
-test('repos économe : une scène de la veille se joue à 60 images/s, puis le métronome reprend', async ({ page }) => {
+test('repos économe : une scène de la veille se joue à 60 images/s, les boucles de fond restent au métronome (KOB-170)', async ({ page }) => {
   await page.clock.install();
   const errors = await openUi(page, '');
   const stage = page.locator('.stage');
@@ -115,10 +115,20 @@ test('repos économe : une scène de la veille se joue à 60 images/s, puis le m
   await page.clock.runFor(500);
   await expect(stage).toHaveAttribute('data-fps', '3');
   expect(await page.evaluate(() => (window.kobi.stage.kobi as unknown as { playIdle(n: string): boolean }).playIdle('whistle'))).toBe(true);
-  await expect(stage).toHaveAttribute('data-fps', '0');
-  // Toujours au repos économe : le mot garde son ondulation lente.
+  await expect(stage).toHaveAttribute('data-geste', '');
+  // Le geste (animations Web de la scène) tourne librement…
+  expect(await page.evaluate(() => document.querySelector('.kobi')!.getAnimations({ subtree: true }).filter((a) => !(a instanceof CSSAnimation) && a.playState === 'running').length)).toBeGreaterThan(0);
+  // … mais le métronome tient toujours les boucles de fond : l'ondulation de la
+  // police ne repart pas à 60 images/s (c'est elle qui coûte, KOB-170).
+  await expect(stage).toHaveAttribute('data-fps', '3');
+  const vagues = await page.evaluate(() =>
+    document.querySelector('.kobi')!.getAnimations({ subtree: true }).filter((a) => a instanceof CSSAnimation && a.animationName === 'kobi-wave').map((a) => a.playState),
+  );
+  expect(vagues.length).toBeGreaterThan(0);
+  expect(new Set(vagues)).toEqual(new Set(['paused']));
   await expect(page.locator('.kobi')).toHaveClass(/deep/);
   await page.clock.runFor(3_000);
+  await expect(stage).not.toHaveAttribute('data-geste', '');
   await expect(stage).toHaveAttribute('data-fps', '3');
   await expectNoErrors(errors);
 });
