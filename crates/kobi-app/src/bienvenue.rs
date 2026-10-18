@@ -25,9 +25,6 @@ pub const FENETRE: &str = "bienvenue";
 /// Fichier posé dans `~/Kobi` quand le parcours est terminé.
 const MARQUE: &str = "premier-lancement.fait";
 
-/// Raccourci d'enregistrement de réunion (parcours UX, KOB-134).
-pub const RACCOURCI_REUNION: &str = "Ctrl+Shift+R";
-
 /// Clé de `[audio]` dans `config.toml` : nom du micro choisi.
 const CLE_MICRO: &str = "micro";
 
@@ -285,14 +282,16 @@ pub struct Raccourcis {
 #[tauri::command]
 pub fn raccourcis() -> Raccourcis {
     let config = lire_config();
-    let (_, probleme) = crate::raccourci::lire(&config.hotkey);
+    let defaut = config::Config::default();
+    // Un raccourci illisible est remplacé par le défaut : on montre celui
+    // qui marche vraiment.
+    let valide = |cle: &str, valeur: &str, defaut: &str| match crate::raccourci::lire(cle, valeur, defaut) {
+        (_, None) => valeur.to_owned(),
+        (_, Some(_)) => defaut.to_owned(),
+    };
     Raccourcis {
-        parler: if probleme.is_some() {
-            config::Config::default().hotkey
-        } else {
-            config.hotkey
-        },
-        reunion: RACCOURCI_REUNION.into(),
+        parler: valide("hotkey", &config.hotkey, &defaut.hotkey),
+        reunion: valide("hotkey_record", &config.hotkey_record, &defaut.hotkey_record),
     }
 }
 
@@ -601,7 +600,7 @@ mod tests {
             .unwrap();
 
         let r = appeler(&w, "raccourcis", json!({})).unwrap();
-        assert_eq!(r["reunion"], RACCOURCI_REUNION);
+        assert!(r["reunion"].as_str().is_some_and(|p| !p.is_empty()));
         assert!(r["parler"].as_str().is_some_and(|p| !p.is_empty()));
 
         let m = appeler(&w, "etat_modele", json!({})).unwrap();
