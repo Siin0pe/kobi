@@ -331,9 +331,11 @@ function dessinerResultats(resultats: Trouve[]): void {
   );
 }
 
-/** Extrait d'une ligne de markdown sans sa puce, sa case ou son dièse de titre. */
+/** Extrait d'une ligne de markdown sans sa puce, sa case, son dièse de titre ni ses marques en ligne. */
 function sansMarque(ligne: string): string {
-  return ligne.replace(/^\s*(?:#{1,6}\s+|(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s*)?)/, '');
+  return ligne
+    .replace(/^\s*(?:#{1,6}\s+|(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s*)?)/, '')
+    .replace(/\*\*([^*]+)\*\*|`([^`]+)`/g, '$1$2');
 }
 
 let minuterieRecherche = 0;

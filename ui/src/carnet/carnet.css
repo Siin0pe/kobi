@@ -31,6 +31,13 @@ button {
   min-height: 0;
   background: var(--acide);
   border-right: 3px solid var(--ink);
+  /* L'index est une liste de boutons : pas de sélection de texte au clic. */
+  -webkit-user-select: none;
+  user-select: none;
+}
+.index .champ {
+  -webkit-user-select: text;
+  user-select: text;
 }
 .marque {
   display: flex;

@@ -221,6 +221,8 @@ test('la recherche retrouve un mot sans casse ni accents et mène au passage', a
   await page.locator('.extrait').first().click();
   await expect(page.locator('.feuille[data-genre="conversation"]')).toBeVisible();
   await expect(page.locator('.tour.cible mark')).toHaveText('Tokyo');
+  // L'extrait de la réponse de Kobi est montré sans ses marques markdown.
+  await expect(page.locator('.extrait-texte').last()).toHaveText('Il est 23 h à Tokyo.');
 
   // Rien trouvé, puis Échap revient à la liste.
   await page.getByRole('searchbox').fill('zeppelin');
