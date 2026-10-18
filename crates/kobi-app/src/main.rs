@@ -4,6 +4,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod carnet;
 mod demarrage;
 mod diag;
 mod ecoute;
@@ -13,8 +14,11 @@ mod mot_cle;
 mod placement;
 mod porte;
 mod raccourci;
+mod reglages;
 mod session;
 mod stockage;
+#[cfg(test)]
+mod test_ipc;
 mod tray;
 
 use std::sync::mpsc::Sender;
@@ -83,6 +87,7 @@ fn main() {
     #[cfg(target_os = "linux")]
     choose_webkit_renderer();
     session::installer(tauri::Builder::default())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             if let Some(dir) = kobi_session::logs::default_dir() {
                 if let Err(e) = kobi_session::logs::init(&dir) {
@@ -113,6 +118,18 @@ fn main() {
             app.manage(PositionSaver(Mutex::new(placement::spawn_saver(file))));
             window.show()?;
             tray::install(app.handle())?;
+            // `kobi --carnet` / `kobi --reglages` : ouvre la fenêtre au
+            // lancement (raccourci du menu Démarrer, essai sous Xvfb).
+            for arg in std::env::args().skip(1) {
+                let ouverte = match arg.as_str() {
+                    "--carnet" => carnet::ouvrir(app.handle()),
+                    "--reglages" => reglages::ouvrir(app.handle(), None),
+                    _ => continue,
+                };
+                if let Err(e) = ouverte {
+                    tracing::warn!(erreur = %e, arg, "ouverture au lancement");
+                }
+            }
             // Essai de bout en bout du menu (sans barre système, par exemple en CI
             // sous Xvfb) : chaque entrée est déclenchée une fois, « Quitter » en dernier.
             if std::env::var_os("KOBI_ESSAI_MENU").is_some() {

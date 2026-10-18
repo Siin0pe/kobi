@@ -30,7 +30,6 @@ impl StockagePartage {
 }
 
 /// Stockage courant (absent seulement sans dossier personnel).
-#[cfg_attr(not(test), allow(dead_code))] // branché par le chef (KOB-134, KOB-133)
 pub fn actuel<R: Runtime>(app: &AppHandle<R>) -> Option<Stockage> {
     let partage = app.try_state::<StockagePartage>()?;
     let s = partage.stockage.read().unwrap_or_else(|e| e.into_inner());

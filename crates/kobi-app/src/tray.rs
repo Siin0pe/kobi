@@ -13,14 +13,18 @@ pub const EVENT: &str = "kobi://menu";
 pub enum MenuAction {
     StartMeeting,
     Pause,
+    OpenNotebook,
+    OpenSettings,
     ToggleMascot,
     Quit,
 }
 
 impl MenuAction {
-    pub const ALL: [MenuAction; 4] = [
+    pub const ALL: [MenuAction; 6] = [
         MenuAction::StartMeeting,
         MenuAction::Pause,
+        MenuAction::OpenNotebook,
+        MenuAction::OpenSettings,
         MenuAction::ToggleMascot,
         MenuAction::Quit,
     ];
@@ -30,6 +34,8 @@ impl MenuAction {
         match self {
             MenuAction::StartMeeting => "start-meeting",
             MenuAction::Pause => "pause",
+            MenuAction::OpenNotebook => "open-notebook",
+            MenuAction::OpenSettings => "open-settings",
             MenuAction::ToggleMascot => "toggle-mascot",
             MenuAction::Quit => "quit",
         }
@@ -39,6 +45,8 @@ impl MenuAction {
         match self {
             MenuAction::StartMeeting => "Démarrer une réunion",
             MenuAction::Pause => "Pause",
+            MenuAction::OpenNotebook => "Ouvrir le Carnet",
+            MenuAction::OpenSettings => "Réglages…",
             MenuAction::ToggleMascot => "Afficher/masquer Kobi",
             MenuAction::Quit => "Quitter Kobi",
         }
@@ -58,7 +66,9 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let separator = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(
         app,
-        &[&items[0], &items[1], &items[2], &separator, &items[3]],
+        &[
+            &items[0], &items[1], &items[2], &items[3], &items[4], &separator, &items[5],
+        ],
     )?;
     let mut tray = TrayIconBuilder::with_id("kobi")
         .tooltip("Kobi")
@@ -89,6 +99,16 @@ pub fn handle<R: Runtime>(app: &AppHandle<R>, id: &str) {
                 } else {
                     window.show()
                 };
+            }
+        }
+        MenuAction::OpenNotebook => {
+            if let Err(e) = crate::carnet::ouvrir(app) {
+                tracing::warn!(erreur = %e, "carnet");
+            }
+        }
+        MenuAction::OpenSettings => {
+            if let Err(e) = crate::reglages::ouvrir(app, None) {
+                tracing::warn!(erreur = %e, "réglages");
             }
         }
         MenuAction::Quit => app.exit(0),
@@ -131,6 +151,8 @@ mod tests {
             [
                 "Démarrer une réunion",
                 "Pause",
+                "Ouvrir le Carnet",
+                "Réglages…",
                 "Afficher/masquer Kobi",
                 "Quitter Kobi"
             ]
