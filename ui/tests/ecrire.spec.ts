@@ -138,6 +138,17 @@ test('pendant la frappe : lettres brouillées puis posées, Kobi suit le curseur
   await away(page);
   await page.evaluate(() => window.kobi.ecrire());
   await opened(page);
+  // Yeux relevés au moment même de chaque impatience (voir la fin du test).
+  await page.evaluate(() => {
+    const w = window as unknown as { __impatience: string[] };
+    w.__impatience = [];
+    const kobi = window.kobi.stage.kobi;
+    const impatient = kobi.impatient.bind(kobi);
+    kobi.impatient = () => {
+      impatient();
+      w.__impatience.push(document.querySelector('.kobi .g')!.textContent ?? '');
+    };
+  });
   const gaze = () => page.locator('.kobi .gaze').evaluate((n) => new DOMMatrix(getComputedStyle(n).transform).m41);
   // Kobi est réveillé et regarde vers la bulle (à sa gauche).
   await expect(page.locator('.kobi .g').first()).toHaveText('o');
@@ -167,8 +178,9 @@ test('pendant la frappe : lettres brouillées puis posées, Kobi suit le curseur
   await page.keyboard.press('End');
   // Le miroir est exactement sous le champ : les lettres dessinées sont celles tapées.
   await expect(page.locator('.ecrire-miroir')).toHaveText('où est géré le refresh token ?​');
-  // On hésite : Kobi s'impatiente (regard en coin).
-  await expect(page.locator('.kobi .g').first()).toHaveText('¬', { timeout: 4_000 });
+  // On hésite : Kobi s'impatiente (regard en coin). Le regard ne dure que
+  // 900 ms : relevé au moment de l'impatience plutôt qu'échantillonné (KOB-172).
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __impatience: string[] }).__impatience), { timeout: 8_000 }).toContain('¬');
   await page.screenshot({ path: test.info().outputPath('frappe.png') });
   await expectNoErrors(errors);
 });
@@ -296,10 +308,13 @@ test('bulle vide pendant 8 s : elle se range seule ; du texte la garde ouverte',
 test('réduire les animations : apparition et disparition en fondu court, rien ne bouge', async ({ page }) => {
   await mockTauri(page);
   const errors = await openUi(page, 'reduced=1');
-  await page.evaluate(() => window.kobi.ecrire());
-  const anims = await bulle(page).evaluate((n) =>
-    n.getAnimations().map((a) => (a.effect as KeyframeEffect).getKeyframes().map((k) => Object.keys(k).filter((x) => !['offset', 'easing', 'composite', 'computedOffset'].includes(x)))),
-  );
+  // Ouverture et relevé dans la même tâche : sous charge, le fondu court est
+  // fini avant un second aller-retour du test (KOB-172).
+  const anims = await page.evaluate(() => {
+    window.kobi.ecrire();
+    const n = document.querySelector('form.ecrire')!;
+    return n.getAnimations().map((a) => (a.effect as KeyframeEffect).getKeyframes().map((k) => Object.keys(k).filter((x) => !['offset', 'easing', 'composite', 'computedOffset'].includes(x))));
+  });
   expect(anims).toEqual([[['opacity'], ['opacity']]]);
   await opened(page);
   await page.keyboard.type('bonjour');

@@ -5,14 +5,21 @@ Interface web (TypeScript, sans framework) servie par Tauri : la mascotte, ses b
 ```sh
 npm ci
 npm run dev          # http://localhost:1420/?state=think&backdrop=1
-npm test             # Playwright (Chromium headless, un seul worker) sur le build de production
+npm test             # Playwright : suite complète (Chromium headless, en parallèle) sur le build de production
+npm run test:pr      # mode rapide : seulement les tests liés aux fichiers modifiés depuis origin/main
 npm run build && node scripts/captures.mjs --out captures/kobi   # PNG, WebM, GIF par état + tour
 npm run build && node scripts/fluidite.mjs [--charge]            # intervalles entre images aux 56 transitions
 npm run build && node scripts/videos.mjs --out videos            # MP4 de chaque état, transition, veille, curseur, réunion
 powershell -File scripts/cpu-windows.ps1 -Seconds 60             # CPU de l'app Windows lancée (kobi.exe + WebView2)
 ```
 
-Sur une machine partagée avec des mesures de performance, les tests tournent avec un seul navigateur ; `KOBI_UI_PORT` change le port du serveur de test.
+Tests (KOB-172) :
+
+- **Suite complète** (`npm test`) : navigateurs en parallèle, les trois quarts des cœurs (de 2 à 6). `KOBI_PW_WORKERS=1` pour un seul navigateur (mesure de performance au calme). Délais d'attente prévus pour un PC chargé (un `cargo build` en même temps).
+- **Mode rapide** (`npm run test:pr`, ou `npm run test:pr -- <base>`, `-- --liste` pour voir le choix sans lancer) : pour vérifier une PR. Il lance les fichiers de test modifiés, plus ceux que `tests/carte.json` associe aux fichiers de `src/` modifiés, plus `transparence` et `session`. Un fichier du socle (scène, mascotte, coque, configuration) ou absent de la carte fait lancer la suite complète. En créant un module, ajoutez-le à la carte.
+- **Ni trace ni vidéo** en vérification : elles cassent sous manque de mémoire. `KOBI_PW_TRACE=1` garde la trace des tests en échec ; `KOBI_PW_VIDEOS=1` active les tests qui filment pour les tickets (`*-video.spec.ts`).
+- **Temps** : horloge simulée (`page.clock`) quand un test attend un délai de l'interface ; un geste trop bref pour être échantillonné sous charge est relevé dans la page au moment où il est joué. Pas de `waitForTimeout` pour attendre un état : `expect(...).toHave…` ou `expect.poll`.
+- `KOBI_UI_PORT` change le port du serveur de test (deux arbres de travail en même temps).
 
 Paramètres d'URL : `state` (un des 8 états, avec des données de démonstration), `backdrop=1` (fond vert de Kobi ; la fenêtre native est transparente), `backdrop=sombre` ou `backdrop=clair` (bureaux de test pour la lisibilité), `reduced=1` ou `reduced=0` (force « réduire les animations »), `discret=1` (pastille), `reunion=<titre>` (indicateur REC).
 

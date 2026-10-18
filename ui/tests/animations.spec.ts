@@ -19,9 +19,9 @@ const DENSE_MS = 2.5 * 16.7;
  * `judged` compte les triplets jugés, pour qu'une machine trop lente ne
  * fasse pas passer le test à vide.
  */
-async function worstJump(page: Page, pairs: Array<[string, string]>): Promise<{ jump: number; speed: number; pair: string; judged: number }> {
+async function worstJump(page: Page, pairs: Array<[string, string]>, stopAbove = Infinity): Promise<{ jump: number; speed: number; pair: string; judged: number }> {
   return page.evaluate(
-    async ([pairs, denseMs]) => {
+    async ([pairs, denseMs, stopAbove]) => {
       const pill = document.querySelector('.kobi .pill')!;
       const box = () => {
         const r = pill.getBoundingClientRect();
@@ -69,10 +69,12 @@ async function worstJump(page: Page, pairs: Array<[string, string]>): Promise<{ 
           const jump = moves[i]! - Math.max(moves[i - 1]!, moves[i + 1]!);
           if (jump > worst.jump) Object.assign(worst, { jump, pair: `${a} → ${b}` });
         }
+        // Contre-épreuve : un saut trouvé suffit.
+        if (worst.jump > stopAbove) break;
       }
       return worst;
     },
-    [pairs, DENSE_MS] as const,
+    [pairs, DENSE_MS, stopAbove] as const,
   );
 }
 
@@ -85,16 +87,20 @@ const ALL_PAIRS: Array<[string, string]> = STATES.flatMap((a) => STATES.filter((
 test.describe(() => {
   test.describe.configure({ retries: 2 });
 
-  test('aucune image ne saute pendant les transitions entre les 8 états', async ({ page }) => {
-    test.setTimeout(300_000);
-    const errors = await openUi(page, 'backdrop=1');
-    const worst = await worstJump(page, ALL_PAIRS);
-    // Assez d'images jugées (une machine libre en juge plus de 1 500).
-    expect(worst.judged).toBeGreaterThan(200);
-    expect(worst.jump, `saut : ${worst.pair}`).toBeLessThan(9);
-    expect(worst.speed).toBeLessThan(30);
-    await expectNoErrors(errors);
-  });
+  // Les 72 transitions en 4 parts, jouées en parallèle (KOB-172 : un seul
+  // test en durait plus de deux minutes).
+  for (let part = 0; part < 4; part++) {
+    test(`aucune image ne saute pendant les transitions entre les états (${part + 1}/4)`, async ({ page }) => {
+      test.setTimeout(180_000);
+      const errors = await openUi(page, 'backdrop=1');
+      const worst = await worstJump(page, ALL_PAIRS.filter((_, i) => i % 4 === part));
+      // Assez d'images jugées (une machine libre en juge plus de 350 par part).
+      expect(worst.judged).toBeGreaterThan(50);
+      expect(worst.jump, `saut : ${worst.pair}`).toBeLessThan(9);
+      expect(worst.speed).toBeLessThan(30);
+      await expectNoErrors(errors);
+    });
+  }
 
   test('chaque transition est chorégraphiée : anticipation, yeux en fente, puis décollage', async ({ page }) => {
     const errors = await openUi(page, 'state=listen');
@@ -135,8 +141,8 @@ test('contre-épreuve : sans l’enveloppe d’inertie, le même détecteur voit
     };
   });
   const errors = await openUi(page, 'backdrop=1');
-  const worst = await worstJump(page, ALL_PAIRS);
-  expect(worst.judged).toBeGreaterThan(200);
+  const worst = await worstJump(page, ALL_PAIRS, 9);
+  expect(worst.judged).toBeGreaterThan(20);
   expect(worst.jump).toBeGreaterThan(9);
   await expectNoErrors(errors);
 });

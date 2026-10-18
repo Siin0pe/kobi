@@ -1,0 +1,41 @@
+{
+  "_lisez-moi": "Carte fichiers → tests du mode rapide (npm run test:pr, KOB-172). « socle » : fichiers dont dépend toute l'interface, qui font lancer la suite complète. « regles » : la première règle dont un motif correspond donne les tests (noms de tests/<nom>.spec.ts). Un fichier de src/ qui n'est dans aucune règle fait aussi lancer la suite complète : ajoutez-le ici en créant un module.",
+  "toujours": ["transparence", "session"],
+  "socle": [
+    "src/main.ts",
+    "src/stage.ts",
+    "src/states.ts",
+    "src/native.ts",
+    "src/dom.ts",
+    "src/ipc.ts",
+    "src/ticker.ts",
+    "src/econome.ts",
+    "src/animations.ts",
+    "src/demo.ts",
+    "src/mascotte/**",
+    "src/fonts/**",
+    "src/styles/stage.css",
+    "src/styles/fonts.css",
+    "index.html",
+    "app.html",
+    "src/app/main.ts",
+    "src/app/app.css"
+  ],
+  "regles": [
+    { "fichiers": ["src/menu.ts", "src/styles/menu.css"], "tests": ["menu"] },
+    { "fichiers": ["src/ecrire.ts", "src/styles/ecrire.css"], "tests": ["ecrire", "conversation"] },
+    { "fichiers": ["src/conversation.ts", "src/styles/conversation.css"], "tests": ["conversation", "ecrire", "activite", "bulles"] },
+    { "fichiers": ["src/bubbles.ts", "src/styles/bubbles.css", "src/typewriter.ts"], "tests": ["bulles", "scene", "conversation", "effets", "brouillage", "kobi"] },
+    { "fichiers": ["src/cartes.ts", "src/validation.ts", "src/validation-detail.ts", "src/styles/validation.css", "src/styles/validation-detail.css", "src/app/validations.ts", "src/app/validations.css"], "tests": ["validation", "validation-app", "scene"] },
+    { "fichiers": ["src/meeting.ts", "src/recording.ts", "src/styles/meeting.css"], "tests": ["reunion", "effets", "sobriete", "scene"] },
+    { "fichiers": ["src/compte-rendu.ts", "src/styles/compte-rendu.css"], "tests": ["compte-rendu", "sobriete"] },
+    { "fichiers": ["src/notes-lien.ts", "src/styles/notes-lien.css", "src/notes/**", "notes.html"], "tests": ["notes"] },
+    { "fichiers": ["src/activite.ts", "src/styles/activite.css"], "tests": ["activite", "app", "sobriete"] },
+    { "fichiers": ["src/taches.ts", "src/notif.ts"], "tests": ["rappels", "conversation", "effets", "sobriete"] },
+    { "fichiers": ["src/effets.ts", "src/styles/effets.css"], "tests": ["effets", "reunion", "sobriete"] },
+    { "fichiers": ["src/app/sections.ts", "src/titre.ts"], "tests": ["app", "activite", "rappels", "validation-app"] },
+    { "fichiers": ["src/carnet/**"], "tests": ["carnet", "app", "rappels"] },
+    { "fichiers": ["src/reglages/**"], "tests": ["app", "voix", "bienvenue"] },
+    { "fichiers": ["src/bienvenue/**"], "tests": ["bienvenue", "app"] }
+  ]
+}

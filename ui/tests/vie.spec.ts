@@ -26,16 +26,29 @@ test('la veille a au moins 15 scènes, chacune vit puis rend la main sans laisse
 });
 
 test('clic sur Kobi : il se fait pincer (écrasé), puis sursaute de surprise', async ({ page }) => {
+  // Gestes joués sur le calque .react, relevés dans la page : l'écrasement ne
+  // dure que 240 ms, trop peu pour être lu à coup sûr sous charge (KOB-172).
+  await page.addInitScript(() => {
+    const gestes: string[][] = [];
+    (window as unknown as { __gestes: string[][] }).__gestes = gestes;
+    const animate = Element.prototype.animate;
+    Element.prototype.animate = function (this: Element, ...args: Parameters<Element['animate']>) {
+      if (this.classList.contains('react') && Array.isArray(args[0])) gestes.push((args[0] as Keyframe[]).map((k) => String(k.transform ?? '')));
+      return animate.apply(this, args);
+    };
+  });
   const errors = await openUi(page, 'state=listen&backdrop=1');
-  await page.waitForTimeout(900);
+  await expect(page.locator('.kobi')).toHaveClass(/m-listen/);
   const box = (await page.locator('.kobi .pill').boundingBox())!;
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-  await page.waitForTimeout(700);
+  await page.evaluate(() => ((window as unknown as { __gestes: string[][] }).__gestes.length = 0));
   await page.mouse.down();
   await expect(page.locator('.kobi')).toHaveAttribute('data-pinched', '1');
   await expect(page.locator('.kobi .g').first()).toHaveText('>');
-  // Écrasé : plus large que haut.
-  await expect.poll(() => page.locator('.kobi .react').evaluate((n) => new DOMMatrix(getComputedStyle(n).transform).a)).toBeGreaterThan(1.05);
+  // Écrasé (plus large que haut), puis le sursaut part de la pose écrasée.
+  const gestes = () => page.evaluate(() => (window as unknown as { __gestes: string[][] }).__gestes);
+  await expect.poll(async () => (await gestes()).some((g) => g.includes('scale(1.2,.72)'))).toBe(true);
+  await expect.poll(async () => (await gestes()).some((g) => g.includes('translateY(-26px) scale(.88,1.16) rotate(3deg)'))).toBe(true);
   await page.mouse.up();
   await expect(page.locator('.kobi .g').first()).toHaveText('O');
   await expect(page.locator('.kobi')).not.toHaveAttribute('data-pinched', '1', { timeout: 2000 });
