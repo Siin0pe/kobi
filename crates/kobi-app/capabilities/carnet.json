@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "carnet",
-  "description": "Fenêtres du Carnet et des Réglages : commandes de l'app (lecture du stockage, export, suppression, réglages) et événements.",
-  "windows": ["carnet", "reglages"],
+  "description": "Fenêtres du Carnet, des Réglages et du premier lancement : commandes de l'app (lecture du stockage, export, suppression, réglages) et événements.",
+  "windows": ["carnet", "reglages", "bienvenue"],
   "permissions": ["core:default"]
 }

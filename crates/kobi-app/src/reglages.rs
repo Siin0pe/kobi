@@ -37,14 +37,17 @@ pub fn ouvrir<R: Runtime>(app: &AppHandle<R>, panneau: Option<&str>) -> tauri::R
         Some(p) => format!("reglages.html?panneau={p}"),
         None => "reglages.html".to_owned(),
     };
-    WebviewWindowBuilder::new(app, FENETRE, WebviewUrl::App(page.into()))
-        .title("Réglages de Kobi")
-        .inner_size(860.0, 600.0)
-        .min_inner_size(620.0, 440.0)
-        .center()
-        .visible(true)
-        .focused(true)
-        .build()?;
+    crate::placement::a_cote_de_kobi_ou_centre(
+        app,
+        WebviewWindowBuilder::new(app, FENETRE, WebviewUrl::App(page.into()))
+            .title("Réglages de Kobi")
+            .inner_size(860.0, 600.0)
+            .min_inner_size(620.0, 440.0)
+            .visible(true)
+            .focused(true),
+        (860.0, 600.0),
+    )
+    .build()?;
     tracing::info!(panneau, "réglages ouverts");
     Ok(())
 }

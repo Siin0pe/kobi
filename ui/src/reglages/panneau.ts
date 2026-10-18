@@ -9,10 +9,15 @@
 
 export type Ton = 'ok' | 'erreur';
 
+/** Où en est un réglage : prêt, à revoir, en panne, ou pas encore disponible. */
+export type Statut = 'ok' | 'attention' | 'erreur' | 'attente';
+
 /** Ce que la fenêtre hôte offre au panneau. */
 export interface Contexte {
   /** Message court (enregistré, erreur…) affiché par l'hôte. */
   notifier(texte: string, ton?: Ton): void;
+  /** État du réglage, montré par le premier lancement à côté de l'étape. */
+  signaler?(statut: Statut, resume: string): void;
 }
 
 export interface Panneau {

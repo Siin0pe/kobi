@@ -39,7 +39,11 @@ export const DEMARRAGE: Panneau = {
         h('p', { class: 'aide' }, 'Il démarre en veille, sans fenêtre : il suffit ensuite de dire « Kobi ».'),
         h('div', { class: 'ligne-interrupteur' }, interrupteur, h('span', {}, actif ? 'Activé' : 'Désactivé')),
       );
+      ctx.signaler?.('ok', actif ? 'activé' : 'désactivé');
     };
-    invoke<boolean>('demarrage_systeme').then(dessiner, (e) => zone.replaceChildren(h('p', { class: 'erreur' }, message(e))));
+    invoke<boolean>('demarrage_systeme').then(dessiner, (e) => {
+      zone.replaceChildren(h('p', { class: 'erreur' }, message(e)));
+      ctx.signaler?.('erreur', 'erreur');
+    });
   },
 };

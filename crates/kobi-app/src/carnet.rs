@@ -31,14 +31,17 @@ pub fn ouvrir<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         w.show()?;
         return w.set_focus();
     }
-    WebviewWindowBuilder::new(app, FENETRE, WebviewUrl::App("carnet.html".into()))
-        .title("Carnet de Kobi")
-        .inner_size(1120.0, 740.0)
-        .min_inner_size(720.0, 480.0)
-        .center()
-        .visible(true)
-        .focused(true)
-        .build()?;
+    crate::placement::a_cote_de_kobi_ou_centre(
+        app,
+        WebviewWindowBuilder::new(app, FENETRE, WebviewUrl::App("carnet.html".into()))
+            .title("Carnet de Kobi")
+            .inner_size(1120.0, 740.0)
+            .min_inner_size(720.0, 480.0)
+            .visible(true)
+            .focused(true),
+        (1120.0, 740.0),
+    )
+    .build()?;
     tracing::info!("carnet ouvert");
     Ok(())
 }
@@ -241,10 +244,17 @@ pub fn carnet_rappel_fait<R: Runtime>(app: AppHandle<R>, id: String) -> Result<b
     stockage(&app)?.marquer_fait(&id).map_err(|e| e.to_string())
 }
 
-/// Sélecteur de dossier natif, pour le dossier racine. `None` si annulé.
+/// Sélecteur de dossier natif (dossier de Kobi, dossiers de code). `None`
+/// si annulé.
 #[tauri::command]
-pub async fn choisir_dossier<R: Runtime>(app: AppHandle<R>) -> Result<Option<PathBuf>, String> {
-    let mut dialogue = app.dialog().file().set_title("Dossier de Kobi");
+pub async fn choisir_dossier<R: Runtime>(
+    app: AppHandle<R>,
+    titre: Option<String>,
+) -> Result<Option<PathBuf>, String> {
+    let mut dialogue = app
+        .dialog()
+        .file()
+        .set_title(titre.as_deref().unwrap_or("Dossier de Kobi"));
     if let Ok(st) = stockage(&app) {
         dialogue = dialogue.set_directory(st.racine());
     }

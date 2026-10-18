@@ -240,7 +240,16 @@ pub fn installer<R: Runtime>(builder: Builder<R>) -> Builder<R> {
             crate::carnet::carnet_supprimer,
             crate::carnet::carnet_rappel_fait,
             crate::carnet::choisir_dossier,
-            crate::reglages::ouvrir_reglages
+            crate::reglages::ouvrir_reglages,
+            crate::bienvenue::ouvrir_bienvenue,
+            crate::bienvenue::terminer_bienvenue,
+            crate::bienvenue::etat_claude,
+            crate::bienvenue::micros,
+            crate::bienvenue::choisir_micro,
+            crate::bienvenue::raccourcis,
+            crate::bienvenue::etat_modele,
+            crate::bienvenue::telecharger_modele,
+            crate::bienvenue::annuler_telechargement
         ])
 }
 

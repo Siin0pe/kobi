@@ -30,7 +30,16 @@ export function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<
   return api.core.invoke<T>(cmd, args);
 }
 
-/** Écoute un événement de la coque ; sans coque, ne fait rien. */
-export function ecouter<T>(event: string, handler: (payload: T) => void): void {
-  void coque()?.event.listen<T>(event, (e) => handler(e.payload));
+/** Écoute un événement de la coque ; retourne de quoi arrêter d'écouter. */
+export function ecouter<T>(event: string, handler: (payload: T) => void): () => void {
+  const fin = coque()?.event.listen<T>(event, (e) => handler(e.payload));
+  return () => void fin?.then((arreter) => arreter());
+}
+
+/**
+ * La commande n'existe pas dans cette version de Kobi (fonction pas encore
+ * livrée) : l'interface le dit au lieu d'afficher une erreur.
+ */
+export function absente(e: unknown): boolean {
+  return /command \S+ not found|commande inconnue/i.test(message(e));
 }
