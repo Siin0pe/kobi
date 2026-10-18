@@ -44,6 +44,10 @@ const LECTURE_MIN: Duration = Duration::from_secs(5);
 const ERREUR_AFFICHEE: Duration = Duration::from_secs(6);
 /// Bulles gardées dans l'historique.
 const HISTORIQUE: usize = 12;
+/// Une conversation du quotidien est close après ce temps en veille sans
+/// nouveau tour : lecture de la réponse (25 s au plus) et suite possible
+/// sans redire « Kobi » (20 s, KOB-133).
+const FIN_CONVERSATION: Duration = Duration::from_secs(45);
 
 /// Ce qui arrive au chef.
 #[derive(Debug, Clone, PartialEq)]
@@ -145,8 +149,9 @@ pub struct Chef<R: Runtime> {
     pour_conversation: String,
     /// Retour au calme prévu (fin de lecture d'une réponse, d'une erreur).
     calme_a: Option<(Instant, Evenement)>,
-    /// Une conversation du quotidien est ouverte chez l'écrivain (KOB-141).
-    conversation_ouverte: bool,
+    /// Dernier tour de la conversation du quotidien ouverte chez l'écrivain
+    /// (KOB-141), s'il y en a une.
+    conversation: Option<Instant>,
     /// Tours abandonnés : ce qui en revient encore est ignoré.
     interrompus: HashSet<u64>,
 }
@@ -298,7 +303,7 @@ impl<R: Runtime> Chef<R> {
             cartes: BTreeMap::new(),
             pour_conversation: String::new(),
             calme_a: None,
-            conversation_ouverte: false,
+            conversation: None,
             interrompus: HashSet::new(),
         }
     }
@@ -457,7 +462,7 @@ impl<R: Runtime> Chef<R> {
         };
         self.ecrivain
             .tour(stockage, maintenant_ms(), qui, texte.to_owned(), voix);
-        self.conversation_ouverte = true;
+        self.conversation = Some(Instant::now());
     }
 
     fn ajouter(&mut self, bulle: Bulle) {
@@ -786,8 +791,7 @@ impl<R: Runtime> Chef<R> {
     }
 
     fn fermer_conversation(&mut self) {
-        if self.conversation_ouverte {
-            self.conversation_ouverte = false;
+        if self.conversation.take().is_some() {
             self.ecrivain.fermer_conversation();
         }
     }
@@ -826,8 +830,12 @@ impl<R: Runtime> Chef<R> {
                 self.transition(&[evenement]);
             }
         }
-        // Retour en veille : la prochaine question ouvre une autre conversation.
-        if self.conversation_ouverte && etat(&self.app).etat == "veille" {
+        // Longtemps en veille : la prochaine question ouvre une autre conversation.
+        if self
+            .conversation
+            .is_some_and(|dernier| dernier.elapsed() >= FIN_CONVERSATION)
+            && etat(&self.app).etat == "veille"
+        {
             self.fermer_conversation();
         }
         let Some(r) = &mut self.reunion else { return };
