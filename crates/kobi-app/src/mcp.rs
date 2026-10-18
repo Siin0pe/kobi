@@ -720,9 +720,8 @@ async fn autorisation_existante(
     url: &str,
     coffre: Arc<dyn Coffre>,
 ) -> Option<rmcp::transport::auth::AuthorizationManager> {
-    if coffre.lire(nom, OAUTH).ok().flatten().is_none() {
-        return None;
-    }
+    // Rien dans le coffre : inutile d'interroger le serveur d'autorisation.
+    coffre.lire(nom, OAUTH).ok().flatten()?;
     let mut m = manager(nom, url, coffre).await.ok()?;
     m.initialize_from_store().await.ok()?.then_some(m)
 }
@@ -1105,25 +1104,14 @@ pub async fn mcp_importer(noms: Vec<String>) -> Result<Vec<ServeurUi>, String> {
         Ok(())
     })?;
     tracing::info!(?noms, "MCP importés depuis Claude Code");
-    // Tests en parallèle : les annotations classent les outils tout de suite.
-    let essais = noms.iter().map(|nom| async {
-        let s = serveur(&path, nom).ok()?;
-        Some((nom.clone(), tester(nom, &s, Arc::new(CoffreSysteme)).await))
-    });
-    for (nom, test) in futures_join(essais).await.into_iter().flatten() {
-        retenir_test(&path, &nom, &test)?;
+    // Test de chaque serveur importé : les annotations classent ses outils
+    // tout de suite. Peu de serveurs, chacun avec son délai : à la suite.
+    for nom in &noms {
+        let s = serveur(&path, nom)?;
+        let test = tester(nom, &s, Arc::new(CoffreSysteme)).await;
+        retenir_test(&path, nom, &test)?;
     }
     Ok(lister_ui(&path, &coffre))
-}
-
-async fn futures_join<F: std::future::Future>(f: impl IntoIterator<Item = F>) -> Vec<F::Output> {
-    let taches: Vec<_> = f.into_iter().collect();
-    let mut sorties = Vec::with_capacity(taches.len());
-    // Peu de serveurs : à la suite suffit, chaque test a son délai.
-    for t in taches {
-        sorties.push(t.await);
-    }
-    sorties
 }
 
 #[cfg(test)]
@@ -1253,13 +1241,13 @@ mod tests {
             .outils
             .insert("save_issue".into(), NatureOutil::Ecriture);
         let s = pour_session(&kobi, &coffre);
-        assert_eq!(s.noms(), ["linear", "treg"]);
+        assert_eq!(s.noms(), ["linear", "linear-server", "treg"]);
         assert_eq!(
             s.serveurs[0].1,
             json!({ "type": "http", "url": "https://mcp.linear.app/mcp" })
         );
         assert_eq!(
-            s.serveurs[1].1["headers"]["Authorization"],
+            s.serveurs[2].1["headers"]["Authorization"],
             "${KOBI_MCP_TREG_AUTHORIZATION}"
         );
         assert_eq!(

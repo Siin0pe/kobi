@@ -9,16 +9,17 @@
 import { ANIMATIONS } from './animations';
 import { DEMARRAGE } from './demarrage';
 import { CLAUDE, DOSSIERS, ESSAI, MICRO, MODELE, PARCOURS, RACCOURCIS } from './etapes';
+import { MCP, OUTILS } from './mcp';
 import type { Panneau } from './panneau';
 import { STOCKAGE } from './stockage';
 
-const liste: Panneau[] = [STOCKAGE, DOSSIERS, MICRO, MODELE, CLAUDE, DEMARRAGE, ANIMATIONS, RACCOURCIS, PARCOURS];
+const liste: Panneau[] = [STOCKAGE, DOSSIERS, MCP, MICRO, MODELE, CLAUDE, DEMARRAGE, ANIMATIONS, RACCOURCIS, PARCOURS];
 
 /** Panneaux de la section Réglages, dans l'ordre du menu. */
 export const PANNEAUX: readonly Panneau[] = liste;
 
 /** Le premier lancement, dans l'ordre du parcours UX (section 1). */
-export const ETAPES: readonly Panneau[] = [CLAUDE, MICRO, MODELE, DOSSIERS, DEMARRAGE, ESSAI, RACCOURCIS];
+export const ETAPES: readonly Panneau[] = [CLAUDE, MICRO, MODELE, DOSSIERS, OUTILS, DEMARRAGE, ESSAI, RACCOURCIS];
 
 export function panneau(id: string | null | undefined): Panneau | undefined {
   return PANNEAUX.find((p) => p.id === id);

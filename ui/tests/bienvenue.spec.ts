@@ -25,6 +25,7 @@ function fakeTauri(o: Options): void {
     sessionStorage.setItem('kobi-demarrage', JSON.stringify(d));
     return d;
   };
+  let mcp: unknown[] = [];
   let modele = o.modele ? '/home/neuf/Kobi/models/sherpa-onnx-nemotron' : null;
   const absente = (cmd: string) => {
     throw `Command ${cmd} not found`;
@@ -71,6 +72,14 @@ function fakeTauri(o: Options): void {
             const d = demarrage();
             return (d.choisi ? d : garder({ actif: true, choisi: true })).actif;
           }
+          case 'mcp_serveurs':
+            return o.dependances ? mcp : absente(cmd);
+          case 'mcp_candidats':
+            if (!o.dependances) return absente(cmd);
+            return [{ nom: 'linear', portee: 'utilisateur', transport: 'http', resume: 'https://mcp.linear.app/mcp', deja: mcp.length > 0, secrets: [] }];
+          case 'mcp_importer':
+            mcp = [{ nom: 'linear', transport: 'http', resume: 'https://mcp.linear.app/mcp', actif: true, ecriture: 'demander', origine: 'Claude Code (utilisateur)', commande: '', args: [], url: 'https://mcp.linear.app/mcp', env: {}, entetes: {}, secrets: [], outils: [], teste_ms: null }];
+            return mcp;
           case 'raccourcis':
             return { parler: 'Ctrl+Shift+Space', reunion: 'Ctrl+Shift+R' };
           case 'terminer_bienvenue':
@@ -119,7 +128,7 @@ test('Kobi se présente, puis le parcours complet mène à « C’est parti »',
 
   await page.getByRole('button', { name: 'On y va' }).click();
   // 1. Claude Code.
-  await expect(page.locator('.surtitre')).toHaveText('Étape 1 sur 7');
+  await expect(page.locator('.surtitre')).toHaveText('Étape 1 sur 8');
   await expect(page.locator('.etat[data-statut="ok"]')).toContainText('Claude Code 2.1.302 est installé et connecté.');
   await page.getByRole('button', { name: 'Suivant' }).click();
   // 2. Micro.
@@ -138,10 +147,17 @@ test('Kobi se présente, puis le parcours complet mène à « C’est parti »',
   expect(await appels(page)).toContainEqual(['set_codebases', { dossiers: ['/home/neuf/code/kobi'] }]);
   expect(await appels(page)).toContainEqual(['choisir_dossier', { titre: 'Dossier de code à lire' }]);
   await page.getByRole('button', { name: 'Suivant' }).click();
-  // 5. Démarrage avec le système : coché par défaut au premier lancement.
+  // 5. Outils MCP (facultatif) : import depuis Claude Code en un clic.
+  await expect(etape(page, 'outils')).toHaveAttribute('data-statut', 'attente');
+  await page.getByRole('button', { name: 'Importer 1 serveur' }).click();
+  expect(await appels(page)).toContainEqual(['mcp_importer', { noms: ['linear'] }]);
+  await expect(etape(page, 'outils')).toHaveAttribute('data-statut', 'ok');
+  await expect(page.locator('.mcp-candidat[data-deja="true"]')).toContainText('déjà connecté');
+  await page.getByRole('button', { name: 'Suivant' }).click();
+  // 6. Démarrage avec le système : coché par défaut au premier lancement.
   await expect(page.getByRole('switch')).toHaveAttribute('aria-checked', 'true');
   await page.getByRole('button', { name: 'Suivant' }).click();
-  // 6. Essai : la question transcrite puis la réponse de Kobi.
+  // 7. Essai : la question transcrite puis la réponse de Kobi.
   await expect(page.locator('.essai-consigne')).toHaveText('Dis : « Kobi, bonjour »');
   await page.evaluate(() => {
     const emit = (window as unknown as { __emit: (e: string, p: unknown) => void }).__emit;
@@ -152,7 +168,7 @@ test('Kobi se présente, puis le parcours complet mène à « C’est parti »',
   await expect(page.locator('.essai-reponse')).toHaveText('Bonjour ! Je suis prêt.');
   await expect(etape(page, 'essai')).toHaveAttribute('data-statut', 'ok');
   await page.getByRole('button', { name: 'Suivant' }).click();
-  // 7. Raccourcis.
+  // 8. Raccourcis.
   await expect(page.locator('.raccourcis kbd')).toHaveText(['Ctrl', 'Maj', 'Espace', 'Ctrl', 'Maj', 'R']);
   await page.getByRole('button', { name: 'Terminer' }).click();
   // Fin.
@@ -181,9 +197,13 @@ test('une commande absente : l’étape le dit et ne bloque pas le parcours', as
   await page.locator('.etape[data-etape="dossiers-code"] button').click();
   await expect(page.locator('.etat[data-statut="attente"]')).toContainText('prochaine version');
   await page.getByRole('button', { name: 'Suivant' }).click();
+  // Outils MCP absents : facultatif, en attente, sans bloquer.
+  await expect(page.locator('.etat[data-statut="attente"]')).toContainText('prochaine version');
+  await expect(etape(page, 'outils')).toHaveAttribute('data-statut', 'attente');
+  await page.getByRole('button', { name: 'Suivant' }).click();
   await expect(page.getByRole('switch')).toHaveAttribute('aria-checked', 'true');
   // La fin ne liste que ce qui est à revoir : « en attente » n'en fait pas partie.
-  await page.evaluate(() => window.bienvenue.aller(8));
+  await page.evaluate(() => window.bienvenue.aller(9));
   await expect(page.locator('.panneau')).toContainText('Tout est en ordre.');
   await expectNoErrors(errors);
 });
@@ -230,14 +250,14 @@ test('la section Réglages montre l’état sans rien activer d’office', async
 test('essai sans rien entendu : Kobi le dit et propose le raccourci', async ({ page }) => {
   await page.clock.install();
   const errors = await ouvrir(page, { dependances: true, modele: true });
-  await page.evaluate(() => window.bienvenue.aller(6));
+  await page.evaluate(() => window.bienvenue.aller(7));
   await expect(page.locator('.essai-etat')).toContainText('J’écoute…');
   await page.clock.runFor(21_000);
   await expect(page.locator('.essai-etat')).toContainText('Je n’ai rien entendu.');
   await expect(page.locator('.essai-etat .touches')).toHaveAttribute('aria-label', 'Ctrl + Maj + Espace');
   await expect(etape(page, 'essai')).toHaveAttribute('data-statut', 'attention');
   // À la fin, l'essai est listé à revoir.
-  await page.evaluate(() => window.bienvenue.aller(8));
+  await page.evaluate(() => window.bienvenue.aller(9));
   await expect(page.locator('.a-revoir')).toContainText('Essai');
   await expectNoErrors(errors);
 });

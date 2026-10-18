@@ -79,7 +79,10 @@ pub struct MeetingConfig {
 
 /// Fabrique d'arguments de [`MeetingConfig::args_with_perms`].
 #[derive(Clone)]
-pub struct ArgsWithPerms(pub Arc<dyn Fn(&Value) -> Result<Vec<String>, String> + Send + Sync>);
+pub struct ArgsWithPerms(pub Arc<ArgsFn>);
+
+/// Config MCP du serveur de permission → arguments de `claude`.
+pub type ArgsFn = dyn Fn(&Value) -> Result<Vec<String>, String> + Send + Sync;
 
 impl std::fmt::Debug for ArgsWithPerms {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
