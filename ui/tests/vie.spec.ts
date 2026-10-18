@@ -131,17 +131,20 @@ test('réglage « Animations » : par défaut Kobi bouge même si Windows rédui
   await expectNoErrors(errors);
 });
 
-test('réglage « Animations » changé dans une autre fenêtre : la mascotte suit tout de suite', async ({ page, context }) => {
+test('réglage « Animations » changé dans les Réglages de l’app : la mascotte et l’app suivent tout de suite', async ({ page, context }) => {
   const errors = await openUi(page, 'state=think');
   await expect(page.locator('.stage')).not.toHaveClass(/reduced-motion/);
-  // Les Réglages, autre fenêtre de la même app (même origine).
+  // La section Réglages de l'app Kobi, autre fenêtre de la même origine.
   const reglages = await context.newPage();
-  await reglages.goto('/reglages.html?panneau=animations');
+  await reglages.goto('/app.html#reglages/animations');
   await reglages.getByRole('radio', { name: /Réduites/ }).click();
   await expect(page.locator('.stage')).toHaveClass(/reduced-motion/);
+  // L'app elle-même suit aussi (classe sur <html>, lue par animationsReduites()).
+  await expect(reglages.locator('html')).toHaveClass(/reduced-motion/);
   await expect.poll(() => page.evaluate(() => document.getAnimations().filter((a) => a.playState === 'running').length)).toBe(0);
   await reglages.getByRole('radio', { name: /Toujours/ }).click();
   await expect(page.locator('.stage')).not.toHaveClass(/reduced-motion/);
+  await expect(reglages.locator('html')).not.toHaveClass(/reduced-motion/);
   // « Comme Windows » avec Windows qui réduit : immobile.
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await reglages.getByRole('radio', { name: /Comme Windows/ }).click();
@@ -170,5 +173,20 @@ test('réunion, réglage « toujours » avec Windows réduit : REC et fiche de n
   // La vie passe par les enfants : le surtitre de la fiche et le point rouge.
   const vivants = await page.evaluate(() => ['.card-notes .kicker', '.rec-dot'].map((s) => document.querySelector(s)!.getAnimations().filter((a) => a.playState === 'running').length));
   expect(vivants.every((n) => n > 0)).toBe(true);
+  await expectNoErrors(errors);
+});
+
+test('fenêtre masquée pendant que le regard est tourné : le regard recentré ne tourne plus', async ({ page }) => {
+  const errors = await openUi(page, 'state=listen');
+  await page.waitForTimeout(700);
+  await page.mouse.move(805, 30);
+  await expect.poll(() => page.locator('.kobi .gaze').evaluate((n) => n.style.transform)).toMatch(/translate\(1\d|translate\(2\d/);
+  await page.waitForTimeout(500);
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  expect(await page.evaluate(() => document.getAnimations().filter((a) => a.playState === 'running').map((a) => a.constructor.name + ':' + ((a as CSSTransition).transitionProperty ?? (a as CSSAnimation).animationName ?? '')))).toEqual([]);
   await expectNoErrors(errors);
 });

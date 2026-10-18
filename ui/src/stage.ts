@@ -376,6 +376,9 @@ export class Stage {
     // tout, pastille comprise.
     this.root.classList.toggle('paused', paused);
     this.root.classList.toggle('window-hidden', hidden);
+    // Kobi d'abord : sa mise en pause recentre le regard (transition CSS) ;
+    // le gel ci-dessous la saisit avec le reste.
+    this.kobi.setPaused(paused);
     this.frozen.forEach((a) => {
       if (a.playState === 'paused') a.play();
     });
@@ -389,7 +392,6 @@ export class Stage {
     this.metronome.setSuspended(paused || hidden);
     this.bubbles.setPaused(paused);
     this.rec.setPaused(hidden);
-    this.kobi.setPaused(paused);
   }
 
   private fit(): void {
