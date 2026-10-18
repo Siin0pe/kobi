@@ -222,6 +222,10 @@ pub fn installer<R: Runtime>(builder: Builder<R>) -> Builder<R> {
             decider_carte,
             etat_enregistrement,
             historique,
+            // Réponse à voix haute ou en texte (KOB-142).
+            crate::voix::etat_voix_ui,
+            crate::voix::regler_voix,
+            crate::voix::basculer_voix,
             // Dossiers de code lisibles (KOB-138), pour la fenêtre des réglages.
             crate::lecture::get_codebases,
             crate::lecture::set_codebases,

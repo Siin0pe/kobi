@@ -90,6 +90,13 @@ export function followSession(stage: Stage): void {
   void api.event.listen<{ title: string; message: string }>('erreur', (e) => stage.update({ error: e.payload }));
   // Volume du micro (0 à 1) pendant l'écoute, s'il est émis par la coque.
   void api.event.listen<number>('niveau', (e) => typeof e.payload === 'number' && stage.setLevel(e.payload));
+  // Réponse à voix haute ou en texte (KOB-142) : `data-voix` vaut `parle`
+  // pendant que Kobi parle, `active` si ses réponses seront dites, sinon `texte`.
+  const voix = (v: { actif: boolean; parle: boolean } | null | undefined) => {
+    if (v) stage.root.dataset.voix = v.parle ? 'parle' : v.actif ? 'active' : 'texte';
+  };
+  void api.event.listen<{ actif: boolean; parle: boolean } | null>('voix', (e) => voix(e.payload));
+  api.core.invoke<{ actif: boolean; parle: boolean } | null>('etat_voix_ui').then(voix, () => {});
   void api.core.invoke<SessionState>('etat_session').then(show);
   followRecording(stage);
 }

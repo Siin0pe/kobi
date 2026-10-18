@@ -15,16 +15,18 @@ pub enum MenuAction {
     Pause,
     OpenNotebook,
     OpenSettings,
+    ToggleVoice,
     ToggleMascot,
     Quit,
 }
 
 impl MenuAction {
-    pub const ALL: [MenuAction; 6] = [
+    pub const ALL: [MenuAction; 7] = [
         MenuAction::StartMeeting,
         MenuAction::Pause,
         MenuAction::OpenNotebook,
         MenuAction::OpenSettings,
+        MenuAction::ToggleVoice,
         MenuAction::ToggleMascot,
         MenuAction::Quit,
     ];
@@ -36,6 +38,7 @@ impl MenuAction {
             MenuAction::Pause => "pause",
             MenuAction::OpenNotebook => "open-notebook",
             MenuAction::OpenSettings => "open-settings",
+            MenuAction::ToggleVoice => "voix",
             MenuAction::ToggleMascot => "toggle-mascot",
             MenuAction::Quit => "quit",
         }
@@ -47,6 +50,7 @@ impl MenuAction {
             MenuAction::Pause => "Pause",
             MenuAction::OpenNotebook => "Ouvrir le Carnet",
             MenuAction::OpenSettings => "Réglages…",
+            MenuAction::ToggleVoice => "Réponse à voix haute / en texte",
             MenuAction::ToggleMascot => "Afficher/masquer Kobi",
             MenuAction::Quit => "Quitter Kobi",
         }
@@ -67,7 +71,7 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let menu = Menu::with_items(
         app,
         &[
-            &items[0], &items[1], &items[2], &items[3], &items[4], &separator, &items[5],
+            &items[0], &items[1], &items[2], &items[3], &items[4], &items[5], &separator, &items[6],
         ],
     )?;
     let mut tray = TrayIconBuilder::with_id("kobi")
@@ -112,6 +116,10 @@ pub fn handle<R: Runtime>(app: &AppHandle<R>, id: &str) {
             }
         }
         MenuAction::Quit => app.exit(0),
+        // Voix ou texte seul pour le contexte courant (KOB-142).
+        MenuAction::ToggleVoice => {
+            crate::voix::basculer(app);
+        }
         // En réunion, met l'enregistrement en pause (ou le reprend) ; hors
         // réunion, coupe le micro jusqu'au prochain clic (KOB-132).
         MenuAction::Pause => {
@@ -170,6 +178,7 @@ mod tests {
                 "Pause",
                 "Ouvrir le Carnet",
                 "Réglages…",
+                "Réponse à voix haute / en texte",
                 "Afficher/masquer Kobi",
                 "Quitter Kobi"
             ]

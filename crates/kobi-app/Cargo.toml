@@ -17,6 +17,7 @@ kobi-audio = { path = "../kobi-audio" }
 kobi-brain = { path = "../kobi-brain" }
 kobi-session = { path = "../kobi-session" }
 kobi-stt = { path = "../kobi-stt", features = ["nemotron"] }
+kobi-tts = { path = "../kobi-tts", features = ["piper", "lecture"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 bzip2 = "0.5"
 tar = "0.4"

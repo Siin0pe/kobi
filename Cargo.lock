@@ -2793,6 +2793,7 @@ dependencies = [
  "kobi-brain",
  "kobi-session",
  "kobi-stt",
+ "kobi-tts",
  "serde",
  "serde_json",
  "tar",
@@ -2916,6 +2917,14 @@ dependencies = [
 [[package]]
 name = "kobi-tts"
 version = "0.1.0"
+dependencies = [
+ "cpal",
+ "hound",
+ "sherpa-onnx",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tracing",
+]
 
 [[package]]
 name = "kobi-wake"
