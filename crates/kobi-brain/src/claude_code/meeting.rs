@@ -202,7 +202,15 @@ impl ClaudeCodeBrain {
                 .map_err(|e| BrainError::Unavailable(format!("serveur de permission : {e}")))?;
                 let kobi = perms.mcp_config()["mcpServers"][kobi_perms::SERVER_NAME].clone();
                 let args = match &config.args_with_perms {
-                    Some(fabrique) => match (fabrique.0)(&kobi) {
+                    // La fabrique peut lire le disque (carte des dépôts) :
+                    // hors du runtime.
+                    Some(fabrique) => match tokio::task::spawn_blocking({
+                        let (fabrique, kobi) = (fabrique.0.clone(), kobi.clone());
+                        move || fabrique(&kobi)
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(e.to_string()))
+                    {
                         Ok(args) => args,
                         Err(e) => {
                             perms.shutdown().await;
