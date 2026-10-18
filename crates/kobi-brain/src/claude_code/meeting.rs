@@ -64,6 +64,10 @@ pub struct MeetingConfig {
     pub permission_rules: kobi_perms::Rules,
     /// Arguments en plus, passés tels quels.
     pub extra_args: Vec<String>,
+    /// Session sans serveur de permission : s'ils sont donnés, ces arguments
+    /// remplacent ceux de [`MeetingConfig::args`] et aucune carte n'est
+    /// possible (Kobi en lecture seule, KOB-138).
+    pub fixed_args: Option<Vec<String>>,
 }
 
 impl Default for MeetingConfig {
@@ -82,6 +86,7 @@ impl Default for MeetingConfig {
             permission_timeout: kobi_perms::DEFAULT_TIMEOUT,
             permission_rules: kobi_perms::Rules::default(),
             extra_args: Vec::new(),
+            fixed_args: None,
         }
     }
 }
@@ -157,25 +162,39 @@ pub struct ClaudeCodeBrain {
 }
 
 impl ClaudeCodeBrain {
-    /// Ouvre la session : serveur de permission puis process `claude`.
+    /// Ouvre la session : serveur de permission (sauf avec
+    /// [`MeetingConfig::fixed_args`]) puis process `claude`.
     pub async fn start(config: MeetingConfig) -> Result<Self, BrainError> {
-        let (perms, approvals) = PermsServer::start_with_rules(
-            config.permission_timeout,
-            config.permission_rules.clone(),
-        )
-        .await
-        .map_err(|e| BrainError::Unavailable(format!("serveur de permission : {e}")))?;
-        let kobi = perms.mcp_config()["mcpServers"][kobi_perms::SERVER_NAME].clone();
+        let (perms, approvals, args) = match &config.fixed_args {
+            Some(args) => {
+                // Canal fermé : aucune demande de permission n'arrivera.
+                let (_, approvals) = mpsc::channel(1);
+                (None, approvals, args.clone())
+            }
+            None => {
+                let (perms, approvals) = PermsServer::start_with_rules(
+                    config.permission_timeout,
+                    config.permission_rules.clone(),
+                )
+                .await
+                .map_err(|e| BrainError::Unavailable(format!("serveur de permission : {e}")))?;
+                let kobi = perms.mcp_config()["mcpServers"][kobi_perms::SERVER_NAME].clone();
+                let args = config.args(&kobi);
+                (Some(perms), approvals, args)
+            }
+        };
         let opts = ClaudeOptions {
             program: config.program.clone(),
             cwd: config.cwd.clone(),
             partial_messages: true,
-            args: config.args(&kobi),
+            args,
         };
         let claude = match ClaudeCode::spawn(&opts) {
             Ok(c) => c,
             Err(e) => {
-                perms.shutdown().await;
+                if let Some(perms) = perms {
+                    perms.shutdown().await;
+                }
                 return Err(BrainError::Unavailable(e.to_string()));
             }
         };
@@ -276,7 +295,7 @@ impl Brain for ClaudeCodeBrain {
 /// tour en cours.
 async fn run(
     mut claude: ClaudeCode,
-    perms: PermsServer,
+    perms: Option<PermsServer>,
     mut approvals: mpsc::Receiver<ApprovalRequest>,
     mut jobs: mpsc::Receiver<Job>,
     mut stop: oneshot::Receiver<Duration>,
@@ -300,7 +319,9 @@ async fn run(
         }
     };
     let _ = claude.close(close_timeout).await;
-    perms.shutdown().await;
+    if let Some(perms) = perms {
+        perms.shutdown().await;
+    }
 }
 
 /// Joue un tour et renvoie son événement de fin, sans l'envoyer.

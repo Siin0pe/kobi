@@ -1,21 +1,16 @@
-//! Interpellation de bout en bout (KOB-67, KOB-132) : de la question
-//! repérée dans l'écoute continue à la réponse dans la bulle.
+//! Interpellation de bout en bout (KOB-67, KOB-132, KOB-134) : branchement
+//! des composants qui tournent en parallèle.
 //!
-//! Un fil dédié garde une session Claude Code ouverte (config isolée, prompt
-//! système de Kobi), pour que chaque question ne paie pas le démarrage de
-//! `claude`. Il reçoit les questions du fil d'écoute ([`crate::ecoute`]), qui
-//! garde le modèle Nemotron chargé et le micro ouvert, et pousse la réponse
-//! en flux vers la webview.
-//!
-//! La session est en lecture seule ([`crate::lecture`], KOB-138) : Read, Grep
-//! et Glob sur les dossiers de code déclarés, rien d'autre.
+//! * le fil d'écoute ([`crate::ecoute`]) garde le micro ouvert et Nemotron
+//!   chargé, et publie segments et questions ;
+//! * le chef d'orchestre ([`crate::chef`]) enregistre la réunion quand on le
+//!   lui demande, tient l'historique et l'état affiché ;
+//! * l'acteur Claude ([`crate::cerveau`]) répond, prend les notes et mène
+//!   les tâches longues sur ses propres sessions.
 
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
-use kobi_brain::claude_code::Event;
-use kobi_brain::{ClaudeCode, ClaudeOptions, Detection, SYSTEM_PROMPT};
 use kobi_session::etat::Evenement;
 use kobi_stt::nemotron::{NemotronConfig, NemotronEngine};
 use serde::Serialize;
@@ -31,8 +26,6 @@ pub const EVENEMENT_REPONSE: &str = "answer";
 /// Erreur à afficher dans la carte d'erreur.
 pub const EVENEMENT_ERREUR: &str = "erreur";
 
-/// Temps de lecture minimal d'une réponse avant le retour au calme.
-const LECTURE_MIN: Duration = Duration::from_secs(5);
 /// Temps d'affichage d'une erreur.
 const ERREUR_AFFICHEE: Duration = Duration::from_secs(6);
 /// Threads de Nemotron. L'écoute est continue : mesuré sur ce PC (6 cœurs)
@@ -80,48 +73,27 @@ pub fn modele_nemotron() -> Option<PathBuf> {
     dirs.into_iter().next()
 }
 
-/// Lance le fil d'interpellation et le fil d'écoute qui l'alimente.
-/// `codebases` : dossiers de code que Claude peut lire.
-pub fn installer<R: Runtime>(app: &AppHandle<R>, codebases: Vec<PathBuf>) {
-    let (tx, rx) = mpsc::channel();
-    let fil = app.clone();
-    std::thread::Builder::new()
-        .name("interpellation".into())
-        .spawn(move || travailleur(fil, rx, codebases))
-        .expect("fil d'interpellation");
-    ecoute::installer(app, tx);
+/// Lance le chef, l'acteur Claude et le fil d'écoute. `codebases` : dossiers
+/// de code que Claude peut lire (KOB-138).
+pub fn installer<R: Runtime>(
+    app: &AppHandle<R>,
+    intervalle_notes_min: u8,
+    codebases: Vec<PathBuf>,
+) {
+    let codebases = crate::lecture::codebases_valides(&codebases);
+    tracing::info!(codebases = ?codebases, "Claude en lecture seule");
+    crate::chef::installer(
+        app,
+        crate::chef::fabrique_claude(MODELE_CLAUDE, codebases),
+        intervalle_notes_min,
+    );
+    ecoute::installer(app);
 }
 
 /// Interpelle Kobi depuis le raccourci, secours du mot-clé : la phrase
 /// suivante est la question.
 pub fn declencher<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     ecoute::commander(app, Commande::Raccourci)
-}
-
-fn travailleur<R: Runtime>(app: AppHandle<R>, rx: Receiver<String>, codebases: Vec<PathBuf>) {
-    let rt = match tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .build()
-    {
-        Ok(rt) => rt,
-        Err(e) => {
-            tracing::error!(erreur = %e, "runtime tokio indisponible");
-            return;
-        }
-    };
-
-    let codebases = crate::lecture::codebases_valides(&codebases);
-    tracing::info!(codebases = ?codebases, "Claude en lecture seule");
-    let mut claude = rt.block_on(demarrer_claude(&codebases));
-    match &claude {
-        Ok(_) => tracing::info!("session Claude Code prête"),
-        Err(e) => tracing::warn!(erreur = %e, "Claude Code indisponible"),
-    }
-
-    while let Ok(question) = rx.recv() {
-        repondre(&app, &rt, &mut claude, &question, &codebases);
-    }
 }
 
 pub fn charger_stt() -> Result<NemotronEngine, String> {
@@ -146,101 +118,6 @@ pub fn charger_stt() -> Result<NemotronEngine, String> {
     let engine = NemotronEngine::new(config).map_err(|e| e.to_string())?;
     tracing::info!(modele = %dir.display(), ms = debut.elapsed().as_millis() as u64, "Nemotron chargé");
     Ok(engine)
-}
-
-async fn demarrer_claude(codebases: &[PathBuf]) -> Result<ClaudeCode, String> {
-    let program = match kobi_brain::claude_code::detect::detect(Duration::from_secs(30)).await {
-        Detection::Ready { install, .. } => install.program,
-        Detection::NotLoggedIn(_) => {
-            return Err("Claude Code n'est pas connecté : lancer « claude auth login »".into())
-        }
-        autre => return Err(format!("Claude Code indisponible : {autre:?}")),
-    };
-    let cwd = kobi_dir().ok_or("dossier personnel introuvable")?;
-    std::fs::create_dir_all(&cwd).map_err(|e| e.to_string())?;
-    let options = ClaudeOptions {
-        program,
-        cwd: Some(cwd),
-        partial_messages: true,
-        args: crate::lecture::arguments(MODELE_CLAUDE, SYSTEM_PROMPT, codebases),
-    };
-    ClaudeCode::spawn(&options).map_err(|e| e.to_string())
-}
-
-fn repondre<R: Runtime>(
-    app: &AppHandle<R>,
-    rt: &tokio::runtime::Runtime,
-    claude: &mut Result<ClaudeCode, String>,
-    question: &str,
-    codebases: &[PathBuf],
-) {
-    if claude.is_err() {
-        *claude = rt.block_on(demarrer_claude(codebases));
-    }
-    let session = match claude {
-        Ok(session) => session,
-        Err(e) => {
-            let e = e.clone();
-            erreur(app, "Claude Code indisponible", &e);
-            return;
-        }
-    };
-
-    let message = format!("[interpellation]\n\n## Question\n\n{question}\n");
-    let mut texte = String::new();
-    let mut commence = false;
-    let resultat = rt.block_on(async {
-        session.send(&message).await.map_err(|e| e.to_string())?;
-        loop {
-            let Some(evenement) = session.next_event().await else {
-                return Err(session.exited().await.to_string());
-            };
-            // Chaque outil appelé est journalisé : seuls Read, Grep et Glob
-            // doivent apparaître (KOB-138).
-            for outil in crate::lecture::outils_appeles(&evenement) {
-                if crate::lecture::permis(&outil) {
-                    tracing::info!(%outil, "outil de lecture");
-                } else {
-                    tracing::warn!(%outil, "outil hors lecture seule demandé par Claude");
-                }
-            }
-            if let Some(delta) = evenement.text_delta() {
-                if !commence {
-                    commence = true;
-                    let _ = appliquer(app, &[Evenement::ReponseCommence]);
-                }
-                texte.push_str(delta);
-                let _ = app.emit(EVENEMENT_REPONSE, &texte);
-            }
-            if let Event::Result(fin) = evenement {
-                if texte.is_empty() {
-                    if let Some(t) = &fin.result {
-                        texte.clone_from(t);
-                        let _ = appliquer(app, &[Evenement::ReponseCommence]);
-                        let _ = app.emit(EVENEMENT_REPONSE, &texte);
-                    }
-                }
-                return if fin.is_error {
-                    Err(fin.result.unwrap_or_else(|| "tour en erreur".into()))
-                } else {
-                    Ok(())
-                };
-            }
-        }
-    });
-    match resultat {
-        Ok(_) => {
-            // Le temps de lire la réponse, puis retour au calme.
-            let lecture = LECTURE_MIN + Duration::from_millis(60 * texte.chars().count() as u64);
-            std::thread::sleep(lecture.min(Duration::from_secs(25)));
-            let _ = appliquer(app, &[Evenement::ReponseTerminee]);
-        }
-        Err(message) => {
-            // La session sera relancée à la prochaine question.
-            *claude = Err(message.clone());
-            erreur(app, "Claude n'a pas répondu", &message);
-        }
-    }
 }
 
 pub fn erreur<R: Runtime>(app: &AppHandle<R>, titre: &str, message: &str) {

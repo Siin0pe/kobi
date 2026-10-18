@@ -253,10 +253,12 @@ fn activite_suivante(activite: Activite, evenement: Evenement) -> Option<Activit
     use Evenement as E;
 
     match (activite, evenement) {
-        // Une interpellation est prioritaire sur les notes et sur l'affichage
-        // de « fait » ou « oups » ; elle n'interrompt pas une réponse, une
-        // carte de permission ou une question déjà envoyée.
-        (Calme | Note | Fait | Oups, E::Interpellation) => Some(Ecoute),
+        // On peut interpeller Kobi à tout moment (KOB-134) : la réponse en
+        // cours continue dans l'historique, la carte reste cliquable, la
+        // nouvelle question passe après.
+        (Calme | Note | Fait | Oups | Reflechit | Repond | Propose, E::Interpellation) => {
+            Some(Ecoute)
+        }
         (Ecoute, E::Interpellation) => Some(Ecoute),
         (Ecoute, E::QuestionEnvoyee) => Some(Reflechit),
         (Ecoute, E::PasDeQuestion) => Some(Calme),
@@ -303,6 +305,9 @@ mod tests {
             (Reunion(A::Fait), E::Interpellation, Reunion(A::Ecoute)),
             (Reunion(A::Oups), E::Interpellation, Reunion(A::Ecoute)),
             (Reunion(A::Ecoute), E::Interpellation, Reunion(A::Ecoute)),
+            (Reunion(A::Reflechit), E::Interpellation, Reunion(A::Ecoute)),
+            (Reunion(A::Repond), E::Interpellation, Reunion(A::Ecoute)),
+            (Reunion(A::Propose), E::Interpellation, Reunion(A::Ecoute)),
             (
                 Reunion(A::Ecoute),
                 E::QuestionEnvoyee,

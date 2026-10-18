@@ -1,7 +1,9 @@
 //! Écoute continue du micro (KOB-132) : Nemotron transcrit en local, en
 //! permanence tant que Kobi n'est pas en pause, et [`Ecouteur`] repère
-//! « Kobi » dans la transcription. Rien ne sort de la machine et rien n'est
-//! écrit : seule la question part chez Claude, par le fil d'interpellation.
+//! « Kobi » dans la transcription. Rien ne sort de la machine : le fil
+//! publie segments et questions au chef d'orchestre ([`crate::chef`]), qui
+//! seul écrit la réunion (quand on l'a demandé) et interroge Claude. Le fil ne
+//! s'arrête jamais pour attendre une réponse.
 //!
 //! Le fil garde le micro ouvert et le modèle chargé. Le raccourci clavier
 //! reste un déclencheur de secours : il lui envoie [`Commande::Raccourci`].
@@ -16,21 +18,25 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use kobi_audio::{AudioFrame, Capture, CaptureOptions};
-use kobi_session::etat::Evenement;
 use kobi_stt::nemotron::NemotronEngine;
 use kobi_stt::SttEngine;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
+use crate::chef::{publier, Message};
 use crate::diag::Diag;
-use crate::interpellation::{charger_stt, erreur, EVENEMENT_QUESTION};
+use crate::interpellation::{charger_stt, erreur};
 use crate::mot_cle::{Action, Ecouteur};
 use crate::porte::Porte;
-use crate::session::{appliquer, etat};
+use crate::session::etat;
 
 /// Après un échec d'ouverture du micro, nouvel essai après ce délai.
 const REESSAI_MICRO: Duration = Duration::from_secs(5);
 /// Période du bilan de charge dans le journal.
 const BILAN: Duration = Duration::from_secs(300);
+/// Événement du niveau du micro (0 à 1), pendant l'écoute.
+pub const EVENEMENT_NIVEAU: &str = "niveau";
+/// Période du niveau envoyé à l'interface (20 par seconde).
+const PERIODE_NIVEAU: f64 = 0.05;
 
 /// Ce que l'application demande au fil d'écoute.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,14 +50,14 @@ pub enum Commande {
 /// Canal vers le fil d'écoute.
 pub struct Ecoute(Mutex<Sender<Commande>>);
 
-/// Lance le fil d'écoute ; les questions repérées partent sur `questions`.
-pub fn installer<R: Runtime>(app: &AppHandle<R>, questions: Sender<String>) {
+/// Lance le fil d'écoute.
+pub fn installer<R: Runtime>(app: &AppHandle<R>) {
     let (tx, rx) = mpsc::channel();
     app.manage(Ecoute(Mutex::new(tx)));
     let app = app.clone();
     std::thread::Builder::new()
         .name("ecoute".into())
-        .spawn(move || Fil::new(app, questions).boucle(rx))
+        .spawn(move || Fil::new(app).boucle(rx))
         .expect("fil d'écoute");
 }
 
@@ -154,11 +160,12 @@ fn transcrire(
     diag: &mut Option<Diag>,
     frame: kobi_stt::AudioFrame,
     t: f64,
-) -> Vec<Action> {
+) -> (Vec<Action>, Vec<kobi_stt::Segment>) {
     if let Some(d) = diag {
         d.trame(frame.t, &frame.samples);
     }
     let mut actions = ecouteur.tick(t);
+    let mut finals = Vec::new();
     let etait_ouverte = porte.ouverte();
     let sorties = porte.trame(frame.t, frame.samples);
     if let (Some(d), true) = (diag.as_mut(), porte.ouverte() != etait_ouverte) {
@@ -182,17 +189,19 @@ fn transcrire(
                         d.segment(&s.text, s.is_final, &suite);
                     }
                     actions.extend(suite);
+                    if s.is_final {
+                        finals.push(s);
+                    }
                 }
             }
             Err(e) => tracing::warn!(erreur = %e, "écoute continue : transcription"),
         }
     }
-    actions
+    (actions, finals)
 }
 
 struct Fil<R: Runtime> {
     app: AppHandle<R>,
-    questions: Sender<String>,
     stt: Result<NemotronEngine, String>,
     entree: Option<Entree>,
     diag: Option<Diag>,
@@ -205,13 +214,16 @@ struct Fil<R: Runtime> {
     audio: f64,
     calcul: Duration,
     bilan: Instant,
+    /// Une réunion est ouverte : la transcription n'est jamais remise à zéro.
+    en_reunion: bool,
+    /// Niveau du micro en cours d'accumulation : (somme des carrés, échantillons).
+    niveau: (f64, usize),
 }
 
 impl<R: Runtime> Fil<R> {
-    fn new(app: AppHandle<R>, questions: Sender<String>) -> Self {
+    fn new(app: AppHandle<R>) -> Self {
         Self {
             app,
-            questions,
             stt: charger_stt(),
             entree: None,
             diag: Diag::ouvrir(),
@@ -222,6 +234,8 @@ impl<R: Runtime> Fil<R> {
             audio: 0.0,
             calcul: Duration::ZERO,
             bilan: Instant::now(),
+            en_reunion: false,
+            niveau: (0.0, 0),
         }
     }
 
@@ -241,8 +255,11 @@ impl<R: Runtime> Fil<R> {
             while let Ok(commande) = rx.try_recv() {
                 self.commande(commande);
             }
+            let session = etat(&self.app).etat;
+            let en_reunion = matches!(session, "reunion" | "pause" | "fin");
+            self.en_reunion = en_reunion;
             // En pause (Kobi ou la réunion), ni micro ni transcription.
-            if self.en_pause || etat(&self.app).etat == "pause" || self.stt.is_err() {
+            if self.en_pause || session == "pause" || self.stt.is_err() {
                 self.fermer_micro();
                 match rx.recv_timeout(Duration::from_millis(500)) {
                     Ok(commande) => self.commande(commande),
@@ -322,9 +339,12 @@ impl<R: Runtime> Fil<R> {
                     std::thread::spawn(move || erreur(&app, "Micro ou transcription", &message));
                     return;
                 }
-                // La phrase en cours est oubliée : la suivante est la question.
-                if let Ok(stt) = self.stt.as_mut() {
-                    stt.reset();
+                // Hors réunion, la phrase en cours est oubliée : la suivante est
+                // la question. En réunion, rien n'est perdu de la transcription.
+                if !self.en_reunion {
+                    if let Ok(stt) = self.stt.as_mut() {
+                        stt.reset();
+                    }
                 }
                 let actions = self.ecouteur.raccourci(self.t);
                 self.executer(actions);
@@ -344,6 +364,7 @@ impl<R: Runtime> Fil<R> {
                 return;
             }
         };
+        self.niveau(&frame.samples);
         let Ok(stt) = self.stt.as_mut() else { return };
         let frame = kobi_stt::AudioFrame {
             source: kobi_stt::Source::Moi,
@@ -354,7 +375,7 @@ impl<R: Runtime> Fil<R> {
         self.audio += frame.samples.len() as f64 / kobi_stt::SAMPLE_RATE as f64;
         let debut = Instant::now();
         let t = self.t;
-        let actions = transcrire(
+        let (actions, finals) = transcrire(
             stt,
             &mut self.porte,
             &mut self.ecouteur,
@@ -363,6 +384,9 @@ impl<R: Runtime> Fil<R> {
             t,
         );
         self.calcul += debut.elapsed();
+        for s in finals {
+            publier(&self.app, Message::Segment(s));
+        }
         self.executer(actions);
 
         if self.bilan.elapsed() >= BILAN {
@@ -378,42 +402,52 @@ impl<R: Runtime> Fil<R> {
         }
     }
 
+    /// Niveau du micro, 20 fois par seconde, seulement quand Kobi écoute.
+    fn niveau(&mut self, samples: &[f32]) {
+        self.niveau.0 += samples
+            .iter()
+            .map(|&x| f64::from(x) * f64::from(x))
+            .sum::<f64>();
+        self.niveau.1 += samples.len();
+        if (self.niveau.1 as f64) < PERIODE_NIVEAU * kobi_stt::SAMPLE_RATE as f64 {
+            return;
+        }
+        let rms = (self.niveau.0 / self.niveau.1 as f64).sqrt();
+        self.niveau = (0.0, 0);
+        if etat(&self.app).mascotte == "listen" {
+            let _ = self.app.emit(EVENEMENT_NIVEAU, niveau_normalise(rms));
+        }
+    }
+
     fn executer(&mut self, actions: Vec<Action>) {
         for action in actions {
-            match action {
-                Action::Interpeller => match appliquer(&self.app, &[Evenement::Interpellation]) {
-                    Ok(_) => tracing::info!("Kobi interpellé"),
-                    Err(refus) => {
-                        tracing::info!(%refus, "interpellation ignorée");
-                        self.note(&format!("interpellation refusée par la session : {refus}"));
-                        self.ecouteur.refusee();
-                        return;
-                    }
-                },
-                Action::Question(q) => {
-                    let _ = self.app.emit(EVENEMENT_QUESTION, &q);
+            let message = match action {
+                Action::Interpeller => {
+                    tracing::info!("Kobi interpellé");
+                    Message::Interpelle
                 }
+                Action::Question(q) => Message::QuestionPartielle(q),
                 Action::Envoyer(q) => {
-                    // La question est partie : la transcription repart d'un flux neuf.
-                    if let Ok(stt) = self.stt.as_mut() {
-                        stt.reset();
-                    }
                     tracing::info!(longueur = q.len(), "question transcrite");
-                    match appliquer(&self.app, &[Evenement::QuestionEnvoyee]) {
-                        Ok(_) => {
-                            let _ = self.app.emit(EVENEMENT_QUESTION, &q);
-                            let _ = self.questions.send(q);
-                        }
-                        Err(refus) => self.note(&format!("question refusée : {refus}")),
+                    Message::Question {
+                        texte: q,
+                        voix: true,
                     }
                 }
                 Action::Abandonner => {
                     tracing::info!("interpellation sans question");
-                    let _ = appliquer(&self.app, &[Evenement::PasDeQuestion]);
+                    Message::SansQuestion
                 }
-            }
+            };
+            publier(&self.app, message);
         }
     }
+}
+
+/// Niveau RMS ramené entre 0 et 1 : -60 dBFS (silence) à -10 dBFS (voix forte).
+pub fn niveau_normalise(rms: f64) -> f32 {
+    let db = 20.0 * rms.max(1e-10).log10();
+    ((db + 60.0) / 50.0).clamp(0.0, 1.0) as f32
 }
 
 #[cfg(test)]
@@ -421,6 +455,14 @@ mod tests {
     use super::*;
     use crate::interpellation::modele_nemotron;
     use std::path::Path;
+
+    #[test]
+    fn niveau_entre_zero_et_un() {
+        assert_eq!(niveau_normalise(0.0), 0.0);
+        assert_eq!(niveau_normalise(1.0), 1.0);
+        let parole = niveau_normalise(0.03);
+        assert!(parole > 0.4 && parole < 0.6, "{parole}");
+    }
 
     /// Rejoue un WAV dans Nemotron et l'écoute comme le fil le fait avec le
     /// micro (trames de 10 ms, puis 3 s de silence). Renvoie les actions et
@@ -443,16 +485,11 @@ mod tests {
                 t: i as f64 * 0.01,
             };
             let t = frame.end();
-            let suite = transcrire(stt, &mut porte, &mut ecouteur, diag, frame, t);
+            let (suite, _) = transcrire(stt, &mut porte, &mut ecouteur, diag, frame, t);
             if let Some(d) = diag {
                 finals.extend(d.finals());
             }
-            for a in suite {
-                if matches!(a, Action::Envoyer(_)) {
-                    stt.reset();
-                }
-                actions.push(a);
-            }
+            actions.extend(suite);
         }
         (actions, finals)
     }

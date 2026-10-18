@@ -1,0 +1,228 @@
+//! Écrivain (KOB-134) : toutes les écritures sur le disque passent par un
+//! fil à part, dans l'ordre où le chef les demande. Chaque segment et chaque
+//! tour de conversation est poussé sur le disque (fsync) : sur un disque
+//! lent, cela ne retarde ni les questions ni l'interface.
+
+use std::path::PathBuf;
+use std::sync::mpsc::{self, Sender};
+
+use kobi_session::stockage::{Conversation, Qui, ReunionOuverte, Stockage};
+use kobi_stt::Segment;
+
+/// Ce que l'écrivain garde ouvert.
+#[derive(Default)]
+pub struct Disque {
+    reunion: Option<ReunionOuverte>,
+    conversation: Option<Conversation>,
+    compte: Option<Box<dyn Fn(Nouvelle) + Send>>,
+}
+
+impl Disque {
+    fn compter(&self, compte: Nouvelle) {
+        if let Some(f) = &self.compte {
+            f(compte);
+        }
+    }
+}
+
+type Ecriture = Box<dyn FnOnce(&mut Disque) + Send>;
+
+/// Poignée de l'écrivain.
+pub struct Ecrivain(Sender<Ecriture>);
+
+/// Ce que l'écrivain signale au chef.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Nouvelle {
+    /// Fichiers de la réunion créés, dans ce dossier.
+    ReunionOuverte(PathBuf),
+    /// Compte rendu écrit, à ce chemin.
+    CompteRenduEcrit(PathBuf),
+    Erreur(String),
+}
+
+impl Ecrivain {
+    /// Lance le fil ; `compte` reçoit ce que le chef doit savoir.
+    pub fn lancer(compte: impl Fn(Nouvelle) + Send + 'static) -> Self {
+        let (tx, rx) = mpsc::channel::<Ecriture>();
+        std::thread::Builder::new()
+            .name("ecrivain".into())
+            .spawn(move || {
+                let mut disque = Disque {
+                    compte: Some(Box::new(compte)),
+                    ..Disque::default()
+                };
+                while let Ok(ecriture) = rx.recv() {
+                    ecriture(&mut disque);
+                }
+            })
+            .expect("fil de l'écrivain");
+        Self(tx)
+    }
+
+    fn envoyer(&self, ecriture: impl FnOnce(&mut Disque) + Send + 'static) {
+        let _ = self.0.send(Box::new(ecriture));
+    }
+
+    /// Crée les fichiers de la réunion.
+    pub fn ouvrir_reunion(&self, stockage: Stockage, debut_ms: u64) {
+        self.envoyer(move |d| match stockage.nouvelle_reunion(debut_ms, None) {
+            Ok(r) => {
+                let dossier = r.dossier().to_path_buf();
+                d.reunion = Some(r);
+                d.compter(Nouvelle::ReunionOuverte(dossier));
+            }
+            Err(e) => d.compter(Nouvelle::Erreur(format!(
+                "Je n'arrive pas à créer le dossier de la réunion : {e}"
+            ))),
+        });
+    }
+
+    pub fn segment(&self, segment: Segment) {
+        self.envoyer(move |d| {
+            if let Some(r) = &mut d.reunion {
+                if let Err(e) = r.ecrire_segment(&segment) {
+                    tracing::warn!(erreur = %e, "transcript.jsonl");
+                }
+            }
+        });
+    }
+
+    pub fn notes(&self, notes: String) {
+        self.envoyer(move |d| {
+            if let Some(r) = &d.reunion {
+                if let Err(e) = r.ecrire_notes(&notes) {
+                    tracing::warn!(erreur = %e, "notes.md");
+                }
+            }
+        });
+    }
+
+    /// Compte rendu, notes finales et fin de la réunion ; ferme ses fichiers.
+    pub fn terminer_reunion(&self, compte_rendu: String, notes: String, fin_ms: u64) {
+        self.envoyer(move |d| {
+            let Some(mut r) = d.reunion.take() else {
+                d.compter(Nouvelle::Erreur(
+                    "Compte rendu non rangé : les fichiers de la réunion manquent.".into(),
+                ));
+                return;
+            };
+            if let Err(e) = r.ecrire_compte_rendu(&compte_rendu) {
+                tracing::warn!(erreur = %e, "compte-rendu.md");
+            }
+            if let Err(e) = r.ecrire_notes(&notes) {
+                tracing::warn!(erreur = %e, "notes.md");
+            }
+            if let Err(e) = r.terminer(fin_ms) {
+                tracing::warn!(erreur = %e, "reunion.json");
+            }
+            d.compter(Nouvelle::CompteRenduEcrit(
+                r.dossier().join("compte-rendu.md"),
+            ));
+        });
+    }
+
+    /// Range un tour de la conversation du quotidien ; la conversation est
+    /// créée au premier tour.
+    pub fn tour(&self, stockage: Stockage, debut_ms: u64, qui: Qui, texte: String, voix: bool) {
+        self.envoyer(move |d| {
+            let c = d
+                .conversation
+                .get_or_insert_with(|| stockage.nouvelle_conversation(debut_ms));
+            if let Err(e) = c.ajouter(qui, &texte, voix) {
+                tracing::warn!(erreur = %e, "conversation non rangée");
+            }
+        });
+    }
+
+    /// La conversation est finie : le prochain tour en ouvre une autre.
+    pub fn fermer_conversation(&self) {
+        self.envoyer(|d| d.conversation = None);
+    }
+
+    /// Attend que tout ce qui a été demandé soit écrit (tests).
+    #[cfg(test)]
+    pub fn attendre(&self) {
+        let (tx, rx) = mpsc::channel();
+        self.envoyer(move |_| {
+            let _ = tx.send(());
+        });
+        let _ = rx.recv();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    fn segment(t: f64, texte: &str) -> Segment {
+        Segment {
+            text: texte.into(),
+            start: t,
+            end: t + 1.0,
+            is_final: true,
+            source: kobi_stt::Source::Moi,
+        }
+    }
+
+    #[test]
+    fn reunion_ecrite_dans_l_ordre() {
+        let dir = tempfile::tempdir().unwrap();
+        let stockage = Stockage::new(dir.path());
+        let comptes = Arc::new(Mutex::new(Vec::new()));
+        let c = comptes.clone();
+        let e = Ecrivain::lancer(move |compte| c.lock().unwrap().push(compte));
+        e.ouvrir_reunion(stockage.clone(), 1_000);
+        e.segment(segment(0.0, "on commence"));
+        e.segment(segment(2.0, "le budget"));
+        e.notes("- budget".into());
+        e.terminer_reunion("## Résumé\n- budget".into(), "- budget".into(), 2_000);
+        e.attendre();
+        let comptes = comptes.lock().unwrap();
+        let Nouvelle::ReunionOuverte(dossier) = &comptes[0] else {
+            panic!("{comptes:?}");
+        };
+        let transcript = std::fs::read_to_string(dossier.join("transcript.jsonl")).unwrap();
+        let textes: Vec<_> = transcript
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| serde_json::from_str::<Segment>(l).unwrap().text)
+            .collect();
+        assert_eq!(textes, ["on commence", "le budget"]);
+        assert_eq!(
+            comptes[1],
+            Nouvelle::CompteRenduEcrit(dossier.join("compte-rendu.md"))
+        );
+        let lue = stockage
+            .lire_reunion(&stockage.reunions().unwrap()[0].nom)
+            .unwrap();
+        assert_eq!(lue.resume.fin_ms, Some(2_000));
+        assert_eq!(lue.notes.trim(), "- budget");
+    }
+
+    #[test]
+    fn conversation_creee_au_premier_tour() {
+        let dir = tempfile::tempdir().unwrap();
+        let stockage = Stockage::new(dir.path());
+        let e = Ecrivain::lancer(|_| {});
+        e.tour(
+            stockage.clone(),
+            1_000,
+            Qui::Moi,
+            "quelle heure ?".into(),
+            true,
+        );
+        e.tour(stockage.clone(), 1_000, Qui::Kobi, "midi".into(), false);
+        e.fermer_conversation();
+        e.tour(
+            stockage.clone(),
+            90_000_000,
+            Qui::Moi,
+            "et demain ?".into(),
+            false,
+        );
+        e.attendre();
+        let conversations = stockage.conversations().unwrap();
+        assert_eq!(conversations.len(), 2, "{conversations:?}");
+    }
+}

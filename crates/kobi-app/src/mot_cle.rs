@@ -216,7 +216,10 @@ impl Ecouteur {
                     vec![Action::Abandonner]
                 } else {
                     let q = self.derniere.clone();
-                    vec![self.envoyer(&q)]
+                    let envoi = self.envoyer(&q);
+                    // Le reste de la phrase ne repart pas une seconde fois.
+                    self.attente = Attente::Ignore;
+                    vec![envoi]
                 }
             }
             _ => Vec::new(),
@@ -231,12 +234,6 @@ impl Ecouteur {
         };
         self.derniere.clear();
         vec![Action::Interpeller]
-    }
-
-    /// La session a refusé l'interpellation (Kobi répond déjà, par exemple).
-    pub fn refusee(&mut self) {
-        self.attente = Attente::Ignore;
-        self.derniere.clear();
     }
 
     fn afficher(&mut self, q: &str, actions: &mut Vec<Action>) {
@@ -457,12 +454,13 @@ mod tests {
     }
 
     #[test]
-    fn occupe_la_phrase_est_ignoree() {
+    fn question_trop_longue_le_reste_est_ignore() {
         let mut e = Ecouteur::default();
-        assert_eq!(e.segment("Kobi", false, 1.0), [Interpeller]);
-        e.refusee();
-        assert!(e.segment("Kobi encore", false, 1.5).is_empty());
-        assert!(e.segment("Kobi encore ?", true, 2.0).is_empty());
-        assert_eq!(e.segment("Kobi, et là ?", true, 5.0)[0], Interpeller);
+        assert_eq!(e.segment("Kobi, raconte", false, 1.0)[0], Interpeller);
+        let envoi = e.tick(1.0 + QUESTION_MAX + 0.1);
+        assert!(matches!(envoi[..], [Envoyer(_)]), "{envoi:?}");
+        assert!(e.segment("Kobi, raconte encore", false, 30.0).is_empty());
+        assert!(e.segment("Kobi, raconte encore ?", true, 31.0).is_empty());
+        assert_eq!(e.segment("Kobi, et là ?", true, 35.0)[0], Interpeller);
     }
 }
