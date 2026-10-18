@@ -20,7 +20,7 @@ pub const FENETRE: &str = "notes";
 /// Taille du panneau, en pixels logiques ; replié, il garde l'en-tête et la
 /// dernière note.
 const TAILLE: (f64, f64) = (360.0, 480.0);
-const TAILLE_REPLIEE: (f64, f64) = (360.0, 150.0);
+const TAILLE_REPLIEE: (f64, f64) = (360.0, 170.0);
 
 /// Écart entre le panneau et la mascotte, en pixels logiques.
 const ECART: f64 = 12.0;
