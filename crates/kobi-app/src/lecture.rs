@@ -178,11 +178,7 @@ pub fn arguments(
         prompt.push_str("\n\n");
         prompt.push_str(crate::mcp_config::PROMPT_MCP_KOBI);
         if let Some(utilisateur) = &mcp.prompt {
-            prompt.push_str(
-                "
-
-",
-            );
+            prompt.push_str("\n\n");
             prompt.push_str(utilisateur);
         }
     }
@@ -461,7 +457,8 @@ mod tests {
         // Écriture et commandes restent interdites, MCP ou pas.
         assert!(valeur(&args, "--disallowedTools")[0].contains("Write"));
         let prompt = valeur(&args, "--append-system-prompt")[0];
-        assert!(prompt.ends_with("## Outils MCP connectés"), "{prompt}");
+        // Les outils connectés précèdent la carte des dépôts (KOB-153), en fin.
+        assert!(prompt.contains("\n\n## Outils MCP connectés"), "{prompt}");
     }
 
     #[test]
