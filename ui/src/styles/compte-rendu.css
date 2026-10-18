@@ -1,0 +1,161 @@
+/* Compte rendu de fin de réunion (KOB-74) : carte « Compte rendu prêt »,
+   repliée en pastille au-dessus du champ. Aux couleurs de Kobi.
+   Toujours animé, jamais l'élément cliquable lui-même. */
+
+.card-rapport {
+  --r: -1deg;
+  position: absolute;
+  left: 40px;
+  top: 40px;
+  z-index: 8;
+  box-sizing: border-box;
+  width: 380px;
+  padding: 18px 20px 20px;
+  border-radius: 12px;
+  background: var(--paper);
+  color: var(--ink);
+  border: 2.5px solid var(--ink);
+  box-shadow: 8px 8px 0 var(--ink);
+  font-family: var(--font);
+  transform: rotate(var(--r));
+  animation: deal 0.35s cubic-bezier(0.3, 1.4, 0.5, 1) both;
+}
+.card-rapport[hidden],
+.rapport-pastille[hidden] {
+  display: none;
+}
+/* La carte passe devant : les bulles attendent. */
+.rapport-open .bubbles .card {
+  visibility: hidden;
+}
+.card-rapport .kicker {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-variation-settings: 'MONO' 1, 'wght' 700;
+}
+.card-rapport .title {
+  margin-top: 6px;
+  font-size: 24px;
+  line-height: 1.15;
+  font-variation-settings: 'CASL' 1, 'wght' 900;
+}
+.rapport-resume {
+  display: -webkit-box;
+  margin: 8px 0 10px;
+  overflow: hidden;
+  font-size: 16px;
+  line-height: 1.45;
+  white-space: pre-line;
+  font-variation-settings: 'CASL' 1, 'wght' 480;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+}
+.rapport-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.rapport-chip {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--ink);
+  font-size: 12px;
+  font-variation-settings: 'MONO' 1, 'wght' 650;
+  animation: chip-float 3.2s ease-in-out infinite;
+}
+.rapport-chip:nth-child(2) {
+  animation-delay: -1.1s;
+  animation-duration: 3.6s;
+}
+.rapport-chip:nth-child(3) {
+  animation-delay: -2.2s;
+  animation-duration: 2.9s;
+}
+.card-rapport .buttons {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+}
+.card-rapport .btn {
+  min-height: 44px;
+  padding: 0 18px;
+  border-radius: 999px;
+  border: 2.5px solid var(--ink);
+  background: transparent;
+  color: var(--ink);
+  font: 800 15px var(--font);
+  cursor: pointer;
+}
+.card-rapport .btn-primary {
+  position: relative;
+  padding: 0 20px;
+  background: var(--ink);
+  color: var(--accent);
+}
+.card-rapport .btn:focus-visible,
+.rapport-pastille:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+.card-rapport .kicker {
+  display: inline-block;
+  transform-origin: 0 100%;
+  animation: kicker-bob 2.8s ease-in-out infinite;
+}
+.card-rapport .title {
+  animation: title-sway 4.2s ease-in-out infinite;
+}
+.card-rapport .btn-primary::after {
+  content: '';
+  position: absolute;
+  inset: -2.5px;
+  border-radius: inherit;
+  border: 2.5px solid var(--ink);
+  pointer-events: none;
+  animation: btn-halo 2.4s ease-out infinite;
+}
+
+/* Repliée : une pastille au-dessus du champ, qui ouvre le compte rendu. */
+.rapport-pastille {
+  position: absolute;
+  left: 40px;
+  top: 428px;
+  z-index: 7;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px 6px 6px;
+  border-radius: 999px;
+  border: 2.5px solid var(--ink);
+  background: var(--ink);
+  color: var(--paper);
+  box-shadow: 4px 4px 0 var(--accent);
+  font: 750 14px var(--font);
+  cursor: pointer;
+  animation: notif-in 0.4s cubic-bezier(0.3, 1.4, 0.5, 1) both;
+}
+.rapport-icone {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--ink);
+  font-size: 14px;
+  font-variation-settings: 'MONO' 1, 'wght' 900;
+  animation: notif-pop 2.2s ease-in-out infinite;
+}
+
+/* Réduire les animations : tout est posé. */
+.reduced-motion .card-rapport,
+.reduced-motion .card-rapport *,
+.reduced-motion .card-rapport *::after,
+.reduced-motion .rapport-pastille,
+.reduced-motion .rapport-pastille * {
+  animation: none !important;
+}

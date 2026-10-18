@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use kobi_session::etat::Evenement;
-use kobi_session::stockage::{maintenant_ms, Qui};
+use kobi_session::stockage::{maintenant_ms, CompteRendu, Qui};
 use kobi_stt::Segment;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
@@ -37,6 +37,8 @@ pub const EVENEMENT_CONVERSATION: &str = "conversation";
 pub const EVENEMENT_CARTE: &str = "carte";
 /// `notes.md` vient d'être écrit (panneau des notes en direct, KOB-73).
 pub const EVENEMENT_NOTES: &str = "notes";
+/// Compte rendu de fin de réunion, prêt à ouvrir dans le Carnet (KOB-74).
+pub const EVENEMENT_COMPTE_RENDU: &str = "compte_rendu";
 
 /// Premier bloc de notes après ce délai, puis toutes les `interval_min`.
 const PREMIER_BLOC: Duration = Duration::from_secs(60);
@@ -118,6 +120,38 @@ pub struct Bulle {
     pub statut: &'static str,
     /// Question tapée au clavier.
     pub clavier: bool,
+}
+
+/// Compte rendu de fin de réunion, résumé pour la carte de Kobi : un clic
+/// l'ouvre dans le Carnet (`ouvrir_carnet { reunion }`).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct CompteRenduUi {
+    /// Nom de la réunion dans le stockage (son dossier).
+    pub reunion: String,
+    pub resume: String,
+    pub decisions: usize,
+    pub actions: usize,
+    pub questions: usize,
+}
+
+/// Résume `compte-rendu.md` pour l'interface : le résumé et le nombre de
+/// puces de chaque section.
+pub fn compte_rendu_ui(reunion: &str, markdown: &str) -> CompteRenduUi {
+    let cr = CompteRendu::depuis_markdown(markdown);
+    let puces = |section: &str| {
+        section
+            .lines()
+            .map(str::trim_start)
+            .filter(|l| l.starts_with("- ") || l.starts_with("* "))
+            .count()
+    };
+    CompteRenduUi {
+        reunion: reunion.to_owned(),
+        resume: cr.resume.trim().to_owned(),
+        decisions: puces(&cr.decisions),
+        actions: puces(&cr.actions),
+        questions: puces(&cr.questions),
+    }
 }
 
 /// Carte de confirmation, au format `ActionCard` de l'interface.
@@ -921,6 +955,19 @@ impl<R: Runtime> Chef<R> {
             }
             Nouvelle::CompteRenduEcrit(chemin) => {
                 tracing::info!(fichier = %chemin.display(), "compte rendu écrit");
+                let reunion = chemin
+                    .parent()
+                    .and_then(|d| d.file_name())
+                    .map(|n| n.to_string_lossy().into_owned());
+                match (reunion, std::fs::read_to_string(&chemin)) {
+                    (Some(reunion), Ok(texte)) => {
+                        let _ = self
+                            .app
+                            .emit(EVENEMENT_COMPTE_RENDU, compte_rendu_ui(&reunion, &texte));
+                    }
+                    (_, Err(e)) => tracing::warn!(erreur = %e, "compte rendu illisible"),
+                    _ => {}
+                }
                 self.tour += 1;
                 self.ajouter(Bulle {
                     tour: self.tour,
@@ -1074,6 +1121,24 @@ pub fn fabrique_claude(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compte_rendu_resume_pour_la_carte() {
+        let md = "# Compte rendu\n\n## Résumé\nBudget du séminaire validé.\nLieu : Annecy.\n\n## Décisions\n- Budget validé\n- Annecy\n\n## Actions\n- [ ] Sophie : devis\n\n## Questions ouvertes\n- Date exacte ?\n\n## Interpellations\n- Kobi, le budget ? : 12 k€\n";
+        let ui = compte_rendu_ui("2026-10-18-point-hebdo", md);
+        assert_eq!(ui.reunion, "2026-10-18-point-hebdo");
+        assert_eq!(ui.resume, "Budget du séminaire validé.\nLieu : Annecy.");
+        assert_eq!((ui.decisions, ui.actions, ui.questions), (2, 1, 1));
+        // Compte rendu de secours (Claude en échec) : pas de sections, rien à compter.
+        let secours = compte_rendu_ui(
+            "r",
+            "# Compte rendu\n\nLe compte rendu n'a pas pu être écrit.\n",
+        );
+        assert_eq!(
+            (secours.decisions, secours.actions, secours.questions),
+            (0, 0, 0)
+        );
+    }
 
     #[test]
     fn compteur_de_notes() {
