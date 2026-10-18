@@ -249,7 +249,11 @@ pub fn installer<R: Runtime>(builder: Builder<R>) -> Builder<R> {
             crate::bienvenue::raccourcis,
             crate::bienvenue::etat_modele,
             crate::bienvenue::telecharger_modele,
-            crate::bienvenue::annuler_telechargement
+            crate::bienvenue::annuler_telechargement,
+            crate::notes::notes_en_cours,
+            crate::notes::basculer_notes,
+            crate::notes::replier_notes,
+            crate::notes::fermer_notes
         ])
 }
 

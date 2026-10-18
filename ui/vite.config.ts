@@ -4,8 +4,8 @@ import { defineConfig } from 'vite';
 const page = (fichier: string) => fileURLToPath(new URL(fichier, import.meta.url));
 
 // Tauri sert `dist/` ; en développement, le serveur Vite sur le port 1420.
-// Quatre pages : la mascotte, le Carnet (KOB-140), les Réglages et le
-// premier lancement (KOB-144).
+// Pages : la mascotte, le Carnet (KOB-140), les Réglages, le premier
+// lancement (KOB-144) et les notes en direct (KOB-73).
 export default defineConfig({
   clearScreen: false,
   server: { port: 1420, strictPort: true },
@@ -18,6 +18,7 @@ export default defineConfig({
         carnet: page('./carnet.html'),
         reglages: page('./reglages.html'),
         bienvenue: page('./bienvenue.html'),
+        notes: page('./notes.html'),
       },
     },
   },

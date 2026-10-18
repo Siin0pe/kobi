@@ -1,0 +1,280 @@
+/* Panneau des notes en direct : une fiche papier, l'en-tête noir de Kobi,
+   la dernière note sur le vert. */
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--papier);
+  color: var(--ink);
+  font-family: var(--font);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+#app {
+  height: 100%;
+}
+button {
+  font-family: inherit;
+}
+.panneau-notes {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  box-sizing: border-box;
+  border: 3px solid var(--ink);
+  background:
+    repeating-linear-gradient(to bottom, transparent 0 27px, rgba(11, 11, 11, 0.05) 27px 28px),
+    var(--papier);
+}
+
+.tete {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 10px 10px 12px;
+  background: var(--ink);
+  color: var(--papier);
+  cursor: grab;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.mini-kobi {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  width: 44px;
+  height: 26px;
+  border-radius: 13px;
+  background: var(--ink);
+  color: var(--acide);
+  box-shadow: 0 0 0 2px var(--acide);
+  font-size: 16px;
+  font-variation-settings: 'wght' 800, 'CASL' 1;
+  animation: griffonne 0.6s steps(2) infinite;
+}
+.oeil {
+  display: inline-block;
+  width: 10px;
+  text-align: center;
+}
+@keyframes griffonne {
+  0%, 100% { transform: rotate(-4deg) translateX(0); }
+  50% { transform: rotate(-4deg) translateX(-2px); }
+}
+.tete-texte {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+}
+.rec-pastille {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  font-variation-settings: 'wght' 850, 'MONO' 1;
+  color: var(--danger);
+}
+.rec-point {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--danger);
+  animation: pulse-rec 1.2s ease-in-out infinite;
+}
+@keyframes pulse-rec {
+  50% { opacity: 0.3; transform: scale(0.7); }
+}
+body[data-etat='hors-reunion'] .rec-pastille {
+  visibility: hidden;
+}
+.duree {
+  color: var(--papier);
+  opacity: 0.8;
+}
+.titre {
+  margin: 0;
+  font-size: 17px;
+  line-height: 1.2;
+  font-variation-settings: 'wght' 900, 'CASL' 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.icone {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border: 2px solid var(--papier);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--papier);
+  font-size: 16px;
+  line-height: 1;
+  font-variation-settings: 'wght' 900;
+  cursor: pointer;
+  transition: transform 0.3s var(--ressort), background-color 0.15s, color 0.15s;
+}
+.icone:hover {
+  background: var(--acide);
+  color: var(--ink);
+  border-color: var(--acide);
+  transform: scale(1.12) rotate(-8deg);
+}
+.icone:focus-visible {
+  outline: 3px solid var(--acide);
+  outline-offset: 2px;
+}
+
+.derniere {
+  margin: 12px 12px 4px;
+  padding: 10px 14px;
+  border: 2px solid var(--ink);
+  border-radius: 16px;
+  background: var(--acide);
+  box-shadow: 4px 4px 0 var(--ink);
+}
+body[data-etat='hors-reunion'] .derniere,
+body[data-etat='attente'] .derniere {
+  background: #fff;
+  box-shadow: 4px 4px 0 rgba(11, 11, 11, 0.15);
+}
+.derniere.arrive {
+  animation: arrive 0.6s var(--ressort);
+}
+@keyframes arrive {
+  0% { transform: translateY(-10px) scale(0.96) rotate(-1deg); }
+  45% { transform: translateY(2px) scale(1.03) rotate(0.6deg); }
+}
+.derniere-etiquette {
+  margin: 0 0 2px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-variation-settings: 'wght' 850, 'MONO' 1;
+}
+.quand {
+  font-variation-settings: 'wght' 500, 'MONO' 1;
+}
+.derniere-texte {
+  margin: 0;
+  font-size: 15.5px;
+  line-height: 1.4;
+  font-variation-settings: 'wght' 750, 'CASL' 0.7;
+}
+
+.sections {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 12px 14px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--ink) transparent;
+}
+.panneau-notes[data-replie='true'] .sections {
+  display: none;
+}
+.section {
+  margin-top: 8px;
+  animation: entre 0.4s var(--ressort) backwards;
+}
+.section summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px;
+  cursor: pointer;
+  list-style: none;
+  border-bottom: 2px solid var(--ink);
+}
+.section summary::-webkit-details-marker {
+  display: none;
+}
+.section summary::before {
+  content: '▸';
+  display: inline-block;
+  transition: transform 0.3s var(--ressort);
+  font-size: 12px;
+}
+.section[open] summary::before {
+  transform: rotate(90deg);
+}
+.section summary:focus-visible {
+  outline: 3px solid var(--ink);
+  outline-offset: 2px;
+}
+.section-titre {
+  font-size: 12.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-variation-settings: 'wght' 900, 'MONO' 1;
+}
+.nombre {
+  margin-left: auto;
+  min-width: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--ink);
+  color: var(--acide);
+  font-size: 11px;
+  text-align: center;
+  font-variation-settings: 'wght' 800, 'MONO' 1;
+}
+.section .md {
+  padding: 6px 2px 0;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.md ul,
+.md ol {
+  margin: 0;
+  padding-left: 18px;
+}
+.md li {
+  margin: 3px 0;
+}
+.md li.tache {
+  list-style: none;
+  margin-left: -18px;
+  display: flex;
+  gap: 8px;
+}
+.md .case {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  margin-top: 4px;
+  border: 2px solid var(--ink);
+  border-radius: 4px;
+}
+.md li.tache[data-fait='true'] .case {
+  background: var(--ink);
+}
+.md p {
+  margin: 0 0 6px;
+}
+.md code {
+  font-family: var(--font);
+  font-variation-settings: 'MONO' 1;
+  font-size: 0.92em;
+  background: rgba(11, 11, 11, 0.07);
+  padding: 0 4px;
+  border-radius: 4px;
+}
+li.nouvelle {
+  animation: nouvelle 1.6s ease-out;
+  border-radius: 6px;
+}
+@keyframes nouvelle {
+  0% { background: var(--acide); transform: translateX(-12px); }
+  25% { transform: translateX(2px); }
+  60% { background: var(--acide); }
+  100% { background: transparent; }
+}
+.vide {
+  margin: 4px 0;
+  font-size: 13.5px;
+  color: var(--muted);
+}

@@ -6,6 +6,7 @@ import { isMascotState, STATES, type MascotData, type MascotState } from './stat
 import { demoData, playDemo } from './demo';
 import { command, enableWindowDrag, followSession, type Command, type SessionState } from './native';
 import { applyRecording, type RecordingState } from './recording';
+import { relierNotes } from './notes-lien';
 import { Stage } from './stage';
 import { applyCarte, enableInterrupt, followCartes, type CarteUi } from './cartes';
 import { Conversation, followConversation, type Bulle } from './conversation';
@@ -28,6 +29,7 @@ const stage = new Stage(document.getElementById('app')!, {
   reducedMotion: reduced === null ? undefined : reduced === '1',
 });
 enableWindowDrag(stage.root);
+relierNotes(stage.root);
 followSession(stage);
 
 // Conversation (KOB-133), tâches longues (KOB-135), cartes et interruption.
