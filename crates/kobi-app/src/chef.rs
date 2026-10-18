@@ -56,6 +56,9 @@ const ETAPES: usize = 24;
 /// nouveau tour : lecture de la réponse (25 s au plus) et suite possible
 /// sans redire « Kobi » (20 s, KOB-133).
 const FIN_CONVERSATION: Duration = Duration::from_secs(45);
+/// Un arrêt de la réunion à la voix ou par Claude s'annule pendant ce temps
+/// (« reprends », KOB-165) : le compte rendu attend jusque-là.
+pub const ANNULATION: Duration = Duration::from_secs(30);
 
 /// Ce qui arrive au chef.
 #[derive(Debug, Clone, PartialEq)]
@@ -261,6 +264,9 @@ struct EnCours {
     envoye: Option<String>,
     prochain_bloc: Instant,
     fin_demandee: bool,
+    /// Arrêt annulable (KOB-165) : le compte rendu est demandé à cet
+    /// instant, sauf « reprends » d'ici là.
+    fin_differee: Option<Instant>,
 }
 
 /// Le chef, partagé entre son fil et les commandes de l'interface.
@@ -623,6 +629,20 @@ impl<R: Runtime> Chef<R> {
             }
             None => {}
         }
+        // « Reprends », « c'était une erreur » juste après un arrêt (KOB-165).
+        if self.fin_annulable() && crate::intentions::annule_la_fin(&texte) {
+            self.transition(&[Evenement::PasDeQuestion]);
+            let reponse = self.piloter(Intention::Reprendre, true);
+            self.tour += 1;
+            self.ajouter(Bulle {
+                tour: self.tour,
+                question: texte,
+                reponse,
+                statut: "fini",
+                clavier: !voix,
+            });
+            return;
+        }
         let mut consigne = None;
         match intention(&texte) {
             Some(Intention::Interrompre) => {
@@ -681,7 +701,7 @@ impl<R: Runtime> Chef<R> {
         if let Some(i) = intention(&texte).filter(|_| consigne.is_none()) {
             tracing::info!(intention = ?i, "ordre vocal");
             self.transition(&[Evenement::PasDeQuestion]);
-            let reponse = self.commande(i);
+            let reponse = self.piloter(i, true);
             self.tour += 1;
             self.ajouter(Bulle {
                 tour: self.tour,
@@ -710,7 +730,7 @@ impl<R: Runtime> Chef<R> {
         }
         self.cerveau.demander(Demande::Question {
             tour: self.tour,
-            question: consigne.unwrap_or_else(|| texte.clone()),
+            question: self.avec_etat_de_la_reunion(consigne.unwrap_or_else(|| texte.clone())),
             transcript: std::mem::take(&mut self.pour_conversation),
             notes,
         });
@@ -775,9 +795,47 @@ impl<R: Runtime> Chef<R> {
         self.emettre_historique();
     }
 
-    /// Ordre (voix, menu ou interface) ; renvoie la phrase de confirmation.
+    /// Ordre (menu, raccourci, interface ou CLI) ; renvoie la phrase de
+    /// confirmation, affichée et dite.
     pub fn commande(&mut self, intention: Intention) -> String {
+        let Some(reponse) = self.executer(intention) else {
+            return String::new();
+        };
+        self.emettre_enregistrement();
+        let _ = self.app.emit(EVENEMENT_REPONSE, &reponse);
+        crate::voix::dire(&self.app, &reponse);
+        reponse
+    }
+
+    /// Ordre de réunion entendu (chemin rapide) ou décidé par Claude avec le
+    /// MCP de Kobi (KOB-165) : pas de carte, Kobi agit tout de suite, et un
+    /// arrêt s'annule pendant [`ANNULATION`]. `annoncer` : Kobi affiche et
+    /// dit la confirmation (Claude, lui, l'annonce dans sa réponse).
+    pub fn piloter(&mut self, intention: Intention, annoncer: bool) -> String {
         let reponse = match intention {
+            Intention::TerminerReunion => Some(self.arreter_annulable()),
+            i => self.executer(i),
+        };
+        let Some(reponse) = reponse else {
+            return String::new();
+        };
+        self.emettre_enregistrement();
+        if annoncer {
+            let _ = self.app.emit(EVENEMENT_REPONSE, &reponse);
+            crate::voix::dire(&self.app, &reponse);
+        }
+        reponse
+    }
+
+    /// Un arrêt de la réunion peut-il encore s'annuler ?
+    pub fn fin_annulable(&self) -> bool {
+        self.reunion
+            .as_ref()
+            .is_some_and(|r| r.fin_differee.is_some())
+    }
+
+    fn executer(&mut self, intention: Intention) -> Option<String> {
+        Some(match intention {
             Intention::DemarrerReunion => self.demarrer(),
             Intention::Pause => match &mut self.reunion {
                 Some(r) if !r.pause => {
@@ -788,6 +846,7 @@ impl<R: Runtime> Chef<R> {
                 Some(_) => "La réunion est déjà en pause.".into(),
                 None => "Aucune réunion en cours.".into(),
             },
+            Intention::Reprendre if self.fin_annulable() => self.annuler_fin(),
             Intention::Reprendre => match &mut self.reunion {
                 Some(r) if r.pause => {
                     r.pause = false;
@@ -800,7 +859,7 @@ impl<R: Runtime> Chef<R> {
             Intention::TerminerReunion => self.terminer(),
             Intention::Interrompre => {
                 self.interrompre();
-                return String::new();
+                return None;
             }
             Intention::OuvrirCarnet => match crate::carnet::ouvrir(&self.app) {
                 Ok(()) => "J'ouvre le Carnet.".into(),
@@ -815,12 +874,8 @@ impl<R: Runtime> Chef<R> {
             | Intention::Developpe
             | Intention::EnAnglais
             | Intention::OuEnEst
-            | Intention::Annuler => return String::new(),
-        };
-        self.emettre_enregistrement();
-        let _ = self.app.emit(EVENEMENT_REPONSE, &reponse);
-        crate::voix::dire(&self.app, &reponse);
-        reponse
+            | Intention::Annuler => return None,
+        })
     }
 
     fn demarrer(&mut self) -> String {
@@ -857,6 +912,7 @@ impl<R: Runtime> Chef<R> {
             envoye: None,
             prochain_bloc: debut + PREMIER_BLOC,
             fin_demandee: false,
+            fin_differee: None,
         });
         "C'est parti : j'enregistre la réunion et je prends des notes.".into()
     }
@@ -866,16 +922,61 @@ impl<R: Runtime> Chef<R> {
             return "Aucune réunion en cours.".into();
         };
         if r.fin_demandee {
+            // Arrêt annulable en cours : le raccourci ou le menu le confirment.
+            if r.fin_differee.take().is_some() {
+                self.demander_compte_rendu();
+                return "Réunion terminée : j'écris le compte rendu.".into();
+            }
             return "J'écris déjà le compte rendu.".into();
         }
         r.fin_demandee = true;
-        let transcript = std::mem::take(&mut r.a_noter);
-        let notes = r.notes.clone();
         self.transition(&[Evenement::TerminerReunion]);
         self.emettre_enregistrement();
+        self.demander_compte_rendu();
+        "Réunion terminée : j'écris le compte rendu.".into()
+    }
+
+    /// Arrêt à la voix ou par Claude (KOB-165) : l'enregistrement s'arrête
+    /// tout de suite, le compte rendu attend [`ANNULATION`] ; « reprends »
+    /// d'ici là reprend la même réunion.
+    fn arreter_annulable(&mut self) -> String {
+        let Some(r) = &mut self.reunion else {
+            return "Aucune réunion en cours.".into();
+        };
+        if r.fin_demandee {
+            return "J'ai déjà arrêté l'enregistrement.".into();
+        }
+        r.fin_demandee = true;
+        r.fin_differee = Some(Instant::now() + ANNULATION);
+        self.transition(&[Evenement::TerminerReunion]);
+        self.emettre_enregistrement();
+        // « Reprends » s'entend sans redire « Kobi » pendant l'annulation.
+        let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::Annulable);
+        tracing::info!("réunion arrêtée, annulable");
+        "J'ai arrêté l'enregistrement. Dis « reprends » si c'était une erreur.".into()
+    }
+
+    /// « Reprends » pendant l'annulation : la réunion continue, rien n'est
+    /// perdu de ce qui restait à noter.
+    fn annuler_fin(&mut self) -> String {
+        let Some(r) = &mut self.reunion else {
+            return "Aucune réunion en cours.".into();
+        };
+        r.fin_demandee = false;
+        r.fin_differee = None;
+        self.transition(&[Evenement::Reprendre]);
+        self.emettre_enregistrement();
+        tracing::info!("arrêt de la réunion annulé");
+        "J'enregistre de nouveau : la réunion continue.".into()
+    }
+
+    /// Envoie à Claude la demande de compte rendu de la réunion.
+    fn demander_compte_rendu(&mut self) {
+        let Some(r) = &mut self.reunion else { return };
+        let transcript = std::mem::take(&mut r.a_noter);
+        let notes = r.notes.clone();
         self.cerveau
             .demander(Demande::CompteRendu { transcript, notes });
-        "Réunion terminée : j'écris le compte rendu.".into()
     }
 
     /// Segment final : écrit tout de suite dans `transcript.jsonl`.
@@ -1371,6 +1472,18 @@ impl<R: Runtime> Chef<R> {
         }
     }
 
+    /// En réunion, la question dit à Claude où en est l'enregistrement : il
+    /// pilote la réunion (KOB-165).
+    fn avec_etat_de_la_reunion(&self, question: String) -> String {
+        let etat = match &self.reunion {
+            None => return question,
+            Some(r) if r.fin_demandee => "arrêté, compte rendu à venir",
+            Some(r) if r.pause => "en pause",
+            Some(_) => "en cours",
+        };
+        format!("(Réunion : enregistrement {etat}.)\n{question}")
+    }
+
     fn fermer_conversation(&mut self) {
         if self.conversation.take().is_some() {
             self.ecrivain.fermer_conversation();
@@ -1454,6 +1567,13 @@ impl<R: Runtime> Chef<R> {
             self.fermer_conversation();
         }
         let Some(r) = &mut self.reunion else { return };
+        // Arrêt annulable : sans « reprends » à temps, le compte rendu part.
+        if r.fin_differee.is_some_and(|quand| Instant::now() >= quand) {
+            r.fin_differee = None;
+            tracing::info!("arrêt confirmé : compte rendu demandé");
+            self.demander_compte_rendu();
+            return;
+        }
         if r.pause || r.fin_demandee || r.envoye.is_some() || Instant::now() < r.prochain_bloc {
             return;
         }

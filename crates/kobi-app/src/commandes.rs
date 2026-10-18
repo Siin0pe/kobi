@@ -220,7 +220,7 @@ mod tests {
 
     #[test]
     fn commandes_branchees_sur_la_session() {
-        let base = crate::lecture::arguments("haiku", "Tu es Kobi.", &[kobi()], None, None);
+        let base = crate::lecture::arguments("haiku", "Tu es Kobi.", &[kobi()], None, None, false);
         assert_eq!(brancher(base.clone(), None), base);
         let args = brancher(base, Some(Path::new("C:/Kobi/mcp/reglages-claude.json")));
         let valeur = |o: &str| {
@@ -274,6 +274,7 @@ mod tests {
                 std::slice::from_ref(&depot),
                 None,
                 None,
+                false,
             ),
             Some(&reglages),
         );

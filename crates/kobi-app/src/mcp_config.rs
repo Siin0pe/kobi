@@ -29,6 +29,32 @@ jusqu'à une minute. Appelle simplement l'outil, sans demander l'accord en texte
 dis-le en une phrase et ne réessaie pas. Quand tu prends des notes ou écris un compte rendu, ne les \
 appelle pas : tout ce qu'il te faut est dans le message, et l'état de la réunion y change encore.";
 
+/// Ajouté au prompt système de la conversation (KOB-165) : c'est Claude qui
+/// démarre et arrête l'enregistrement, d'après la demande et la transcription.
+pub const PROMPT_PILOTAGE_REUNION: &str = "\
+## Piloter la réunion
+
+C'est toi qui démarres, mets en pause, reprends et arrêtes l'enregistrement de la réunion, \
+avec `mcp__kobi__meeting_start`, `mcp__kobi__meeting_pause`, `mcp__kobi__meeting_resume` et \
+`mcp__kobi__meeting_stop`. Pas de confirmation : Kobi agit tout de suite, l'annonce, et un \
+arrêt s'annule pendant 30 secondes avec « reprends ».
+
+- Appelle l'outil dès que la question te le demande, quelle que soit la formulation. \
+La question vient de la reconnaissance vocale, qui écorche les mots (« mais faire \
+l'enregistrement » pour « mets fin à l'enregistrement », « Kobe », « Koby » ou « Cobi » pour \
+« Kobi ») : appuie-toi sur la transcription récente du message pour comprendre.
+- Adressés à toi, « on a fini la réunion », « fin de réunion », « termine », « coupe », \
+« mets fin à l'enregistrement », « tu peux arrêter » veulent dire `meeting_stop` ; \
+« enregistre », « prends des notes de la réunion » veulent dire `meeting_start` ; \
+« pause » et « reprends » veulent dire `meeting_pause` et `meeting_resume`.
+- Jamais sur une simple mention : « on en reparle à la fin de la réunion », « la réunion \
+finit à midi », « l'enregistrement du client », une question sur la réunion ou ce qu'un \
+participant dit à un autre ne sont pas des ordres. Dans le doute, n'appelle rien et demande \
+en une phrase : « Tu veux que j'arrête l'enregistrement ? ».
+- Après l'appel, réponds en une phrase : le message rendu par l'outil, tel quel.
+- Ces quatre outils passent sans carte ; les autres outils qui écrivent demandent un « oui » \
+à l'utilisateur.";
+
 /// Un serveur MCP d'une session.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ServeurMcp {
@@ -74,7 +100,7 @@ pub fn assembler(fichier: &Path, utilisateur: Vec<ServeurMcp>) -> io::Result<Mcp
     assembler_avec(fichier, serveur_kobi(&exe), utilisateur)
 }
 
-fn assembler_avec(
+pub(crate) fn assembler_avec(
     fichier: &Path,
     kobi: ServeurMcp,
     utilisateur: Vec<ServeurMcp>,

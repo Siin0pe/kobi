@@ -277,6 +277,9 @@ enum Attente {
     /// Question envoyée avant la fin de la phrase (trop longue) : le reste de
     /// la phrase est ignoré jusqu'à sa fin.
     Ignore,
+    /// Réunion arrêtée à la voix (KOB-165) : jusqu'à `jusqu`, « reprends »
+    /// part sans le nom ; toute autre phrase est ignorée.
+    Annulation { jusqu: f64 },
 }
 
 /// Silence qui clôt une conversation, en secondes.
@@ -361,6 +364,21 @@ impl Ecouteur {
                     self.attente = self.apres(t);
                 }
             }
+            Attente::Annulation { .. }
+                if finale
+                    && reperer(texte).is_none()
+                    && crate::intentions::annule_la_fin(texte) =>
+            {
+                actions.push(Action::Interpeller);
+                actions.push(self.envoyer(texte.trim(), t));
+            }
+            // Le nom ramène à l'écoute ordinaire ; le reste est ignoré.
+            Attente::Annulation { .. } => {
+                if reperer(texte).is_some() {
+                    self.attente = Attente::Nom;
+                    actions = self.segment(texte, finale, t);
+                }
+            }
             // « Merci Kobi » n'est pas une interpellation.
             Attente::Nom if fin_de_conversation(texte) => self.phrase_sans_nom(texte, finale, t),
             Attente::Nom | Attente::Phrase { .. } => match interpellation(texte) {
@@ -416,6 +434,10 @@ impl Ecouteur {
     /// Le temps passe (appelé à chaque trame audio) : délais de l'écoute.
     pub fn tick(&mut self, t: f64) -> Vec<Action> {
         match self.attente {
+            Attente::Annulation { jusqu } if t > jusqu => {
+                self.attente = Attente::Nom;
+                Vec::new()
+            }
             Attente::Suite {
                 depuis,
                 parle: None,
@@ -483,6 +505,17 @@ impl Ecouteur {
                 depuis: t,
                 parle: None,
             };
+        }
+    }
+
+    /// La réunion vient d'être arrêtée : pendant `duree` secondes,
+    /// « reprends » suffit, sans le nom.
+    pub fn annulable(&mut self, t: f64, duree: f64) {
+        if matches!(
+            self.attente,
+            Attente::Nom | Attente::Conversation { parle: None, .. }
+        ) {
+            self.attente = Attente::Annulation { jusqu: t + duree };
         }
     }
 
@@ -865,6 +898,36 @@ mod tests {
         e.segment("Kobi, quel est le budget ?", true, 1.0);
         e.suite(5.0);
         assert!(e.segment("on passe au point suivant", true, 6.0).is_empty());
+    }
+
+    #[test]
+    fn reprends_sans_le_nom_apres_un_arret() {
+        let mut e = Ecouteur::new(false);
+        e.annulable(10.0, 30.0);
+        // Les participants se disent au revoir : rien ne part.
+        assert!(e
+            .segment("Bon, merci à tous, bonne soirée", true, 12.0)
+            .is_empty());
+        assert_eq!(
+            e.segment("Ah non, reprends !", true, 15.0),
+            [Interpeller, Envoyer("Ah non, reprends !".into())]
+        );
+        // Une seule fois : ensuite il faut de nouveau le nom.
+        assert!(e.segment("reprends", true, 18.0).is_empty());
+    }
+
+    #[test]
+    fn annulation_expiree_ou_nom() {
+        let mut e = Ecouteur::new(false);
+        e.annulable(10.0, 30.0);
+        assert!(e.tick(41.0).is_empty());
+        assert!(e.segment("reprends", true, 42.0).is_empty());
+        // Le nom pendant l'annulation : question ordinaire.
+        e.annulable(50.0, 30.0);
+        assert_eq!(
+            e.segment("Kobi, quelle heure est-il ?", true, 52.0),
+            [Interpeller, Envoyer("quelle heure est-il ?".into())]
+        );
     }
 
     #[test]

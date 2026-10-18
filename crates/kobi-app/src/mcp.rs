@@ -280,6 +280,8 @@ pub fn session_claude(
         .into_iter()
         .filter(|(n, _)| nom_valide(n).is_ok())
         .collect();
+    // La conversation pilote la réunion (KOB-165), pas les notes.
+    let pilote = role == crate::cerveau::Role::Conversation;
     let role = format!("{role:?}").to_lowercase();
     let args = kobi_brain::ArgsWithPerms(Arc::new(move |perms: &Value| {
         let dossier = config::kobi_dir()
@@ -317,6 +319,7 @@ pub fn session_claude(
                 &codebases,
                 memoire.as_ref(),
                 Some(&mcp),
+                pilote,
             ),
             reglages.as_deref(),
         ))
@@ -1444,6 +1447,7 @@ rl.on("line", (l) => {
                 &[],
                 None,
                 Some(&mcp),
+                false,
             ))
         }));
         let mut brain = ClaudeCodeBrain::start(MeetingConfig {

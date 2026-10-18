@@ -5,6 +5,11 @@
 //! L'enregistrement ne démarre que sur une demande explicite (« Kobi,
 //! enregistre la réunion », « Kobi, assiste-nous pour la réunion ») : jamais
 //! tout seul, jamais par le raccourci.
+//!
+//! Ce n'est qu'un chemin rapide pour les formules évidentes (KOB-165) : toute
+//! autre formulation part à Claude, qui pilote la réunion avec les outils
+//! `meeting_*` du MCP de Kobi d'après la question et la transcription
+//! récente. Pas de liste de phrases à faire grossir ici.
 
 /// Commande reconnue dans une question.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,8 +87,16 @@ const TERMINER: &[&str] = &[
     " arrete la reunion ",
     " arrete l enregistrement ",
     " arrete d enregistrer ",
+    " stop l enregistrement ",
+    " stoppe l enregistrement ",
+    " coupe l enregistrement ",
+    " termine l enregistrement ",
+    " mets fin a l enregistrement ",
+    " mets fin a la reunion ",
     " stop the meeting ",
     " end the meeting ",
+    " stop recording ",
+    " stop the recording ",
 ];
 /// « C'est fini », « on a fini » : seulement en ordre bref.
 const FINI: &[&str] = &[
@@ -245,6 +258,29 @@ pub fn reponse_validation(texte: &str) -> Option<bool> {
     }
 }
 
+/// Juste après un arrêt de la réunion (KOB-165), la phrase demande-t-elle
+/// de reprendre ? « Reprends », « non, continue », « c'était une erreur »,
+/// en phrase courte.
+pub fn annule_la_fin(texte: &str) -> bool {
+    let n = normaliser(texte);
+    n.split_whitespace().count() <= 8
+        && [
+            " reprends ",
+            " reprend ",
+            " reprendre ",
+            " continue ",
+            " continuons ",
+            " annule ",
+            " c etait une erreur ",
+            " c est une erreur ",
+            " pas fini ",
+            " resume ",
+            " undo ",
+        ]
+        .iter()
+        .any(|m| n.contains(m))
+}
+
 /// Intention de la question, s'il y en a une. Les ordres sont courts : au
 /// delà de 12 mots, c'est une question pour Claude.
 pub fn intention(question: &str) -> Option<Intention> {
@@ -320,6 +356,11 @@ mod tests {
             ("termine la réunion", TerminerReunion),
             ("arrête l'enregistrement", TerminerReunion),
             ("arrête d'enregistrer", TerminerReunion),
+            ("stop l'enregistrement", TerminerReunion),
+            ("Kobi, stop l'enregistrement", TerminerReunion),
+            ("coupe l'enregistrement s'il te plaît", TerminerReunion),
+            ("mets fin à la réunion", TerminerReunion),
+            ("stop recording", TerminerReunion),
             ("stop", Interrompre),
             ("Attends !", Interrompre),
             ("tais-toi", Interrompre),
@@ -408,6 +449,28 @@ mod tests {
             "",
         ] {
             assert_eq!(intention(texte), None, "{texte}");
+        }
+    }
+
+    #[test]
+    fn reprise_apres_un_arret() {
+        for texte in [
+            "reprends",
+            "Ah non, reprends !",
+            "non continue",
+            "c'était une erreur",
+            "annule, on n'a pas fini",
+            "reprends l'enregistrement",
+        ] {
+            assert!(annule_la_fin(texte), "{texte}");
+        }
+        for texte in [
+            "merci à tous, bonne soirée",
+            "on se voit jeudi",
+            "non",
+            "il reste des croissants si vous voulez, servez-vous avant de partir",
+        ] {
+            assert!(!annule_la_fin(texte), "{texte}");
         }
     }
 }

@@ -67,6 +67,16 @@ pub fn outils_de_l_agent(serveur: &str) -> Vec<String> {
         .collect()
 }
 
+/// Outils de pilotage de la réunion (`meeting_start`…), lancés sans carte
+/// (KOB-165) et refusés à la session des notes.
+pub fn outils_de_reunion(serveur: &str) -> Vec<String> {
+    COMMANDES
+        .iter()
+        .filter(|c| c.pilote_la_reunion())
+        .map(|c| format!("mcp__{serveur}__{}", c.outil()))
+        .collect()
+}
+
 fn outil(c: &Commande) -> Value {
     json!({
         "name": c.outil(),
@@ -281,6 +291,15 @@ mod tests {
         assert!(outils_de_lecture("kobi").contains(&"mcp__kobi__notes_last".to_string()));
         assert!(!outils_de_lecture("kobi").contains(&"mcp__kobi__app_quit".to_string()));
         assert!(outils_de_l_agent("kobi").contains(&"mcp__kobi__config_set".to_string()));
+        assert_eq!(
+            outils_de_reunion("kobi"),
+            [
+                "mcp__kobi__meeting_start",
+                "mcp__kobi__meeting_stop",
+                "mcp__kobi__meeting_pause",
+                "mcp__kobi__meeting_resume"
+            ]
+        );
     }
 
     #[test]

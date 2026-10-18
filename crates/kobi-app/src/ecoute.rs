@@ -51,6 +51,9 @@ pub enum Commande {
     Pause(bool),
     /// Kobi vient de répondre : la conversation attend la suite.
     Suite,
+    /// La réunion vient d'être arrêtée à la voix ou par Claude : « reprends »
+    /// s'entend sans redire « Kobi » pendant l'annulation (KOB-165).
+    Annulable,
 }
 
 /// Canal vers le fil d'écoute.
@@ -349,6 +352,9 @@ impl<R: Runtime> Fil<R> {
     fn executer_commande(&mut self, commande: Commande) {
         match commande {
             Commande::Suite => self.ecouteur.suite(self.t),
+            Commande::Annulable => self
+                .ecouteur
+                .annulable(self.t, crate::chef::ANNULATION.as_secs_f64()),
             Commande::BasculerPause => {
                 self.en_pause = !self.en_pause;
                 tracing::info!(pause = self.en_pause, "écoute continue");

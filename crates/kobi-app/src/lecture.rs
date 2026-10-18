@@ -122,16 +122,26 @@ réunions en parlent : donne la plus récente et dis qu'il y en a d'autres.
 /// en lecture seule sur `codebases`, et sur la mémoire des réunions si elle
 /// est donnée (KOB-76). `mcp` : serveurs MCP de la session
 /// ([`crate::mcp_config::assembler`]), dont le MCP de Kobi (KOB-161).
+/// `pilote` : la session pilote la réunion avec les outils `meeting_*` du MCP
+/// de Kobi (conversation, KOB-165) ; sinon ils lui sont refusés (notes).
 pub fn arguments(
     modele: &str,
     systeme: &str,
     codebases: &[PathBuf],
     memoire: Option<&Memoire>,
     mcp: Option<&McpSession>,
+    pilote: bool,
 ) -> Vec<String> {
     let mut autorises = OUTILS_LECTURE.map(String::from).to_vec();
+    let mut refuses: Vec<String> = OUTILS_REFUSES.iter().map(|o| o.to_string()).collect();
     if let Some(mcp) = mcp {
         autorises.extend(mcp.outils_autorises.iter().cloned());
+        let reunion = kobi_ctl::mcp::outils_de_reunion(crate::mcp_config::SERVEUR_KOBI);
+        if pilote {
+            autorises.extend(reunion);
+        } else {
+            refuses.extend(reunion);
+        }
     }
     let mut args: Vec<String> = [
         "--model",
@@ -146,7 +156,7 @@ pub fn arguments(
         "--allowedTools",
         &autorises.join(","),
         "--disallowedTools",
-        &OUTILS_REFUSES.join(","),
+        &refuses.join(","),
     ]
     .map(String::from)
     .into();
@@ -180,6 +190,10 @@ pub fn arguments(
         args.push(mcp.fichier.display().to_string());
         prompt.push_str("\n\n");
         prompt.push_str(crate::mcp_config::PROMPT_MCP_KOBI);
+        if pilote {
+            prompt.push_str("\n\n");
+            prompt.push_str(crate::mcp_config::PROMPT_PILOTAGE_REUNION);
+        }
         if let Some(utilisateur) = &mcp.prompt {
             prompt.push_str("\n\n");
             prompt.push_str(utilisateur);
@@ -342,6 +356,7 @@ mod tests {
             &[PathBuf::from("C:/code/kobi"), PathBuf::from("C:/code/site")],
             None,
             None,
+            false,
         );
         assert_eq!(valeur(&args, "--tools"), ["Read,Grep,Glob"]);
         assert_eq!(valeur(&args, "--allowedTools"), ["Read,Grep,Glob"]);
@@ -380,6 +395,7 @@ mod tests {
             &[PathBuf::from("/code/kobi")],
             Some(&memoire),
             None,
+            false,
         );
         assert_eq!(
             valeur(&args, "--add-dir"),
@@ -408,7 +424,7 @@ mod tests {
             reunions: dir.path().join("rien"),
             conversations: dir.path().join("rien-non-plus"),
         };
-        let args = arguments("haiku", "x", &[], Some(&absent), None);
+        let args = arguments("haiku", "x", &[], Some(&absent), None, false);
         assert!(valeur(&args, "--add-dir").is_empty());
     }
 
@@ -422,7 +438,7 @@ mod tests {
             permission_prompt_tool: None,
             prompt: None,
         };
-        let args = arguments("haiku", "Tu es Kobi.", &[], None, Some(&mcp));
+        let args = arguments("haiku", "Tu es Kobi.", &[], None, Some(&mcp), false);
         assert_eq!(
             valeur(&args, "--mcp-config"),
             ["C:/Users/moi/Kobi/mcp/session-conversation.json"]
@@ -435,6 +451,40 @@ mod tests {
         assert_eq!(valeur(&args, "--tools"), ["Read,Grep,Glob"]);
         let prompt = valeur(&args, "--append-system-prompt")[0];
         assert!(prompt.contains("mcp__kobi__"), "{prompt}");
+        // Session des notes : le pilotage de la réunion lui est refusé.
+        assert!(valeur(&args, "--disallowedTools")[0].contains("mcp__kobi__meeting_stop"));
+        assert!(!prompt.contains("## Piloter la réunion"));
+    }
+
+    /// Conversation (KOB-165) : Claude pilote la réunion sans carte.
+    #[test]
+    fn conversation_qui_pilote_la_reunion() {
+        let mcp = McpSession {
+            fichier: PathBuf::from("C:/Users/moi/Kobi/mcp/session.json"),
+            outils_autorises: vec!["mcp__kobi__status".into()],
+            permission_prompt_tool: None,
+            prompt: None,
+        };
+        let args = arguments("haiku", "Tu es Kobi.", &[], None, Some(&mcp), true);
+        let autorises = valeur(&args, "--allowedTools")[0];
+        for outil in [
+            "meeting_start",
+            "meeting_stop",
+            "meeting_pause",
+            "meeting_resume",
+        ] {
+            assert!(
+                autorises.contains(&format!("mcp__kobi__{outil}")),
+                "{outil}"
+            );
+        }
+        assert!(!autorises.contains("config_set"));
+        assert!(!valeur(&args, "--disallowedTools")[0].contains("meeting"));
+        let prompt = valeur(&args, "--append-system-prompt")[0];
+        assert!(prompt.contains("## Piloter la réunion"), "{prompt}");
+        // Sans MCP de Kobi, rien à piloter.
+        let args = arguments("haiku", "Tu es Kobi.", &[], None, None, true);
+        assert!(!valeur(&args, "--allowedTools")[0].contains("meeting"));
     }
 
     /// Avec des serveurs de l'utilisateur (KOB-155) : le serveur de
@@ -448,7 +498,7 @@ mod tests {
             permission_prompt_tool: Some("mcp__kobi-perms__approve".into()),
             prompt: Some("## Outils MCP connectés".into()),
         };
-        let args = arguments("haiku", "Tu es Kobi.", &[], None, Some(&mcp));
+        let args = arguments("haiku", "Tu es Kobi.", &[], None, Some(&mcp), false);
         assert_eq!(valeur(&args, "--permission-mode"), ["default"]);
         assert_eq!(
             valeur(&args, "--permission-prompt-tool"),
@@ -495,7 +545,7 @@ mod tests {
             program,
             cwd: Some(cwd.clone()),
             partial_messages: false,
-            args: arguments("haiku", SYSTEM_PROMPT, &[code], None, None),
+            args: arguments("haiku", SYSTEM_PROMPT, &[code], None, None, false),
             env: Vec::new(),
         })
         .unwrap();
@@ -617,7 +667,14 @@ mod tests {
             program,
             cwd: Some(cwd),
             partial_messages: false,
-            args: arguments("haiku", SYSTEM_PROMPT, &[], Some(&Memoire::de(&st)), None),
+            args: arguments(
+                "haiku",
+                SYSTEM_PROMPT,
+                &[],
+                Some(&Memoire::de(&st)),
+                None,
+                false,
+            ),
             env: Vec::new(),
         })
         .unwrap();
