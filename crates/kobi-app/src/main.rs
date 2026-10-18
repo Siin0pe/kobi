@@ -33,6 +33,7 @@ mod stockage;
 #[cfg(test)]
 mod test_ipc;
 mod tray;
+mod validation;
 mod voix;
 
 use std::sync::mpsc::Sender;
@@ -191,6 +192,8 @@ fn main() {
                     tracing::warn!(erreur = %e, arg, "ouverture au lancement");
                 }
             }
+            // Essai réel des cartes de validation (KOB-62), avant KOB-156.
+            validation::essai(app.handle());
             // Essai de bout en bout du menu (sans barre système, par exemple en CI
             // sous Xvfb) : les entrées de la coque sont déclenchées, « Quitter » en dernier.
             if std::env::var_os("KOBI_ESSAI_MENU").is_some() {

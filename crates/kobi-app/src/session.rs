@@ -184,6 +184,8 @@ fn interrompre<R: Runtime>(app: AppHandle<R>) {
 #[tauri::command]
 fn decider_carte<R: Runtime>(app: AppHandle<R>, id: String, accepte: bool) -> Result<(), String> {
     let carte = id.parse().map_err(|_| format!("carte inconnue : {id}"))?;
+    // Carte de validation (KOB-62) : elle quitte la liste de l'app Kobi.
+    crate::validation::retirer(&app, &id, accepte);
     publier(&app, Message::Decision { carte, accepte });
     Ok(())
 }
@@ -221,6 +223,7 @@ pub fn installer<R: Runtime>(builder: Builder<R>) -> Builder<R> {
             envoyer_texte,
             interrompre,
             decider_carte,
+            crate::validation::cartes_validation,
             etat_enregistrement,
             historique,
             // Réponse à voix haute ou en texte (KOB-142).

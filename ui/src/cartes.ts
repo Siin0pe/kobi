@@ -9,6 +9,7 @@ import type { Conversation } from './conversation';
 import { tauri } from './native';
 import type { Stage } from './stage';
 import type { ActionCard } from './states';
+import { isValidation, showValidation } from './validation';
 
 /** Carte telle que la publie la coque. */
 export interface CarteUi {
@@ -21,6 +22,7 @@ export interface CarteUi {
 
 /** Affiche une carte publiée par la coque. */
 export function applyCarte(stage: Stage, c: CarteUi): void {
+  if (isValidation(c)) return showValidation(stage, c);
   const action: ActionCard = { id: c.id, kicker: c.kicker, title: c.title, meta: c.meta ?? undefined, status: c.status };
   if (c.status === 'pending') stage.setState('suggest', { action });
   else if (c.status === 'confirmed') stage.setState('done', { action });

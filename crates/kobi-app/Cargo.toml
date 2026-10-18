@@ -42,6 +42,9 @@ rmcp = { version = "3.5", features = ["client", "transport-child-process", "tran
 winreg = "0.56"
 
 [dev-dependencies]
+# Test d'intégration de la carte de validation avec le serveur de permission (KOB-62).
+kobi-perms = { path = "../kobi-perms" }
+rmcp = { version = "3.5", features = ["server"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "test-util", "time"] }
 tauri = { version = "2.12", features = ["test"] }
 tempfile = "3"

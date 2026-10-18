@@ -10,6 +10,7 @@ import type { Bulle } from '../conversation';
 import { ecouter, invoke, message } from '../ipc';
 import type { Ton } from '../reglages/panneau';
 import { poserTitre } from '../titre';
+import { blocValidations } from './validations';
 
 type Notifier = (texte: string, ton?: Ton) => void;
 
@@ -98,6 +99,7 @@ export function monterActivite(racine: HTMLElement): void {
       'article',
       { class: 'feuille' },
       entete('Activité', 'Ce que Kobi a fait', 'Le journal des recherches, des actions proposées et de tes validations.'),
+      blocValidations(),
       journal,
       h(
         'div',
