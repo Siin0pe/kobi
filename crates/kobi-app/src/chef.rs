@@ -803,13 +803,15 @@ impl<R: Runtime> Chef<R> {
         }
     }
 
-    /// Kobi a fini de répondre : temps de lecture, puis retour au calme.
+    /// Kobi a fini de répondre : temps de lecture, puis la conversation
+    /// attend la suite sans qu'on redise « Kobi » (KOB-133).
     fn lire(&mut self, texte: &str) {
         let lecture = LECTURE_MIN + Duration::from_millis(60 * texte.chars().count() as u64);
         self.calme_a = Some((
             Instant::now() + lecture.min(Duration::from_secs(25)),
             Evenement::ReponseTerminee,
         ));
+        let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::Suite);
     }
 
     fn erreur(&mut self, titre: &str, message: &str) {

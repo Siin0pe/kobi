@@ -45,6 +45,8 @@ pub enum Commande {
     Raccourci,
     /// Met l'écoute en pause, ou la reprend.
     BasculerPause,
+    /// Kobi vient de répondre : la conversation attend la suite.
+    Suite,
 }
 
 /// Canal vers le fil d'écoute.
@@ -214,7 +216,8 @@ struct Fil<R: Runtime> {
     audio: f64,
     calcul: Duration,
     bilan: Instant,
-    /// Une réunion est ouverte : la transcription n'est jamais remise à zéro.
+    /// Une réunion est ouverte : pas de mode conversation, et la transcription
+    /// n'est jamais remise à zéro.
     en_reunion: bool,
     /// Niveau du micro en cours d'accumulation : (somme des carrés, échantillons).
     niveau: (f64, usize),
@@ -257,7 +260,13 @@ impl<R: Runtime> Fil<R> {
             }
             let session = etat(&self.app).etat;
             let en_reunion = matches!(session, "reunion" | "pause" | "fin");
-            self.en_reunion = en_reunion;
+            if en_reunion != self.en_reunion {
+                self.en_reunion = en_reunion;
+                self.ecouteur.conversation = !en_reunion;
+                if en_reunion {
+                    self.ecouteur.oublier();
+                }
+            }
             // En pause (Kobi ou la réunion), ni micro ni transcription.
             if self.en_pause || session == "pause" || self.stt.is_err() {
                 self.fermer_micro();
@@ -286,7 +295,7 @@ impl<R: Runtime> Fil<R> {
                 if let Ok(stt) = self.stt.as_mut() {
                     stt.reset();
                 }
-                self.ecouteur = Ecouteur::default();
+                self.ecouteur = Ecouteur::new(!self.en_reunion);
                 self.porte = Porte::new(kobi_stt::SAMPLE_RATE);
                 self.t = 0.0;
                 self.entree = Some(entree);
@@ -313,6 +322,7 @@ impl<R: Runtime> Fil<R> {
 
     fn commande(&mut self, commande: Commande) {
         match commande {
+            Commande::Suite => self.ecouteur.suite(self.t),
             Commande::BasculerPause => {
                 self.en_pause = !self.en_pause;
                 tracing::info!(pause = self.en_pause, "écoute continue");
