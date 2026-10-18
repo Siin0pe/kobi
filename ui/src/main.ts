@@ -7,10 +7,14 @@ import { demoData, playDemo } from './demo';
 import { command, enableWindowDrag, followSession, type Command, type SessionState } from './native';
 import { applyRecording, type RecordingState } from './recording';
 import { Stage } from './stage';
+import { applyCarte, enableInterrupt, followCartes, type CarteUi } from './cartes';
+import { Conversation, followConversation, type Bulle } from './conversation';
+import { Tasks } from './taches';
 import './styles/fonts.css';
 import './styles/stage.css';
 import './styles/bubbles.css';
 import './styles/meeting.css';
+import './styles/conversation.css';
 
 const params = new URLSearchParams(location.search);
 
@@ -25,6 +29,12 @@ const stage = new Stage(document.getElementById('app')!, {
 });
 enableWindowDrag(stage.root);
 followSession(stage);
+
+// Conversation (KOB-133), tâches longues (KOB-135), cartes et interruption.
+const conversation = new Conversation(stage);
+const tasks = new Tasks(stage);
+followConversation(conversation, (bulles) => tasks.update(bulles));
+enableInterrupt(stage, conversation, followCartes(stage));
 
 let stopDemo: () => void = () => {};
 
@@ -57,6 +67,12 @@ declare global {
       play(state: MascotState): void;
       /** Commande envoyée à la session (coque native). */
       command(name: Command): Promise<SessionState | undefined>;
+      /** Historique, comme l'événement `conversation` de la coque. */
+      conversation(bulles: Bulle[]): void;
+      /** Carte de confirmation, comme l'événement `carte` de la coque. */
+      carte(carte: CarteUi): void;
+      /** Échap : la réponse en cours s'arrête net. */
+      interrupt(): void;
     };
   }
 }
@@ -76,6 +92,12 @@ window.kobi = {
   recording: (state) => applyRecording(stage, state),
   demoData,
   command,
+  conversation: (bulles) => {
+    conversation.setBulles(bulles);
+    tasks.update(bulles);
+  },
+  carte: (c) => applyCarte(stage, c),
+  interrupt: () => stage.interrupt(),
   play: (state) => {
     stopDemo();
     stopDemo = playDemo(
