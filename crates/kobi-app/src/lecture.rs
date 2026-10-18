@@ -5,10 +5,22 @@
 //! (KOB-161), et refuse le reste sans carte.
 //!
 //! Voir « Kobi — parcours utilisateur et règles d'UX », principe 6.
+//!
+//! Les dossiers se changent à chaud (KOB-153) : [`set_codebases`] met à
+//! jour [`Codebases`] et demande au chef de rouvrir les sessions Claude ; la
+//! question suivante les utilise.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 
 use kobi_session::config;
+use tauri::{AppHandle, Manager, Runtime};
+
+/// Dossiers de code courants, lus à l'ouverture de chaque session Claude.
+pub type Dossiers = Arc<RwLock<Vec<PathBuf>>>;
+
+/// Dossiers de code partagés (état géré par Tauri).
+pub struct Codebases(pub Dossiers);
 
 use crate::mcp_config::McpSession;
 
@@ -155,8 +167,20 @@ pub fn arguments(
         prompt.push_str(crate::mcp_config::PROMPT_MCP_KOBI);
     }
     args.push("--append-system-prompt".into());
+    // Carte des dépôts (KOB-153) : bloc à part, en fin de prompt.
+    prompt.push_str("\n\n");
+    prompt.push_str(&crate::depots::carte(codebases));
     args.push(prompt);
     args
+}
+
+/// Dossier de travail de la session : le premier dossier de code déclaré
+/// (Grep et Glob sans chemin y cherchent), sinon `~/Kobi`.
+pub fn dossier_de_travail(codebases: &[PathBuf]) -> Option<PathBuf> {
+    codebases
+        .first()
+        .cloned()
+        .or_else(kobi_session::config::kobi_dir)
 }
 
 /// Dossiers déclarés qui existent ; les autres sont signalés et ignorés.
@@ -243,12 +267,24 @@ pub fn get_codebases() -> Result<Vec<String>, String> {
         .collect())
 }
 
-/// Les dossiers servent à la prochaine session Claude (au redémarrage de Kobi).
+/// Enregistre les dossiers et les applique à chaud : les sessions Claude
+/// sont rouvertes, la question suivante les utilise (KOB-153).
 #[tauri::command]
-pub fn set_codebases(dossiers: Vec<String>) -> Result<(), String> {
+pub fn set_codebases<R: Runtime>(app: AppHandle<R>, dossiers: Vec<String>) -> Result<(), String> {
     let dossiers = apply_codebases(&config_path()?, &dossiers)?;
     tracing::info!(?dossiers, "réglages : dossiers de code");
+    changer(&app, &dossiers);
     Ok(())
+}
+
+/// Applique de nouveaux dossiers de code à l'application en cours.
+pub fn changer<R: Runtime>(app: &AppHandle<R>, dossiers: &[PathBuf]) {
+    let valides = codebases_valides(dossiers);
+    if let Some(c) = app.try_state::<Codebases>() {
+        *c.0.write().unwrap_or_else(|e| e.into_inner()) = valides.clone();
+    }
+    tracing::info!(codebases = ?valides, "dossiers de code appliqués à chaud");
+    crate::chef::publier(app, crate::chef::Message::CodebasesChangees);
 }
 
 #[cfg(test)]
@@ -306,6 +342,12 @@ mod tests {
             .any(|a| a == "--mcp-config" || a == "--permission-prompt-tool"));
         let prompt = valeur(&args, "--append-system-prompt")[0];
         assert!(prompt.starts_with("Tu es Kobi.") && prompt.contains("ne fais que lire"));
+        // Carte des dépôts (KOB-153).
+        assert!(prompt.contains("## Dossiers de code") && prompt.contains("C:/code/kobi"));
+        assert_eq!(
+            dossier_de_travail(&[PathBuf::from("C:/code/kobi"), PathBuf::from("C:/code/site")]),
+            Some(PathBuf::from("C:/code/kobi"))
+        );
     }
 
     /// Mémoire des réunions : les dossiers du stockage s'ajoutent aux

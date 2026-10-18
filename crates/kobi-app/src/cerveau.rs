@@ -84,6 +84,10 @@ pub enum Demande {
     Annuler {
         tour: u64,
     },
+    /// Les dossiers de code ont changé (KOB-153) : les sessions (et la
+    /// réserve) sont rouvertes ; la question suivante les utilise. Les tours
+    /// détachés finissent sur leur session.
+    Renouveler,
 }
 
 /// Ce que le cerveau renvoie.
@@ -220,6 +224,10 @@ impl Cerveau {
                     t.abort();
                 }
             }
+            Demande::Renouveler => {
+                let _ = self.questions.send(Demande::Renouveler);
+                let _ = self.notes.send(Demande::Renouveler);
+            }
             d @ Demande::Question { .. } => {
                 let _ = self.questions.send(d);
             }
@@ -255,6 +263,13 @@ async fn conversation(
     let mut session: Option<Session> = None;
     let mut suivante = reserve(&fabrique);
     while let Some(demande) = rx.recv().await {
+        if demande == Demande::Renouveler {
+            session = None;
+            suivante.abort();
+            suivante = reserve(&fabrique);
+            tracing::info!("sessions Claude renouvelées");
+            continue;
+        }
         let Demande::Question {
             tour,
             question,
@@ -504,6 +519,10 @@ async fn prise_de_notes(
 ) {
     let mut session: Option<Session> = None;
     while let Some(demande) = rx.recv().await {
+        if demande == Demande::Renouveler {
+            session = None;
+            continue;
+        }
         if session.is_none() {
             match fabrique(Role::Notes).await {
                 Ok(s) => session = Some(s),
@@ -719,6 +738,40 @@ mod tests {
             "{:?}",
             recus.lock().unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn dossiers_changes_la_question_suivante_les_utilise() {
+        let (s, recus) = sortie();
+        // La fabrique lit les dossiers courants à l'ouverture de chaque
+        // session, comme la vraie ; la doublure répond avec eux.
+        let dossiers = Arc::new(Mutex::new("ancien".to_string()));
+        let d = dossiers.clone();
+        let fabrique: Fabrique = Arc::new(move |_role| {
+            let lus = d.lock().unwrap().clone();
+            Box::pin(async move {
+                let b = FakeBrain::new().then(vec![Step::Text(format!("dossiers {lus}"))]);
+                Ok(Box::new(b) as Session)
+            })
+        });
+        let c = Cerveau::lancer(fabrique, s);
+        c.demander(question(1, "où est fabrique_claude ?"));
+        attendre(&recus, |r| matches!(r, Retour::Fin { tour: 1, .. })).await;
+        // Changés pendant que Kobi tourne.
+        *dossiers.lock().unwrap() = "nouveau".into();
+        c.demander(Demande::Renouveler);
+        c.demander(question(2, "et maintenant ?"));
+        attendre(&recus, |r| matches!(r, Retour::Fin { tour: 2, .. })).await;
+        let fins: Vec<_> = recus
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|(_, r)| match r {
+                Retour::Fin { texte, .. } => Some(texte.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(fins, ["dossiers ancien", "dossiers nouveau"]);
     }
 
     #[tokio::test]

@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use kobi_session::etat::Evenement;
 use kobi_stt::nemotron::{NemotronConfig, NemotronEngine};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::ecoute::{self, Commande};
 use crate::session::appliquer;
@@ -82,9 +82,12 @@ pub fn installer<R: Runtime>(
 ) {
     let codebases = crate::lecture::codebases_valides(&codebases);
     tracing::info!(codebases = ?codebases, "Claude en lecture seule");
+    // Partagés : `set_codebases` les change à chaud (KOB-153).
+    let dossiers: crate::lecture::Dossiers = std::sync::Arc::new(std::sync::RwLock::new(codebases));
+    app.manage(crate::lecture::Codebases(dossiers.clone()));
     crate::chef::installer(
         app,
-        crate::chef::fabrique_claude(MODELE_CLAUDE, codebases, source_memoire(app)),
+        crate::chef::fabrique_claude(MODELE_CLAUDE, dossiers, source_memoire(app)),
         intervalle_notes_min,
     );
     ecoute::installer(app);

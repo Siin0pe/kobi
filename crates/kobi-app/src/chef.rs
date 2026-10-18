@@ -82,6 +82,9 @@ pub enum Message {
     },
     /// Échap ou « stop » : la réponse en cours s'arrête net.
     Interrompre,
+    /// Dossiers de code changés (KOB-153) : les sessions Claude sont
+    /// rouvertes avec les nouveaux.
+    CodebasesChangees,
     Cerveau(Retour),
     /// Nouvelle de l'écrivain (fichiers créés, compte rendu rangé, erreur).
     Disque(Nouvelle),
@@ -517,6 +520,7 @@ impl<R: Runtime> Chef<R> {
                 self.cerveau.demander(Demande::Decision { carte, accepte })
             }
             Message::Interrompre => self.interrompre(),
+            Message::CodebasesChangees => self.cerveau.demander(Demande::Renouveler),
             Message::Cerveau(r) => self.retour(r),
             Message::Disque(c) => self.disque(c),
             Message::Rappel(r) => {
@@ -1320,15 +1324,16 @@ fn dossiers_de_code() -> Vec<PathBuf> {
 }
 
 /// Sessions Claude Code réelles, en lecture seule (KOB-138) : Read, Grep et
-/// Glob sur les `codebases` et la mémoire des réunions (KOB-76), le MCP de
-/// Kobi en lecture (KOB-161), sans serveur de permission, modèle rapide,
-/// prompt système de Kobi.
+/// Glob sur les dossiers de code et la mémoire des réunions (KOB-76), le MCP
+/// de Kobi en lecture (KOB-161), sans serveur de permission, modèle rapide,
+/// prompt système de Kobi avec la carte des dépôts (KOB-153). Les dossiers
+/// sont relus à chaque ouverture : un changement vaut pour la session
+/// suivante.
 pub fn fabrique_claude(
     modele: &'static str,
-    codebases: Vec<PathBuf>,
+    dossiers: crate::lecture::Dossiers,
     memoire: SourceMemoire,
 ) -> Fabrique {
-    let codebases = Arc::new(codebases);
     // MCP de Kobi (KOB-161) ; KOB-155 : serveurs de l'utilisateur ici.
     let mcp = kobi_session::config::kobi_dir()
         .map(|d| d.join("mcp").join("session.json"))
@@ -1339,13 +1344,9 @@ pub fn fabrique_claude(
         });
     let programme: Arc<tokio::sync::OnceCell<Result<PathBuf, String>>> = Arc::default();
     Arc::new(move |role| {
-        let args = crate::lecture::arguments(
-            modele,
-            kobi_brain::SYSTEM_PROMPT,
-            &codebases,
-            memoire().as_ref(),
-            mcp.as_ref(),
-        );
+        let codebases = dossiers.read().unwrap_or_else(|e| e.into_inner()).clone();
+        let memoire = memoire();
+        let mcp = mcp.clone();
         let programme = programme.clone();
         Box::pin(async move {
             let programme = programme
@@ -1361,10 +1362,25 @@ pub fn fabrique_claude(
                 .await
                 .clone()
                 .map_err(kobi_brain::BrainError::Unavailable)?;
-            let cwd = kobi_session::config::kobi_dir();
+            let cwd = crate::lecture::dossier_de_travail(&codebases);
             if let Some(cwd) = &cwd {
                 let _ = std::fs::create_dir_all(cwd);
             }
+            // La carte des dépôts parcourt le disque : hors du runtime.
+            let args = tokio::task::spawn_blocking({
+                let codebases = codebases.clone();
+                move || {
+                    crate::lecture::arguments(
+                        modele,
+                        kobi_brain::SYSTEM_PROMPT,
+                        &codebases,
+                        memoire.as_ref(),
+                        mcp.as_ref(),
+                    )
+                }
+            })
+            .await
+            .map_err(|e| kobi_brain::BrainError::Unavailable(e.to_string()))?;
             let config = kobi_brain::MeetingConfig {
                 program: programme,
                 cwd,
@@ -1375,6 +1391,7 @@ pub fn fabrique_claude(
             let session = kobi_brain::ClaudeCodeBrain::start(config).await?;
             tracing::info!(
                 ?role,
+                codebases = ?codebases,
                 ms = debut.elapsed().as_millis() as u64,
                 "session Claude ouverte"
             );

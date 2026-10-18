@@ -11,6 +11,7 @@ mod cerveau;
 mod chef;
 mod controle;
 mod demarrage;
+mod depots;
 mod diag;
 mod ecoute;
 mod ecrivain;
