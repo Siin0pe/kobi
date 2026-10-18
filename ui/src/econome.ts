@@ -36,11 +36,10 @@ function isLoop(a: Animation): boolean {
 }
 
 export class Metronome {
-  /** Boucles tenues par le métronome. */
-  private readonly held = new Set<Animation>();
+  /** Animations tenues par le métronome, avec l'instant où elles ont été avancées. */
+  private readonly held = new Map<Animation, number>();
   private tick = 0;
   private slow = 0;
-  private last = 0;
   private active = false;
   private suspended = false;
   private fps = ECONOMY_FPS;
@@ -82,7 +81,7 @@ export class Metronome {
     } else {
       active.delete(this);
       this.halt();
-      for (const a of this.held) if (a.playState === 'paused') a.play();
+      for (const a of this.held.keys()) if (a.playState === 'paused') a.play();
       this.held.clear();
     }
     setFrameInterval(this.active ? 1000 / this.fps : 0);
@@ -110,13 +109,16 @@ export class Metronome {
 
   private hold(a: Animation): void {
     a.pause();
-    this.held.add(a);
+    // Une animation adoptée entre deux tics n'avance que du temps écoulé depuis.
+    this.held.set(a, performance.now());
   }
 
   private run(): void {
     this.halt();
     if (this.suspended) return;
-    this.last = performance.now();
+    // Reprise (après une suspension) : le temps passé caché ne compte pas.
+    const now = performance.now();
+    for (const a of this.held.keys()) this.held.set(a, now);
     this.tick = window.setInterval(() => this.step(), 1000 / this.fps);
   }
 
@@ -125,20 +127,23 @@ export class Metronome {
     this.tick = 0;
   }
 
-  /** Une image : toutes les boucles avancent du temps écoulé, ensemble. */
+  /** Une image : toutes les animations tenues avancent ensemble, chacune du temps écoulé pour elle. */
   private step(): void {
     const now = performance.now();
-    const dt = now - this.last;
-    this.last = now;
-    for (const a of this.held) {
+    for (const [a, since] of this.held) {
       const target = (a.effect as KeyframeEffect | null)?.target;
       // Animation remplacée (changement d'état) ou élément retiré : on la lâche.
       if (a.playState === 'idle' || !target?.isConnected) {
         this.held.delete(a);
         continue;
       }
-      if (a.playState !== 'paused') continue;
-      const next = Number(a.currentTime ?? 0) + dt;
+      this.held.set(a, now);
+      // Relancée par ailleurs (changement de classe) : le métronome la reprend.
+      if (a.playState !== 'paused') {
+        if (a.playState === 'running') a.pause();
+        continue;
+      }
+      const next = Number(a.currentTime ?? 0) + (now - since);
       const end = Number(a.effect!.getComputedTiming().endTime);
       if (next >= end) {
         // Fin d'une animation courte : posée sur sa dernière image et relâchée,
