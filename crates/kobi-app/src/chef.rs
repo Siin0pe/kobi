@@ -135,9 +135,20 @@ pub struct CompteRenduUi {
 }
 
 /// Résume `compte-rendu.md` pour l'interface : le résumé et le nombre de
-/// puces de chaque section.
+/// puces de chaque section. Sans section « Résumé » (compte rendu de secours,
+/// Claude indisponible), le premier paragraphe en tient lieu : il dit pourquoi.
 pub fn compte_rendu_ui(reunion: &str, markdown: &str) -> CompteRenduUi {
     let cr = CompteRendu::depuis_markdown(markdown);
+    let resume = if cr.resume.trim().is_empty() {
+        markdown
+            .split("\n\n")
+            .map(str::trim)
+            .find(|p| !p.is_empty() && !p.starts_with('#'))
+            .unwrap_or("")
+            .to_owned()
+    } else {
+        cr.resume.trim().to_owned()
+    };
     let puces = |section: &str| {
         section
             .lines()
@@ -147,7 +158,7 @@ pub fn compte_rendu_ui(reunion: &str, markdown: &str) -> CompteRenduUi {
     };
     CompteRenduUi {
         reunion: reunion.to_owned(),
-        resume: cr.resume.trim().to_owned(),
+        resume,
         decisions: puces(&cr.decisions),
         actions: puces(&cr.actions),
         questions: puces(&cr.questions),
@@ -1132,7 +1143,11 @@ mod tests {
         // Compte rendu de secours (Claude en échec) : pas de sections, rien à compter.
         let secours = compte_rendu_ui(
             "r",
-            "# Compte rendu\n\nLe compte rendu n'a pas pu être écrit.\n",
+            "# Compte rendu\n\nLe compte rendu n'a pas pu être écrit (Claude absent).\n\n## Notes\n\n- budget\n",
+        );
+        assert_eq!(
+            secours.resume,
+            "Le compte rendu n'a pas pu être écrit (Claude absent)."
         );
         assert_eq!(
             (secours.decisions, secours.actions, secours.questions),
