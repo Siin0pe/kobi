@@ -35,6 +35,8 @@ pub const EVENEMENT_ENREGISTREMENT: &str = "enregistrement";
 pub const EVENEMENT_CONVERSATION: &str = "conversation";
 /// Carte de confirmation (bulle d'action).
 pub const EVENEMENT_CARTE: &str = "carte";
+/// `notes.md` vient d'être écrit (panneau des notes en direct, KOB-73).
+pub const EVENEMENT_NOTES: &str = "notes";
 
 /// Premier bloc de notes après ce délai, puis toutes les `interval_min`.
 const PREMIER_BLOC: Duration = Duration::from_secs(60);
@@ -92,6 +94,16 @@ pub struct Enregistrement {
     pub titre: Option<String>,
     /// Dernière note ajoutée, pour la fiche de prise de notes.
     pub derniere_note: Option<String>,
+}
+
+/// Charge de [`EVENEMENT_NOTES`] : de quoi relire `notes.md` sur le disque.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct NotesEcrites {
+    /// Nom du dossier de la réunion (celui du Carnet).
+    pub reunion: String,
+    pub dossier: String,
+    /// Lignes de notes, comme dans `enregistrement`.
+    pub notes: u32,
 }
 
 /// Bulle de l'historique.
@@ -792,6 +804,19 @@ impl<R: Runtime> Chef<R> {
                     );
                     r.dossier = Some(dossier);
                 }
+            }
+            Nouvelle::NotesEcrites(dossier) => {
+                let notes = self.reunion.as_ref().map_or(0, |r| compter_notes(&r.notes));
+                let charge = NotesEcrites {
+                    reunion: dossier
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                    dossier: dossier.display().to_string(),
+                    notes,
+                };
+                tracing::info!(notes, "notes écrites");
+                let _ = self.app.emit(EVENEMENT_NOTES, charge);
             }
             Nouvelle::CompteRenduEcrit(chemin) => {
                 tracing::info!(fichier = %chemin.display(), "compte rendu écrit");

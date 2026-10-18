@@ -35,6 +35,8 @@ pub struct Ecrivain(Sender<Ecriture>);
 pub enum Nouvelle {
     /// Fichiers de la réunion créés, dans ce dossier.
     ReunionOuverte(PathBuf),
+    /// `notes.md` écrit, dans ce dossier de réunion.
+    NotesEcrites(PathBuf),
     /// Compte rendu écrit, à ce chemin.
     CompteRenduEcrit(PathBuf),
     Erreur(String),
@@ -89,10 +91,13 @@ impl Ecrivain {
 
     pub fn notes(&self, notes: String) {
         self.envoyer(move |d| {
-            if let Some(r) = &d.reunion {
-                if let Err(e) = r.ecrire_notes(&notes) {
-                    tracing::warn!(erreur = %e, "notes.md");
+            let Some(r) = &d.reunion else { return };
+            match r.ecrire_notes(&notes) {
+                Ok(()) => {
+                    let dossier = r.dossier().to_path_buf();
+                    d.compter(Nouvelle::NotesEcrites(dossier));
                 }
+                Err(e) => tracing::warn!(erreur = %e, "notes.md"),
             }
         });
     }
@@ -189,8 +194,9 @@ mod tests {
             .map(|l| serde_json::from_str::<Segment>(l).unwrap().text)
             .collect();
         assert_eq!(textes, ["on commence", "le budget"]);
+        assert_eq!(comptes[1], Nouvelle::NotesEcrites(dossier.clone()));
         assert_eq!(
-            comptes[1],
+            comptes[2],
             Nouvelle::CompteRenduEcrit(dossier.join("compte-rendu.md"))
         );
         let lue = stockage
