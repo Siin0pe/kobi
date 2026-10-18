@@ -60,6 +60,14 @@ export class Defilement {
     this.instant = instant;
   }
 
+  /** Revient en bas et reprend le suivi (ouverture de la vue agrandie). */
+  suivreBas(): void {
+    this.follow = true;
+    this.zone.scrollTop = this.zone.scrollHeight;
+    this.ours = this.zone.scrollTop;
+    this.paintFades();
+  }
+
   /** Remonté par l'utilisateur ? (tests) */
   get following(): boolean {
     return this.follow;
@@ -75,6 +83,12 @@ export class Defilement {
   /** Le contenu a changé de taille : on glisse vers le bas si on suit. */
   private poke(): void {
     this.paintFades();
+    // Widget simple (KOB-169) : la bulle montre le début de la réponse ; la
+    // suite se lit dans la vue agrandie.
+    if (this.zone.closest('.affichage-simple .card-answer')) {
+      this.zone.scrollTop = 0;
+      return;
+    }
     if (!this.follow || this.stopTick) return;
     if (this.instant) {
       this.zone.scrollTop = this.zone.scrollHeight;

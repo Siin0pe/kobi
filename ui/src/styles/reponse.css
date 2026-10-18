@@ -4,9 +4,7 @@
    garde sa taille ; paragraphes, listes et code sont mis en forme
    (markdown.ts) ; les chemins et adresses longs se coupent.
 
-   Fenêtre agrandie (agrandir.ts) : la scène reste dans son coin, à la même
-   échelle, et la bulle de réponse sort de la scène à sa vraie taille
-   (`zoom`, inverse de l'échelle) dans la place gagnée. */
+   Pour lire en grand : la vue agrandie de la conversation (vue.ts, KOB-169). */
 
 @property --fondu-haut {
   syntax: '<length>';
@@ -77,7 +75,6 @@
   }
 }
 /* Une bulle qui défile ou qui porte un bouton ne flotte plus : on la lit, on la clique. */
-.bubbles .card-answer.a-bouton,
 .bubbles .card-answer:has(.defile.peut-monter),
 .bubbles .card-answer:has(.defile.peut-descendre) {
   animation: deal 0.35s cubic-bezier(0.3, 1.4, 0.5, 1) both;
@@ -136,8 +133,13 @@
   overflow-wrap: anywhere;
 }
 
-/* Réponse très longue : tout lire dans l'app. */
+/* La bulle ne peut pas tout montrer : « Lire en grand » ouvre la vue
+   agrandie (KOB-169) ; toute la bulle s'ouvre aussi d'un clic. */
+.bubbles .card-answer {
+  cursor: pointer;
+}
 .card-answer .lire-tout {
+  display: none;
   align-self: flex-start;
   flex: none;
   min-height: 38px;
@@ -150,8 +152,9 @@
   font: 800 14px var(--font);
   cursor: pointer;
 }
-.card-answer .lire-tout[hidden] {
-  display: none;
+.card-answer:has(.defile.peut-descendre, .defile.peut-monter) .lire-tout {
+  display: inline-flex;
+  align-items: center;
 }
 .card-answer .lire-tout:hover {
   background: var(--accent);
@@ -165,67 +168,36 @@
   flex: none;
 }
 
-/* Fenêtre agrandie : la scène reste dans son coin, Kobi garde sa taille. */
-.stage.agrandie .scene {
-  left: auto;
-  top: auto;
-  transform: scale(var(--scale));
-  overflow: visible;
+/* Widget simple (réglage par défaut, KOB-169) : Kobi et une courte bulle de
+   trois lignes au plus, le début de la réponse ; le reste se lit en grand.
+   Fil d'activité, notifications et historique attendent la vue agrandie. */
+.affichage-simple .bubbles .card-answer .defile {
+  max-height: calc(3 * 1.5em);
+  overflow: hidden;
 }
-.stage.agrandie.vers-gauche .scene {
-  right: 0;
+.affichage-simple .card-answer:has(.defile.peut-descendre)::after {
+  display: none;
 }
-.stage.agrandie.vers-droite .scene {
-  left: 0;
-}
-.stage.agrandie.vers-haut .scene {
-  bottom: 0;
-}
-.stage.agrandie.vers-bas .scene {
-  top: 0;
-}
-.stage.agrandie.vers-gauche.vers-haut .scene {
-  transform-origin: 100% 100%;
-}
-.stage.agrandie.vers-gauche.vers-bas .scene {
-  transform-origin: 100% 0;
-}
-.stage.agrandie.vers-droite.vers-haut .scene {
-  transform-origin: 0 100%;
-}
-.stage.agrandie.vers-droite.vers-bas .scene {
-  transform-origin: 0 0;
-}
-/* Sobriété : en plus de Kobi et de sa bulle, une seule chose à la fois. La
-   réponse se lit en grand : les notifications des tâches (« Résultat prêt »,
-   déjà affiché) s'effacent le temps de la lecture. */
-.stage.agrandie .notifs {
+.affichage-simple .fil,
+.affichage-simple .notifs {
   visibility: hidden;
 }
-/* La bulle de réponse, à sa vraie taille (le zoom compense l'échelle), à
-   côté de Kobi dans la place gagnée ; ses positions sont en unités de scène
-   divisées par le zoom. */
-.stage.agrandie .bubbles .card-answer {
-  zoom: var(--zoom);
-  width: 400px;
-  max-height: var(--lecture);
-  top: auto;
-  bottom: auto;
-  left: auto;
-  right: auto;
-  font-size: 16px;
+
+/* Fenêtre agrandie pour la vue de la conversation : la scène reste
+   exactement où était la petite fenêtre, à la même échelle. */
+.stage.agrandie .scene {
+  left: var(--kobi-x);
+  top: var(--kobi-y);
 }
-.stage.agrandie.vers-gauche .bubbles .card-answer {
-  right: calc(420px / var(--zoom));
-}
-.stage.agrandie.vers-droite .bubbles .card-answer {
-  left: calc(750px / var(--zoom));
-}
-.stage.agrandie.vers-haut .bubbles .card-answer {
-  bottom: calc(136px / var(--zoom));
-}
-.stage.agrandie.vers-bas .bubbles .card-answer {
-  top: calc(150px / var(--zoom));
+/* Sobriété : la conversation se lit dans la vue ; dans la scène, seules
+   restent les cartes qui attendent une décision (confirmation, erreur). */
+.vue-ouverte .bubbles .card-answer,
+.vue-ouverte .bubbles .card-question,
+.vue-ouverte .bubbles .card-sources,
+.vue-ouverte .card-history,
+.vue-ouverte .notifs,
+.vue-ouverte .fil {
+  visibility: hidden;
 }
 
 .reduced-motion .card-answer::after,

@@ -44,6 +44,11 @@ pub const CLES: &[(&str, Application, &str)] = &[
         "Raccourci qui démarre ou arrête l'enregistrement (Ctrl+Shift+R).",
     ),
     (
+        "hotkey_view",
+        AuRedemarrage,
+        "Raccourci qui ouvre ou range la conversation en grand (Ctrl+Alt+L).",
+    ),
+    (
         "codebases",
         AuRedemarrage,
         "Dossiers de code que Kobi peut lire (chemins complets).",

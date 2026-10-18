@@ -417,6 +417,12 @@ pub fn lisible(commande: &Commande, r: &Value) -> String {
         }
         .into(),
         "app.open" => format!("App Kobi ouverte : {}", s(&r["section"])),
+        "view.open" | "view.close" | "view.toggle" => match r["vue"].as_str() {
+            Some("ouvrir") => "Conversation ouverte en grand.",
+            Some("fermer") => "Vue agrandie rangée.",
+            _ => "Vue agrandie ouverte ou rangée.",
+        }
+        .into(),
         _ if r.as_object().is_some_and(Map::is_empty) || r.is_null() => "OK".into(),
         _ => serde_json::to_string_pretty(r).unwrap_or_default(),
     }
@@ -679,6 +685,8 @@ mod tests {
             "Mode discret : Kobi est une pastille."
         );
         assert_eq!(lisible(c("reminders.list"), &json!([])), "(aucun)");
+        assert_eq!(lisible(c("view.open"), &json!({"vue": "ouvrir"})), "Conversation ouverte en grand.");
+        assert_eq!(params("view open"), ("view.open", json!({})));
         let set = lisible(
             c("config.set"),
             &json!({"key": "voice.assistant", "before": true, "after": false, "apply": "hot"}),

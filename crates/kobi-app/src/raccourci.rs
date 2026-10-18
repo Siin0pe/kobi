@@ -6,7 +6,9 @@
 //! * `hotkey_record` (`Ctrl+Shift+R` par défaut) : démarre l'enregistrement
 //!   de la réunion, ou l'arrête s'il tourne (puis compte rendu) ;
 //! * `hotkey_write` (`Ctrl+Alt+K` par défaut) : montre Kobi et ouvre sa bulle
-//!   pour lui écrire (KOB-147).
+//!   pour lui écrire (KOB-147) ;
+//! * `hotkey_view` (`Ctrl+Alt+L` par défaut) : ouvre ou range la vue agrandie
+//!   de la conversation (KOB-169).
 
 use std::str::FromStr;
 
@@ -38,6 +40,7 @@ struct Raccourcis {
     interpeller: Shortcut,
     enregistrer: Shortcut,
     ecrire: Shortcut,
+    vue: Shortcut,
 }
 
 /// Événement qui ouvre la bulle d'écriture dans l'interface.
@@ -86,13 +89,15 @@ pub fn installer<R: Runtime>(
         &defaut.hotkey_record,
     );
     let (ecrire, p3) = lire("hotkey_write", &config.hotkey_write, &defaut.hotkey_write);
-    for probleme in [p1, p2, p3].into_iter().flatten() {
+    let (vue, p4) = lire("hotkey_view", &config.hotkey_view, &defaut.hotkey_view);
+    for probleme in [p1, p2, p3, p4].into_iter().flatten() {
         tracing::warn!(%probleme, "raccourci de la config ignoré");
     }
     app.manage(Raccourcis {
         interpeller,
         enregistrer,
         ecrire,
+        vue,
     });
     app.plugin(
         tauri_plugin_global_shortcut::Builder::new()
@@ -105,6 +110,8 @@ pub fn installer<R: Runtime>(
                     basculer_enregistrement(app);
                 } else if *raccourci == r.ecrire {
                     ouvrir_bulle(app);
+                } else if *raccourci == r.vue {
+                    crate::agrandir::vue(app, "basculer");
                 } else if *raccourci == r.interpeller {
                     match crate::interpellation::declencher(app) {
                         Ok(()) => tracing::info!("raccourci global : interpellation"),
@@ -114,7 +121,7 @@ pub fn installer<R: Runtime>(
             })
             .build(),
     )?;
-    for raccourci in [interpeller, enregistrer, ecrire] {
+    for raccourci in [interpeller, enregistrer, ecrire, vue] {
         if let Err(e) = app.global_shortcut().register(raccourci) {
             tracing::warn!(raccourci = ?raccourci, erreur = %e, "raccourci global non enregistré");
         } else {
@@ -153,6 +160,13 @@ mod tests {
         );
         assert_ne!(ecrire, defaut);
         assert_ne!(ecrire, record);
+        let (vue, probleme) = lire("hotkey_view", &c.hotkey_view, &c.hotkey_view);
+        assert!(probleme.is_none());
+        assert_eq!(
+            vue,
+            Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyL)
+        );
+        assert!(![defaut, record, ecrire].contains(&vue));
         let (autre, probleme) = lire("hotkey", "Alt+K", &c.hotkey);
         assert!(probleme.is_none());
         assert_eq!(autre, Shortcut::new(Some(Modifiers::ALT), Code::KeyK));

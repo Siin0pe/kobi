@@ -6,6 +6,7 @@
 // depuis son module avec `ajouterPanneau(MON_PANNEAU)` (importé par l'app).
 // L'app n'a rien d'autre à changer : son menu suit cette liste.
 
+import { AFFICHAGE } from './affichage';
 import { ANIMATIONS } from './animations';
 import { DEMARRAGE } from './demarrage';
 import { CLAUDE, DOSSIERS, ESSAI, MICRO, MODELE, PARCOURS, RACCOURCIS } from './etapes';
@@ -13,7 +14,7 @@ import { MCP, OUTILS } from './mcp';
 import type { Panneau } from './panneau';
 import { STOCKAGE } from './stockage';
 
-const liste: Panneau[] = [STOCKAGE, DOSSIERS, MCP, MICRO, MODELE, CLAUDE, DEMARRAGE, ANIMATIONS, RACCOURCIS, PARCOURS];
+const liste: Panneau[] = [STOCKAGE, DOSSIERS, MCP, MICRO, MODELE, CLAUDE, DEMARRAGE, ANIMATIONS, AFFICHAGE, RACCOURCIS, PARCOURS];
 
 /** Panneaux de la section Réglages, dans l'ordre du menu. */
 export const PANNEAUX: readonly Panneau[] = liste;
