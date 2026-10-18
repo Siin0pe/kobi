@@ -67,6 +67,12 @@ export class Typewriter {
     return this.shown >= this.target.length;
   }
 
+  /** Interruption (Échap) : le texte s'arrête là où en est la frappe. */
+  freeze(): void {
+    this.target = this.target.slice(0, this.shown);
+    this.stop();
+  }
+
   stop(): void {
     this.stopTick?.();
     this.stopTick = null;

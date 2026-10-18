@@ -69,6 +69,10 @@ export class Stage {
   private readonly cleanups: Array<() => void> = [];
   /** Animations arrêtées par la mise en pause, à relancer au retour. */
   private frozen: Animation[] = [];
+  /** Réponse interrompue par l'utilisateur (Échap). */
+  private interrupted = false;
+  /** Appelé à chaque état affiché (l'historique se referme, par exemple). */
+  onStateChange: ((state: MascotState) => void) | null = null;
 
   constructor(parent: HTMLElement, options: StageOptions = {}) {
     this.forcedMotion = options.reducedMotion;
@@ -150,6 +154,7 @@ export class Stage {
 
   /** Change d'état. Les données remplacent les précédentes. */
   setState(state: MascotState, data: MascotData = {}): void {
+    if (state !== 'answer') this.interrupted = false;
     this.requested = state;
     this.requestedData = { ...data };
     this.show();
@@ -176,6 +181,7 @@ export class Stage {
     this.paintDot();
     this.kobi.setState(state, this.data);
     this.bubbles.render(state, this.data);
+    this.onStateChange?.(state);
     if (state !== this.spoken) {
       this.spoken = state;
       this.live.textContent = STATE_SPOKEN[state];
@@ -271,9 +277,32 @@ export class Stage {
 
   /** Met à jour les données sans changer d'état (texte en flux, sources). */
   update(data: MascotData): void {
+    // Réponse interrompue (Échap) : la suite du flux ne s'affiche plus.
+    if (this.interrupted && data.answer !== undefined) {
+      const { answer: _ignored, ...rest } = data;
+      data = rest;
+    }
     this.data = { ...this.data, ...data };
     this.kobi.setData(this.data);
     this.bubbles.render(this.state, this.data);
+  }
+
+  /**
+   * Échap ou « stop » : la réponse s'arrête net, le texte déjà affiché reste ;
+   * la suite du flux est ignorée jusqu'au prochain changement d'état.
+   */
+  interrupt(): void {
+    if (this.state !== 'answer') return;
+    this.interrupted = true;
+    this.bubbles.interrupt();
+    // Le texte affiché devient la réponse : un nouveau rendu ne relance pas la frappe.
+    this.data = { ...this.data, answer: this.root.querySelector('[data-card=answer] .text')?.textContent ?? '' };
+    this.kobi.setData(this.data);
+  }
+
+  /** Ajoute un élément à la scène (champ de saisie, historique, notifications). */
+  mount(node: HTMLElement): void {
+    this.scene.append(node);
   }
 
   /** Volume du micro, de 0 à 1 : Kobi l'écoute en Écoute. */

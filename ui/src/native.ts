@@ -9,13 +9,13 @@ import { followRecording } from './recording';
 import { isMascotState } from './states';
 import type { Stage } from './stage';
 
-interface TauriGlobal {
+export interface TauriGlobal {
   window: { getCurrentWindow(): { startDragging(): Promise<void> } };
   core: { invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> };
   event: { listen<T>(event: string, handler: (e: { payload: T }) => void): Promise<() => void> };
 }
 
-function tauri(): TauriGlobal | undefined {
+export function tauri(): TauriGlobal | undefined {
   return (window as unknown as { __TAURI__?: TauriGlobal }).__TAURI__;
 }
 

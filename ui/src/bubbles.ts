@@ -73,6 +73,12 @@ export class Bubbles {
     if (this.card && kind) this.fill(kind, this.card, data);
   }
 
+  /** Interruption (Échap) : la frappe s'arrête net, le texte affiché reste. */
+  interrupt(): void {
+    this.typer?.freeze();
+    if (this.card) this.card.dataset.typing = '0';
+  }
+
   setPaused(paused: boolean): void {
     this.root.classList.toggle('paused', paused);
   }

@@ -171,6 +171,133 @@ const CLIPS = [
     },
   ],
   [
+    'conversation-clavier-historique',
+    'backdrop=1',
+    async (page) => {
+      // KOB-133 : on tape une question (Entrée), Kobi répond ; on en tape une
+      // autre ; puis on fait défiler la bulle vers le haut pour relire.
+      const bulles = [];
+      const echange = async (question, reponse, clavier) => {
+        await page.locator('.say-input').click();
+        await page.keyboard.type(question, { delay: 45 });
+        await wait(page, 300);
+        await page.keyboard.press('Enter');
+        bulles.push({ tour: bulles.length + 1, question, reponse: '', statut: 'attente', clavier });
+        await page.evaluate((b) => window.kobi.conversation(b), bulles);
+        await wait(page, 900);
+        await page.evaluate(() => window.kobi.setState('think', window.kobi.demoData('think')));
+        await wait(page, 1600);
+        await page.evaluate(() => window.kobi.setState('answer', { answer: '' }));
+        let t = '';
+        for (const w of reponse.split(' ')) {
+          t = t ? `${t} ${w}` : w;
+          await page.evaluate((t) => window.kobi.update({ answer: t }), t);
+          await wait(page, 90);
+        }
+        bulles[bulles.length - 1] = { ...bulles[bulles.length - 1], reponse, statut: 'fini' };
+        await page.evaluate((b) => window.kobi.conversation(b), bulles);
+        await wait(page, 1800);
+      };
+      await wait(page, 600);
+      await echange('où est géré le refresh token ?', 'Dans api/src/auth/refresh.ts, ligne 88. Durée actuelle : 15 min.', true);
+      await echange('et côté mobile ?', 'Le mobile le renouvelle dans app/lib/session.dart, ligne 41.', true);
+      await page.locator('.say-input').blur();
+      await page.mouse.move(220, 250);
+      await page.mouse.wheel(0, -300);
+      await wait(page, 2500);
+      await page.mouse.wheel(0, -300);
+      await wait(page, 1500);
+      await page.keyboard.press('Escape');
+      await wait(page, 1500);
+    },
+  ],
+  [
+    'tache-longue',
+    'backdrop=1',
+    async (page) => {
+      // KOB-135 : annonce immédiate, Kobi reste disponible (une autre question
+      // passe), puis le résultat arrive en notification et s'ouvre d'un clic.
+      const longue = 'liste tous les appels à refresh dans la codebase';
+      const bulles = [{ tour: 1, question: longue, reponse: '', statut: 'attente', clavier: false }];
+      await wait(page, 600);
+      await page.evaluate(() => window.kobi.setState('listen', { question: 'liste tous les appels à refresh dans la codebase' }));
+      await page.evaluate((b) => window.kobi.conversation(b), bulles);
+      await wait(page, 1800);
+      await page.evaluate(() => window.kobi.setState('think', window.kobi.demoData('think')));
+      await wait(page, 1500);
+      bulles[0] = { ...bulles[0], statut: 'tache', reponse: 'Je m’en occupe, je te donne le résultat dès qu’il est prêt.' };
+      await page.evaluate((b) => window.kobi.conversation(b), bulles);
+      await page.evaluate(() => window.kobi.setState('answer', { answer: 'Je m’en occupe, je te donne le résultat dès qu’il est prêt.' }));
+      await wait(page, 3000);
+      await page.evaluate(() => window.kobi.setState('idle'));
+      await wait(page, 1200);
+      await page.locator('.say-input').click();
+      await page.keyboard.type('quelle heure est-il ?', { delay: 45 });
+      await page.keyboard.press('Enter');
+      bulles.push({ tour: 2, question: 'quelle heure est-il ?', reponse: 'Il est 10 h 12.', statut: 'fini', clavier: true });
+      await wait(page, 900);
+      await page.evaluate(() => window.kobi.setState('answer', { answer: 'Il est 10 h 12.' }));
+      await page.evaluate((b) => window.kobi.conversation(b), bulles);
+      await wait(page, 2500);
+      await page.evaluate(() => window.kobi.setState('idle'));
+      await wait(page, 1500);
+      bulles[0] = { ...bulles[0], statut: 'fini', reponse: '7 appels : api/src/auth/refresh.ts (3), app/lib/session.dart (2), web/src/auth.ts (2).' };
+      await page.evaluate((b) => window.kobi.conversation(b), bulles);
+      await wait(page, 3500);
+      await page.locator('.notif').click();
+      await wait(page, 4000);
+    },
+  ],
+  [
+    'interruption-echap',
+    'backdrop=1',
+    async (page) => {
+      // Échap : la réponse s'arrête net, la suite du flux est ignorée.
+      await wait(page, 600);
+      await page.evaluate(() => window.kobi.setState('answer', { answer: '' }));
+      const full = 'C’est dans api/src/auth/refresh.ts, ligne 88. La durée actuelle est de quinze minutes, et un ticket ouvert en parle déjà depuis lundi dernier, avec deux propositions.';
+      let t = '';
+      let i = 0;
+      for (const w of full.split(' ')) {
+        t = t ? `${t} ${w}` : w;
+        await page.evaluate((t) => window.kobi.update({ answer: t }), t);
+        await wait(page, 110);
+        if (++i === 9) await page.keyboard.press('Escape');
+      }
+      await wait(page, 2500);
+      await page.evaluate(() => window.kobi.setState('idle'));
+      await wait(page, 1500);
+    },
+  ],
+  [
+    'reunion-derniere-note-et-champ',
+    'backdrop=1',
+    async (page) => {
+      // KOB-134 : enregistrement très visible, dernière note dans la fiche,
+      // et le champ reste disponible pendant la réunion.
+      const debut = Date.now() - 125_000;
+      const rec = (notes, note) =>
+        page.evaluate(([notes, note, debut]) => window.kobi.recording({ actif: true, pause: false, debut_ms: debut, notes, titre: null, derniere_note: note }), [notes, note, debut]);
+      await wait(page, 600);
+      await rec(0, null);
+      await wait(page, 2500);
+      await rec(1, 'Décision : refresh token à 30 jours');
+      await wait(page, 3000);
+      await rec(2, 'Action : mettre à jour la doc API (Léa)');
+      await wait(page, 2000);
+      await page.locator('.say-input').click();
+      await page.keyboard.type('résume les décisions', { delay: 45 });
+      await page.keyboard.press('Enter');
+      await wait(page, 1500);
+      await page.evaluate(() => window.kobi.setState('answer', { answer: 'Une décision : refresh token à 30 jours. Une action : doc API, Léa.' }));
+      await wait(page, 3500);
+      await page.evaluate(() => window.kobi.setState('idle'));
+      await wait(page, 2000);
+      await rec(3, 'Question : impact sur le mobile ?');
+      await wait(page, 3000);
+    },
+  ],
+  [
     'lisibilite-fond-sombre',
     'backdrop=sombre',
     async (page) => {
