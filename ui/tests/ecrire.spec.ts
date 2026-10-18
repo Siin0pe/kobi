@@ -2,7 +2,7 @@
 // Kobi (clic, touche, menu, raccourci), le texte aspiré à l'envoi, rangée par
 // Échap ou après 8 s vide. Chaque test est filmé (preuve du ticket).
 import { expect, test, type Page } from '@playwright/test';
-import { calls, emit, expectNoErrors, mockTauri, openUi } from './helpers';
+import { calls, emit, expectNoErrors, kobiPose, mockTauri, openUi } from './helpers';
 
 test.use({ video: { mode: 'on', size: { width: 820, height: 560 } } });
 
@@ -23,7 +23,7 @@ async function opened(page: Page): Promise<void> {
 
 test('au repos, rien d’autre que Kobi : aucune barre, aucun champ visible', async ({ page }) => {
   const errors = await openUi(page, '');
-  await page.waitForTimeout(600);
+  await kobiPose(page);
   await expect(bulle(page)).toBeHidden();
   await expect(champ(page)).toBeHidden();
   await expect(page.locator('.say')).toHaveCount(0);
@@ -33,7 +33,7 @@ test('au repos, rien d’autre que Kobi : aucune barre, aucun champ visible', as
 
 test('clic sur Kobi : la bulle grandit depuis sa bouche avec un rebond, pointe vers lui', async ({ page }) => {
   const errors = await openUi(page, '');
-  await page.waitForTimeout(500);
+  await kobiPose(page);
   const mouth = await page.locator('.kobi .mouth').boundingBox();
   await page.mouse.click(580, 250);
   await expect(bulle(page)).toBeVisible();
@@ -72,7 +72,6 @@ test('n’importe quelle touche ouvre la bulle et la lettre y arrive', async ({ 
   await page.keyboard.type('bonjour');
   await expect(champ(page)).toHaveValue('bonjour');
   await expect(bulle(page)).toHaveAttribute('data-etat', 'ouverte');
-  await page.waitForTimeout(600);
   await expectNoErrors(errors);
 });
 
@@ -134,6 +133,18 @@ test('entrée « Écrire à Kobi » du menu (événement kobi:ecrire) et raccour
 });
 
 test('pendant la frappe : lettres brouillées puis posées, Kobi suit le curseur des yeux et sursaute', async ({ page }) => {
+  // Sursauts de la pilule comptés au moment où ils sont joués : trop brefs
+  // pour être lus à coup sûr sous charge (KOB-172).
+  await page.addInitScript(() => {
+    const w = window as unknown as { __sursauts: number };
+    w.__sursauts = 0;
+    const animate = Element.prototype.animate;
+    Element.prototype.animate = function (this: Element, ...args: Parameters<Element['animate']>) {
+      const options = args[1];
+      if (this.classList.contains('pill') && typeof options === 'object' && options?.composite === 'add') w.__sursauts++;
+      return animate.apply(this, args);
+    };
+  });
   const errors = await openUi(page, '');
   await away(page);
   await page.evaluate(() => window.kobi.ecrire());
@@ -162,19 +173,25 @@ test('pendant la frappe : lettres brouillées puis posées, Kobi suit le curseur
   await expect(just).toHaveText('x');
   await expect(page.locator('.ecrire-miroir')).toHaveText('où estx​');
   // Chaque touche fait sursauter la pilule.
+  const avant = await page.evaluate(() => (window as unknown as { __sursauts: number }).__sursauts);
   await page.keyboard.press('y');
-  const jolts = await page.locator('.kobi .pill').evaluate((n) => n.getAnimations().filter((a) => !(a instanceof CSSAnimation) && (a.effect as KeyframeEffect).composite === 'add').length);
-  expect(jolts).toBeGreaterThanOrEqual(1);
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __sursauts: number }).__sursauts)).toBeGreaterThan(avant);
   await page.keyboard.press('Backspace');
   await page.keyboard.press('Backspace');
   // Le regard suit le curseur : au début du texte, il est plus à gauche qu'à la fin.
   await page.keyboard.type(' géré le refresh token ?', { delay: 60 });
-  await page.waitForTimeout(500);
-  const atEnd = await gaze();
+  // Regard posé en fin de texte (deux relevés égaux), puis il repart vers le début.
+  let atEnd = NaN;
+  await expect
+    .poll(async () => {
+      const g = await gaze();
+      const pose = g === atEnd;
+      atEnd = g;
+      return pose;
+    })
+    .toBe(true);
   await page.keyboard.press('Home');
-  await page.waitForTimeout(500);
-  const atStart = await gaze();
-  expect(atStart).toBeLessThan(atEnd);
+  await expect.poll(gaze).toBeLessThan(atEnd);
   await page.keyboard.press('End');
   // Le miroir est exactement sous le champ : les lettres dessinées sont celles tapées.
   await expect(page.locator('.ecrire-miroir')).toHaveText('où est géré le refresh token ?​');
@@ -208,13 +225,12 @@ test('Entrée : le texte est aspiré dans Kobi qui l’avale, puis réfléchit ;
   await page.evaluate(() => window.kobi.ecrire());
   await opened(page);
   await page.keyboard.type('où est géré le refresh token ?');
-  await page.waitForTimeout(400);
+  await expect(page.locator('.ecrire-c.nouv')).toHaveCount(0);
   await page.keyboard.press('Enter');
   // Les lettres volent vers la bouche ; la bulle se vide tout de suite.
   await expect(page.locator('.ecrire-vole').first()).toBeAttached();
   await expect(champ(page)).toHaveValue('');
   await expect(page.locator('.kobi .mouth')).toHaveText('O');
-  await page.waitForTimeout(150);
   await page.screenshot({ path: test.info().outputPath('aspiration.png') });
   await expect(page.locator('.ecrire-vole')).toHaveCount(0);
   await expect.poll(() => calls(page)).toContainEqual(['envoyer_texte', { texte: 'où est géré le refresh token ?' }]);
@@ -229,10 +245,10 @@ test('Entrée : le texte est aspiré dans Kobi qui l’avale, puis réfléchit ;
   await emit(page, 'answer', 'Dans api/src/auth/refresh.ts, ligne 88.');
   await expect(page.locator('[data-card=answer] .text')).toHaveText('Dans api/src/auth/refresh.ts, ligne 88.');
   await expect(bulle(page)).toBeVisible();
-  await page.waitForTimeout(400);
   await page.screenshot({ path: test.info().outputPath('reponse.png') });
   // Un texte vide n'envoie rien.
   await page.keyboard.press('Enter');
+  // Contrôle négatif : 600 ms laissés à un envoi pour partir.
   await page.waitForTimeout(600);
   expect((await calls(page)).filter(([c]) => c === 'envoyer_texte')).toHaveLength(1);
   await expectNoErrors(errors);
@@ -264,7 +280,7 @@ test('Échap : la bulle se dégonfle et rentre dans Kobi', async ({ page }) => {
   await page.evaluate(() => window.kobi.ecrire());
   await opened(page);
   await page.keyboard.type('finalement non');
-  await page.waitForTimeout(400);
+  await expect(page.locator('.ecrire-c.nouv')).toHaveCount(0);
   const mouth = (await page.locator('.kobi .mouth').boundingBox())!;
   await page.keyboard.press('Escape');
   await expect(bulle(page)).toHaveAttribute('data-etat', 'fermeture');

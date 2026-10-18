@@ -36,7 +36,6 @@ test('Kobi passe les 9 états sans erreur', async ({ page }) => {
     await expect(kobi).toHaveClass(new RegExp(`m-${state}`));
     await expect(page.locator('.kobi .word')).toHaveText(LOOKS[state].word);
     await expect(page.locator('.kobi .g').first()).toHaveText(LOOKS[state].eye);
-    await page.waitForTimeout(300);
   }
   await expectNoErrors(errors);
 });
@@ -55,6 +54,7 @@ test('le changement d’état ne fait pas sauter la pilule', async ({ page }) =>
   const errors = await openUi(page, 'state=think');
   // Réfléchit se balance de ±3° : on change d'état en pleine inclinaison.
   for (const next of ['suggest', 'error', 'idle', 'write'] as const) {
+    // Voulu : on change d'état en pleine inclinaison (le balancement dure ~1,3 s).
     await page.waitForTimeout(650);
     const [before, after] = await page.evaluate((s) => {
       const m = (n: Element) => {
@@ -79,6 +79,7 @@ test('la bouche parle seulement en Répond', async ({ page }) => {
   const seen = new Set<string>();
   for (let i = 0; i < 12; i++) {
     seen.add((await page.locator('.kobi .mouth').textContent()) ?? '');
+    // Échantillonnage de la bouche toutes les 60 ms.
     await page.waitForTimeout(60);
   }
   expect(seen.size).toBeGreaterThan(1);

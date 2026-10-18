@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { expectNoErrors, openUi } from './helpers';
+import { expectNoErrors, openUi, sansAnimation } from './helpers';
 
 const STATES = ['idle', 'listen', 'think', 'write', 'answer', 'suggest', 'done', 'error', 'work'] as const;
 const CARDS: Record<(typeof STATES)[number], string | null> = {
@@ -63,7 +63,7 @@ test('les cartes à boutons vivent par leurs enfants décoratifs, les boutons ne
   const errors = await openUi(page, 'state=suggest');
   const card = page.locator('[data-card=action]');
   await expect(card).toBeVisible();
-  await page.waitForTimeout(500);
+  await sansAnimation(card);
   // La carte a fini d'arriver : plus aucune animation sur elle ni sur ses boutons.
   expect(await card.evaluate((n) => n.getAnimations().filter((a) => a.playState === 'running').length)).toBe(0);
   const live = await card.evaluate((n) => n.getAnimations({ subtree: true }).filter((a) => a.playState === 'running').length);
@@ -72,6 +72,7 @@ test('les cartes à boutons vivent par leurs enfants décoratifs, les boutons ne
   const boxes = [];
   for (let i = 0; i < 6; i++) {
     boxes.push(await button.boundingBox());
+    // Échantillonnage : la position est relevée toutes les 250 ms.
     await page.waitForTimeout(250);
   }
   for (const b of boxes) expect(b).toEqual(boxes[0]);

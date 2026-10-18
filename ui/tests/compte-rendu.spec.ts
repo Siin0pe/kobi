@@ -67,9 +67,10 @@ test('toujours animée sans bouger ce qui se clique ; « réduire les animations
   const errors = await openUi(page, '');
   await emit(page, 'compte_rendu', CR);
   const card = page.locator('.card-rapport');
-  await page.waitForTimeout(600);
   const running = (sel: string, subtree: boolean) =>
     page.locator(sel).evaluate((n, subtree) => n.getAnimations({ subtree }).filter((a) => a.playState === 'running').length, subtree);
+  // La carte a fini d'arriver.
+  await expect.poll(() => running('.card-rapport', false)).toBe(0);
   expect(await running('.card-rapport', true)).toBeGreaterThanOrEqual(4);
   expect(await running('.card-rapport', false)).toBe(0);
   expect(await running('.card-rapport .btn-primary', false)).toBe(0);

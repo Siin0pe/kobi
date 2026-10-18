@@ -2,7 +2,7 @@
 // longues (KOB-135) : l'interface pilotée par les événements de la coque,
 // simulée ici (`mockTauri`) tant que la coque n'est pas sur main.
 import { expect, test, type Page } from '@playwright/test';
-import { calls, emit, expectNoErrors, mockTauri, openUi } from './helpers';
+import { calls, emit, expectNoErrors, mockTauri, openUi, sansAnimation } from './helpers';
 
 type Statut = 'attente' | 'reponse' | 'tache' | 'fini' | 'erreur';
 const bulle = (tour: number, question: string, reponse: string, statut: Statut, clavier = false) => ({ tour, question, reponse, statut, clavier });
@@ -17,6 +17,7 @@ async function boxes(page: Page, selector: string): Promise<unknown[]> {
   const out = [];
   for (let i = 0; i < 5; i++) {
     out.push(await page.locator(selector).first().boundingBox());
+    // Échantillonnage : la position est relevée toutes les 200 ms.
     await page.waitForTimeout(200);
   }
   return out;
@@ -37,6 +38,7 @@ test('Entrée envoie le texte tapé (envoyer_texte) : Kobi l’avale et réfléc
   await expect.poll(() => calls(page)).toContainEqual(['envoyer_texte', { texte: 'où est géré le refresh token ?' }]);
   // Un texte vide n'envoie rien.
   await input.press('Enter');
+  // Contrôle négatif : 600 ms laissés à un envoi pour partir.
   await page.waitForTimeout(600);
   expect((await calls(page)).filter(([c]) => c === 'envoyer_texte')).toHaveLength(1);
   await expectNoErrors(errors);
@@ -109,7 +111,7 @@ test('tâche longue : annoncée, Kobi reste disponible, résultat livré en noti
   await expect(running).toHaveCount(0);
   await expect(delivered).toContainText('7 appels');
   // Une fois arrivée, la notification ne bouge plus : elle se clique du premier coup.
-  await page.waitForTimeout(500);
+  await sansAnimation(page.locator('.notif').first());
   const b = await boxes(page, '.notif');
   for (const x of b) expect(x).toEqual(b[0]);
   await delivered.click();
@@ -148,6 +150,7 @@ test('Échap interrompt la réponse : la frappe s’arrête net et la suite du f
   const full = 'C’est dans api/src/auth/refresh.ts, ligne 88. La durée actuelle est de quinze minutes, et un ticket ouvert en parle déjà depuis lundi dernier.';
   await emit(page, 'state', { etat: 'veille', activite: 'repond', mascotte: 'answer', transcrit: false });
   await emit(page, 'answer', full.slice(0, 60));
+  // Voulu : la réponse se tape un moment avant Échap.
   await page.waitForTimeout(700);
   await page.keyboard.press('Escape');
   expect(await calls(page)).toContainEqual(['interrompre', null]);
@@ -156,6 +159,7 @@ test('Échap interrompt la réponse : la frappe s’arrête net et la suite du f
   expect(frozen!.length).toBeLessThan(61);
   // La coque envoie encore la fin du flux : rien ne s'ajoute.
   await emit(page, 'answer', full);
+  // Contrôle négatif : 600 ms laissés au texte pour s'ajouter.
   await page.waitForTimeout(600);
   await expect(text).toHaveText(frozen!);
   // Nouvelle question : tout repart.
@@ -189,13 +193,12 @@ test('toujours animé, sans faire bouger ce qui se clique ; « réduire les anim
   await page.evaluate(() => window.kobi.ecrire());
   await page.keyboard.type('bonjour');
   const live = (sel: string) => page.locator(sel).evaluate((n) => n.getAnimations({ subtree: true }).filter((a) => a.playState === 'running').length);
-  await page.waitForTimeout(600);
   // La pointe et l'invite ↵ de la bulle vivent (la pointe est un pseudo-élément).
-  expect(await page.evaluate(() => document.getAnimations().filter((a) => a.playState === 'running' && ['ecrire-pointe', 'ecrire-entree'].includes((a as CSSAnimation).animationName)).length)).toBe(2);
+  await expect.poll(() => page.evaluate(() => document.getAnimations().filter((a) => a.playState === 'running' && ['ecrire-pointe', 'ecrire-entree'].includes((a as CSSAnimation).animationName)).length)).toBe(2);
   expect(await live('.notif')).toBeGreaterThanOrEqual(3);
   // La bulle (une fois ouverte) et la notification elles-mêmes ne bougent pas.
-  expect(await page.locator('.ecrire').evaluate((n) => n.getAnimations().filter((a) => a.playState === 'running').length)).toBe(0);
-  expect(await page.locator('.notif').evaluate((n) => n.getAnimations().filter((a) => a.playState === 'running').length)).toBe(0);
+  await sansAnimation(page.locator('.ecrire'));
+  await sansAnimation(page.locator('.notif'));
   const b = await boxes(page, '.ecrire-champ');
   for (const x of b) expect(x).toEqual(b[0]);
 

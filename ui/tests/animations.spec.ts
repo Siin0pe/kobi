@@ -1,7 +1,7 @@
 // Animations de Kobi (KOB-137) : transitions sans saut, vie de chaque état,
 // curseur, volume du micro, bouche calée sur le flux, enregistrement.
 import { expect, test, type Page } from '@playwright/test';
-import { expectEconomicalFont, expectNoErrors, openUi } from './helpers';
+import { expectEconomicalFont, expectNoErrors, kobiPose, openUi } from './helpers';
 
 const STATES = ['idle', 'listen', 'think', 'write', 'answer', 'suggest', 'done', 'error', 'work'] as const;
 
@@ -104,7 +104,7 @@ test.describe(() => {
 
   test('chaque transition est chorégraphiée : anticipation, yeux en fente, puis décollage', async ({ page }) => {
     const errors = await openUi(page, 'state=listen');
-    await page.waitForTimeout(700);
+    await kobiPose(page);
     // Lu dans la même tâche que `setState` : l'anticipation est trop courte pour un aller-retour du test.
     const during = await page.evaluate(() => {
       window.kobi.setState('suggest', window.kobi.demoData('suggest'));
@@ -177,7 +177,7 @@ test('la bouche suit la réponse en flux et se tait quand le flux s’arrête', 
 
 test('le regard et le corps suivent le curseur ; le survol réveille Kobi en veille', async ({ page }) => {
   const errors = await openUi(page, '');
-  await page.waitForTimeout(400);
+  await kobiPose(page);
   const gaze = page.locator('.kobi .gaze');
   await page.mouse.move(805, 30);
   await expect.poll(() => gaze.evaluate((n) => n.style.transform)).toMatch(/translate\((1\d|2\d)(\.\d+)?px, -\d+(\.\d+)?px\)/);
@@ -192,6 +192,7 @@ test('le regard et le corps suivent le curseur ; le survol réveille Kobi en vei
 test('réduire les animations : le curseur ne fait rien bouger', async ({ page }) => {
   const errors = await openUi(page, 'reduced=1&state=listen');
   await page.mouse.move(805, 30);
+  // Contrôle négatif : 200 ms laissés à un mouvement pour apparaître.
   await page.waitForTimeout(200);
   expect(await page.locator('.kobi .lean').evaluate((n) => n.style.transform)).toBe('');
   expect(await page.evaluate(() => document.getAnimations().filter((a) => a.playState === 'running').length)).toBe(0);
@@ -200,7 +201,7 @@ test('réduire les animations : le curseur ne fait rien bouger', async ({ page }
 
 test('en écoute, Kobi suit le volume du micro, puis s’arrête quand il retombe', async ({ page }) => {
   const errors = await openUi(page, 'state=listen');
-  await page.waitForTimeout(700);
+  await kobiPose(page);
   const voice = page.locator('.kobi .voice');
   await page.evaluate(() => window.kobi.setLevel(1));
   await expect.poll(() => voice.evaluate((n) => n.style.transform)).toMatch(/translateY\(-\d/);
@@ -209,6 +210,7 @@ test('en écoute, Kobi suit le volume du micro, puis s’arrête quand il retomb
   // Hors écoute, le volume est ignoré.
   await page.evaluate(() => window.kobi.setState('think', window.kobi.demoData('think')));
   await page.evaluate(() => window.kobi.setLevel(1));
+  // Contrôle négatif : le volume ne fait rien hors écoute.
   await page.waitForTimeout(150);
   expect(await voice.evaluate((n) => n.style.transform)).toBe('');
   await expectNoErrors(errors);
@@ -276,7 +278,7 @@ test('pendant une réunion, l’enregistrement se voit dans tous les états, ave
 
 test('Fait ! : une gerbe de symboles jaillit puis disparaît', async ({ page }) => {
   const errors = await openUi(page, 'state=suggest');
-  await page.waitForTimeout(600);
+  await kobiPose(page);
   await page.evaluate(() => window.kobi.setState('done', window.kobi.demoData('done')));
   await expect.poll(() => page.locator('.kobi .burst span').count()).toBeGreaterThan(5);
   await expect.poll(() => page.locator('.kobi .burst span').count(), { timeout: 4000 }).toBe(0);
@@ -344,6 +346,7 @@ test('la prise de notes passe en mode économe après 20 s : le mot ondule lente
   await page.clock.runFor(21_000);
   await expect(kobi).toHaveClass(/deep/);
   await page.clock.runFor(1_500);
+  // Animations CSS de la police : en temps réel, hors de l'horloge simulée.
   await page.waitForTimeout(1_400);
   await expectEconomicalFont(page);
   // Le griffonnage continue.

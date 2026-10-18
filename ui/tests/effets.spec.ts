@@ -14,6 +14,7 @@ async function boxes(page: Page, sel: string): Promise<unknown[]> {
   const out = [];
   for (let i = 0; i < 5; i++) {
     out.push(await page.locator(sel).first().boundingBox());
+    // Échantillonnage : la position est relevée toutes les 200 ms.
     await page.waitForTimeout(200);
   }
   return out;
