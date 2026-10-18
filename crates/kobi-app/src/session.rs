@@ -167,7 +167,8 @@ pub fn installer<R: Runtime>(builder: Builder<R>) -> Builder<R> {
             crate::carnet::carnet_ouvrir_dossier,
             crate::carnet::carnet_supprimer,
             crate::carnet::carnet_rappel_fait,
-            crate::carnet::choisir_dossier
+            crate::carnet::choisir_dossier,
+            crate::reglages::ouvrir_reglages
         ])
 }
 

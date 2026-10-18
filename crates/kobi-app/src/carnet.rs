@@ -301,4 +301,158 @@ mod tests {
             .contains("salut"));
         assert!(document(&st, Genre::Reunion, "absente").is_err());
     }
+
+    /// Les commandes appelées par la fenêtre du Carnet, comme depuis la
+    /// webview : index, lecture, recherche, copie, rappel fait, suppression.
+    #[test]
+    fn commandes_du_carnet_par_ipc() {
+        use crate::test_ipc::appeler;
+        use kobi_session::config::Config;
+        use kobi_stt::{Segment, Source};
+        use serde_json::json;
+        use tauri::test::{mock_builder, mock_context, noop_assets};
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.stockage.dossier = Some(dir.path().to_owned());
+        let st = Stockage::new(dir.path());
+        st.preparer().unwrap();
+
+        // Une réunion terminée, avec transcription et compte rendu.
+        let mut r = st
+            .nouvelle_reunion(1_792_315_800_000, Some("Point budget"))
+            .unwrap();
+        for (start, source, text) in [
+            (0.0, Source::Moi, "On parle du budget de la fusée."),
+            (4.5, Source::Eux, "Le prototype vole jeudi."),
+        ] {
+            r.ecrire_segment(&Segment {
+                start,
+                end: start + 4.0,
+                source,
+                text: text.into(),
+                is_final: true,
+            })
+            .unwrap();
+        }
+        r.ecrire_compte_rendu("## Résumé\nBudget validé.\n\n## Actions\n- [ ] Envoyer le devis\n")
+            .unwrap();
+        r.terminer(1_792_316_400_000).unwrap();
+        let nom = r.nom().to_owned();
+        // Deux conversations.
+        let mut c1 = st.nouvelle_conversation(1_792_320_000_000);
+        c1.ajouter(Qui::Moi, "Quelle heure à Tokyo ?", true).unwrap();
+        c1.ajouter(Qui::Kobi, "Il est 23 h.", false).unwrap();
+        let mut c2 = st.nouvelle_conversation(1_792_330_000_000);
+        c2.ajouter(Qui::Moi, "Où est la fusée dans le code ?", false)
+            .unwrap();
+        let rappel = st
+            .ajouter_rappel("Appeler Léa", Some(1_792_400_000_000), None)
+            .unwrap();
+
+        let app = crate::session::installer(mock_builder())
+            .build(mock_context(noop_assets()))
+            .unwrap();
+        crate::stockage::installer(app.handle(), &config, None);
+        let webview = WebviewWindowBuilder::new(&app, FENETRE, Default::default())
+            .build()
+            .unwrap();
+        let appel = |cmd: &str, corps| appeler(&webview, cmd, corps);
+
+        let index = appel("carnet_index", json!({})).unwrap();
+        assert_eq!(index["racine"], dir.path().to_str().unwrap());
+        assert_eq!(index["reunions"].as_array().unwrap().len(), 1);
+        assert_eq!(index["reunions"][0]["titre"], "Point budget");
+        assert_eq!(index["reunions"][0]["a_compte_rendu"], true);
+        assert_eq!(index["conversations"].as_array().unwrap().len(), 2);
+        assert_eq!(index["rappels"][0]["texte"], "Appeler Léa");
+
+        let lue = appel("carnet_reunion", json!({ "nom": nom })).unwrap();
+        assert_eq!(lue["segments"].as_array().unwrap().len(), 2);
+        assert_eq!(lue["segments"][1]["source"], "eux");
+        assert_eq!(lue["compte_rendu"]["resume"], "Budget validé.");
+        assert!(lue["compte_rendu"]["actions"]
+            .as_str()
+            .unwrap()
+            .contains("devis"));
+
+        let conv = appel("carnet_conversation", json!({ "id": c1.id() })).unwrap();
+        assert_eq!(conv["tours"][0]["qui"], "moi");
+        assert_eq!(conv["tours"][1]["texte"], "Il est 23 h.");
+
+        // Sans casse ni accents : « FUSEE » retrouve la réunion et une conversation.
+        let trouves = appel("carnet_chercher", json!({ "requete": "FUSEE" })).unwrap();
+        let types: Vec<_> = trouves
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["type"].as_str().unwrap())
+            .collect();
+        assert!(types.contains(&"reunion") && types.contains(&"conversation"), "{trouves}");
+        let dans_transcription = trouves
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["partie"] == "transcription")
+            .unwrap();
+        assert_eq!(dans_transcription["start"], 0.0);
+
+        let md = appel(
+            "carnet_markdown",
+            json!({ "genre": "reunion", "id": nom }),
+        )
+        .unwrap();
+        assert!(md.as_str().unwrap().contains("Budget validé"));
+        assert!(appel("carnet_markdown", json!({ "genre": "inconnu", "id": nom })).is_err());
+
+        assert_eq!(
+            appel("carnet_rappel_fait", json!({ "id": rappel.id })).unwrap(),
+            json!(true)
+        );
+        assert!(st.rappels().unwrap()[0].fait);
+
+        appel(
+            "carnet_supprimer",
+            json!({ "genre": "conversation", "id": c2.id() }),
+        )
+        .unwrap();
+        appel("carnet_supprimer", json!({ "genre": "reunion", "id": nom })).unwrap();
+        let index = appel("carnet_index", json!({})).unwrap();
+        assert!(index["reunions"].as_array().unwrap().is_empty());
+        assert_eq!(index["conversations"].as_array().unwrap().len(), 1);
+
+        // Une réunion en cours, écrite à l'instant, ne se supprime pas.
+        let en_cours = st
+            .nouvelle_reunion(kobi_session::stockage::maintenant_ms(), Some("En direct"))
+            .unwrap();
+        let refus = appel(
+            "carnet_supprimer",
+            json!({ "genre": "reunion", "id": en_cours.nom() }),
+        )
+        .unwrap_err();
+        assert!(refus.as_str().unwrap().contains("en cours"), "{refus}");
+        assert!(en_cours.dossier().is_dir());
+    }
+
+    /// `ouvrir_carnet` et `ouvrir_reglages` créent leur fenêtre une seule fois.
+    #[test]
+    fn fenetres_ouvertes_une_seule_fois() {
+        use crate::test_ipc::appeler;
+        use serde_json::json;
+        use tauri::test::{mock_builder, mock_context, noop_assets};
+
+        let app = crate::session::installer(mock_builder())
+            .build(mock_context(noop_assets()))
+            .unwrap();
+        let main = WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .unwrap();
+        for _ in 0..2 {
+            appeler(&main, "ouvrir_carnet", json!({})).unwrap();
+            appeler(&main, "ouvrir_reglages", json!({ "panneau": "stockage" })).unwrap();
+        }
+        let mut fenetres: Vec<_> = app.webview_windows().into_keys().collect();
+        fenetres.sort();
+        assert_eq!(fenetres, ["carnet", "main", "reglages"]);
+    }
 }
