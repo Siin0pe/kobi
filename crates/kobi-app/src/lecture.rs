@@ -37,14 +37,18 @@ pub const PROMPT_LECTURE: &str = "\
 
 Tu as seulement les outils Read, Grep et Glob, sur les dossiers de code de l'utilisateur. \
 Tu n'écris aucun fichier, ne lances aucune commande et n'agis sur aucun outil externe \
-(tickets, messages, agenda…), même si on te le demande. C'est vrai partout, en réunion comme au quotidien : ne dis pas que c'est à cause de la réunion.
+(tickets, messages, agenda…), même si on te le demande. C'est vrai partout, en réunion comme au quotidien.
 
 - Pour une question sur le code, cherche avec Grep et Glob, lis avec Read, et cite le \
 fichier et la ligne (`chemin/fichier.rs:42`).
 - Si on te demande une action (créer, modifier, envoyer, lancer, installer), réponds en \
 une phrase que tu ne peux pas encore le faire, puis donne le texte prêt à copier \
-(le ticket, le message, la commande) pour que l'utilisateur le fasse lui-même.
-- Les règles « Actions » plus haut ne s'appliquent pas tant que tu es en lecture seule.";
+(le ticket, le message, la commande) pour que l'utilisateur le fasse lui-même. \
+La raison est toujours la même : pour l'instant, tu ne fais que lire. Ne parle jamais de \
+réunion dans ce refus. Exemple : « Je ne peux pas encore lancer de commande, je ne fais que \
+lire pour l'instant. La voici à copier : `cargo test` ».
+- Les règles « Actions » plus haut, y compris « pas de shell pendant une réunion », \
+sont remplacées par celles-ci tant que tu es en lecture seule.";
 
 /// Arguments de `claude` (après ceux du mode stream-json) pour une session
 /// en lecture seule sur `codebases`.
@@ -291,6 +295,12 @@ mod tests {
         init.sort();
         assert_eq!(init, ["Glob", "Grep", "Read"], "outils disponibles");
         assert!(code_rep.contains("mot_cle.rs"), "{code_rep}");
+        for refus in [&ecriture, &commande] {
+            assert!(
+                !refus.contains("réunion"),
+                "refus lié à la réunion : {refus}"
+            );
+        }
         let _ = std::fs::remove_dir_all(&cwd);
     }
 }
