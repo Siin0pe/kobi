@@ -114,18 +114,25 @@
    douceur par la mascotte) et les « z » ne bougent plus qu'en transformation et
    opacité, sans graisse animée : la veille ne redessine presque plus de texte.
    La pilule continue de respirer. */
-/* Repos économe : l'ondulation de la police continue, plus lente et par
-   paliers (une image de texte toutes les 300 ms au lieu de 60 par seconde) ;
-   le sautillement, sur le compositeur, reste fluide. */
-.kobi.m-idle.deep .ch,.kobi.m-write.deep .ch{animation-duration:4.8s,2.4s;animation-timing-function:steps(16),ease-in-out}
+/* Repos économe : l'ondulation de la police continue, lente et par paliers. */
+/* Mesuré dans l'app (WebKitGTK sans GPU) : redessiner la graisse d'une lettre
+   cernée de son contour est le poste le plus cher. Le mot reste vivant : les
+   lettres ondulent encore (un palier par seconde) et sautillent par paliers de
+   250 ms ; la respiration du mot et la dérive des yeux attendent le réveil.
+   Les paliers sont recalés sur une grille commune (econome.ts) : au plus
+   4 images par seconde. */
+.kobi.m-idle.deep .ch,.kobi.m-write.deep .ch{animation-duration:8s,2.5s;animation-timing-function:steps(8),steps(10)}
+.kobi.deep .eyes,.kobi.deep .word{animation:none}
+.kobi.m-write.deep .pill{animation-duration:.5s}
+.kobi.deep.recording .rec-ring{animation-duration:2.5s;animation-timing-function:steps(10)}
 
 @keyframes kobi-zfloat-deep{0%{transform:translate(0,0) scale(.6);opacity:0}30%{opacity:1}100%{transform:translate(26px,-70px) scale(1.2);opacity:0}}
 .kobi.m-idle.deep .zz span{animation-name:kobi-zfloat-deep;font-variation-settings:"wght" 650}
-/* En sommeil profond, 8 images/s suffisent pour un mouvement aussi lent, et
+/* En sommeil profond, 4 images/s suffisent pour un mouvement aussi lent, et
    un seul « z » s'envole : sans GPU, chaque image coûte (WebKitGTK repeint et
    recompose la fenêtre), et chaque animation décalée ajoute ses images. */
 .kobi.m-idle.deep .pill{animation-timing-function:steps(12)}
-.kobi.m-idle.deep .zz span{animation-timing-function:steps(21)}
+.kobi.m-idle.deep .zz span{animation-duration:2.5s;animation-timing-function:steps(10)}
 .kobi.m-idle.deep .zz span+span{visibility:hidden;animation:none}
 
 /* Réduire les animations : la mascotte garde ses expressions (yeux, mot,

@@ -97,3 +97,37 @@ test('après 20 s de veille, Kobi passe en sommeil profond : le mot ondule par p
   await expect(kobi).not.toHaveClass(/deep/);
   await expectNoErrors(errors);
 });
+
+test('repos économe en réunion : tout bouge encore, par paliers recalés sur une grille de 250 ms', async ({ page }) => {
+  await page.clock.install();
+  const errors = await openUi(page, '');
+  await page.evaluate(() =>
+    window.kobi.recording({ actif: true, pause: false, debut_ms: Date.now(), notes: 2, titre: 'Point hebdo', derniere_note: 'Décision : refresh token à 30 jours' }),
+  );
+  await page.clock.runFor(23_000);
+  await page.waitForTimeout(1_500);
+  await expect(page.locator('.stage')).toHaveClass(/econome/);
+  const anims = await page.evaluate(() =>
+    document
+      .getAnimations()
+      .filter((a) => a.playState === 'running')
+      .map((a) => {
+        const effect = a.effect as KeyframeEffect;
+        const steps = effect.getKeyframes().find((k) => String(k.easing).startsWith('steps'));
+        const n = Number(/steps\((\d+)/.exec(String(steps?.easing))?.[1] ?? 0);
+        const interval = n ? Number(effect.getTiming().duration) / n : 0;
+        const phase = (Number(a.startTime) + Number(effect.getTiming().delay)) % 250;
+        return { name: (a as CSSAnimation).animationName, interval, phase: Math.min(phase, 250 - phase) };
+      }),
+  );
+  // Le mot, la pilule, l'anneau, l'étiquette REC et la fiche bougent toujours.
+  for (const name of ['kobi-wave', 'kobi-bob', 'kobi-scribble', 'kobi-rec', 'rec-float', 'card-float']) {
+    expect(anims.map((a) => a.name)).toContain(name);
+  }
+  for (const a of anims) {
+    expect(a.interval % 250, a.name).toBe(0);
+    expect(a.interval, a.name).toBeGreaterThan(0);
+    expect(a.phase, a.name).toBeLessThan(1);
+  }
+  await expectNoErrors(errors);
+});

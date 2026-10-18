@@ -3,6 +3,7 @@
 // animations) et met tout en pause quand la fenêtre est masquée.
 
 import { Bubbles, type ActionDecision } from './bubbles';
+import { alignSteps } from './econome';
 import { Kobi } from './mascotte/kobi';
 import { ConsentCard, RecIndicator, type ConsentEvent } from './meeting';
 import {
@@ -100,6 +101,17 @@ export class Stage {
 
     this.kobi = new Kobi(this.reducedMotion);
     this.scene.append(this.kobi.root, this.bubbles.root, this.rec.root);
+    // Repos économe : bulles et étiquette REC passent aux paliers de Kobi, et
+    // tout ce qui démarre ensuite (nouvelle fiche, « z ») se recale sur la grille.
+    this.kobi.onDeepChange = (deep) => {
+      this.root.classList.toggle('econome', deep);
+      if (deep) requestAnimationFrame(() => alignSteps(this.scene));
+    };
+    const onAnimationStart = (): void => {
+      if (this.root.classList.contains('econome')) alignSteps(this.scene);
+    };
+    this.scene.addEventListener('animationstart', onAnimationStart);
+    this.cleanups.push(() => this.scene.removeEventListener('animationstart', onAnimationStart));
     this.root.append(this.scene, this.dot, this.live);
     parent.append(this.root);
 

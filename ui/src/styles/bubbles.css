@@ -392,6 +392,20 @@
   animation: btn-halo 2.4s ease-out infinite;
 }
 
+/* Repos économe (econome.ts) : les bulles vivent au même rythme que Kobi,
+   par paliers de 250 ms recalés sur la grille commune. */
+.econome .bubbles .card {
+  animation-duration: 0.35s, 5s;
+  animation-timing-function: cubic-bezier(0.3, 1.4, 0.5, 1), steps(20);
+}
+.econome .bubbles .hl::after {
+  animation-duration: 3s;
+  animation-timing-function: steps(12);
+}
+.econome .bubbles .caret {
+  animation-timing-function: steps(4);
+}
+
 /* Réduire les animations : les cartes apparaissent sans mouvement, le curseur
    reste fixe. `!important` : les règles de vie plus précises (puce trouvée,
    enfants des cartes à boutons) ne doivent jamais reprendre le dessus. */

@@ -133,6 +133,8 @@ export class Kobi {
   private reduced = false;
   private paused = false;
   private deep = false;
+  /** Entrée et sortie du repos économe (la scène met ses bulles au même rythme). */
+  onDeepChange: ((deep: boolean) => void) | null = null;
   private switchTimer = 0;
   private deepTimer = 0;
   private morph: Animation | null = null;
@@ -279,7 +281,10 @@ export class Kobi {
     if (this.shown) c.add(`m-${this.shown}`);
     c.toggle('reduced-motion', this.reduced);
     c.toggle('paused', this.paused);
-    c.toggle('deep', this.deep);
+    if (c.contains('deep') !== this.deep) {
+      c.toggle('deep', this.deep);
+      this.onDeepChange?.(this.deep);
+    }
   }
 
   /** Fin d'une anticipation en cours : l'état demandé se pose tout de suite. */
