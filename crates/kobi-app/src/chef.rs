@@ -23,7 +23,7 @@ use kobi_stt::Segment;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
-use crate::cerveau::{self, Cerveau, Demande, Fabrique, Retour};
+use crate::cerveau::{self, Cerveau, Demande, Fabrique, Retour, MESSAGE_ANNONCE};
 use crate::ecrivain::{Ecrivain, Nouvelle};
 use crate::intentions::{intention, Intention};
 use crate::interpellation::{EVENEMENT_ERREUR, EVENEMENT_QUESTION, EVENEMENT_REPONSE};
@@ -658,8 +658,22 @@ impl<R: Runtime> Chef<R> {
                 }
                 self.emettre_historique();
             }
-            Retour::Detache { tour } => {
-                tracing::info!(tour, "tour détaché");
+            Retour::Detache { tour, annonce } => {
+                tracing::info!(tour, annonce, "tour détaché");
+                if annonce {
+                    if let Some(b) = self.bulle(tour) {
+                        b.statut = "tache";
+                        if b.reponse.is_empty() {
+                            b.reponse = MESSAGE_ANNONCE.into();
+                        }
+                    }
+                    if tour == self.dernier {
+                        self.transition(&[Evenement::ReponseCommence]);
+                        let _ = self.app.emit(EVENEMENT_REPONSE, MESSAGE_ANNONCE);
+                        self.lire(MESSAGE_ANNONCE);
+                    }
+                    self.emettre_historique();
+                }
             }
             Retour::Resultat { tour, texte } => {
                 tracing::info!(tour, "résultat livré");
