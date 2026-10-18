@@ -18,12 +18,13 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use kobi_session::etat::Evenement;
-use kobi_session::stockage::{maintenant_ms, Conversation, Qui, ReunionOuverte};
+use kobi_session::stockage::{maintenant_ms, Qui};
 use kobi_stt::Segment;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::cerveau::{self, Cerveau, Demande, Fabrique, Retour};
+use crate::ecrivain::{Ecrivain, Nouvelle};
 use crate::intentions::{intention, Intention};
 use crate::interpellation::{EVENEMENT_ERREUR, EVENEMENT_QUESTION, EVENEMENT_REPONSE};
 use crate::session::{appliquer, etat};
@@ -70,6 +71,8 @@ pub enum Message {
     /// Échap ou « stop » : la réponse en cours s'arrête net.
     Interrompre,
     Cerveau(Retour),
+    /// Nouvelle de l'écrivain (fichiers créés, compte rendu rangé, erreur).
+    Disque(Nouvelle),
 }
 
 /// État de l'enregistrement envoyé à l'interface (événement
@@ -110,50 +113,9 @@ pub struct CarteUi {
     pub status: &'static str,
 }
 
-/// Fichiers de la réunion, créés par un fil à part : l'état « réunion » se
-/// voit tout de suite, même quand le disque est lent.
-enum Fichiers {
-    /// En création ; les segments arrivés entre-temps attendent.
-    EnCreation(Receiver<std::io::Result<ReunionOuverte>>, Vec<Segment>),
-    Ouverts(ReunionOuverte),
-    Echec(String),
-}
-
-impl Fichiers {
-    /// Les fichiers s'ils sont prêts ; avec `attendre`, jusqu'à la fin de
-    /// leur création.
-    fn prets(&mut self, attendre: bool) -> Option<&mut ReunionOuverte> {
-        if let Fichiers::EnCreation(rx, attente) = self {
-            let cree = if attendre {
-                rx.recv().map_err(|_| mpsc::TryRecvError::Disconnected)
-            } else {
-                rx.try_recv()
-            };
-            match cree {
-                Err(mpsc::TryRecvError::Empty) => return None,
-                Ok(Ok(mut reunion)) => {
-                    for segment in attente.drain(..) {
-                        if let Err(e) = reunion.ecrire_segment(&segment) {
-                            tracing::warn!(erreur = %e, "transcript.jsonl");
-                        }
-                    }
-                    *self = Fichiers::Ouverts(reunion);
-                }
-                Ok(Err(e)) => *self = Fichiers::Echec(e.to_string()),
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    *self = Fichiers::Echec("création interrompue".into())
-                }
-            }
-        }
-        match self {
-            Fichiers::Ouverts(reunion) => Some(reunion),
-            _ => None,
-        }
-    }
-}
-
 struct EnCours {
-    fichiers: Fichiers,
+    /// Dossier de la réunion, connu quand l'écrivain l'a créé.
+    dossier: Option<PathBuf>,
     debut: Instant,
     debut_ms: u64,
     pause: bool,
@@ -171,6 +133,7 @@ struct EnCours {
 pub struct Chef<R: Runtime> {
     app: AppHandle<R>,
     cerveau: Cerveau,
+    ecrivain: Ecrivain,
     reunion: Option<EnCours>,
     intervalle: Duration,
     tour: u64,
@@ -182,8 +145,8 @@ pub struct Chef<R: Runtime> {
     pour_conversation: String,
     /// Retour au calme prévu (fin de lecture d'une réponse, d'une erreur).
     calme_a: Option<(Instant, Evenement)>,
-    /// Conversation du quotidien en cours, rangée par le stockage (KOB-141).
-    conversation: Option<Conversation>,
+    /// Une conversation du quotidien est ouverte chez l'écrivain (KOB-141).
+    conversation_ouverte: bool,
     /// Tours abandonnés : ce qui en revient encore est ignoré.
     interrompus: HashSet<u64>,
 }
@@ -210,6 +173,7 @@ pub fn installer<R: Runtime>(app: &AppHandle<R>, fabrique: Fabrique, intervalle_
         .thread_name("cerveau")
         .build()
         .expect("runtime tokio du cerveau");
+    let tx_disque = Mutex::new(tx.clone());
     let sortie_tx = Mutex::new(tx);
     let sortie: cerveau::Sortie = Arc::new(move |retour| {
         let _ = sortie_tx.lock().map(|tx| tx.send(Message::Cerveau(retour)));
@@ -218,9 +182,13 @@ pub fn installer<R: Runtime>(app: &AppHandle<R>, fabrique: Fabrique, intervalle_
         let _guard = rt.enter();
         Cerveau::lancer(fabrique, sortie)
     };
+    let ecrivain = Ecrivain::lancer(move |compte| {
+        let _ = tx_disque.lock().map(|tx| tx.send(Message::Disque(compte)));
+    });
     app.manage(ChefPartage(Mutex::new(Chef::new(
         app.clone(),
         cerveau,
+        ecrivain,
         Duration::from_secs(60 * u64::from(intervalle_min.max(1))),
     ))));
     let app = app.clone();
@@ -317,10 +285,11 @@ pub fn carte_ui(carte: u64, outil: &str, entree: &serde_json::Value) -> CarteUi 
 }
 
 impl<R: Runtime> Chef<R> {
-    fn new(app: AppHandle<R>, cerveau: Cerveau, intervalle: Duration) -> Self {
+    fn new(app: AppHandle<R>, cerveau: Cerveau, ecrivain: Ecrivain, intervalle: Duration) -> Self {
         Self {
             app,
             cerveau,
+            ecrivain,
             reunion: None,
             intervalle,
             tour: 0,
@@ -329,7 +298,7 @@ impl<R: Runtime> Chef<R> {
             cartes: BTreeMap::new(),
             pour_conversation: String::new(),
             calme_a: None,
-            conversation: None,
+            conversation_ouverte: false,
             interrompus: HashSet::new(),
         }
     }
@@ -343,10 +312,7 @@ impl<R: Runtime> Chef<R> {
                 pause: r.pause,
                 debut_ms: r.debut_ms,
                 notes: compter_notes(&r.notes),
-                titre: match &r.fichiers {
-                    Fichiers::Ouverts(f) => f.meta().titre.clone(),
-                    _ => None,
-                },
+                titre: None,
                 derniere_note: r.derniere_note.clone(),
             },
         }
@@ -408,6 +374,7 @@ impl<R: Runtime> Chef<R> {
             }
             Message::Interrompre => self.interrompre(),
             Message::Cerveau(r) => self.retour(r),
+            Message::Disque(c) => self.disque(c),
         }
     }
 
@@ -485,17 +452,12 @@ impl<R: Runtime> Chef<R> {
                 .push_str(&format!("[{:02}:{:02} {qui}] {texte}\n", t / 60, t % 60));
             return;
         }
-        if self.conversation.is_none() {
-            let Some(stockage) = crate::stockage::actuel(&self.app) else {
-                return;
-            };
-            self.conversation = Some(stockage.nouvelle_conversation(maintenant_ms()));
-        }
-        if let Some(c) = &mut self.conversation {
-            if let Err(e) = c.ajouter(qui, texte, voix) {
-                tracing::warn!(erreur = %e, "conversation non rangée");
-            }
-        }
+        let Some(stockage) = crate::stockage::actuel(&self.app) else {
+            return;
+        };
+        self.ecrivain
+            .tour(stockage, maintenant_ms(), qui, texte.to_owned(), voix);
+        self.conversation_ouverte = true;
     }
 
     fn ajouter(&mut self, bulle: Bulle) {
@@ -547,10 +509,7 @@ impl<R: Runtime> Chef<R> {
         };
         let debut = Instant::now();
         let debut_ms = maintenant_ms();
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(stockage.nouvelle_reunion(debut_ms, None));
-        });
+        self.ecrivain.ouvrir_reunion(stockage, debut_ms);
         // Depuis un échange hors réunion, on revient d'abord en veille.
         if etat(&self.app).etat == "assistant" {
             self.transition(&[Evenement::PasDeQuestion]);
@@ -558,10 +517,10 @@ impl<R: Runtime> Chef<R> {
         }
         self.transition(&[Evenement::DemarrerReunion]);
         // La conversation du quotidien s'arrête là ; la réunion prend le relais.
-        self.conversation = None;
+        self.fermer_conversation();
         tracing::info!(ms = debut.elapsed().as_millis() as u64, "réunion démarrée");
         self.reunion = Some(EnCours {
-            fichiers: Fichiers::EnCreation(rx, Vec::new()),
+            dossier: None,
             debut,
             debut_ms,
             pause: false,
@@ -601,18 +560,7 @@ impl<R: Runtime> Chef<R> {
         let duree = (s.end - s.start).max(0.0);
         s.end = r.debut.elapsed().as_secs_f64();
         s.start = (s.end - duree).max(0.0);
-        match r.fichiers.prets(false) {
-            Some(f) => {
-                if let Err(e) = f.ecrire_segment(&s) {
-                    tracing::warn!(erreur = %e, "transcript.jsonl");
-                }
-            }
-            None => {
-                if let Fichiers::EnCreation(_, attente) = &mut r.fichiers {
-                    attente.push(s.clone());
-                }
-            }
-        }
+        self.ecrivain.segment(s.clone());
         let t = s.start as u64;
         let ligne = format!(
             "[{:02}:{:02} {}] {}\n",
@@ -777,11 +725,7 @@ impl<R: Runtime> Chef<R> {
             Ok(notes) if !notes.trim().is_empty() => {
                 r.derniere_note = derniere_note(&r.notes, &notes).or(r.derniere_note.take());
                 r.notes = notes;
-                if let Some(f) = r.fichiers.prets(false) {
-                    if let Err(e) = f.ecrire_notes(&r.notes) {
-                        tracing::warn!(erreur = %e, "notes.md");
-                    }
-                }
+                self.ecrivain.notes(r.notes.clone());
                 tracing::info!(lignes = compter_notes(&r.notes), "notes mises à jour");
                 self.emettre_enregistrement();
             }
@@ -794,7 +738,7 @@ impl<R: Runtime> Chef<R> {
     }
 
     fn compte_rendu(&mut self, resultat: Result<String, String>) {
-        let Some(mut r) = self.reunion.take() else {
+        let Some(r) = self.reunion.take() else {
             return;
         };
         let texte = match resultat {
@@ -804,35 +748,48 @@ impl<R: Runtime> Chef<R> {
                 format!("# Compte rendu\n\nLe compte rendu n'a pas pu être écrit ({e}).\n\n## Notes\n\n{}", r.notes)
             }
         };
-        let notes = r.notes.clone();
-        let Some(f) = r.fichiers.prets(true) else {
-            tracing::warn!("compte rendu non rangé : fichiers de la réunion absents");
-            self.transition(&[Evenement::CompteRenduEcrit]);
-            self.emettre_enregistrement();
-            return;
-        };
-        let chemin: PathBuf = f.dossier().join("compte-rendu.md");
-        if let Err(e) = f.ecrire_compte_rendu(&texte) {
-            tracing::warn!(erreur = %e, "compte-rendu.md");
-        }
-        if let Err(e) = f.ecrire_notes(&notes) {
-            tracing::warn!(erreur = %e, "notes.md");
-        }
-        if let Err(e) = f.terminer(maintenant_ms()) {
-            tracing::warn!(erreur = %e, "reunion.json");
-        }
-        tracing::info!(fichier = %chemin.display(), "compte rendu écrit");
+        self.ecrivain
+            .terminer_reunion(texte, r.notes, maintenant_ms());
         self.transition(&[Evenement::CompteRenduEcrit]);
         self.emettre_enregistrement();
-        let message = format!("Compte rendu écrit : {}", chemin.display());
-        self.tour += 1;
-        self.ajouter(Bulle {
-            tour: self.tour,
-            question: "Fin de la réunion".into(),
-            reponse: message,
-            statut: "fini",
-            clavier: false,
-        });
+    }
+
+    /// Nouvelles de l'écrivain.
+    fn disque(&mut self, compte: Nouvelle) {
+        match compte {
+            Nouvelle::ReunionOuverte(dossier) => {
+                if let Some(r) = &mut self.reunion {
+                    tracing::info!(
+                        dossier = %dossier.display(),
+                        ms = r.debut.elapsed().as_millis() as u64,
+                        "fichiers de la réunion prêts"
+                    );
+                    r.dossier = Some(dossier);
+                }
+            }
+            Nouvelle::CompteRenduEcrit(chemin) => {
+                tracing::info!(fichier = %chemin.display(), "compte rendu écrit");
+                self.tour += 1;
+                self.ajouter(Bulle {
+                    tour: self.tour,
+                    question: "Fin de la réunion".into(),
+                    reponse: format!("Compte rendu écrit : {}", chemin.display()),
+                    statut: "fini",
+                    clavier: false,
+                });
+            }
+            Nouvelle::Erreur(message) => {
+                tracing::warn!(%message, "écriture sur le disque");
+                self.erreur("Enregistrement sur le disque", &message);
+            }
+        }
+    }
+
+    fn fermer_conversation(&mut self) {
+        if self.conversation_ouverte {
+            self.conversation_ouverte = false;
+            self.ecrivain.fermer_conversation();
+        }
     }
 
     /// Kobi a fini de répondre : temps de lecture, puis retour au calme.
@@ -870,23 +827,8 @@ impl<R: Runtime> Chef<R> {
             }
         }
         // Retour en veille : la prochaine question ouvre une autre conversation.
-        if self.conversation.is_some() && etat(&self.app).etat == "veille" {
-            self.conversation = None;
-        }
-        let Some(r) = &mut self.reunion else { return };
-        if let Fichiers::EnCreation(..) = r.fichiers {
-            if let Some(f) = r.fichiers.prets(false) {
-                tracing::info!(
-                    dossier = %f.dossier().display(),
-                    ms = r.debut.elapsed().as_millis() as u64,
-                    "fichiers de la réunion prêts"
-                );
-            } else if let Fichiers::Echec(e) = &r.fichiers {
-                let message = format!("Je n'arrive pas à créer le dossier de la réunion : {e}");
-                tracing::warn!(%message, "réunion sans fichiers");
-                self.erreur("Réunion non enregistrée", &message);
-                return;
-            }
+        if self.conversation_ouverte && etat(&self.app).etat == "veille" {
+            self.fermer_conversation();
         }
         let Some(r) = &mut self.reunion else { return };
         if r.pause || r.fin_demandee || r.envoye.is_some() || Instant::now() < r.prochain_bloc {
@@ -963,35 +905,6 @@ mod tests {
         let notes = "## Décisions\n- budget validé\n- séminaire à Annecy\n\n## Actions\n* Sophie : devis\ntexte libre\n";
         assert_eq!(compter_notes(notes), 3);
         assert_eq!(compter_notes(""), 0);
-    }
-
-    #[test]
-    fn segments_gardes_pendant_la_creation_des_fichiers() {
-        let dir = tempfile::tempdir().unwrap();
-        let stockage = kobi_session::stockage::Stockage::new(dir.path());
-        let (tx, rx) = mpsc::channel();
-        let segment = |t: f64, texte: &str| Segment {
-            text: texte.into(),
-            start: t,
-            end: t + 1.0,
-            is_final: true,
-            source: kobi_stt::Source::Moi,
-        };
-        let mut fichiers = Fichiers::EnCreation(rx, Vec::new());
-        assert!(fichiers.prets(false).is_none());
-        if let Fichiers::EnCreation(_, attente) = &mut fichiers {
-            attente.push(segment(0.0, "on commence"));
-        }
-        tx.send(stockage.nouvelle_reunion(1_000, None)).unwrap();
-        let f = fichiers.prets(false).expect("fichiers ouverts");
-        f.ecrire_segment(&segment(2.0, "le budget")).unwrap();
-        let transcript = std::fs::read_to_string(f.dossier().join("transcript.jsonl")).unwrap();
-        let textes: Vec<_> = transcript
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .map(|l| serde_json::from_str::<Segment>(l).unwrap().text)
-            .collect();
-        assert_eq!(textes, ["on commence", "le budget"]);
     }
 
     #[test]

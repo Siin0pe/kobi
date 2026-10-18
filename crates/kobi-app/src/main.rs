@@ -10,6 +10,7 @@ mod chef;
 mod demarrage;
 mod diag;
 mod ecoute;
+mod ecrivain;
 mod intentions;
 mod interpellation;
 mod lecture;
