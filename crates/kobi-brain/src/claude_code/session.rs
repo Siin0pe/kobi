@@ -99,6 +99,10 @@ impl ClaudeCode {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        // Sous Windows, une app sans console (Kobi) ferait sinon apparaître
+        // une fenêtre de console pour `claude`.
+        #[cfg(windows)]
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         if let Some(cwd) = &opts.cwd {
             cmd.current_dir(cwd);
         }
