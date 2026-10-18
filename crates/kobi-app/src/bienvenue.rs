@@ -25,10 +25,6 @@ pub const FENETRE: &str = "bienvenue";
 /// Fichier posé dans `~/Kobi` quand le parcours est terminé.
 const MARQUE: &str = "premier-lancement.fait";
 
-/// Argument ajouté par le démarrage avec le système (KOB-143,
-/// `demarrage::ARG`) : pas de bienvenue dans ce cas.
-const ARG_DEMARRAGE: &str = "--demarrage";
-
 /// Raccourci d'enregistrement de réunion (parcours UX, KOB-134).
 pub const RACCOURCI_REUNION: &str = "Ctrl+Shift+R";
 
@@ -60,11 +56,6 @@ fn modele() -> Modele {
 
 // ----- Ouverture -----
 
-/// Kobi a été lancé par le système à l'ouverture de session.
-fn lance_par_le_systeme() -> bool {
-    std::env::args().any(|a| a == ARG_DEMARRAGE)
-}
-
 /// Le parcours reste à faire dans ce dossier de Kobi.
 pub fn a_faire(kobi_dir: &Path) -> bool {
     !kobi_dir.join(MARQUE).exists()
@@ -76,7 +67,7 @@ pub fn installer<R: Runtime>(app: &AppHandle<R>) {
     let Some(dir) = config::kobi_dir() else {
         return;
     };
-    if a_faire(&dir) && !lance_par_le_systeme() {
+    if a_faire(&dir) && !crate::demarrage::lance_par_le_systeme() {
         // Kobi apparaît d'abord, puis se présente : la bienvenue s'ouvre une
         // fois la mascotte posée à l'écran, pour se ranger à côté d'elle.
         let app = app.clone();
