@@ -121,9 +121,43 @@ enum Attente {
     /// Interpellé (« Kobi. » seul ou raccourci) : la phrase suivante est la
     /// question. `parle` est l'instant où elle a commencé.
     Suite { depuis: f64, parle: Option<f64> },
-    /// Interpellation refusée (Kobi est occupé) : la phrase en cours est
-    /// ignorée jusqu'à sa fin.
+    /// Conversation à deux (KOB-133) : chaque phrase est la suite de
+    /// l'échange, sans redire « Kobi », jusqu'à [`CONVERSATION`] secondes de
+    /// silence ou « merci Kobi ».
+    Conversation { depuis: f64, parle: Option<f64> },
+    /// Question envoyée avant la fin de la phrase (trop longue) : le reste de
+    /// la phrase est ignoré jusqu'à sa fin.
     Ignore,
+}
+
+/// Silence qui clôt une conversation, en secondes.
+pub const CONVERSATION: f64 = 20.0;
+
+/// La phrase clôt-elle la conversation (« merci Kobi », « c'est bon ») ?
+pub fn fin_de_conversation(texte: &str) -> bool {
+    let mots: Vec<String> = texte
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|m| !m.is_empty() && !est_kobi(m))
+        .map(normaliser)
+        .collect();
+    matches!(
+        mots.join(" ").as_str(),
+        "merci"
+            | "merci beaucoup"
+            | "non merci"
+            | "merci c est bon"
+            | "c est bon"
+            | "c est bon merci"
+            | "ca ira"
+            | "ca ira merci"
+            | "c est tout"
+            | "c est tout merci"
+            | "laisse tomber"
+            | "stop"
+            | "thanks"
+            | "thank you"
+            | "that s all"
+    )
 }
 
 /// Automate d'écoute, voir le module.
@@ -132,6 +166,9 @@ pub struct Ecouteur {
     attente: Attente,
     /// Dernière question affichée.
     derniere: String,
+    /// Mode conversation permis. Hors réunion seulement : en réunion, les
+    /// participants se parlent entre eux.
+    pub conversation: bool,
 }
 
 impl Default for Ecouteur {
@@ -139,20 +176,31 @@ impl Default for Ecouteur {
         Self {
             attente: Attente::Nom,
             derniere: String::new(),
+            conversation: true,
         }
     }
 }
 
 impl Ecouteur {
+    /// Écouteur neuf ; `conversation` : voir le champ du même nom.
+    pub fn new(conversation: bool) -> Self {
+        Self {
+            conversation,
+            ..Self::default()
+        }
+    }
+
     /// Un segment de la transcription, à l'instant `t` de l'audio.
     pub fn segment(&mut self, texte: &str, finale: bool, t: f64) -> Vec<Action> {
         let mut actions = Vec::new();
         match self.attente {
             Attente::Ignore => {
                 if finale {
-                    self.attente = Attente::Nom;
+                    self.attente = self.apres(t);
                 }
             }
+            // « Merci Kobi » n'est pas une interpellation.
+            Attente::Nom if fin_de_conversation(texte) => {}
             Attente::Nom | Attente::Phrase { .. } => match reperer(texte) {
                 Some(suite) => {
                     if self.attente == Attente::Nom {
@@ -166,7 +214,7 @@ impl Ecouteur {
                                 parle: None,
                             };
                         } else {
-                            actions.push(self.envoyer(suite));
+                            actions.push(self.envoyer(suite, t));
                         }
                     } else {
                         self.afficher(suite, &mut actions);
@@ -179,16 +227,32 @@ impl Ecouteur {
                 }
                 None => {}
             },
-            Attente::Suite { depuis, parle } => {
+            Attente::Suite { depuis, parle } | Attente::Conversation { depuis, parle } => {
+                let conversation = matches!(self.attente, Attente::Conversation { .. });
                 let q = question(texte);
                 if finale {
-                    if !q.is_empty() {
-                        actions.push(self.envoyer(q));
+                    if conversation && fin_de_conversation(texte) {
+                        self.attente = Attente::Nom;
+                        self.derniere.clear();
+                        if parle.is_some() {
+                            actions.push(Action::Abandonner);
+                        }
+                    } else if !q.is_empty() {
+                        if conversation && parle.is_none() {
+                            actions.push(Action::Interpeller);
+                        }
+                        actions.push(self.envoyer(q, t));
                     }
-                } else {
-                    self.attente = Attente::Suite {
-                        depuis,
-                        parle: parle.or(Some(t)),
+                } else if !q.is_empty() {
+                    // En conversation, Kobi se remet à écouter dès que l'on parle.
+                    if conversation && parle.is_none() {
+                        actions.push(Action::Interpeller);
+                    }
+                    let parle = parle.or(Some(t));
+                    self.attente = if conversation {
+                        Attente::Conversation { depuis, parle }
+                    } else {
+                        Attente::Suite { depuis, parle }
                     };
                     self.afficher(q, &mut actions);
                 }
@@ -207,8 +271,18 @@ impl Ecouteur {
                 self.attente = Attente::Nom;
                 vec![Action::Abandonner]
             }
+            Attente::Conversation {
+                depuis,
+                parle: None,
+            } if t - depuis > CONVERSATION => {
+                self.attente = Attente::Nom;
+                Vec::new()
+            }
             Attente::Phrase { t: debut }
             | Attente::Suite {
+                parle: Some(debut), ..
+            }
+            | Attente::Conversation {
                 parle: Some(debut), ..
             } if t - debut > QUESTION_MAX => {
                 if self.derniere.is_empty() {
@@ -216,7 +290,7 @@ impl Ecouteur {
                     vec![Action::Abandonner]
                 } else {
                     let q = self.derniere.clone();
-                    let envoi = self.envoyer(&q);
+                    let envoi = self.envoyer(&q, t);
                     // Le reste de la phrase ne repart pas une seconde fois.
                     self.attente = Attente::Ignore;
                     vec![envoi]
@@ -236,6 +310,41 @@ impl Ecouteur {
         vec![Action::Interpeller]
     }
 
+    /// Kobi vient de finir de répondre : la conversation attend la suite
+    /// pendant [`CONVERSATION`] secondes à partir de maintenant.
+    pub fn suite(&mut self, t: f64) {
+        if !self.conversation {
+            return;
+        }
+        if matches!(
+            self.attente,
+            Attente::Nom | Attente::Conversation { parle: None, .. }
+        ) {
+            self.attente = Attente::Conversation {
+                depuis: t,
+                parle: None,
+            };
+        }
+    }
+
+    /// Fin de la conversation imposée (entrée en réunion).
+    pub fn oublier(&mut self) {
+        if matches!(self.attente, Attente::Conversation { .. }) {
+            self.attente = Attente::Nom;
+        }
+    }
+
+    fn apres(&self, t: f64) -> Attente {
+        if self.conversation {
+            Attente::Conversation {
+                depuis: t,
+                parle: None,
+            }
+        } else {
+            Attente::Nom
+        }
+    }
+
     fn afficher(&mut self, q: &str, actions: &mut Vec<Action>) {
         if !q.is_empty() && q != self.derniere {
             self.derniere = q.to_string();
@@ -243,8 +352,8 @@ impl Ecouteur {
         }
     }
 
-    fn envoyer(&mut self, q: &str) -> Action {
-        self.attente = Attente::Nom;
+    fn envoyer(&mut self, q: &str, t: f64) -> Action {
+        self.attente = self.apres(t);
         self.derniere.clear();
         Action::Envoyer(q.to_string())
     }
@@ -454,13 +563,64 @@ mod tests {
     }
 
     #[test]
-    fn question_trop_longue_le_reste_est_ignore() {
+    fn conversation_sans_redire_le_nom() {
         let mut e = Ecouteur::default();
-        assert_eq!(e.segment("Kobi, raconte", false, 1.0)[0], Interpeller);
-        let envoi = e.tick(1.0 + QUESTION_MAX + 0.1);
-        assert!(matches!(envoi[..], [Envoyer(_)]), "{envoi:?}");
-        assert!(e.segment("Kobi, raconte encore", false, 30.0).is_empty());
-        assert!(e.segment("Kobi, raconte encore ?", true, 31.0).is_empty());
-        assert_eq!(e.segment("Kobi, et là ?", true, 35.0)[0], Interpeller);
+        let actions = rejouer(
+            &mut e,
+            &[
+                ("Kobi, quelle heure est-il ?", true, 2.0),
+                // Kobi a répondu : la conversation attend la suite.
+                ("et demain", false, 8.0),
+                ("Et demain ?", true, 9.0),
+                ("merci Kobi", true, 14.0),
+                ("on se voit demain ?", true, 16.0),
+            ],
+        );
+        assert_eq!(
+            actions,
+            [
+                Interpeller,
+                Envoyer("quelle heure est-il ?".into()),
+                Interpeller,
+                Question("et demain".into()),
+                Envoyer("Et demain ?".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn conversation_close_par_le_silence_compte_apres_la_reponse() {
+        let mut e = Ecouteur::default();
+        e.segment("Kobi, raconte une blague", true, 1.0);
+        // La réponse s'affiche pendant 15 s ; la fenêtre part de sa fin.
+        e.suite(16.0);
+        assert!(e.tick(30.0).is_empty());
+        assert_eq!(
+            e.segment("encore une", true, 31.0),
+            [Interpeller, Envoyer("encore une".into())]
+        );
+        e.suite(35.0);
+        assert!(e.tick(56.0).is_empty());
+        assert!(e.segment("on mange où ?", true, 57.0).is_empty());
+    }
+
+    #[test]
+    fn pas_de_conversation_en_reunion() {
+        let mut e = Ecouteur {
+            conversation: false,
+            ..Default::default()
+        };
+        e.segment("Kobi, quel est le budget ?", true, 1.0);
+        e.suite(5.0);
+        assert!(e.segment("on passe au point suivant", true, 6.0).is_empty());
+    }
+
+    #[test]
+    fn merci_kobi_n_interpelle_pas() {
+        let mut e = Ecouteur::default();
+        assert!(e.segment("Merci Kobi.", true, 1.0).is_empty());
+        assert!(e.tick(10.0).is_empty());
+        assert!(fin_de_conversation("C'est bon, merci."));
+        assert!(!fin_de_conversation("merci de résumer le budget"));
     }
 }
