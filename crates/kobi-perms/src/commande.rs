@@ -923,6 +923,14 @@ fn options_interdites(nom: &str, args: &[String]) -> Option<Avis> {
             "`uniq` avec deux fichiers écrit dans le second",
         )),
         "rg" if commence("--pre") => ecrit("`rg --pre` lance une commande".into()),
+        // Suit le fichier sans jamais rendre la main.
+        "tail" if a("-f") || a("-F") || commence("--follow") => {
+            ecrit("`tail -f` ne s'arrête jamais".into())
+        }
+        "tree" if a("-o") => Some(Avis::ecriture(
+            Genre::Fichier,
+            "`tree -o` écrit dans un fichier",
+        )),
         "date" if a("-s") || commence("--set") => ecrit("`date -s` change l'heure".into()),
         "hostname" if args.iter().any(|x| !x.starts_with('-')) => {
             ecrit("`hostname <nom>` change le nom".into())
@@ -1635,6 +1643,311 @@ mod tests {
         lecture(bash("cut -d , -f 1 Cargo.toml"), "cut -d , -f 1 Cargo.toml");
         for ligne in ["ls |", "| ls", "ls && && ls"] {
             pas_lecture(bash(ligne), ligne);
+        }
+    }
+
+    /// Cas de test écrits par kobi-voix pour son propre validateur (commit
+    /// 089d69c, KOB-154), repris tels quels : même sémantique (lecture,
+    /// écriture, suppression, refus), avec une cale vers [`analyser`].
+    mod cas_kobi_voix {
+        use super::super::*;
+        use std::path::PathBuf;
+
+        #[derive(Debug, PartialEq)]
+        enum Verdict {
+            Lecture,
+            Ecriture { suppression: bool },
+            Refus,
+        }
+
+        #[derive(Clone, Copy)]
+        enum Interprete {
+            Bash,
+            PowerShell,
+        }
+
+        fn juger(
+            ligne: &str,
+            i: Interprete,
+            dossiers: &[PathBuf],
+            _courant: Option<&Path>,
+        ) -> Verdict {
+            let shell = match i {
+                Interprete::Bash => Shell::Bash,
+                Interprete::PowerShell => Shell::PowerShell,
+            };
+            match analyser(ligne, shell, &Contexte::new(dossiers.to_vec())).classe {
+                Classe::Lecture => Verdict::Lecture,
+                Classe::Ecriture(Genre::Suppression) => Verdict::Ecriture { suppression: true },
+                Classe::Ecriture(_) => Verdict::Ecriture { suppression: false },
+                Classe::Refus(_) => Verdict::Refus,
+            }
+        }
+
+        fn racine() -> PathBuf {
+            PathBuf::from(if cfg!(windows) {
+                "C:/code/kobi"
+            } else {
+                "/code/kobi"
+            })
+        }
+
+        fn abs(p: &str) -> String {
+            if cfg!(windows) {
+                format!("C:{p}")
+            } else {
+                p.to_string()
+            }
+        }
+
+        fn bash(ligne: &str) -> Verdict {
+            juger(ligne, Interprete::Bash, &[racine()], None)
+        }
+
+        fn ps(ligne: &str) -> Verdict {
+            juger(ligne, Interprete::PowerShell, &[racine()], None)
+        }
+
+        #[track_caller]
+        fn lecture(v: Verdict, ligne: &str) {
+            assert_eq!(v, Verdict::Lecture, "{ligne}");
+        }
+
+        /// Écrit (ou supprime : la suppression est une écriture plus grave).
+        #[track_caller]
+        fn ecrit(v: Verdict, ligne: &str) {
+            assert!(matches!(v, Verdict::Ecriture { .. }), "{ligne} : {v:?}");
+        }
+
+        #[track_caller]
+        fn supprime(v: Verdict, ligne: &str) {
+            assert!(
+                matches!(v, Verdict::Ecriture { suppression: true }),
+                "{ligne} : {v:?}"
+            );
+        }
+
+        #[track_caller]
+        fn refuse(v: Verdict, ligne: &str) {
+            assert!(matches!(v, Verdict::Refus), "{ligne} : {v:?}");
+        }
+
+        fn commandes_de_lecture_acceptees() {
+            for ligne in [
+                "ls",
+                "ls -la crates",
+                "cat Cargo.toml",
+                "head -n 20 crates/kobi-app/src/chef.rs",
+                "tail -n 50 README.md",
+                "wc -l crates/kobi-app/src/*.rs",
+                "rg fabrique_claude",
+                "rg -n 'fn fabrique' crates",
+                "grep -rn \"Kobi\" ui/src",
+                "find . -name '*.rs' -type f",
+                "tree -L 2",
+                "git status",
+                "git log --oneline -5",
+                "git log -5 --format='%h %s'",
+                "git show HEAD~1 --stat",
+                "git diff main...HEAD -- crates",
+                "git blame -L 10,20 crates/kobi-app/src/chef.rs",
+                "git branch",
+                "git branch -a --sort=-committerdate",
+                "git grep -n fabrique",
+                "git ls-files crates",
+                "git -C crates/kobi-app log -3",
+                "git --no-pager log -1",
+                "git tag",
+                "git remote -v",
+                "git config --get remote.origin.url",
+                "git stash list",
+                "git worktree list",
+                "cargo metadata --format-version 1",
+                "cargo tree -p kobi-app",
+                "npm ls --depth 0",
+                "gh pr view 108",
+                "gh pr list --state open",
+                "gh issue list",
+                "sed -n '1,20p' Cargo.toml",
+                "git log --oneline | head -5",
+                "rg TODO | wc -l",
+                "cd crates && ls",
+                "git status && git log -1",
+                "ls 2>/dev/null",
+                "rg foo 2>&1 | head",
+                "pwd; ls",
+                "echo bonjour",
+                "rustc --version",
+                "diff Cargo.toml Cargo.lock",
+            ] {
+                lecture(bash(ligne), ligne);
+            }
+        }
+
+        #[test]
+        fn options_et_commandes_qui_ecrivent() {
+            for ligne in [
+                "touch x.txt",
+                "mkdir build",
+                "mv a b",
+                "cp a b",
+                "sed -i 's/a/b/' x.rs",
+                "sed 's/a/b/w sortie' x.rs",
+                "sed -e 's/a/b/' x.rs",
+                "find . -exec cat {} +",
+                "find . -name '*.rs' -execdir ls ;",
+                "find . -fprint liste.txt",
+                "git checkout main",
+                "git reset --hard HEAD~1",
+                "git commit -m test",
+                "git push",
+                "git branch nouvelle",
+                "git branch -D vieille",
+                "git branch -m nouveau-nom",
+                "git tag v1.0",
+                "git config user.name Kobi",
+                "git stash",
+                "git log --output=journal.txt",
+                "git diff --ext-diff",
+                "git grep -O fabrique",
+                "git -c core.pager=sh log",
+                "cargo build",
+                "cargo test",
+                "npm install",
+                "gh pr merge 108",
+                "gh issue create",
+                "tail -f kobi.log",
+                "rg --pre cat fabrique",
+                "sort -o sortie.txt entree.txt",
+                "uniq entree.txt sortie.txt",
+                "tree -o arbre.txt",
+                "python script.py",
+                "node -e 'require(\"fs\")'",
+                "awk '{print}' x",
+                "chmod +x script.sh",
+                "curl https://example.com",
+                "/usr/bin/ls",
+                "./build.sh",
+                "env",
+                "PAGER=sh git log",
+            ] {
+                ecrit(bash(ligne), ligne);
+            }
+        }
+
+        #[test]
+        fn contournements_classiques() {
+            for ligne in [
+                "ls; touch x",
+                "ls && rm -f x",
+                "ls || mkdir y",
+                "cat x | tee y",
+                "ls > liste.txt",
+                "ls >> liste.txt",
+                "cat < /etc/passwd",
+                "echo $(touch x)",
+                "echo `touch x`",
+                "echo \"$(touch x)\"",
+                "echo $HOME",
+                "ls &",
+                "(cd .. && touch x)",
+                "cat <(ls)",
+                "ls |& tee x",
+                "ls\ntouch x",
+                "echo 'non fermé",
+                "{ ls; }",
+            ] {
+                let v = bash(ligne);
+                assert!(
+                    !matches!(v, Verdict::Lecture),
+                    "contournement accepté : {ligne}"
+                );
+            }
+        }
+
+        #[test]
+        fn suppressions() {
+            for ligne in [
+                "rm -rf target",
+                "rm Cargo.lock",
+                "rmdir vide",
+                "find . -name '*.tmp' -delete",
+                "git rm fichier",
+                "git clean -fdx",
+                "ls && rm -rf target",
+            ] {
+                supprime(bash(ligne), ligne);
+            }
+        }
+
+        #[test]
+        fn hors_des_dossiers_de_code() {
+            for ligne in [
+                format!("cat {}", abs("/etc/passwd")),
+                "cat ../../etc/passwd".to_string(),
+                "ls ~".to_string(),
+                "ls ~/Documents".to_string(),
+                format!("cd {}", abs("/tmp")),
+                "cd ..".to_string(),
+                "cd".to_string(),
+                format!("git -C {} log", abs("/etc")),
+                format!("rg secret {}", abs("/home")),
+                format!("find {} -name x", abs("/")),
+                format!("head {}", abs("/code/kobi-bis/x")),
+            ] {
+                refuse(bash(&ligne), &ligne);
+            }
+            // Le motif de rg n'est pas un chemin : seul le dossier compte.
+            lecture(bash("rg '/api/v1' crates"), "rg '/api/v1' crates");
+            // Un chemin absolu dans les dossiers est permis.
+            let dedans = format!("cat {}", abs("/code/kobi/Cargo.toml"));
+            lecture(bash(&dedans), &dedans);
+        }
+
+        #[test]
+        fn powershell() {
+            for ligne in [
+                "Get-ChildItem",
+                "Get-ChildItem -Recurse -Filter *.rs crates",
+                "Get-Content Cargo.toml",
+                "gc README.md | Select-Object -First 10",
+                "Select-String -Pattern fabrique -Path crates",
+                "git log --oneline -5",
+                "Get-ChildItem | Measure-Object",
+            ] {
+                lecture(ps(ligne), ligne);
+            }
+            for ligne in [
+                "Set-Content x.txt bonjour",
+                "New-Item x.txt",
+                "Out-File x.txt",
+                "Get-ChildItem | Where-Object { $_.Length -gt 0 }",
+                "Get-Content x; New-Item y",
+                "Get-ChildItem > liste.txt",
+                "Invoke-Expression 'rm x'",
+                "iex (gc script.ps1)",
+                "Start-Process notepad",
+                "powershell -EncodedCommand ZQBjAGgAbwA=",
+                "Get-Content $env:USERPROFILE\\secret",
+                "& calc.exe",
+                "Copy-Item a b",
+            ] {
+                assert!(!matches!(ps(ligne), Verdict::Lecture), "{ligne}");
+            }
+            supprime(ps("Remove-Item -Recurse target"), "Remove-Item");
+            supprime(ps("rm target"), "rm");
+            refuse(
+                ps(&format!("Get-Content {}", abs("/Windows/win.ini"))),
+                "Get-Content hors dossiers",
+            );
+        }
+
+        #[test]
+        fn sans_dossier_tout_est_refuse() {
+            assert!(matches!(
+                juger("ls", Interprete::Bash, &[], None),
+                Verdict::Refus
+            ));
         }
     }
 }
