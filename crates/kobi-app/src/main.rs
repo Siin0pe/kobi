@@ -26,6 +26,7 @@ mod stockage;
 #[cfg(test)]
 mod test_ipc;
 mod tray;
+mod voix;
 
 use std::sync::mpsc::Sender;
 use std::sync::Mutex;
@@ -113,7 +114,9 @@ fn main() {
                 tracing::warn!(%problem, "config.toml");
             }
             demarrage::installer(app.handle());
-            stockage::installer(app.handle(), &config.config, config_path);
+            stockage::installer(app.handle(), &config.config, config_path.clone());
+            // Réponse à voix haute ou en texte (KOB-142) : la voix se charge en arrière-plan.
+            voix::installer(app.handle(), &config.config.voice, config_path);
             interpellation::installer(
                 app.handle(),
                 config.config.notes.interval_min,

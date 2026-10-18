@@ -164,6 +164,11 @@ pub struct Chef<R: Runtime> {
     /// Dernier tour de la conversation du quotidien ouverte chez l'écrivain
     /// (KOB-141), s'il y en a une.
     conversation: Option<Instant>,
+    /// Réponse dite à voix haute, pour le tour indiqué (KOB-142).
+    voix: Option<(u64, crate::voix::Reponse)>,
+    /// La conversation attend la suite à la fin de la voix, pas avant
+    /// (KOB-133) : la fenêtre de 20 s repart quand Kobi se tait.
+    suite_apres_voix: bool,
     /// Tours abandonnés : ce qui en revient encore est ignoré.
     interrompus: HashSet<u64>,
 }
@@ -316,6 +321,8 @@ impl<R: Runtime> Chef<R> {
             pour_conversation: String::new(),
             calme_a: None,
             conversation: None,
+            voix: None,
+            suite_apres_voix: false,
             interrompus: HashSet::new(),
         }
     }
@@ -406,6 +413,30 @@ impl<R: Runtime> Chef<R> {
             self.transition(&[Evenement::Interpellation]);
         }
         let _ = self.app.emit(EVENEMENT_QUESTION, &texte);
+        // « Kobi, parle », « en silence », « stop » (KOB-142).
+        match crate::voix::commande_vocale(&texte) {
+            Some(crate::voix::CommandeVoix::Stop) => {
+                self.interrompre();
+                return;
+            }
+            Some(c) => {
+                tracing::info!(commande = ?c, "commande de la voix");
+                let confirmation = crate::voix::executer(&self.app, c).unwrap_or_default();
+                self.transition(&[Evenement::PasDeQuestion]);
+                let _ = self.app.emit(EVENEMENT_REPONSE, confirmation);
+                crate::voix::dire(&self.app, confirmation);
+                self.tour += 1;
+                self.ajouter(Bulle {
+                    tour: self.tour,
+                    question: texte,
+                    reponse: confirmation.into(),
+                    statut: "fini",
+                    clavier: !voix,
+                });
+                return;
+            }
+            None => {}
+        }
         if intention(&texte) == Some(Intention::Interrompre) {
             self.interrompre();
             return;
@@ -429,6 +460,7 @@ impl<R: Runtime> Chef<R> {
         self.calme_a = None;
         self.transition(&[Evenement::QuestionEnvoyee]);
         self.ranger(Qui::Moi, &texte, voix);
+        self.voix = Some((self.tour, crate::voix::Reponse::new(&self.app)));
         let notes = self
             .reunion
             .as_ref()
@@ -521,6 +553,7 @@ impl<R: Runtime> Chef<R> {
         };
         self.emettre_enregistrement();
         let _ = self.app.emit(EVENEMENT_REPONSE, &reponse);
+        crate::voix::dire(&self.app, &reponse);
         reponse
     }
 
@@ -616,6 +649,9 @@ impl<R: Runtime> Chef<R> {
             self.emettre_historique();
         }
         tracing::info!(tour, en_cours, "réponse interrompue");
+        crate::voix::taire(&self.app, "interruption");
+        self.voix = None;
+        self.suite_apres_voix = false;
         self.calme_a = None;
         match self.activite() {
             Some("reflechit") => {
@@ -654,6 +690,11 @@ impl<R: Runtime> Chef<R> {
                     self.transition(&[Evenement::ReponseCommence]);
                     let _ = self.app.emit(EVENEMENT_REPONSE, &texte);
                 }
+                if let Some((t, r)) = &mut self.voix {
+                    if *t == tour {
+                        r.morceau(&self.app, &texte);
+                    }
+                }
                 self.emettre_historique();
             }
             Retour::Fin { tour, texte } => {
@@ -662,6 +703,13 @@ impl<R: Runtime> Chef<R> {
                 if let Some(b) = self.bulle(tour) {
                     b.reponse.clone_from(&texte);
                     b.statut = "fini";
+                }
+                if let Some((t, mut r)) = self.voix.take() {
+                    if t == tour {
+                        r.fin(&self.app, &texte);
+                    } else {
+                        self.voix = Some((t, r));
+                    }
                 }
                 if tour == self.dernier {
                     self.transition(&[Evenement::ReponseCommence]);
@@ -682,6 +730,11 @@ impl<R: Runtime> Chef<R> {
                     if tour == self.dernier {
                         self.transition(&[Evenement::ReponseCommence]);
                         let _ = self.app.emit(EVENEMENT_REPONSE, MESSAGE_ANNONCE);
+                        // L'annonce remplace ce qui se disait du tour.
+                        if self.voix.as_ref().is_some_and(|(t, _)| *t == tour) {
+                            self.voix = None;
+                        }
+                        crate::voix::dire(&self.app, MESSAGE_ANNONCE);
                         self.lire(MESSAGE_ANNONCE);
                     }
                     self.emettre_historique();
@@ -708,11 +761,15 @@ impl<R: Runtime> Chef<R> {
                     self.transition(&[Evenement::Interpellation]);
                     self.transition(&[Evenement::QuestionEnvoyee, Evenement::ReponseCommence]);
                     let _ = self.app.emit(EVENEMENT_REPONSE, &texte);
+                    crate::voix::dire(&self.app, &texte);
                     self.lire(&texte);
                 }
             }
             Retour::Erreur { tour, message } => {
                 tracing::warn!(tour, %message, "tour en erreur");
+                if self.voix.as_ref().is_some_and(|(t, _)| *t == tour) {
+                    self.voix = None;
+                }
                 if let Some(b) = self.bulle(tour) {
                     b.reponse.clone_from(&message);
                     b.statut = "erreur";
@@ -851,6 +908,7 @@ impl<R: Runtime> Chef<R> {
             Evenement::ReponseTerminee,
         ));
         let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::Suite);
+        self.suite_apres_voix = true;
     }
 
     fn erreur(&mut self, titre: &str, message: &str) {
@@ -872,11 +930,18 @@ impl<R: Runtime> Chef<R> {
 
     /// Délais : retour au calme, blocs de notes.
     pub fn tick(&mut self) {
+        let parle = crate::voix::parle(&self.app);
         if let Some((quand, evenement)) = self.calme_a {
-            if Instant::now() >= quand {
+            // Le retour au calme attend que Kobi ait fini de parler.
+            if Instant::now() >= quand && !parle {
                 self.calme_a = None;
                 self.transition(&[evenement]);
             }
+        }
+        // Kobi s'est tu : la conversation attend la suite à partir de maintenant.
+        if self.suite_apres_voix && !parle {
+            self.suite_apres_voix = false;
+            let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::Suite);
         }
         // Longtemps en veille : la prochaine question ouvre une autre conversation.
         if self

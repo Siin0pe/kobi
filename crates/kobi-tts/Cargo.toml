@@ -1,7 +1,31 @@
 [package]
 name = "kobi-tts"
+description = "Synthèse vocale locale de Kobi : texte à dire, voix Piper (sherpa-onnx), sortie audio interruptible."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+# Voix Piper/VITS via sherpa-onnx, CPU, bibliothèques statiques (comme
+# `kobi-stt/nemotron`, avec qui elle partage la bibliothèque).
+piper = ["dep:sherpa-onnx", "sherpa-onnx/static"]
+# Lecture sur la sortie audio par défaut (cpal).
+lecture = ["dep:cpal"]
+
 [dependencies]
+cpal = { version = "0.18.2", optional = true }
+hound = "3.5"
+sherpa-onnx = { version = "=1.13.8", optional = true, default-features = false }
+thiserror = "2"
+tracing = "0.1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[[example]]
+name = "dire"
+required-features = ["piper"]
+
+[[example]]
+name = "parleur"
+required-features = ["piper"]

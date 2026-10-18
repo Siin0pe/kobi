@@ -39,6 +39,11 @@ const URL_MODELE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/downloa
 const TAILLE_MODELE: u64 = 475_271_763;
 const SHA_MODELE: &str = "c6bf5e0df765f9d5b43bc9e0536d4b4b3e7d40bdf5ecf13e45f134c51c05ae3a";
 
+/// Voix française de Kobi (KOB-142), archive de sherpa-onnx.
+const URL_VOIX: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-fr_FR-siwis-medium.tar.bz2";
+const TAILLE_VOIX: u64 = 67_207_459;
+const SHA_VOIX: &str = "375909aa30842b3a4efa10b1beb1d761af792960ae6873b4d53889f96c66195b";
+
 /// Le modèle à télécharger. `KOBI_MODELE_URL` remplace l'URL (miroir,
 /// essais hors ligne) ; la taille et la somme restent celles de l'archive.
 fn modele() -> Modele {
@@ -48,6 +53,17 @@ fn modele() -> Modele {
         url: std::env::var("KOBI_MODELE_URL").unwrap_or_else(|_| URL_MODELE.into()),
         taille: TAILLE_MODELE,
         sha256: SHA_MODELE.into(),
+    }
+}
+
+/// La voix Piper, téléchargée avec le modèle de transcription.
+fn voix() -> Modele {
+    Modele {
+        id: "voix-fr".into(),
+        fichier: format!("{}.tar.bz2", kobi_tts::piper::VOIX_PAR_DEFAUT),
+        url: std::env::var("KOBI_VOIX_URL").unwrap_or_else(|_| URL_VOIX.into()),
+        taille: TAILLE_VOIX,
+        sha256: SHA_VOIX.into(),
     }
 }
 
@@ -311,12 +327,14 @@ pub struct Telechargement {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct EtatModele {
-    /// Dossier du modèle, s'il est installé.
+    /// Dossier du modèle, s'il est installé avec la voix.
     pub dossier: Option<PathBuf>,
     pub nom: String,
-    /// Taille du téléchargement, en octets.
+    /// Taille de ce qui reste à télécharger, en octets.
     pub taille: u64,
     pub en_cours: bool,
+    /// Dossier de la voix (KOB-142), si elle est installée.
+    pub voix: Option<PathBuf>,
 }
 
 /// Un paquet Nemotron complet (l'encodeur est le plus gros fichier).
@@ -324,15 +342,33 @@ fn paquet_complet(dossier: &Path) -> bool {
     dossier.join("encoder.int8.onnx").is_file() && dossier.join("tokens.txt").is_file()
 }
 
+/// Un paquet de voix Piper complet.
+fn voix_complete(dossier: &Path) -> bool {
+    dossier.join("tokens.txt").is_file()
+        && fs::read_dir(dossier).is_ok_and(|d| {
+            d.flatten()
+                .any(|e| e.path().extension().is_some_and(|x| x == "onnx"))
+        })
+}
+
+fn voix_installee() -> Option<PathBuf> {
+    crate::voix::paquet_voix().filter(|d| voix_complete(d))
+}
+
 #[tauri::command]
 pub fn etat_modele<R: Runtime>(app: AppHandle<R>) -> EtatModele {
+    let nemotron = crate::interpellation::modele_nemotron().filter(|d| paquet_complet(d));
+    let voix = voix_installee();
+    let taille = if nemotron.is_some() { 0 } else { TAILLE_MODELE }
+        + if voix.is_some() { 0 } else { TAILLE_VOIX };
     EtatModele {
-        dossier: crate::interpellation::modele_nemotron().filter(|d| paquet_complet(d)),
+        dossier: nemotron.filter(|_| voix.is_some()),
         nom: NOM_MODELE.into(),
-        taille: TAILLE_MODELE,
+        taille,
         en_cours: app
             .try_state::<Telechargement>()
             .is_some_and(|t| t.en_cours.load(Ordering::SeqCst)),
+        voix,
     }
 }
 
@@ -407,15 +443,32 @@ pub fn extraire(
     Ok(final_)
 }
 
-/// Télécharge puis extrait le modèle, en signalant l'avancement.
+/// Installe ce qui manque : le modèle de transcription, puis la voix
+/// (KOB-142). Renvoie le dossier du modèle de transcription.
 fn installer_modele<R: Runtime>(
     app: &AppHandle<R>,
     annule: &AtomicBool,
 ) -> Result<PathBuf, String> {
+    let nemotron = match crate::interpellation::modele_nemotron().filter(|d| paquet_complet(d)) {
+        Some(d) => d,
+        None => installer_paquet(app, annule, &modele())?,
+    };
+    if voix_installee().is_none() {
+        let dossier = installer_paquet(app, annule, &voix())?;
+        tracing::info!(dossier = %dossier.display(), "voix installée");
+    }
+    Ok(nemotron)
+}
+
+/// Télécharge puis extrait un paquet, en signalant l'avancement.
+fn installer_paquet<R: Runtime>(
+    app: &AppHandle<R>,
+    annule: &AtomicBool,
+    modele: &Modele,
+) -> Result<PathBuf, String> {
     let models = modeles::default_dir().ok_or("dossier personnel introuvable")?;
-    let modele = modele();
     let mut envoye = 0u64;
-    let fait = modeles::telecharger(&Http::default(), &modele, &models, &mut |p: Progression| {
+    let fait = modeles::telecharger(&Http::default(), modele, &models, &mut |p: Progression| {
         if annule.load(Ordering::SeqCst) {
             return ControlFlow::Break(());
         }
@@ -534,6 +587,11 @@ mod tests {
         assert_eq!(m.taille, TAILLE_MODELE);
         assert_eq!(m.sha256.len(), 64);
         assert!(m.fichier.ends_with(".tar.bz2") && !m.fichier.contains('/'));
+        // La voix de Kobi est téléchargée avec (KOB-142).
+        let v = voix();
+        assert_eq!(v.taille, TAILLE_VOIX);
+        assert_eq!(v.sha256.len(), 64);
+        assert_eq!(v.fichier, "vits-piper-fr_FR-siwis-medium.tar.bz2");
     }
 
     /// Archive `.tar.bz2` d'un faux paquet, comme celles de sherpa-onnx.
@@ -609,7 +667,13 @@ mod tests {
         assert!(r["parler"].as_str().is_some_and(|p| !p.is_empty()));
 
         let m = appeler(&w, "etat_modele", json!({})).unwrap();
-        assert_eq!(m["taille"], TAILLE_MODELE);
+        // Ce qui reste à télécharger dépend de la machine (modèles déjà là).
+        let taille = m["taille"].as_u64().unwrap();
+        assert!(
+            [0, TAILLE_VOIX, TAILLE_MODELE, TAILLE_MODELE + TAILLE_VOIX].contains(&taille),
+            "{taille}"
+        );
+        assert!(m.get("voix").is_some());
         assert_eq!(m["en_cours"], false);
 
         let absente = appeler(&w, "commande_pas_encore_livree", json!({})).unwrap_err();

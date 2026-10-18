@@ -156,6 +156,8 @@ fn jouer(samples: Vec<f32>) -> Receiver<AudioFrame> {
 /// laisse passer vers Nemotron que la parole ; l'écoute voit passer le temps
 /// à chaque trame. `t` est la fin de la trame en temps du micro (celui du
 /// moteur repart de zéro à chaque question).
+/// `entendu` reçoit chaque segment (partiel ou final) et dit s'il faut
+/// l'ignorer : c'est la voix de Kobi qui revient dans le micro (KOB-142).
 fn transcrire(
     stt: &mut NemotronEngine,
     porte: &mut Porte,
@@ -163,6 +165,7 @@ fn transcrire(
     diag: &mut Option<Diag>,
     frame: kobi_stt::AudioFrame,
     t: f64,
+    entendu: &dyn Fn(&str) -> bool,
 ) -> (Vec<Action>, Vec<kobi_stt::Segment>) {
     if let Some(d) = diag {
         d.trame(frame.t, &frame.samples);
@@ -187,6 +190,12 @@ fn transcrire(
         match stt.push(&frame) {
             Ok(segments) => {
                 for s in segments {
+                    if entendu(&s.text) {
+                        if let Some(d) = diag {
+                            d.note(&format!("écho de Kobi ignoré : « {} »", s.text));
+                        }
+                        continue;
+                    }
                     let suite = ecouteur.segment(&s.text, s.is_final, t);
                     if let Some(d) = diag {
                         d.segment(&s.text, s.is_final, &suite);
@@ -386,6 +395,16 @@ impl<R: Runtime> Fil<R> {
         self.audio += frame.samples.len() as f64 / kobi_stt::SAMPLE_RATE as f64;
         let debut = Instant::now();
         let t = self.t;
+        // Sa propre voix est ignorée ; une autre voix pendant qu'il parle le
+        // fait taire (KOB-142).
+        let app = &self.app;
+        let entendu = |texte: &str| {
+            if crate::voix::est_ma_voix(app, texte) {
+                return true;
+            }
+            crate::voix::entendu(app, texte);
+            false
+        };
         let (actions, finals) = transcrire(
             stt,
             &mut self.porte,
@@ -393,6 +412,7 @@ impl<R: Runtime> Fil<R> {
             &mut self.diag,
             frame,
             t,
+            &entendu,
         );
         self.calcul += debut.elapsed();
         for s in finals {
@@ -434,6 +454,8 @@ impl<R: Runtime> Fil<R> {
         for action in actions {
             let message = match action {
                 Action::Interpeller => {
+                    // On appelle Kobi : il se tait pour écouter (KOB-142).
+                    crate::voix::taire(&self.app, "interpellation");
                     tracing::info!("Kobi interpellé");
                     Message::Interpelle
                 }
@@ -496,7 +518,7 @@ mod tests {
                 t: i as f64 * 0.01,
             };
             let t = frame.end();
-            let (suite, _) = transcrire(stt, &mut porte, &mut ecouteur, diag, frame, t);
+            let (suite, _) = transcrire(stt, &mut porte, &mut ecouteur, diag, frame, t, &|_| false);
             if let Some(d) = diag {
                 finals.extend(d.finals());
             }

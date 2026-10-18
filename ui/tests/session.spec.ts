@@ -117,7 +117,8 @@ test('démarrer puis terminer une réunion depuis la webview', async ({ page }) 
   const invokes = await page.evaluate(() => (window as unknown as { __invokes: string[] }).__invokes);
   // `etat_enregistrement` est inconnue de cette coque : repli sur `etat_session`.
   // `historique` (KOB-133) l'est aussi : l'historique reste vide, sans erreur.
-  expect(invokes).toEqual(['etat_session', 'etat_enregistrement', 'historique', 'etat_session', 'demarrer', 'pause', 'reprendre', 'terminer', 'pause']);
+  // `etat_voix_ui` : réglage de la voix (KOB-142).
+  expect(invokes.filter((c) => c !== 'etat_voix_ui')).toEqual(['etat_session', 'etat_enregistrement', 'historique', 'etat_session', 'demarrer', 'pause', 'reprendre', 'terminer', 'pause']);
   await expectNoErrors(errors);
 });
 
