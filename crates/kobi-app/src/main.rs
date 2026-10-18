@@ -20,6 +20,7 @@ mod notes;
 mod placement;
 mod porte;
 mod raccourci;
+mod rappels;
 mod reglages;
 mod session;
 mod stockage;
@@ -117,6 +118,7 @@ fn main() {
             stockage::installer(app.handle(), &config.config, config_path.clone());
             // Réponse à voix haute ou en texte (KOB-142) : la voix se charge en arrière-plan.
             voix::installer(app.handle(), &config.config.voice, config_path);
+            rappels::installer(app.handle());
             interpellation::installer(
                 app.handle(),
                 config.config.notes.interval_min,

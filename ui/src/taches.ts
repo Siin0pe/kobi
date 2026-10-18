@@ -7,6 +7,7 @@
 // bulle de réponse.
 
 import type { Bulle } from './conversation';
+import { tauri } from './native';
 import type { Stage } from './stage';
 
 /** Une notification de livraison reste affichée ce temps-là sans clic. */
@@ -15,6 +16,17 @@ const DELIVERED_MS = 20_000;
 const MAX_NOTIFS = 2;
 
 type Kind = 'running' | 'delivered' | 'failed';
+
+/** Rappel arrivé à l'heure dite (KOB-145), comme l'événement `rappel` de la coque. */
+export interface Rappel {
+  id: string;
+  texte: string;
+  echeance_ms: number | null;
+}
+
+/** Cloche dessinée (pas d'emoji : la police de Kobi n'en a pas). */
+const BELL =
+  '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 2a1.6 1.6 0 0 0-1.6 1.6v.6A6.4 6.4 0 0 0 5.6 10.4v4.2L3.8 17.4h16.4l-1.8-2.8v-4.2a6.4 6.4 0 0 0-4.8-6.2v-.6A1.6 1.6 0 0 0 12 2Zm-2.6 16.6a2.6 2.6 0 0 0 5.2 0Z"/></svg>';
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
@@ -32,7 +44,7 @@ function preview(text: string, max = 90): string {
 export class Tasks {
   readonly root: HTMLElement;
   private readonly statuts = new Map<number, Bulle['statut']>();
-  private readonly timers = new Map<number, number>();
+  private readonly timers = new Map<string, number>();
   private first = true;
 
   constructor(private readonly stage: Stage) {
@@ -80,13 +92,48 @@ export class Tasks {
       this.dismiss(b.tour);
     });
     this.root.append(n);
-    while (this.root.children.length > MAX_NOTIFS) this.dismiss(Number((this.root.firstElementChild as HTMLElement).dataset.tour));
-    if (kind !== 'running') this.timers.set(b.tour, window.setTimeout(() => this.dismiss(b.tour), DELIVERED_MS));
+    this.keep();
+    if (kind !== 'running') this.timers.set(String(b.tour), window.setTimeout(() => this.dismiss(b.tour), DELIVERED_MS));
   }
 
-  private dismiss(tour: number): void {
-    window.clearTimeout(this.timers.get(tour));
-    this.timers.delete(tour);
-    this.root.querySelector(`[data-tour="${tour}"]`)?.remove();
+  /**
+   * Rappel à l'heure dite : il reste jusqu'au clic (on ne rate pas un
+   * rappel), la cloche sonne et Kobi le dit dans sa bulle s'il est au repos.
+   */
+  reminder(r: Rappel): void {
+    const key = `rappel-${r.id}`;
+    this.dismiss(key);
+    const n = el('button', 'notif notif-reminder');
+    n.type = 'button';
+    n.dataset.tour = key;
+    n.dataset.kind = 'reminder';
+    const icon = el('span', 'notif-icon');
+    icon.innerHTML = BELL;
+    const body = el('span', 'notif-body');
+    const heure = r.echeance_ms === null ? '' : new Date(r.echeance_ms).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+    body.append(el('span', 'notif-kicker', heure ? `Rappel · ${heure}` : 'Rappel'), el('span', 'notif-text', preview(r.texte)));
+    n.append(icon, body);
+    n.setAttribute('aria-label', `Rappel : ${r.texte}`);
+    n.addEventListener('click', () => this.dismiss(key));
+    this.root.append(n);
+    this.keep();
+    if (this.stage.root.dataset.state === 'idle') this.stage.setState('answer', { answer: `Rappel : ${r.texte}` });
   }
+
+  /** Au plus `MAX_NOTIFS` à la fois : la plus ancienne s'en va. */
+  private keep(): void {
+    while (this.root.children.length > MAX_NOTIFS) this.dismiss((this.root.firstElementChild as HTMLElement).dataset.tour ?? '');
+  }
+
+  private dismiss(tour: number | string): void {
+    const key = String(tour);
+    window.clearTimeout(this.timers.get(key));
+    this.timers.delete(key);
+    this.root.querySelector(`[data-tour="${key}"]`)?.remove();
+  }
+}
+
+/** Rappels de la coque (événement `rappel`, KOB-145). */
+export function followRappels(tasks: Tasks): void {
+  void tauri()?.event.listen<Rappel>('rappel', (e) => tasks.reminder(e.payload));
 }

@@ -10,7 +10,7 @@ import { relierNotes } from './notes-lien';
 import { Stage } from './stage';
 import { applyCarte, enableInterrupt, followCartes, type CarteUi } from './cartes';
 import { Conversation, followConversation, type Bulle } from './conversation';
-import { Tasks } from './taches';
+import { Tasks, followRappels, type Rappel } from './taches';
 import { Ecrire } from './ecrire';
 import './styles/fonts.css';
 import './styles/stage.css';
@@ -38,6 +38,7 @@ followSession(stage);
 const conversation = new Conversation(stage);
 const tasks = new Tasks(stage);
 followConversation(conversation, (bulles) => tasks.update(bulles));
+followRappels(tasks);
 // Écrire à Kobi (KOB-147) : la bulle qui sort de Kobi.
 const ecrire = new Ecrire(stage);
 ecrire.onSend = (texte) => conversation.send(texte);
@@ -78,6 +79,8 @@ declare global {
       command(name: Command): Promise<SessionState | undefined>;
       /** Historique, comme l'événement `conversation` de la coque. */
       conversation(bulles: Bulle[]): void;
+      /** Rappel à l'heure dite, comme l'événement `rappel` de la coque. */
+      rappel(r: Rappel): void;
       /** Carte de confirmation, comme l'événement `carte` de la coque. */
       carte(carte: CarteUi): void;
       /** Échap : la réponse en cours s'arrête net. */
@@ -107,6 +110,7 @@ window.kobi = {
     conversation.setBulles(bulles);
     tasks.update(bulles);
   },
+  rappel: (r) => tasks.reminder(r),
   carte: (c) => applyCarte(stage, c),
   interrupt: () => stage.interrupt(),
   ecrire: () => ecrire.open(),

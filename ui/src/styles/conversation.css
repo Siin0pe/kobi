@@ -161,6 +161,16 @@
   color: #ffffff;
   animation: notif-shake 2.6s ease-in-out infinite;
 }
+/* Rappel (KOB-145) : jaune de Kobi, la cloche sonne par salves. */
+.notif-reminder {
+  background: var(--accent);
+  color: var(--ink);
+  box-shadow: 5px 5px 0 var(--ink);
+}
+.notif-reminder .notif-icon {
+  animation: notif-ring 1.8s ease-in-out infinite;
+  transform-origin: 50% 10%;
+}
 .notif-icon i {
   display: inline-block;
   font-style: normal;
@@ -231,6 +241,22 @@
   }
   90% {
     rotate: 10deg;
+  }
+}
+
+@keyframes notif-ring {
+  0%,
+  45%,
+  100% {
+    rotate: 0deg;
+  }
+  5%,
+  25% {
+    rotate: -16deg;
+  }
+  15%,
+  35% {
+    rotate: 16deg;
   }
 }
 
