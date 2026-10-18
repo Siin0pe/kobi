@@ -122,6 +122,120 @@ pub fn spawn_saver(path: PathBuf) -> Sender<Saved> {
     tx
 }
 
+impl Rect {
+    fn croise(&self, autre: &Rect) -> bool {
+        let fin = |r: &Rect| {
+            (
+                i64::from(r.x) + i64::from(r.width),
+                i64::from(r.y) + i64::from(r.height),
+            )
+        };
+        let (a, b) = (fin(self), fin(autre));
+        i64::from(self.x) < b.0
+            && i64::from(autre.x) < a.0
+            && i64::from(self.y) < b.1
+            && i64::from(autre.y) < a.1
+    }
+}
+
+/// Position d'une fenêtre secondaire (bienvenue, Carnet, Réglages) : centrée
+/// dans la zone de travail, sauf si elle passerait sous Kobi, toujours au
+/// premier plan. Elle se range alors à gauche de Kobi, sinon au-dessus,
+/// sinon en haut à gauche.
+pub fn a_cote_de_kobi(work_area: Rect, fenetre: (u32, u32), kobi: Rect, scale: f64) -> (i32, i32) {
+    let marge = (MARGIN * scale).round() as i64;
+    let (l, h) = (i64::from(fenetre.0), i64::from(fenetre.1));
+    let (ax, ay) = (i64::from(work_area.x), i64::from(work_area.y));
+    let (al, ah) = (i64::from(work_area.width), i64::from(work_area.height));
+    let centre = (ax + (al - l) / 2, ay + (ah - h) / 2);
+    let pose = |x: i64, y: i64| Rect {
+        x: x as i32,
+        y: y as i32,
+        width: fenetre.0,
+        height: fenetre.1,
+    };
+    let borne = |v: i64, min: i64, taille: i64, total: i64| v.min(min + total - taille).max(min);
+    if !pose(centre.0, centre.1).croise(&kobi) {
+        return (centre.0 as i32, centre.1 as i32);
+    }
+    let a_gauche = i64::from(kobi.x) - marge - l;
+    if a_gauche >= ax {
+        let x = a_gauche.min(centre.0);
+        return (x as i32, borne(centre.1, ay, h, ah) as i32);
+    }
+    let au_dessus = i64::from(kobi.y) - marge - h;
+    if au_dessus >= ay {
+        return (
+            borne(centre.0, ax, l, al) as i32,
+            au_dessus.min(centre.1) as i32,
+        );
+    }
+    ((ax + marge) as i32, (ay + marge) as i32)
+}
+
+/// Construit une fenêtre secondaire de `taille` (pixels logiques) à côté de
+/// la mascotte (fenêtre `main`), sur l'écran de celle-ci ; centrée si la
+/// position de Kobi est illisible. La position est donnée au constructeur :
+/// sous GTK, la déplacer après coup est écrasé par le centrage à l'affichage.
+pub fn a_cote_de_kobi_ou_centre<'a, R: tauri::Runtime, M: tauri::Manager<R>>(
+    app: &M,
+    constructeur: tauri::WebviewWindowBuilder<'a, R, M>,
+    taille: (f64, f64),
+) -> tauri::WebviewWindowBuilder<'a, R, M> {
+    let lire = || -> tauri::Result<Option<(f64, f64)>> {
+        let Some(kobi) = app.get_webview_window("main") else {
+            return Ok(None);
+        };
+        // Juste après `show()`, GTK peut encore annoncer la mascotte cachée
+        // et hors de tout écran : sa position, elle, est déjà posée.
+        let (pos, t) = (kobi.outer_position()?, kobi.outer_size()?);
+        let Some(ecran) = kobi.current_monitor()?.or(kobi.primary_monitor()?) else {
+            return Ok(None);
+        };
+        let zone = ecran.work_area();
+        let echelle = ecran.scale_factor();
+        let declaree = app
+            .config()
+            .app
+            .windows
+            .iter()
+            .find(|w| w.label == "main")
+            .map(|w| (w.width, w.height))
+            .unwrap_or((410.0, 280.0));
+        let t = physical_size((t.width, t.height), declaree, echelle);
+        let (x, y) = a_cote_de_kobi(
+            Rect {
+                x: zone.position.x,
+                y: zone.position.y,
+                width: zone.size.width,
+                height: zone.size.height,
+            },
+            (
+                (taille.0 * echelle).round() as u32,
+                (taille.1 * echelle).round() as u32,
+            ),
+            Rect {
+                x: pos.x,
+                y: pos.y,
+                width: t.0,
+                height: t.1,
+            },
+            echelle,
+        );
+        Ok(Some((f64::from(x) / echelle, f64::from(y) / echelle)))
+    };
+    match lire() {
+        Ok(Some((x, y))) => {
+            tracing::info!(x, y, "fenêtre rangée à côté de Kobi");
+            constructeur.position(x, y)
+        }
+        autre => {
+            tracing::info!(?autre, "position de Kobi illisible : fenêtre centrée");
+            constructeur.center()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -205,5 +319,67 @@ mod tests {
         }
         assert_eq!(found, Some(Saved { x: 30, y: 40 }));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn fenetre_secondaire_jamais_sous_kobi() {
+        let ecran = Rect {
+            x: 0,
+            y: 0,
+            width: 1440,
+            height: 900,
+        };
+        let kobi = Rect {
+            x: 1014,
+            y: 604,
+            width: 410,
+            height: 280,
+        };
+        // Centrée, elle passerait sous Kobi : rangée à sa gauche.
+        let (x, y) = a_cote_de_kobi(ecran, (900, 640), kobi, 1.0);
+        assert_eq!((x, y), (98, 130));
+        let posee = Rect {
+            x,
+            y,
+            width: 900,
+            height: 640,
+        };
+        assert!(!posee.croise(&kobi));
+        // Grand écran : centrée, Kobi est loin.
+        let grand = Rect {
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1040,
+        };
+        let kobi = Rect {
+            x: 1494,
+            y: 744,
+            width: 410,
+            height: 280,
+        };
+        assert_eq!(a_cote_de_kobi(grand, (900, 640), kobi, 1.0), (510, 200));
+        // Écran trop étroit pour la gauche : au-dessus.
+        let etroit = Rect {
+            x: 0,
+            y: 0,
+            width: 1000,
+            height: 1400,
+        };
+        let kobi = Rect {
+            x: 574,
+            y: 900,
+            width: 410,
+            height: 280,
+        };
+        let (x, y) = a_cote_de_kobi(etroit, (900, 640), kobi, 1.0);
+        assert!(!Rect {
+            x,
+            y,
+            width: 900,
+            height: 640
+        }
+        .croise(&kobi));
+        assert_eq!(y, 900 - 16 - 640);
     }
 }

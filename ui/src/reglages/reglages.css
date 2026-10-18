@@ -537,3 +537,9 @@ kbd {
   box-shadow: 4px 4px 0 var(--acide);
   animation: entre 0.4s var(--ressort);
 }
+/* Une longue liste de micros défile au lieu de pousser la page. */
+.choix {
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 4px 8px 8px 4px;
+}

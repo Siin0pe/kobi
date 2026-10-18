@@ -118,7 +118,6 @@ fn main() {
                 config.config.notes.interval_min,
                 config.config.codebases.clone(),
             );
-            bienvenue::installer(app.handle());
             raccourci::installer(app.handle(), &config.config)?;
             let window = app
                 .get_webview_window("main")
@@ -128,6 +127,8 @@ fn main() {
             app.manage(PositionSaver(Mutex::new(placement::spawn_saver(file))));
             window.show()?;
             tray::install(app.handle())?;
+            // Après la mascotte : la bienvenue se range à côté d'elle.
+            bienvenue::installer(app.handle());
             // `kobi --carnet` / `--reglages` / `--bienvenue` : ouvre la fenêtre au
             // lancement (raccourci du menu Démarrer, essai sous Xvfb).
             for arg in std::env::args().skip(1) {

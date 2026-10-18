@@ -31,14 +31,17 @@ pub fn ouvrir<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         w.show()?;
         return w.set_focus();
     }
-    WebviewWindowBuilder::new(app, FENETRE, WebviewUrl::App("carnet.html".into()))
-        .title("Carnet de Kobi")
-        .inner_size(1120.0, 740.0)
-        .min_inner_size(720.0, 480.0)
-        .center()
-        .visible(true)
-        .focused(true)
-        .build()?;
+    crate::placement::a_cote_de_kobi_ou_centre(
+        app,
+        WebviewWindowBuilder::new(app, FENETRE, WebviewUrl::App("carnet.html".into()))
+            .title("Carnet de Kobi")
+            .inner_size(1120.0, 740.0)
+            .min_inner_size(720.0, 480.0)
+            .visible(true)
+            .focused(true),
+        (1120.0, 740.0),
+    )
+    .build()?;
     tracing::info!("carnet ouvert");
     Ok(())
 }

@@ -77,9 +77,18 @@ pub fn installer<R: Runtime>(app: &AppHandle<R>) {
         return;
     };
     if a_faire(&dir) && !lance_par_le_systeme() {
-        if let Err(e) = ouvrir(app) {
-            tracing::warn!(erreur = %e, "bienvenue");
-        }
+        // Kobi apparaît d'abord, puis se présente : la bienvenue s'ouvre une
+        // fois la mascotte posée à l'écran, pour se ranger à côté d'elle.
+        let app = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(800));
+            let h = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                if let Err(e) = ouvrir(&h) {
+                    tracing::warn!(erreur = %e, "bienvenue");
+                }
+            });
+        });
     }
 }
 
@@ -90,14 +99,17 @@ pub fn ouvrir<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         w.show()?;
         return w.set_focus();
     }
-    WebviewWindowBuilder::new(app, FENETRE, WebviewUrl::App("bienvenue.html".into()))
-        .title("Bienvenue — Kobi")
-        .inner_size(900.0, 640.0)
-        .min_inner_size(680.0, 520.0)
-        .center()
-        .visible(true)
-        .focused(true)
-        .build()?;
+    crate::placement::a_cote_de_kobi_ou_centre(
+        app,
+        WebviewWindowBuilder::new(app, FENETRE, WebviewUrl::App("bienvenue.html".into()))
+            .title("Bienvenue — Kobi")
+            .inner_size(900.0, 640.0)
+            .min_inner_size(680.0, 520.0)
+            .visible(true)
+            .focused(true),
+        (900.0, 640.0),
+    )
+    .build()?;
     tracing::info!("premier lancement ouvert");
     Ok(())
 }
@@ -223,6 +235,19 @@ pub fn regler_micro(chemin: &Path, nom: Option<&str>) -> Result<(), String> {
     config::save(&lu.config, chemin).map_err(|e| e.to_string())
 }
 
+/// Sous Linux, cpal liste aussi les greffons ALSA (convertisseurs, JACK,
+/// OSS…) comme des entrées : ce ne sont pas des micros à proposer.
+fn micro_proposable(nom: &str) -> bool {
+    const GREFFONS: [&str; 5] = [
+        "Plugin",
+        "Plug-in",
+        "JACK Audio",
+        "Open Sound System",
+        "Discard all samples",
+    ];
+    !(cfg!(target_os = "linux") && GREFFONS.iter().any(|g| nom.contains(g)))
+}
+
 #[tauri::command]
 pub fn micros() -> Micros {
     let choisi = micro_choisi();
@@ -231,6 +256,7 @@ pub fn micros() -> Micros {
             micros: liste
                 .inputs
                 .into_iter()
+                .filter(|d| d.is_default || micro_proposable(&d.name))
                 .map(|d| Micro {
                     nom: d.name,
                     defaut: d.is_default,
@@ -498,6 +524,13 @@ mod tests {
         // Le reste de la config est gardé ; vide = micro du système.
         regler_micro(&chemin, Some("  ")).unwrap();
         assert_eq!(micro_de(&config::load_or_create(&chemin).config), None);
+    }
+
+    #[test]
+    fn greffons_alsa_pas_proposes_comme_micros() {
+        assert!(micro_proposable("Micro USB"));
+        let greffon = !micro_proposable("Rate Converter Plugin Using Speex Resampler");
+        assert_eq!(greffon, cfg!(target_os = "linux"));
     }
 
     #[test]
