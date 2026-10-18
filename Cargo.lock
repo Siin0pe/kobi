@@ -2797,6 +2797,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-global-shortcut",
+ "tempfile",
  "tokio",
  "tracing",
 ]
@@ -2863,6 +2864,7 @@ dependencies = [
 name = "kobi-session"
 version = "0.1.0"
 dependencies = [
+ "jiff",
  "kobi-stt",
  "serde",
  "serde_json",

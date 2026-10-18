@@ -6,4 +6,5 @@ pub mod etat;
 pub mod logs;
 pub mod modeles;
 pub mod reunion;
+pub mod stockage;
 pub mod workspaces;

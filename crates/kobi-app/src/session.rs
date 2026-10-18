@@ -152,7 +152,9 @@ pub fn installer<R: Runtime>(builder: Builder<R>) -> Builder<R> {
             terminer,
             // Dossiers de code lisibles (KOB-138), pour la fenêtre des réglages.
             crate::lecture::get_codebases,
-            crate::lecture::set_codebases
+            crate::lecture::set_codebases,
+            crate::stockage::reglages_stockage,
+            crate::stockage::regler_stockage
         ])
 }
 

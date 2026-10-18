@@ -219,6 +219,76 @@ pub struct MeetingsConfig {
     pub extra: toml::Table,
 }
 
+/// Conversations du quotidien, rangées à part des réunions (KOB-141).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ConversationsConfig {
+    pub retention_days: Retention,
+    #[serde(flatten)]
+    pub extra: toml::Table,
+}
+
+impl Default for ConversationsConfig {
+    fn default() -> Self {
+        Self {
+            retention_days: Retention::Days(90),
+            extra: toml::Table::new(),
+        }
+    }
+}
+
+/// Destination de publication d'un type de document, par un serveur MCP.
+///
+/// Prête mais inactive tant que Kobi est en lecture seule (KOB-138) : le
+/// réglage est lu et gardé, rien n'est envoyé.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Publication {
+    /// Nom du serveur MCP (`linear`, `colanode`, `notion`…) ; vide = aucune.
+    pub mcp: String,
+    /// Où écrire chez lui : projet, dossier, base… (texte libre pour Claude).
+    pub destination: String,
+    #[serde(flatten)]
+    pub extra: toml::Table,
+}
+
+impl Publication {
+    pub fn est_reglee(&self) -> bool {
+        !self.mcp.trim().is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PublicationConfig {
+    pub reunions: Publication,
+    pub conversations: Publication,
+    #[serde(flatten)]
+    pub extra: toml::Table,
+}
+
+/// Où Kobi range réunions, conversations et rappels.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StockageConfig {
+    /// Dossier racine ; absent = `~/Kobi`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dossier: Option<PathBuf>,
+    pub publication: PublicationConfig,
+    #[serde(flatten)]
+    pub extra: toml::Table,
+}
+
+impl StockageConfig {
+    /// Dossier racine effectif : le réglage, sinon `~/Kobi`.
+    pub fn racine(&self) -> Option<PathBuf> {
+        match &self.dossier {
+            Some(d) if !d.as_os_str().is_empty() => Some(d.clone()),
+            _ => kobi_dir(),
+        }
+    }
+}
+
 /// Réglages de Kobi (dossier de conception, section « Configuration et
 /// stockage »).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -237,6 +307,8 @@ pub struct Config {
     pub notes: NotesConfig,
     pub voice: VoiceConfig,
     pub meetings: MeetingsConfig,
+    pub conversations: ConversationsConfig,
+    pub stockage: StockageConfig,
     /// Clés inconnues, conservées telles quelles à l'écriture.
     #[serde(flatten)]
     pub extra: toml::Table,
@@ -254,6 +326,8 @@ impl Default for Config {
             notes: NotesConfig::default(),
             voice: VoiceConfig::default(),
             meetings: MeetingsConfig::default(),
+            conversations: ConversationsConfig::default(),
+            stockage: StockageConfig::default(),
             extra: toml::Table::new(),
         }
     }
@@ -417,6 +491,36 @@ mod tests {
         assert!(c.voice.assistant);
         assert!(!c.voice.meeting);
         assert_eq!(c.meetings.retention_days, Retention::Unlimited);
+        assert_eq!(c.conversations.retention_days, Retention::Days(90));
+        assert_eq!(c.stockage.dossier, None);
+        assert_eq!(c.stockage.racine(), kobi_dir());
+        assert!(!c.stockage.publication.reunions.est_reglee());
+    }
+
+    #[test]
+    fn stockage_et_publication_lus_et_reecrits() {
+        let text = r#"
+[conversations]
+retention_days = 30
+
+[stockage]
+dossier = "D:/Notes/Kobi"
+
+[stockage.publication.reunions]
+mcp = "linear"
+destination = "Projet Kobi"
+"#;
+        let c = Config::parse(text, Path::new("config.toml")).unwrap();
+        assert_eq!(c.conversations.retention_days, Retention::Days(30));
+        assert_eq!(c.stockage.racine(), Some(PathBuf::from("D:/Notes/Kobi")));
+        assert!(c.stockage.publication.reunions.est_reglee());
+        assert_eq!(c.stockage.publication.reunions.destination, "Projet Kobi");
+        assert!(!c.stockage.publication.conversations.est_reglee());
+        let back = Config::parse(&c.to_toml().unwrap(), Path::new("c")).unwrap();
+        assert_eq!(back, c);
+        // Dossier vide : retour au défaut.
+        let vide = Config::parse("[stockage]\ndossier = \"\"", Path::new("c")).unwrap();
+        assert_eq!(vide.stockage.racine(), kobi_dir());
     }
 
     #[test]
@@ -532,6 +636,7 @@ liste = [1, 2, 3]
             ("[notes]\ninterval_min = \"trois\"", "trois"),
             ("[meetings]\nretention_days = 7", "retention_days"),
             ("[meetings]\nretention_days = \"jamais\"", "jamais"),
+            ("[conversations]\nretention_days = 12", "retention_days"),
             ("wake_word = \"  \"", "wake_word"),
             ("[voice]\nmeeting = \"oui\"", "oui"),
         ] {

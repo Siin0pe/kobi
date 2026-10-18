@@ -144,6 +144,41 @@ impl Reunion {
         &self.dossier
     }
 
+    /// Nom du dossier (`AAAA-MM-JJ-titre`) : l'identifiant de la réunion.
+    pub fn nom(&self) -> &str {
+        self.dossier
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+    }
+
+    /// Réécrit `notes.md` en entier (écriture atomique).
+    pub fn ecrire_notes(&self, notes: &str) -> io::Result<()> {
+        ecrire_atomique(&self.dossier.join(NOTES), notes.as_bytes())
+    }
+
+    /// Écrit `compte-rendu.md` (écriture atomique).
+    pub fn ecrire_compte_rendu(&self, texte: &str) -> io::Result<()> {
+        ecrire_atomique(&self.dossier.join(COMPTE_RENDU), texte.as_bytes())
+    }
+}
+
+/// Notes prises pendant la réunion, réécrites à chaque bloc.
+pub const NOTES: &str = "notes.md";
+
+/// Compte rendu écrit à la fin.
+pub const COMPTE_RENDU: &str = "compte-rendu.md";
+
+/// Écrit `chemin` via un fichier temporaire renommé : jamais à moitié écrit.
+pub(crate) fn ecrire_atomique(chemin: &Path, contenu: &[u8]) -> io::Result<()> {
+    let mut tmp = chemin.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    fs::write(&tmp, contenu)?;
+    fs::rename(&tmp, chemin)
+}
+
+impl Reunion {
     /// Écrit un segment final et le pousse sur le disque. Les segments
     /// provisoires sont ignorés (retourne `false`).
     pub fn ecrire_segment(&mut self, segment: &Segment) -> io::Result<bool> {
