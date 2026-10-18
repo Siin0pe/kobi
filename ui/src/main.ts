@@ -11,11 +11,13 @@ import { Stage } from './stage';
 import { applyCarte, enableInterrupt, followCartes, type CarteUi } from './cartes';
 import { Conversation, followConversation, type Bulle } from './conversation';
 import { Tasks } from './taches';
+import { Ecrire } from './ecrire';
 import './styles/fonts.css';
 import './styles/stage.css';
 import './styles/bubbles.css';
 import './styles/meeting.css';
 import './styles/conversation.css';
+import './styles/ecrire.css';
 
 const params = new URLSearchParams(location.search);
 
@@ -36,6 +38,11 @@ followSession(stage);
 const conversation = new Conversation(stage);
 const tasks = new Tasks(stage);
 followConversation(conversation, (bulles) => tasks.update(bulles));
+// Écrire à Kobi (KOB-147) : la bulle qui sort de Kobi.
+const ecrire = new Ecrire(stage);
+ecrire.onSend = (texte) => conversation.send(texte);
+ecrire.onHistory = () => conversation.openHistory();
+ecrire.yields = () => conversation.historyOpen || ['answer', 'think', 'listen'].includes(stage.currentState);
 enableInterrupt(stage, conversation, followCartes(stage));
 
 let stopDemo: () => void = () => {};
@@ -75,6 +82,8 @@ declare global {
       carte(carte: CarteUi): void;
       /** Échap : la réponse en cours s'arrête net. */
       interrupt(): void;
+      /** Ouvre la bulle pour écrire à Kobi (menu, raccourci). */
+      ecrire(): void;
     };
   }
 }
@@ -100,6 +109,7 @@ window.kobi = {
   },
   carte: (c) => applyCarte(stage, c),
   interrupt: () => stage.interrupt(),
+  ecrire: () => ecrire.open(),
   play: (state) => {
     stopDemo();
     stopDemo = playDemo(

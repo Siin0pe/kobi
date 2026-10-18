@@ -1,94 +1,10 @@
-/* Conversation (KOB-133) : champ de texte sous Kobi, historique des échanges ;
-   tâches longues (KOB-135) : bulles de notification. Aux couleurs de Kobi.
+/* Conversation (KOB-133) : historique des échanges (la bulle pour écrire à
+   Kobi est dans ecrire.css) ; tâches longues (KOB-135) : bulles de
+   notification. Aux couleurs de Kobi.
 
    Toujours animé, jamais l'élément cliquable lui-même (un bouton qui bouge se
-   clique mal) : le chevron, le curseur, l'invite, l'icône vivent ; le champ et
-   les notifications restent en place une fois arrivés. */
-
-/* Champ de saisie : bas gauche de la scène, sous les bulles, à côté du mot. */
-.say {
-  position: absolute;
-  left: 40px;
-  top: 486px;
-  z-index: 6;
-  box-sizing: border-box;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 360px;
-  height: 52px;
-  padding: 0 16px 0 14px;
-  border-radius: 999px;
-  border: 2.5px solid var(--ink);
-  background: var(--paper);
-  box-shadow:
-    0 0 0 2px var(--accent),
-    5px 5px 0 var(--ink);
-  transition: box-shadow 0.2s ease;
-}
-.say:focus-within {
-  box-shadow:
-    0 0 0 2px var(--accent),
-    7px 7px 0 var(--ink);
-}
-.say-chevron {
-  display: inline-block;
-  font-size: 30px;
-  line-height: 1;
-  font-variation-settings: 'CASL' 1, 'wght' 900;
-  animation: say-chevron 1.8s ease-in-out infinite;
-}
-.say-input {
-  flex: 1;
-  min-width: 0;
-  height: 100%;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: var(--ink);
-  caret-color: var(--ink);
-  font: 600 19px var(--font);
-  font-variation-settings: 'CASL' 1, 'wght' 600;
-  /* Le texte tapé se sélectionne et se copie, contrairement au reste de Kobi. */
-  user-select: text;
-}
-.say-input::placeholder {
-  color: var(--muted);
-  opacity: 0.8;
-  font-variation-settings: 'CASL' 1, 'wght' 450;
-}
-.say-enter {
-  display: inline-block;
-  font-size: 22px;
-  line-height: 1;
-  font-variation-settings: 'MONO' 1, 'wght' 700;
-  opacity: 0.25;
-  transition: opacity 0.2s ease;
-  animation: say-enter 1.2s ease-in-out infinite;
-}
-.say.has-text .say-enter {
-  opacity: 1;
-}
-@keyframes say-chevron {
-  0%,
-  100% {
-    translate: 0 0;
-  }
-  50% {
-    translate: 4px 0;
-  }
-}
-@keyframes say-enter {
-  0%,
-  100% {
-    translate: 0 0;
-    scale: 1;
-  }
-  50% {
-    translate: 0 2px;
-    scale: 0.9;
-  }
-}
+   clique mal) : l'icône vit ; les notifications restent en place une fois
+   arrivées. */
 
 /* Historique : il remplace les bulles et les notifications le temps de la relecture. */
 .history-open .bubbles .card,
@@ -319,7 +235,6 @@
 }
 
 /* Réduire les animations : tout est posé, rien ne bouge. */
-.reduced-motion .say *,
 .reduced-motion .card-history,
 .reduced-motion .card-history *,
 .reduced-motion .card-history *::after,

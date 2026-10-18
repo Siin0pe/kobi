@@ -130,3 +130,5 @@
 .kobi.reduced-motion .waves span{opacity:1}
 .kobi.reduced-motion .drop{opacity:1;transform:translateY(10px)}
 .kobi.paused *,.kobi.paused{animation-play-state:paused!important}
+/* Écrire à Kobi (KOB-147) : il lit la bulle, il ne dort plus. */
+.kobi.reading .zz{display:none}

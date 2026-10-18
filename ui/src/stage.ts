@@ -74,6 +74,8 @@ export class Stage {
   private interrupted = false;
   /** Appelé à chaque état affiché (l'historique se referme, par exemple). */
   onStateChange: ((state: MascotState) => void) | null = null;
+  /** État ignoré quelque temps (voir `ignore`). */
+  private ignored: { state: MascotState; until: number } | null = null;
 
   constructor(parent: HTMLElement, options: StageOptions = {}) {
     this.forcedMotion = options.reducedMotion;
@@ -154,6 +156,7 @@ export class Stage {
 
   /** Change d'état. Les données remplacent les précédentes. */
   setState(state: MascotState, data: MascotData = {}): void {
+    if (this.ignored && this.ignored.state === state && performance.now() < this.ignored.until) return;
     if (state !== 'answer') this.interrupted = false;
     this.requested = state;
     this.requestedData = { ...data };
@@ -186,6 +189,15 @@ export class Stage {
       this.spoken = state;
       this.live.textContent = STATE_SPOKEN[state];
     }
+  }
+
+  /**
+   * Ignore les demandes de `state` pendant `ms` : un texte tapé est avalé par
+   * Kobi, qui réfléchit déjà ; l'Écoute que la coque annonce ensuite ne
+   * ressortirait pas la question (KOB-147).
+   */
+  ignore(state: MascotState, ms: number): void {
+    this.ignored = { state, until: performance.now() + ms };
   }
 
   get isCompact(): boolean {

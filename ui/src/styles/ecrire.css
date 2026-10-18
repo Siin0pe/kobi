@@ -1,0 +1,173 @@
+/* Écrire à Kobi (KOB-147) : bulle de dialogue qui sort de Kobi, de la même
+   famille que ses bulles de réponse (encre, coin pointu vers lui, pointe).
+   Bas gauche de la scène, sous les bulles de réponse ; la pointe monte vers
+   la bouche de Kobi, d'où la bulle grandit et où elle rentre (ecrire.ts).
+
+   On y tape : la bulle elle-même ne bouge pas une fois ouverte, ce sont sa
+   pointe et l'invite ↵ qui vivent. */
+
+.ecrire {
+  --ligne: 27px;
+  position: absolute;
+  left: 40px;
+  bottom: 40px;
+  z-index: 6;
+  box-sizing: border-box;
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  width: 360px;
+  padding: 14px 16px 14px 20px;
+  border-radius: 24px 6px 24px 24px;
+  background: var(--ink);
+  color: var(--paper);
+  /* Liseré vert, comme la pilule de Kobi : lisible sur un bureau sombre. */
+  box-shadow:
+    0 0 0 3px var(--accent),
+    8px 8px 0 rgba(11, 11, 11, 0.18);
+  /* Pointe de la pointe : la bulle grandit et se dégonfle à partir d'elle. */
+  transform-origin: calc(100% + 26px) -22px;
+}
+.ecrire[hidden] {
+  display: none;
+}
+/* La pointe, vers la bouche de Kobi (en haut à droite). */
+.ecrire::after {
+  content: '';
+  position: absolute;
+  right: -26px;
+  top: -22px;
+  width: 50px;
+  height: 44px;
+  background: var(--ink);
+  clip-path: polygon(0% 100%, 100% 0%, 45% 100%);
+  transform-origin: 30% 100%;
+  animation: ecrire-pointe 2.6s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes ecrire-pointe {
+  0%,
+  100% {
+    rotate: 0deg;
+  }
+  50% {
+    rotate: -5deg;
+  }
+}
+
+/* Champ et miroir superposés au pixel près : même police à chasse fixe, même
+   corps, mêmes marges, même coupure des lignes. */
+.ecrire-zone {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+.ecrire-miroir,
+.ecrire-champ {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font: 600 19px/var(--ligne) var(--font);
+  font-variation-settings: 'MONO' 1, 'CASL' 1, 'wght' 600;
+  letter-spacing: 0;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: normal;
+  tab-size: 4;
+}
+.ecrire-miroir {
+  min-height: var(--ligne);
+  max-height: calc(var(--ligne) * 4);
+  overflow: hidden;
+  color: var(--paper);
+}
+.ecrire-champ {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  resize: none;
+  overflow-y: auto;
+  scrollbar-width: none;
+  outline: 0;
+  background: transparent;
+  /* Le texte tapé est dessiné par le miroir ; le champ garde le curseur et la sélection. */
+  color: transparent;
+  caret-color: var(--accent);
+  /* Le texte tapé se sélectionne et se copie, contrairement au reste de Kobi. */
+  user-select: text;
+  -webkit-user-select: text;
+}
+.ecrire-champ::-webkit-scrollbar {
+  display: none;
+}
+.ecrire-champ::placeholder {
+  color: color-mix(in srgb, var(--paper) 55%, transparent);
+  font-variation-settings: 'MONO' 1, 'CASL' 1, 'wght' 420;
+}
+.ecrire-champ::selection {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+/* Lettre qui arrive : symboles de Kobi en vert, puis elle se pose. */
+.ecrire-c.nouv {
+  display: inline-block;
+  color: var(--accent);
+}
+.ecrire-entree {
+  display: inline-block;
+  flex: none;
+  font-size: 22px;
+  line-height: var(--ligne);
+  color: var(--accent);
+  font-variation-settings: 'MONO' 1, 'wght' 700;
+  opacity: 0.3;
+  transition: opacity 0.2s ease;
+  animation: ecrire-entree 1.2s ease-in-out infinite;
+}
+.ecrire.has-text .ecrire-entree {
+  opacity: 1;
+}
+@keyframes ecrire-entree {
+  0%,
+  100% {
+    translate: 0 0;
+    scale: 1;
+  }
+  50% {
+    translate: 0 2px;
+    scale: 0.9;
+  }
+}
+
+/* Bulle ouverte : les bulles de Kobi se posent au-dessus d'elle (comme une
+   conversation) au lieu de descendre dessous quand la réponse est longue. */
+.ecrire-open .bubbles .card-question,
+.ecrire-open .bubbles .card-answer,
+.ecrire-open .bubbles .card-error,
+.ecrire-open .bubbles .card-action {
+  top: auto;
+  bottom: 136px;
+}
+
+/* Lettres aspirées vers la bouche de Kobi à l'envoi. */
+.ecrire-vol {
+  position: absolute;
+  inset: 0;
+  z-index: 7;
+  pointer-events: none;
+}
+.ecrire-vole {
+  position: absolute;
+  white-space: pre;
+  color: var(--accent);
+  will-change: transform, opacity;
+}
+
+/* Réduire les animations : apparition et disparition en fondu court (ecrire.ts), rien ne bouge. */
+.reduced-motion .ecrire,
+.reduced-motion .ecrire *,
+.reduced-motion .ecrire::after {
+  animation: none !important;
+  transition: none !important;
+}
