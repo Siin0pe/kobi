@@ -239,3 +239,41 @@
     transition: none !important;
   }
 }
+
+/* Interrupteur (démarrage avec le système…). */
+.ligne-interrupteur {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  font-variation-settings: 'wght' 650;
+}
+.interrupteur {
+  position: relative;
+  width: 58px;
+  height: 32px;
+  border: 2px solid var(--ink);
+  border-radius: 999px;
+  background: var(--papier);
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+.interrupteur[aria-checked='true'] {
+  background: var(--acide);
+}
+.interrupteur:focus-visible {
+  outline: 3px solid var(--ink);
+  outline-offset: 3px;
+}
+.interrupteur-rond {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--ink);
+  transition: transform 0.4s var(--ressort);
+}
+.interrupteur[aria-checked='true'] .interrupteur-rond {
+  transform: translateX(26px);
+}

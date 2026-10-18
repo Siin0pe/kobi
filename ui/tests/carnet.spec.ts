@@ -67,6 +67,7 @@ function fakeTauri(): void {
     publication_reunions: { etat: 'lecture-seule', mcp: 'linear', destination: 'Projet Kobi' },
     publication_conversations: { etat: 'aucune' },
   };
+  let demarrage = false;
   const norm = (t: string) => t.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
   const w = window as unknown as Record<string, unknown>;
   const appels: Array<[string, unknown]> = [];
@@ -117,6 +118,11 @@ function fakeTauri(): void {
             return reglages;
           case 'choisir_dossier':
             return '/home/test/Ailleurs';
+          case 'demarrage_systeme':
+            return demarrage;
+          case 'regler_demarrage_systeme':
+            demarrage = Boolean(args.actif);
+            return demarrage;
           case 'regler_stockage': {
             const c = args.changement as Record<string, unknown>;
             if (c.dossier !== undefined) reglages = { ...reglages, dossier: c.dossier || '/home/test/Kobi', par_defaut: !c.dossier };
@@ -312,6 +318,21 @@ test('la fenêtre Réglages monte les mêmes panneaux', async ({ page }) => {
   await expect(page.locator('.menu-entree[aria-current="true"]')).toContainText('Stockage');
   await expect(page.locator('.titre')).toHaveText('Stockage');
   await expect(page.locator('.chemin')).toHaveText('/home/test/Kobi');
+  await expectNoErrors(errors);
+});
+
+test('panneau Démarrage des Réglages : interrupteur branché sur le démarrage avec le système', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(String(e)));
+  await page.addInitScript(fakeTauri);
+  await page.goto('/reglages.html?panneau=demarrage');
+  await expect(page.locator('.titre')).toHaveText('Démarrage');
+  const interrupteur = page.getByRole('switch', { name: 'Lancer Kobi à l’ouverture de session' });
+  await expect(interrupteur).toHaveAttribute('aria-checked', 'false');
+  await interrupteur.click();
+  await expect(page.getByRole('switch')).toHaveAttribute('aria-checked', 'true');
+  await expect(page.locator('.notif')).toHaveText('Kobi démarrera avec ta session.');
+  expect(await appels(page)).toContainEqual(['regler_demarrage_systeme', { actif: true }]);
   await expectNoErrors(errors);
 });
 

@@ -354,6 +354,9 @@ async function chercher(): Promise<void> {
   try {
     const resultats = await carnet.chercher(requete);
     if (n !== numeroRecherche) return;
+    // Rafraîchissement sans changement (retour sur la fenêtre) : la liste
+    // reste en place, un clic en cours ne tombe pas dans le vide.
+    if (etat.resultats !== null && JSON.stringify(resultats) === JSON.stringify(etat.resultats)) return;
     etat.resultats = resultats;
     app.dataset.recherche = 'true';
     dessinerRappels();
