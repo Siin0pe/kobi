@@ -57,3 +57,22 @@ test('la carte d’action remonte la décision de l’utilisateur', async ({ pag
   expect(decisions).toEqual([{ id: 'demo-ticket', decision: 'confirm' }]);
   await expectNoErrors(errors);
 });
+
+test('les cartes à boutons vivent par leurs enfants décoratifs, les boutons ne bougent jamais', async ({ page }) => {
+  const errors = await openUi(page, 'state=suggest');
+  const card = page.locator('[data-card=action]');
+  await expect(card).toBeVisible();
+  await page.waitForTimeout(500);
+  // La carte a fini d'arriver : plus aucune animation sur elle ni sur ses boutons.
+  expect(await card.evaluate((n) => n.getAnimations().filter((a) => a.playState === 'running').length)).toBe(0);
+  const live = await card.evaluate((n) => n.getAnimations({ subtree: true }).filter((a) => a.playState === 'running').length);
+  expect(live).toBeGreaterThanOrEqual(3);
+  const button = card.getByRole('button', { name: 'Créer' });
+  const boxes = [];
+  for (let i = 0; i < 6; i++) {
+    boxes.push(await button.boundingBox());
+    await page.waitForTimeout(250);
+  }
+  for (const b of boxes) expect(b).toEqual(boxes[0]);
+  await expectNoErrors(errors);
+});

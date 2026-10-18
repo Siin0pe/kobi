@@ -329,20 +329,80 @@
   animation-duration: 0.35s, 5.4s;
 }
 .bubbles .card-action {
-  animation-duration: 0.35s, 3.8s;
+  /* Elle porte des boutons : la carte ne bouge plus après son arrivée (un
+     bouton qui flotte se clique mal), ce sont ses enfants décoratifs qui vivent. */
+  animation: deal 0.35s cubic-bezier(0.3, 1.4, 0.5, 1) both;
+}
+/* Cartes à boutons (action, consentement) : le surtitre se balance, le titre
+   oscille à peine, un halo respire autour du bouton principal. Les boutons
+   eux-mêmes ne bougent jamais. */
+@keyframes kicker-bob {
+  0%,
+  100% {
+    translate: 0 0;
+    rotate: 0deg;
+  }
+  50% {
+    translate: 2px -1px;
+    rotate: -1.5deg;
+  }
+}
+@keyframes title-sway {
+  0%,
+  100% {
+    translate: 0 0;
+  }
+  50% {
+    translate: 0 -2px;
+  }
+}
+@keyframes btn-halo {
+  0% {
+    opacity: 0.55;
+    scale: 1;
+  }
+  70%,
+  100% {
+    opacity: 0;
+    scale: 1.18 1.4;
+  }
+}
+.card-action .kicker,
+.card-consent .kicker {
+  display: inline-block;
+  transform-origin: 0 100%;
+  animation: kicker-bob 2.8s ease-in-out infinite;
+}
+.card-action .title,
+.card-consent .title {
+  animation: title-sway 4.2s ease-in-out infinite;
+}
+.card-action .btn-primary,
+.card-consent .btn-primary {
+  position: relative;
+}
+.card-action .btn-primary::after,
+.card-consent .btn-primary::after {
+  content: '';
+  position: absolute;
+  inset: -2.5px;
+  border-radius: inherit;
+  border: 2.5px solid var(--ink);
+  pointer-events: none;
+  animation: btn-halo 2.4s ease-out infinite;
 }
 
-/* Réduire les animations : les cartes apparaissent sans mouvement, le curseur reste fixe. */
-.reduced-motion .bubbles .card,
-.bubbles.reduced-motion .card,
-.reduced-motion .bubbles .w,
-.reduced-motion .bubbles .hl::after,
-.reduced-motion .bubbles .source {
-  animation: none;
-}
-.reduced-motion .bubbles .caret,
-.bubbles.reduced-motion .caret {
-  animation: none;
+/* Réduire les animations : les cartes apparaissent sans mouvement, le curseur
+   reste fixe. `!important` : les règles de vie plus précises (puce trouvée,
+   enfants des cartes à boutons) ne doivent jamais reprendre le dessus. */
+.bubbles.reduced-motion,
+.bubbles.reduced-motion *,
+.bubbles.reduced-motion *::before,
+.bubbles.reduced-motion *::after,
+.reduced-motion .bubbles *,
+.reduced-motion .bubbles *::before,
+.reduced-motion .bubbles *::after {
+  animation: none !important;
 }
 
 /* Carte remplacée : elle s'efface pendant que la suivante arrive. */

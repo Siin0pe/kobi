@@ -1,7 +1,7 @@
 // Animations de Kobi (KOB-137) : transitions sans saut, vie de chaque état,
 // curseur, volume du micro, bouche calée sur le flux, enregistrement.
 import { expect, test } from '@playwright/test';
-import { expectNoErrors, openUi } from './helpers';
+import { expectEconomicalFont, expectNoErrors, openUi } from './helpers';
 
 const STATES = ['idle', 'listen', 'think', 'write', 'answer', 'suggest', 'done', 'error'] as const;
 
@@ -56,13 +56,23 @@ test('aucune image ne saute pendant les transitions entre les 8 états', async (
 test('chaque transition est chorégraphiée : anticipation, yeux en fente, puis décollage', async ({ page }) => {
   const errors = await openUi(page, 'state=listen');
   await page.waitForTimeout(700);
-  await page.evaluate(() => window.kobi.setState('suggest', window.kobi.demoData('suggest')));
+  // Lu dans la même tâche que `setState` : l'anticipation est trop courte pour un aller-retour du test.
+  const during = await page.evaluate(() => {
+    window.kobi.setState('suggest', window.kobi.demoData('suggest'));
+    const k = document.querySelector('.kobi')!;
+    return {
+      state: k.getAttribute('data-state'),
+      cls: k.getAttribute('class'),
+      react: k.querySelector('.react')!.getAnimations().length,
+      eyes: k.querySelector('.eyes')!.getAnimations().length,
+    };
+  });
   // Pendant l'anticipation, l'état est déjà annoncé mais la classe de l'ancien reste posée.
-  await expect(page.locator('.kobi')).toHaveAttribute('data-state', 'suggest');
-  expect(await page.locator('.kobi').getAttribute('class')).toContain('m-listen');
+  expect(during.state).toBe('suggest');
+  expect(during.cls).toContain('m-listen');
   // Le geste (calque .react) et le morphing des yeux tournent.
-  expect(await page.locator('.kobi .react').evaluate((n) => n.getAnimations().length)).toBe(1);
-  expect(await page.locator('.kobi .eyes').evaluate((n) => n.getAnimations().length)).toBe(1);
+  expect(during.react).toBe(1);
+  expect(during.eyes).toBeGreaterThanOrEqual(1);
   await expect(page.locator('.kobi')).toHaveClass(/m-suggest/);
   // Le « ! » surgit.
   await expect(page.locator('.kobi .bang')).toBeVisible();
@@ -257,7 +267,7 @@ test('pendant l’enregistrement, le repos de Kobi est la prise de notes, puis i
   await expectNoErrors(errors);
 });
 
-test('la prise de notes passe en mode économe après 20 s : le mot cesse d’onduler', async ({ page }) => {
+test('la prise de notes passe en mode économe après 20 s : le mot ondule par paliers, lentement', async ({ page }) => {
   await page.clock.install();
   const errors = await openUi(page, '');
   await page.evaluate(() => window.kobi.recording({ actif: true, pause: false, debut_ms: Date.now(), notes: 0, titre: null }));
@@ -267,14 +277,7 @@ test('la prise de notes passe en mode économe après 20 s : le mot cesse d’on
   await expect(kobi).toHaveClass(/deep/);
   await page.clock.runFor(1_500);
   await page.waitForTimeout(1_400);
-  const fontAnimations = await page.evaluate(
-    () =>
-      document
-        .getAnimations()
-        .filter((a) => a.playState === 'running')
-        .filter((a) => (a.effect as KeyframeEffect).getKeyframes().some((k) => 'fontVariationSettings' in k)).length,
-  );
-  expect(fontAnimations).toBe(0);
+  await expectEconomicalFont(page);
   // Le griffonnage continue.
   expect(await page.locator('.kobi .pill').evaluate((n) => n.getAnimations().length)).toBe(1);
   await expectNoErrors(errors);

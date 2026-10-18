@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { expectNoErrors, openUi } from './helpers';
+import { expectEconomicalFont, expectNoErrors, openUi } from './helpers';
 
 const STATES = ['idle', 'listen', 'think', 'write', 'answer', 'suggest', 'done', 'error'] as const;
 
@@ -78,7 +78,7 @@ for (const state of ['idle', 'think', 'answer', 'listen'] as const) {
   });
 }
 
-test('après 20 s de veille, Kobi passe en sommeil profond sans redessiner son texte', async ({ page }) => {
+test('après 20 s de veille, Kobi passe en sommeil profond : le mot ondule par paliers, lentement', async ({ page }) => {
   await page.clock.install();
   const errors = await openUi(page, '');
   const kobi = page.locator('.kobi');
@@ -86,16 +86,10 @@ test('après 20 s de veille, Kobi passe en sommeil profond sans redessiner son t
   await expect(kobi).not.toHaveClass(/deep/);
   await page.clock.runFor(2_000);
   await expect(kobi).toHaveClass(/deep/);
-  // Le mot se pose en douceur (animation finie), puis plus rien ne touche à la police.
+  // Le mot vit toujours (exigence « toujours animé »), mais par paliers et lentement.
   await page.clock.runFor(1_500);
   await page.waitForTimeout(1_400);
-  const fontAnimations = await page.evaluate(() =>
-    document
-      .getAnimations()
-      .filter((a) => a.playState === 'running')
-      .filter((a) => (a.effect as KeyframeEffect).getKeyframes().some((k) => 'fontVariationSettings' in k)).length,
-  );
-  expect(fontAnimations).toBe(0);
+  await expectEconomicalFont(page);
   // La respiration continue.
   expect(await page.locator('.kobi .pill').evaluate((n) => n.getAnimations().length)).toBe(1);
   // Le moindre changement d'état réveille Kobi.
