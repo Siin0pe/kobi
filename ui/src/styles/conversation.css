@@ -318,21 +318,6 @@
   }
 }
 
-/* Repos économe (econome.ts) : paliers de 250 ms sur la grille commune. */
-.econome .say-chevron {
-  animation-duration: 2s;
-  animation-timing-function: steps(8);
-}
-.econome .say-enter {
-  animation-duration: 1.25s;
-  animation-timing-function: steps(5);
-}
-.econome .notif-icon,
-.econome .notif-icon i {
-  animation-timing-function: steps(4);
-  animation-duration: 1s;
-}
-
 /* Réduire les animations : tout est posé, rien ne bouge. */
 .reduced-motion .say *,
 .reduced-motion .card-history,

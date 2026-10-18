@@ -267,7 +267,7 @@ test('pendant l’enregistrement, le repos de Kobi est la prise de notes, puis i
   await expectNoErrors(errors);
 });
 
-test('la prise de notes passe en mode économe après 20 s : le mot ondule par paliers, lentement', async ({ page }) => {
+test('la prise de notes passe en mode économe après 20 s : le mot ondule lentement, au pas du métronome', async ({ page }) => {
   await page.clock.install();
   const errors = await openUi(page, '');
   await page.evaluate(() => window.kobi.recording({ actif: true, pause: false, debut_ms: Date.now(), notes: 0, titre: null }));

@@ -19,27 +19,21 @@ export async function expectNoErrors(errors: string[]): Promise<void> {
 
 /**
  * Repos économe : la police ondule encore (le mot n'est jamais figé), mais
- * chaque animation de police est lente et avance par paliers, ce qui borne
- * le nombre de redessins du texte.
+ * lentement, et ses boucles sont tenues par le métronome de la scène
+ * (econome.ts) au lieu de produire leurs propres images.
  */
 export async function expectEconomicalFont(page: Page): Promise<void> {
   const fonts = await page.evaluate(() =>
     document
       .getAnimations()
-      .filter((a) => a.playState === 'running')
       .filter((a) => (a.effect as KeyframeEffect).getKeyframes().some((k) => 'fontVariationSettings' in k))
-      .map((a) => {
-        const effect = a.effect as KeyframeEffect;
-        return {
-          duration: Number(effect.getTiming().duration),
-          stepped: effect.getKeyframes().every((k, i, all) => i === all.length - 1 || String(k.easing).startsWith('steps')),
-        };
-      }),
+      .filter((a) => a.playState !== 'finished' && a.playState !== 'idle')
+      .map((a) => ({ state: a.playState, duration: Number((a.effect as KeyframeEffect).getTiming().duration) })),
   );
   expect(fonts.length).toBeGreaterThan(0);
   for (const f of fonts) {
     expect(f.duration).toBeGreaterThanOrEqual(4000);
-    expect(f.stepped).toBe(true);
+    expect(f.state).toBe('paused');
   }
 }
 
