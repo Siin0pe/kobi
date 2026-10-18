@@ -7,6 +7,7 @@
 mod diag;
 mod ecoute;
 mod interpellation;
+mod lecture;
 mod mot_cle;
 mod placement;
 mod porte;
@@ -97,7 +98,7 @@ fn main() {
             if let Some(problem) = &config.problem {
                 tracing::warn!(%problem, "config.toml");
             }
-            interpellation::installer(app.handle());
+            interpellation::installer(app.handle(), config.config.codebases.clone());
             raccourci::installer(app.handle(), &config.config.hotkey)?;
             let window = app
                 .get_webview_window("main")

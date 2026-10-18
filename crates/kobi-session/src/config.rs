@@ -228,6 +228,10 @@ pub struct Config {
     pub wake_word: String,
     /// Raccourci global, au format des accélérateurs Tauri.
     pub hotkey: String,
+    /// Dossiers de code que Kobi peut lire (KOB-138), passés à Claude Code en
+    /// `--add-dir`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub codebases: Vec<PathBuf>,
     pub audio: AudioConfig,
     pub stt: SttConfig,
     pub notes: NotesConfig,
@@ -244,6 +248,7 @@ impl Default for Config {
             brain: Brain::default(),
             wake_word: "Kobi".into(),
             hotkey: "Ctrl+Shift+Space".into(),
+            codebases: Vec::new(),
             audio: AudioConfig::default(),
             stt: SttConfig::default(),
             notes: NotesConfig::default(),

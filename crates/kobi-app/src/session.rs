@@ -149,7 +149,10 @@ pub fn installer<R: Runtime>(builder: Builder<R>) -> Builder<R> {
             demarrer,
             pause,
             reprendre,
-            terminer
+            terminer,
+            // Dossiers de code lisibles (KOB-138), pour la fenêtre des réglages.
+            crate::lecture::get_codebases,
+            crate::lecture::set_codebases
         ])
 }
 

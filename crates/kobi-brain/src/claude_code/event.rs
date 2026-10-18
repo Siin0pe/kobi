@@ -34,6 +34,9 @@ pub struct SystemEvent {
     /// Serveurs MCP et leur état (`connected`, `failed`, `pending`…), dans `init`.
     #[serde(default)]
     pub mcp_servers: Vec<McpServerStatus>,
+    /// Outils disponibles dans la session, dans `init`.
+    #[serde(default)]
+    pub tools: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -173,6 +176,7 @@ mod tests {
                     name: "linear".into(),
                     status: "connected".into(),
                 }],
+                tools: Vec::new(),
             })
         );
     }
