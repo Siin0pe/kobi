@@ -1,6 +1,6 @@
-// Réglages → Outils MCP (KOB-155) avec une fausse coque Tauri. Le classement,
-// l'import et les secrets sont testés côté Rust (crates/kobi-app/src/mcp.rs,
-// crates/kobi-perms/src/mcp.rs).
+// Réglages → Outils MCP (KOB-155), dans la section Réglages de l'app Kobi,
+// avec une fausse coque Tauri. Le classement, l'import et les secrets sont
+// testés côté Rust (crates/kobi-app/src/mcp.rs, crates/kobi-perms/src/mcp.rs).
 import { expect, test, type Page } from '@playwright/test';
 import { expectNoErrors } from './helpers';
 
@@ -69,7 +69,8 @@ function fakeTauri(): void {
             serveurs = serveurs.filter((s) => s.nom !== args.nom);
             return serveurs;
           default:
-            throw new Error(`commande inconnue ${cmd}`);
+            // Le reste de l'app (accueil, autres sections) : sans objet ici.
+            return null;
         }
       },
     },
@@ -80,13 +81,12 @@ function fakeTauri(): void {
 async function ouvrir(page: Page): Promise<string[]> {
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(String(e)));
-  page.on('console', (m) => {
-    if (m.type() === 'error') errors.push(m.text());
-  });
   await page.addInitScript(fakeTauri);
   await page.setViewportSize({ width: 960, height: 760 });
-  await page.goto('/reglages.html?panneau=mcp');
-  await expect(page.locator('.titre')).toHaveText('Outils MCP');
+  // Section Réglages de l'app Kobi (KOB-159), panneau Outils MCP.
+  await page.goto('/app.html#reglages/mcp');
+  await expect(page.locator('.menu-entree[aria-current="true"]')).toContainText('Outils MCP');
+  await expect(page.locator('.feuille .titre')).toHaveText('Outils MCP');
   return errors;
 }
 

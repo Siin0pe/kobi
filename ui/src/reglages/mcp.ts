@@ -3,7 +3,7 @@
 // réglage d'écriture par serveur (« toujours demander » / « faire sans
 // demander »), bouton « Tester » qui liste les outils et leur nature.
 //
-// Deux panneaux : `MCP` pour les Réglages (et la future app Kobi, KOB-159)
+// Deux panneaux : `MCP` pour la section Réglages de l'app Kobi (KOB-159)
 // et `OUTILS`, l'étape facultative « Connecter tes outils » du premier
 // lancement, qui ne montre que l'import.
 
