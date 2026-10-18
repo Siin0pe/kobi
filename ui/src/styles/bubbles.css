@@ -24,7 +24,10 @@
   top: 170px;
   box-sizing: border-box;
   transform: rotate(var(--r));
-  animation: deal 0.35s cubic-bezier(0.3, 1.4, 0.5, 1) both;
+  /* Arrivée, puis la carte flotte doucement tant qu'elle est là. */
+  animation:
+    deal 0.35s cubic-bezier(0.3, 1.4, 0.5, 1) both,
+    card-float 4.6s ease-in-out 0.35s infinite;
 }
 .bubbles .caret {
   display: inline-block;
@@ -32,7 +35,8 @@
   height: 1em;
   vertical-align: -3px;
   background: currentColor;
-  animation: caret 0.8s steps(1) infinite;
+  transform-origin: 50% 100%;
+  animation: caret-alive 1s ease-in-out infinite;
 }
 .bubbles .kicker {
   font-size: 12px;
@@ -205,9 +209,135 @@
   font-variation-settings: 'CASL' 1, 'wght' 700;
 }
 
+/* Vie des bulles : rien n'est jamais tout à fait immobile, mais tout passe
+   par translate / rotate / scale / opacity (compositeur, pas de reflow). */
+@keyframes card-float {
+  0%,
+  100% {
+    translate: 0 0;
+    rotate: 0deg;
+  }
+  50% {
+    translate: 0 -3px;
+    rotate: 0.5deg;
+  }
+}
+@keyframes caret-alive {
+  0%,
+  40%,
+  100% {
+    opacity: 1;
+    scale: 1 1;
+  }
+  55% {
+    opacity: 0.15;
+    scale: 0.6 0.85;
+  }
+}
+/* Chaque mot arrive avec un petit mouvement. */
+@keyframes word-in {
+  from {
+    opacity: 0;
+    translate: 0 0.45em;
+    scale: 0.85;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+    scale: 1;
+  }
+}
+.bubbles .w {
+  display: inline-block;
+}
+.bubbles .w-in {
+  animation: word-in 0.32s cubic-bezier(0.2, 0.8, 0.3, 1.2) both;
+}
+/* Chiffres, chemins, noms de fichiers : mis en valeur par un trait qui va et vient. */
+@keyframes hl-line {
+  0%,
+  100% {
+    transform: scaleX(0.2);
+    opacity: 0.45;
+  }
+  50% {
+    transform: scaleX(1);
+    opacity: 1;
+  }
+}
+.bubbles .hl {
+  position: relative;
+  font-variation-settings: 'CASL' 1, 'wght' 800;
+}
+.bubbles .card-question .hl,
+.bubbles .card-answer .hl {
+  color: var(--paper);
+}
+.bubbles .hl::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -0.06em;
+  height: 0.12em;
+  border-radius: 1px;
+  background: var(--accent);
+  transform-origin: 0 50%;
+  animation: hl-line 2.8s ease-in-out infinite;
+}
+.bubbles .card-notes .hl::after {
+  background: var(--ink);
+}
+/* Puces des sources : chacune flotte à son rythme ; trouvée, elle bondit. */
+@keyframes chip-float {
+  0%,
+  100% {
+    translate: 0 0;
+  }
+  50% {
+    translate: 3px -2px;
+  }
+}
+@keyframes found-pop {
+  0% {
+    scale: 1;
+  }
+  40% {
+    scale: 1.15;
+  }
+  100% {
+    scale: 1;
+  }
+}
+.bubbles .card-sources .source {
+  animation: chip-float 3.2s ease-in-out infinite;
+}
+.bubbles .card-sources .source:nth-child(2) {
+  animation-delay: -1.1s;
+  animation-duration: 3.6s;
+}
+.bubbles .card-sources .source:nth-child(3) {
+  animation-delay: -2.2s;
+  animation-duration: 2.9s;
+}
+.bubbles .card-sources .source.found {
+  animation-name: chip-float, found-pop;
+  animation-duration: 3.2s, 0.45s;
+  animation-iteration-count: infinite, 1;
+}
+.bubbles .card-notes {
+  animation-duration: 0.35s, 5.4s;
+}
+.bubbles .card-action {
+  animation-duration: 0.35s, 3.8s;
+}
+
 /* Réduire les animations : les cartes apparaissent sans mouvement, le curseur reste fixe. */
 .reduced-motion .bubbles .card,
-.bubbles.reduced-motion .card {
+.bubbles.reduced-motion .card,
+.reduced-motion .bubbles .w,
+.reduced-motion .bubbles .hl::after,
+.reduced-motion .bubbles .source {
   animation: none;
 }
 .reduced-motion .bubbles .caret,

@@ -29,15 +29,15 @@ function Get-Tree([int]$Root) {
 }
 
 function Get-CpuSeconds([int[]]$Ids) {
+  # Temps noyau + utilisateur lus par WMI : lisibles aussi pour les processus
+  # de rendu de WebView2, qui tournent en bac à sable.
   $total = 0.0
   $byName = @{}
-  foreach ($id in $Ids) {
-    $p = Get-Process -Id $id -ErrorAction SilentlyContinue
-    if ($p) {
-      $s = $p.TotalProcessorTime.TotalSeconds
-      $total += $s
-      $byName[$p.ProcessName] = ($byName[$p.ProcessName] + $s)
-    }
+  $filter = ($Ids | ForEach-Object { "ProcessId=$_" }) -join ' OR '
+  foreach ($p in Get-CimInstance Win32_Process -Filter $filter) {
+    $s = ($p.KernelModeTime + $p.UserModeTime) / 1e7
+    $total += $s
+    $byName[$p.Name] = ($byName[$p.Name] + $s)
   }
   return @{ Total = $total; ByName = $byName }
 }

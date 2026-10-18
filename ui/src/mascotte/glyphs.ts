@@ -4,7 +4,10 @@
 // (`#%&@*?!/<>{}=+$`) : les yeux pendant 300 ms, puis le mot se pose lettre
 // par lettre. Rythme du prototype : un pas toutes les 60 ms, la lettre i se
 // pose au pas 1,6 × i + 3. La boucle ne tourne que pendant le brouillage.
-// Les symboles tressautent, chaque lettre qui se pose rebondit.
+// Les symboles tressautent, chaque lettre qui se pose rebondit. Tout passe par
+// la boucle d'animation partagée (ticker.ts).
+
+import { onFrame } from '../ticker';
 
 export const NOISE = '#%&@*?!/<>{}=+$';
 const STEP_MS = 60;
@@ -42,15 +45,14 @@ export class Scrambler {
   private eye = '';
   private letters: string[] = [];
   private start = 0;
-  private frame = 0;
+  private unsub: (() => void) | null = null;
   private lastStep = -1;
   private instant = false;
   /** Clignement en cours : les yeux affichent `–`. */
   private blinking = false;
   /** Expression passagère (clin d'œil, regard d'un œil…), sinon l'œil de l'état. */
   private expression: Eyes | null = null;
-  private glitchTimer = 0;
-  private glitched: { span: HTMLElement; final: string } | null = null;
+  private glitched: { span: HTMLElement; final: string; unsub: () => void } | null = null;
 
   constructor(
     private readonly eyes: HTMLElement[],
@@ -93,7 +95,7 @@ export class Scrambler {
   }
 
   get scrambling(): boolean {
-    return this.frame !== 0;
+    return this.unsub !== null;
   }
 
   /** Ferme ou rouvre les yeux (sans effet pendant le brouillage). */
@@ -113,49 +115,53 @@ export class Scrambler {
     const span = this.word.children[index] as HTMLElement | undefined;
     const final = this.letters[index];
     if (!span || final === undefined || final === ' ' || this.scrambling || this.instant || this.glitched) return;
-    this.glitched = { span, final };
-    let step = 0;
-    const tick = (): void => {
-      if (step < 4) {
-        span.textContent = noise(index * 5 + step * 3 + 1);
-        step += 1;
-        this.glitchTimer = window.setTimeout(tick, STEP_MS);
-      } else {
-        this.endGlitch();
-        span.animate(LETTER_POP, { duration: 360 });
+    const t0 = performance.now();
+    let step = -1;
+    const unsub = onFrame((now) => {
+      const k = Math.floor((now - t0) / STEP_MS);
+      if (k === step) return true;
+      step = k;
+      if (k < 4) {
+        span.textContent = noise(index * 5 + k * 3 + 1);
+        return true;
       }
-    };
-    tick();
+      this.endGlitch();
+      span.animate(LETTER_POP, { duration: 360 });
+      return false;
+    });
+    this.glitched = { span, final, unsub };
   }
 
   /** Pose tout de suite le mot et les yeux (pause en plein brouillage). */
   finish(): void {
-    const running = this.frame !== 0;
+    const running = this.unsub !== null;
     this.stop();
     if (running) this.paint(Number.POSITIVE_INFINITY);
   }
 
   /** Arrête la boucle de brouillage et repose une lettre brouillée seule. */
   stop(): void {
-    cancelAnimationFrame(this.frame);
-    this.frame = 0;
+    this.unsub?.();
+    this.unsub = null;
     this.endGlitch();
   }
 
   private endGlitch(): void {
-    window.clearTimeout(this.glitchTimer);
-    this.glitchTimer = 0;
-    if (this.glitched) this.glitched.span.textContent = this.glitched.final;
+    const g = this.glitched;
     this.glitched = null;
+    if (!g) return;
+    g.unsub();
+    g.span.textContent = g.final;
   }
 
   private loop(): void {
-    this.frame = requestAnimationFrame((now) => {
-      this.frame = 0;
+    this.unsub = onFrame((now) => {
       const k = Math.floor((now - this.start) / STEP_MS);
       if (k !== this.lastStep) this.paint(k);
-      if (k < Math.max(EYE_STEPS, settleStep(this.letters.length))) this.loop();
-      else this.paintEyes();
+      if (k < Math.max(EYE_STEPS, settleStep(this.letters.length))) return true;
+      this.unsub = null;
+      this.paintEyes();
+      return false;
     });
   }
 

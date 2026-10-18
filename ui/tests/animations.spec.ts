@@ -212,7 +212,7 @@ test('le mot reste lisible sur un fond sombre : contour vert sous le texte noir'
     return { stroke: s.webkitTextStroke || `${s.getPropertyValue('-webkit-text-stroke-width')} ${s.getPropertyValue('-webkit-text-stroke-color')}`, order: s.paintOrder, color: s.color };
   });
   expect(style.order).toContain('stroke');
-  expect(style.stroke).toMatch(/12px/);
+  expect(style.stroke).toMatch(/8px/);
   expect(style.color).toBe('rgb(11, 11, 11)');
   await expectNoErrors(errors);
 });

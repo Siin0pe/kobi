@@ -3,7 +3,7 @@
 // sombre et « réduire les animations ». Une vidéo MP4 (H.264) par séquence.
 //
 //   npm run build
-//   node scripts/videos.mjs --out videos [--only etat-idle,reunion] [--webm]
+//   node scripts/videos.mjs --out videos [--only etat-idle,reunion] [--webm] [--dist dist]
 //
 // Demande ffmpeg dans le PATH (conversion WebM → MP4). Lance `vite preview`.
 
@@ -25,6 +25,7 @@ function arg(name, fallback) {
 const out = resolve(arg('out', 'videos'));
 const only = arg('only', '')?.split(',').filter(Boolean) ?? [];
 const keepWebm = process.argv.includes('--webm');
+const dist = arg('dist', 'dist');
 const base = `http://127.0.0.1:${PORT}/`;
 const wait = (page, ms) => page.waitForTimeout(ms);
 const play = (page, s) => page.evaluate((s) => window.kobi.play(s), s);
@@ -205,7 +206,7 @@ async function record(browser, name, query, scenario) {
 
 mkdirSync(out, { recursive: true });
 if (await fetch(base).then(() => true, () => false)) throw new Error(`port ${PORT} déjà occupé : arrêter l'ancien serveur`);
-const server = spawn('node', ['node_modules/vite/bin/vite.js', 'preview', '--port', String(PORT), '--strictPort', '--host', '127.0.0.1'], { stdio: 'ignore', detached: true });
+const server = spawn('node', ['node_modules/vite/bin/vite.js', 'preview', '--outDir', dist, '--port', String(PORT), '--strictPort', '--host', '127.0.0.1'], { stdio: 'ignore', detached: true });
 try {
   for (let i = 0; i < 150 && !(await fetch(base).then(() => true, () => false)); i++) await new Promise((r) => setTimeout(r, 200));
   const browser = await chromium.launch();

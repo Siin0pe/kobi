@@ -195,3 +195,41 @@
 .reduced-motion .card-consent {
   animation: none;
 }
+
+/* Vie de l'étiquette REC, du compteur et de la carte de consentement :
+   micro-mouvements sur translate / rotate / scale (compositeur). */
+@keyframes rec-float {
+  0%,
+  100% {
+    translate: 0 0;
+    rotate: 0deg;
+  }
+  50% {
+    translate: 0 -2px;
+    rotate: 1.2deg;
+  }
+}
+@keyframes rec-tick {
+  0%,
+  80%,
+  100% {
+    scale: 1;
+  }
+  90% {
+    scale: 1.12;
+  }
+}
+.rec {
+  animation: rec-float 3.8s ease-in-out infinite;
+}
+.rec-notes {
+  animation: rec-tick 3s ease-in-out infinite;
+}
+.card-consent {
+  animation: card-float 5s ease-in-out infinite;
+}
+.reduced-motion .rec,
+.reduced-motion .rec-notes,
+.reduced-motion .card-consent {
+  animation: none;
+}

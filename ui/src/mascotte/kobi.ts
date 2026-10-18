@@ -22,6 +22,7 @@
 // espacées. Fenêtre masquée ou animations réduites : aucune minuterie.
 
 import type { MascotData, MascotState } from '../states';
+import { onFrame } from '../ticker';
 import { Blinker, Scrambler, type Eyes } from './glyphs';
 import { GESTURES, Gestures, Inertia, morphEyes, type Gesture } from './motion';
 import { Orbit } from './orbit';
@@ -145,11 +146,11 @@ export class Kobi {
   // Volume du micro (Écoute).
   private levelTarget = 0;
   private level = 0;
-  private levelFrame = 0;
+  private levelStop: (() => void) | null = null;
 
   // Curseur.
   private pointer: { x: number; y: number } | null = null;
-  private pointerFrame = 0;
+  private pointerStop: (() => void) | null = null;
   private pointerIdle = 0;
   private lastBoop = 0;
   /** Réveillé par le survol pendant la veille. */
@@ -239,6 +240,8 @@ export class Kobi {
     // de l'ancien état s'efface ; le nouvel état se pose au décollage.
     this.gestures.play(look.enter);
     this.morph = morphEyes(this.eyesBox, this.morph);
+    this.squashWord();
+    if (state !== 'done') this.sparks(state === 'error' ? 4 : 7);
     this.fadeOut(this.shown);
     this.aim();
     this.switchTimer = window.setTimeout(() => this.switchTo(state, true), GESTURES[look.enter].launch);
@@ -361,11 +364,10 @@ export class Kobi {
    */
   setLevel(level: number): void {
     this.levelTarget = Math.max(0, Math.min(1, level));
-    if (this.state === 'listen' && this.live && !this.levelFrame) this.levelFrame = requestAnimationFrame(() => this.levelTick());
+    if (this.state === 'listen' && this.live && !this.levelStop) this.levelStop = onFrame(() => this.levelTick());
   }
 
-  private levelTick(): void {
-    this.levelFrame = 0;
+  private levelTick(): boolean {
     const up = this.levelTarget > this.level;
     this.level += (this.levelTarget - this.level) * (up ? 0.45 : 0.14);
     this.levelTarget *= 0.9;
@@ -373,15 +375,20 @@ export class Kobi {
     this.voice.style.transform = `translateY(${(-v * 10).toFixed(2)}px) scale(${(1 + v * 0.05).toFixed(4)},${(1 + v * 0.09).toFixed(4)})`;
     this.body.style.setProperty('--lv', v.toFixed(3));
     if (v < 0.005 && this.levelTarget < 0.005) {
-      this.stopLevel();
-      return;
+      this.levelStop = null;
+      this.resetLevel();
+      return false;
     }
-    this.levelFrame = requestAnimationFrame(() => this.levelTick());
+    return true;
   }
 
   private stopLevel(): void {
-    cancelAnimationFrame(this.levelFrame);
-    this.levelFrame = 0;
+    this.levelStop?.();
+    this.levelStop = null;
+    this.resetLevel();
+  }
+
+  private resetLevel(): void {
     this.level = 0;
     this.levelTarget = 0;
     this.voice.style.transform = '';
@@ -419,7 +426,7 @@ export class Kobi {
     window.clearTimeout(this.deepTimer);
     window.clearInterval(this.mouthTimer);
     window.clearTimeout(this.pointerIdle);
-    cancelAnimationFrame(this.pointerFrame);
+    this.pointerStop?.();
     this.life.clear();
     this.stopLevel();
     this.blinker.run(false);
@@ -451,8 +458,8 @@ export class Kobi {
       this.stopLevel();
       this.pointer = null;
       window.clearTimeout(this.pointerIdle);
-      cancelAnimationFrame(this.pointerFrame);
-      this.pointerFrame = 0;
+      this.pointerStop?.();
+      this.pointerStop = null;
       this.lean.style.transform = '';
     }
     this.aim();
@@ -538,7 +545,7 @@ export class Kobi {
       window.clearTimeout(this.pointerIdle);
       this.pointerIdle = window.setTimeout(() => this.losePointer(), 2600);
       if (this.state === 'idle' && !this.awake) this.wake();
-      if (!this.pointerFrame) this.pointerFrame = requestAnimationFrame(() => this.followPointer());
+      if (!this.pointerStop) this.pointerStop = onFrame(() => this.followPointer());
     };
     const onLeave = (e: MouseEvent): void => {
       if (!e.relatedTarget) this.losePointer();
@@ -558,13 +565,14 @@ export class Kobi {
     });
   }
 
-  private followPointer(): void {
-    this.pointerFrame = 0;
-    if (!this.pointer || !this.live) return;
+  private followPointer(): false {
+    this.pointerStop = null;
+    if (!this.pointer || !this.live) return false;
     this.aim();
     const [x] = this.towardPointer();
     const t = `rotate(${(x / 24) * 4}deg) translateX(${(x / 24) * 5}px)`;
     if (this.lean.style.transform !== t) this.lean.style.transform = t;
+    return false;
   }
 
   private losePointer(): void {
@@ -606,6 +614,8 @@ export class Kobi {
   /** Vie de l'état : petits gestes espacés, jamais pendant une pause. */
   private startLife(): void {
     if (!this.live || this.shown !== this.state) return;
+    // Dans tous les états, une lettre du mot sautille ou se brouille de temps en temps.
+    this.every(this.deep ? 5000 : 2200, this.deep ? 9000 : 5200, () => this.letterLife());
     switch (this.state) {
       case 'idle':
         if (!this.awake) this.life.after(this.deep ? rand(12_000, 22_000) : rand(4_500, 9_000), () => this.idleEvent());
@@ -632,6 +642,27 @@ export class Kobi {
         this.every(1800, 3200, () => this.flash(['>', '<'], 420));
         break;
     }
+  }
+
+  /** Une lettre au hasard sautille (le plus souvent) ou se brouille. */
+  private letterLife(): void {
+    const letters = [...this.word.children].filter((c) => (c.textContent ?? '').trim()) as HTMLElement[];
+    if (letters.length === 0 || this.scrambler.scrambling) return;
+    const i = Math.floor(Math.random() * letters.length);
+    if (Math.random() < 0.3) {
+      this.scrambler.glitch([...this.word.children].indexOf(letters[i]!));
+      return;
+    }
+    letters[i]!.animate(
+      [
+        { transform: 'none', easing: 'cubic-bezier(.45,0,.75,.4)' },
+        { transform: 'translateY(6px) scale(1.15,.8)', offset: 0.15, easing: 'cubic-bezier(.2,.8,.3,1)' },
+        { transform: 'translateY(-26px) scale(.9,1.15) rotate(-8deg)', offset: 0.45, easing: 'cubic-bezier(.45,0,.75,.4)' },
+        { transform: 'translateY(0) scale(1.12,.86)', offset: 0.7 },
+        { transform: 'none' },
+      ],
+      { duration: 620 },
+    );
   }
 
   /** Répète `fn` à intervalle aléatoire tant que l'état dure. */
@@ -750,14 +781,32 @@ export class Kobi {
     );
   }
 
+  /** Le mot s'écrase puis se redresse quand il change. */
+  private squashWord(): void {
+    this.word.animate(
+      [
+        { transform: 'none', easing: 'cubic-bezier(.45,0,.75,.4)' },
+        { transform: 'translateY(16px) scale(1.2,.66)', offset: 0.22, easing: 'cubic-bezier(.2,.8,.3,1.2)' },
+        { transform: 'translateY(-6px) scale(.94,1.1)', offset: 0.55 },
+        { transform: 'none' },
+      ],
+      { duration: 560 },
+    );
+  }
+
+  /** Étincelles de symboles à chaque transition. */
+  private sparks(count: number): void {
+    const noise = '#%&@*?!/<>{}=+$';
+    this.confetti(Array.from({ length: count }, () => noise.charAt(Math.floor(Math.random() * noise.length))), 0.55);
+  }
+
   /** Fait ! : une gerbe de symboles jaillit de la pilule. */
-  private confetti(): void {
-    const glyphs = ['+', '*', '·', '!', '^', '+', '*', 'o', '·', '+', '!', '*'];
+  private confetti(glyphs = ['+', '*', '·', '!', '^', '+', '*', 'o', '·', '+', '!', '*'], reach = 1): void {
     glyphs.forEach((g, i) => {
       const span = el('span', '', g);
       this.burst.append(span);
       const angle = -Math.PI * (0.08 + (0.84 * i) / (glyphs.length - 1)) + rand(-0.12, 0.12);
-      const dist = rand(130, 210);
+      const dist = rand(130, 210) * reach;
       const dx = Math.cos(angle) * dist;
       const dy = Math.sin(angle) * dist * 0.8;
       const anim = span.animate(
@@ -773,11 +822,9 @@ export class Kobi {
     });
   }
 
-  /** Passe le repos en mode économe, en posant le mot sans à-coup. */
+  /** Passe le repos en mode économe : ondulation du mot par paliers, un seul « z ». */
   private deepSleep(): void {
     if (!this.state || !RESTING.has(this.state) || this.awake) return;
-    const letters = [...this.word.children] as HTMLElement[];
-    const from = letters.map((l) => getComputedStyle(l).fontVariationSettings);
     // Les « z » changent d'animation : chacune reprend là où en était l'ancienne.
     const zs = [...this.root.querySelectorAll<HTMLElement>('.zz span')];
     const times = zs.map((z) => z.getAnimations()[0]?.currentTime ?? null);
@@ -786,11 +833,6 @@ export class Kobi {
     zs.forEach((z, i) => {
       const anim = z.getAnimations()[0];
       if (anim && times[i] !== null) anim.currentTime = times[i]!;
-    });
-    if (this.reduced) return;
-    letters.forEach((l, i) => {
-      const to = getComputedStyle(l).fontVariationSettings;
-      l.animate([{ fontVariationSettings: from[i]! }, { fontVariationSettings: to }], { duration: 1200, easing: 'ease-in-out' });
     });
     // Le rythme de la vie ralentit.
     this.life.clear();
