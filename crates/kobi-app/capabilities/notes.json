@@ -1,7 +1,0 @@
-{
-  "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "notes",
-  "description": "Panneau des notes en direct : commandes de l'app, événements, déplacement par l'en-tête.",
-  "windows": ["notes"],
-  "permissions": ["core:default", "core:window:allow-start-dragging"]
-}

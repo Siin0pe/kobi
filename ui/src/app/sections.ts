@@ -1,13 +1,13 @@
 // Sections de l'app Kobi (KOB-159) qui n'ont pas de module à elles :
-// Rappels et tâches, Activité, À propos. Le Carnet (Notes et réunions), les
+// Rappels et tâches, Activité (le journal), À propos. Le Carnet (Notes et réunions), les
 // Réglages et l'accueil viennent de leurs propres modules.
 
 import { carnet, type Rappel } from '../carnet/donnees';
-import { echeance } from '../carnet/format';
+import { cleDuJour, echeance, heure, libelleDuJour } from '../carnet/format';
 import { animationsReduites, h } from '../dom';
 import { etapeLigne } from '../activite';
 import type { Bulle } from '../conversation';
-import { ecouter, invoke, message } from '../ipc';
+import { absente, ecouter, invoke, message } from '../ipc';
 import type { Ton } from '../reglages/panneau';
 import { poserTitre } from '../titre';
 import { blocValidations } from './validations';
@@ -87,46 +87,127 @@ export function monterRappels(racine: HTMLElement, notifier: Notifier): VueRappe
 
 // ----- Activité -----
 
+/** Entrée du journal (`journal_activite`, événement `journal`). */
+export interface EntreeActivite {
+  quand_ms: number;
+  genre: 'question' | 'reunion' | 'recherche' | 'action' | 'validation' | 'erreur';
+  texte: string;
+  detail?: string | null;
+}
+
+/** Glyphe et libellé de chaque genre d'entrée. */
+const GENRES: Record<EntreeActivite['genre'], [string, string]> = {
+  question: ['?', 'Demandé à Kobi'],
+  reunion: ['●', 'Réunion'],
+  recherche: ['⌕', 'Recherche'],
+  action: ['!', 'Action proposée'],
+  validation: ['✓', 'Ta réponse'],
+  erreur: ['x', 'Erreur'],
+};
+
+export interface VueActivite {
+  rafraichir(): Promise<void>;
+}
+
 /**
- * Ce que Kobi a fait (KOB-152) : chaque échange récent avec ses étapes
- * (fichiers lus, recherches, commandes, appels MCP), tenu à jour en direct
- * par l'événement `conversation`. Les validations viendront avec KOB-156.
+ * Ce que Kobi a fait : en haut, chaque échange récent avec ses étapes
+ * (fichiers lus, recherches, commandes, appels MCP ; KOB-152, événement
+ * `conversation`) ; dessous, le journal daté des questions, réunions,
+ * actions proposées et de tes réponses (`journal_activite`, événement
+ * `journal`), le plus récent en haut, regroupé par jour.
  */
-export function monterActivite(racine: HTMLElement): void {
-  const journal = h('div', { class: 'journal', role: 'log', 'aria-label': 'Étapes des derniers échanges' });
+export function monterActivite(racine: HTMLElement): VueActivite {
+  const etapes = h('div', { class: 'journal', role: 'log', 'aria-label': 'Étapes des derniers échanges' });
+  const liste = h('div', { class: 'fil', 'aria-live': 'polite' });
   racine.append(
     h(
       'article',
       { class: 'feuille' },
-      entete('Activité', 'Ce que Kobi a fait', 'Le journal des recherches, des actions proposées et de tes validations.'),
+      entete('Activité', 'Ce que Kobi a fait', 'Tes questions et les étapes de son travail, les réunions, les actions proposées et tes réponses. Kobi ne fait rien d’important sans toi.'),
       blocValidations(),
-      journal,
-      h(
-        'div',
-        { class: 'bientot' },
-        h('span', { class: 'bientot-yeux', 'aria-hidden': 'true' }, '- -'),
-        h('p', {}, 'Pour l’instant, Kobi ne fait que lire : rien n’est écrit ni envoyé sans toi. Les actions que tu valides apparaîtront ici.'),
-      ),
+      etapes,
+      liste,
     ),
   );
-  const afficher = (bulles: unknown) => {
+
+  const afficherEtapes = (bulles: unknown) => {
     if (!Array.isArray(bulles)) return;
     const avec = (bulles as Bulle[]).filter((b) => (b.etapes ?? []).length > 0).reverse();
-    journal.replaceChildren(
-      ...(avec.length === 0
-        ? [h('p', { class: 'journal-vide' }, 'Aucune étape pour l’instant : pose une question sur ton code, chaque fichier lu et chaque recherche s’afficheront ici.')]
-        : avec.map((b) =>
-            h(
-              'section',
-              { class: 'journal-tour', 'data-tour': b.tour },
-              h('p', { class: 'journal-question' }, b.question),
-              h('div', { class: 'journal-etapes' }, ...(b.etapes ?? []).map((e) => etapeLigne(e))),
-            ),
-          )),
+    etapes.hidden = avec.length === 0;
+    etapes.replaceChildren(
+      ...avec.map((b) =>
+        h(
+          'section',
+          { class: 'journal-tour', 'data-tour': b.tour },
+          h('p', { class: 'journal-question' }, b.question),
+          h('div', { class: 'journal-etapes' }, ...(b.etapes ?? []).map((e) => etapeLigne(e))),
+        ),
+      ),
     );
   };
-  invoke<Bulle[]>('historique').then(afficher, () => afficher([]));
-  ecouter<Bulle[]>('conversation', afficher);
+  invoke<Bulle[]>('historique').then(afficherEtapes, () => afficherEtapes([]));
+  ecouter<Bulle[]>('conversation', afficherEtapes);
+
+  let entrees: EntreeActivite[] = [];
+
+  const ligne = (e: EntreeActivite, i: number) => {
+    const [glyphe, libelle] = GENRES[e.genre] ?? ['·', ''];
+    return h(
+      'div',
+      { class: 'entree', 'data-genre': e.genre, style: `--i:${Math.min(i, 20)}` },
+      h('span', { class: 'entree-glyphe', 'aria-hidden': 'true' }, glyphe),
+      h(
+        'span',
+        { class: 'entree-corps' },
+        h('span', { class: 'entree-texte' }, e.texte),
+        h('span', { class: 'entree-meta' }, [heure(e.quand_ms), libelle, e.detail].filter(Boolean).join(' · ')),
+      ),
+    );
+  };
+
+  function dessiner(): void {
+    if (!entrees.length) {
+      liste.replaceChildren(
+        h(
+          'div',
+          { class: 'bientot' },
+          h('span', { class: 'bientot-yeux', 'aria-hidden': 'true' }, '- -'),
+          h('p', {}, 'Rien encore. Pose une question à Kobi ou lance une réunion : tout ce qu’il fait s’affiche ici.'),
+        ),
+      );
+      return;
+    }
+    const enfants: HTMLElement[] = [];
+    let jour = '';
+    let i = 0;
+    for (const e of [...entrees].reverse()) {
+      const cle = cleDuJour(e.quand_ms);
+      if (cle !== jour) {
+        jour = cle;
+        enfants.push(h('h2', { class: 'groupe' }, libelleDuJour(cle)));
+      }
+      enfants.push(ligne(e, i++));
+    }
+    liste.replaceChildren(...enfants);
+  }
+
+  async function rafraichir(): Promise<void> {
+    try {
+      entrees = await invoke<EntreeActivite[]>('journal_activite');
+    } catch (e) {
+      liste.replaceChildren(h('p', { class: 'erreur' }, absente(e) ? 'Le journal arrive avec la prochaine version de Kobi.' : message(e)));
+      return;
+    }
+    dessiner();
+  }
+
+  ecouter<EntreeActivite>('journal', (e) => {
+    entrees.push(e);
+    dessiner();
+    liste.querySelector('.entree')?.classList.add('nouvelle');
+  });
+  void rafraichir();
+  return { rafraichir };
 }
 
 // ----- À propos -----

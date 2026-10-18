@@ -1,6 +1,7 @@
-//! Notes en direct (KOB-73) : pendant une réunion, un panneau à côté de
-//! Kobi montre les notes prises (décisions, actions, questions) et met en
-//! valeur la dernière. Il s'ouvre d'un clic sur la fiche ou l'étiquette REC.
+//! Notes en direct (KOB-73) : pendant une réunion, la section « En direct »
+//! de l'app Kobi (KOB-159) montre les notes prises (décisions, actions,
+//! questions) et met en valeur la dernière. Elle s'ouvre d'un clic sur la
+//! fiche ou l'étiquette REC de Kobi.
 //!
 //! Les notes sont lues sur le disque, dans le `notes.md` de la réunion en
 //! cours (stockage, KOB-141) : le panneau ne dépend que du fichier écrit par
@@ -12,18 +13,7 @@ use std::time::UNIX_EPOCH;
 
 use kobi_session::stockage::Stockage;
 use serde::Serialize;
-use tauri::{AppHandle, Manager, PhysicalPosition, Runtime, WebviewUrl, WebviewWindowBuilder};
-
-/// Libellé de la fenêtre du panneau.
-pub const FENETRE: &str = "notes";
-
-/// Taille du panneau, en pixels logiques ; replié, il garde l'en-tête et la
-/// dernière note.
-const TAILLE: (f64, f64) = (360.0, 480.0);
-const TAILLE_REPLIEE: (f64, f64) = (360.0, 170.0);
-
-/// Écart entre le panneau et la mascotte, en pixels logiques.
-const ECART: f64 = 12.0;
+use tauri::{AppHandle, Runtime};
 
 /// Notes de la réunion en cours, découpées par section.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -206,95 +196,10 @@ pub fn notes_en_cours<R: Runtime>(app: AppHandle<R>) -> Result<Option<NotesEnCou
     lire(&st).map_err(|e| e.to_string())
 }
 
-/// Position du panneau : à gauche de Kobi, bas alignés ; à droite s'il n'y a
-/// pas la place à gauche. Tout en pixels physiques.
-pub fn position(
-    kobi: crate::placement::Rect,
-    panneau: (u32, u32),
-    ecran: crate::placement::Rect,
-    ecart: i32,
-) -> (i32, i32) {
-    let (l, h) = (i64::from(panneau.0), i64::from(panneau.1));
-    let gauche = i64::from(kobi.x) - i64::from(ecart) - l;
-    let x = if gauche >= i64::from(ecran.x) {
-        gauche
-    } else {
-        i64::from(kobi.x) + i64::from(kobi.width) + i64::from(ecart)
-    };
-    let bas = i64::from(kobi.y) + i64::from(kobi.height) - h;
-    let max_y = i64::from(ecran.y) + i64::from(ecran.height) - h;
-    let y = bas.min(max_y).max(i64::from(ecran.y));
-    let max_x = i64::from(ecran.x) + i64::from(ecran.width) - l;
-    (x.min(max_x).max(i64::from(ecran.x)) as i32, y as i32)
-}
-
-fn ranger<R: Runtime>(
-    app: &AppHandle<R>,
-    w: &tauri::WebviewWindow<R>,
-    taille: (f64, f64),
-) -> tauri::Result<()> {
-    let Some(kobi) = app.get_webview_window("main") else {
-        return Ok(());
-    };
-    let Some(ecran) = kobi.current_monitor()?.or(kobi.primary_monitor()?) else {
-        return Ok(());
-    };
-    let echelle = ecran.scale_factor();
-    let pos = kobi.outer_position()?;
-    let t = kobi.outer_size()?;
-    let t = crate::placement::physical_size((t.width, t.height), (410.0, 280.0), echelle);
-    let zone = ecran.work_area();
-    let (x, y) = position(
-        crate::placement::Rect {
-            x: pos.x,
-            y: pos.y,
-            width: t.0,
-            height: t.1,
-        },
-        crate::placement::physical_size((0, 0), taille, echelle),
-        crate::placement::Rect {
-            x: zone.position.x,
-            y: zone.position.y,
-            width: zone.size.width,
-            height: zone.size.height,
-        },
-        (ECART * echelle).round() as i32,
-    );
-    w.set_position(PhysicalPosition::new(x, y))
-}
-
-/// Ouvre le panneau à côté de Kobi, ou le ferme s'il est ouvert. Renvoie
-/// l'état après coup (`true` : ouvert).
+/// Ouvre les notes en direct dans l'app. Rend `true` (la section est
+/// montrée), comme le faisait l'ancien panneau flottant.
 pub fn basculer<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<bool> {
-    if let Some(w) = app.get_webview_window(FENETRE) {
-        if w.is_visible()? {
-            w.hide()?;
-            return Ok(false);
-        }
-        let taille = w
-            .inner_size()
-            .ok()
-            .zip(w.scale_factor().ok())
-            .map(|(t, e)| (f64::from(t.width) / e, f64::from(t.height) / e))
-            .filter(|t| t.0 > 0.0 && t.1 > 0.0)
-            .unwrap_or(TAILLE);
-        ranger(app, &w, taille)?;
-        w.show()?;
-        return Ok(true);
-    }
-    let w = WebviewWindowBuilder::new(app, FENETRE, WebviewUrl::App("notes.html".into()))
-        .title("Notes de la réunion")
-        .inner_size(TAILLE.0, TAILLE.1)
-        .min_inner_size(280.0, 120.0)
-        .decorations(false)
-        .always_on_top(true)
-        .skip_taskbar(true)
-        .focused(false)
-        .visible(false)
-        .build()?;
-    ranger(app, &w, TAILLE)?;
-    w.show()?;
-    tracing::info!("notes en direct ouvertes");
+    crate::app::ouvrir(app, Some(crate::app::Section::Direct))?;
     Ok(true)
 }
 
@@ -305,31 +210,9 @@ pub fn basculer_notes<R: Runtime>(app: AppHandle<R>) -> Result<bool, String> {
     basculer(&app).map_err(|e| e.to_string())
 }
 
-/// Replie le panneau sur son en-tête et la dernière note, ou le déplie ; il
-/// reste ancré en bas à côté de Kobi.
-#[tauri::command]
-pub fn replier_notes<R: Runtime>(app: AppHandle<R>, replie: bool) -> Result<(), String> {
-    let Some(w) = app.get_webview_window(FENETRE) else {
-        return Ok(());
-    };
-    let taille = if replie { TAILLE_REPLIEE } else { TAILLE };
-    w.set_size(tauri::LogicalSize::new(taille.0, taille.1))
-        .and_then(|_| ranger(&app, &w, taille))
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub fn fermer_notes<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
-    if let Some(w) = app.get_webview_window(FENETRE) {
-        w.hide().map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::placement::Rect;
     use kobi_session::stockage::Stockage;
 
     const NOTES: &str = "## Décisions\n- Budget validé\n- **Séminaire** à Annecy\n\n## Actions\n- [ ] Sophie : devis\n\n## Questions ouvertes\n- Date du séminaire ?\n";
@@ -407,49 +290,15 @@ mod tests {
         assert_eq!(n.lignes, 4);
     }
 
-    #[test]
-    fn panneau_a_gauche_de_kobi_sinon_a_droite() {
-        let ecran = Rect {
-            x: 0,
-            y: 0,
-            width: 1440,
-            height: 900,
-        };
-        let kobi = Rect {
-            x: 1014,
-            y: 604,
-            width: 410,
-            height: 280,
-        };
-        // À gauche, bas alignés avec Kobi.
-        assert_eq!(position(kobi, (360, 480), ecran, 12), (642, 404));
-        // Kobi collé à gauche de l'écran : le panneau passe à droite.
-        let kobi = Rect {
-            x: 16,
-            y: 604,
-            width: 410,
-            height: 280,
-        };
-        assert_eq!(position(kobi, (360, 480), ecran, 12), (438, 404));
-        // Jamais hors de l'écran.
-        let kobi = Rect {
-            x: 1014,
-            y: 10,
-            width: 410,
-            height: 280,
-        };
-        assert_eq!(position(kobi, (360, 480), ecran, 12).1, 0);
-    }
-
-    /// Les commandes du panneau depuis la webview : lecture des notes en
-    /// cours, ouverture puis fermeture du panneau.
+    /// Les commandes depuis la webview : lecture des notes en cours, puis
+    /// ouverture des notes en direct dans l'app.
     #[test]
     fn commandes_par_ipc() {
         use crate::test_ipc::appeler;
         use kobi_session::config::Config;
         use serde_json::json;
         use tauri::test::{mock_builder, mock_context, noop_assets};
-        use tauri::WebviewWindowBuilder;
+        use tauri::{Manager, WebviewWindowBuilder};
 
         let dir = tempfile::tempdir().unwrap();
         let mut config = Config::default();
@@ -481,13 +330,8 @@ mod tests {
             appeler(&main, "basculer_notes", json!({})).unwrap(),
             json!(true)
         );
-        assert!(app.get_webview_window(FENETRE).is_some());
-        appeler(&main, "replier_notes", json!({ "replie": true })).unwrap();
-        appeler(&main, "replier_notes", json!({ "replie": false })).unwrap();
-        assert_eq!(
-            appeler(&main, "basculer_notes", json!({})).unwrap(),
-            json!(false)
-        );
-        appeler(&main, "fermer_notes", json!({})).unwrap();
+        // Plus de panneau flottant : les notes en direct sont dans l'app.
+        assert!(app.get_webview_window(crate::app::FENETRE).is_some());
+        assert!(app.get_webview_window("notes").is_none());
     }
 }

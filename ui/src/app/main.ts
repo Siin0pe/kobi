@@ -1,13 +1,15 @@
 // L'app Kobi (KOB-159) : la seule fenêtre en plus de la mascotte. Navigation
 // latérale et sections Notes et réunions (le Carnet), Rappels et tâches,
-// Activité, Réglages, À propos ; écran d'accueil au premier démarrage (le
-// premier lancement). Chaque section est montée à sa première visite puis
-// gardée, masquée, pour retrouver son état.
+// Activité, Réglages, À propos, et En direct pendant une réunion (les notes
+// de KOB-73) ; écran d'accueil au premier démarrage (le premier lancement).
+// Chaque section est montée à sa première visite puis gardée, masquée, pour
+// retrouver son état. Pendant une réunion, le bandeau REC reste en haut de
+// toutes les sections ; le petit Kobi de la navigation suit la mascotte.
 //
 // Adresse d'une section (ancre de l'URL, et charge de l'événement
 // `app://section` envoyé par `app::ouvrir` côté Rust) : `notes`,
 // `notes/<réunion>`, `rappels`, `activite`, `reglages`, `reglages/<panneau>`,
-// `a-propos`, `accueil`.
+// `a-propos`, `direct`, `accueil`.
 
 import '../erreurs';
 import '../styles/fonts.css';
@@ -15,15 +17,17 @@ import '../reglages/reglages.css';
 import './app.css';
 import { monterAccueil } from '../bienvenue/main';
 import { monterCarnet, type VueCarnet } from '../carnet/main';
-import { animationsReduites, h } from '../dom';
+import { h } from '../dom';
 import { disponible, ecouter } from '../ipc';
-import { Blinker, Scrambler } from '../mascotte/glyphs';
 import { creerNotifieur } from '../notif';
+import { monterNotesEnDirect, type VueDirect } from '../notes/direct';
 import { ajouterPanneau } from '../reglages/panneaux';
 import { monterReglages, type VueReglages } from '../reglages/vue';
-import { monterActivite, monterAPropos, monterRappels, type VueRappels } from './sections';
+import { monterMiniKobi } from './mini-kobi';
+import { monterBandeauRec } from './rec';
+import { monterActivite, monterAPropos, monterRappels, type VueActivite, type VueRappels } from './sections';
 
-export type IdSection = 'notes' | 'rappels' | 'activite' | 'reglages' | 'a-propos';
+export type IdSection = 'direct' | 'notes' | 'rappels' | 'activite' | 'reglages' | 'a-propos';
 
 interface Entree {
   id: IdSection;
@@ -32,10 +36,13 @@ interface Entree {
   glyphe: string;
   /** Mot de Kobi quand on arrive sur la section. */
   mot: string;
+  /** Dans la navigation seulement pendant une réunion. */
+  reunion?: boolean;
 }
 
 /** Sections de la navigation, dans l'ordre. */
 export const SECTIONS: readonly Entree[] = [
+  { id: 'direct', titre: 'En direct', glyphe: '●', mot: 'noté', reunion: true },
   { id: 'notes', titre: 'Notes et réunions', glyphe: '✎', mot: 'notes' },
   { id: 'rappels', titre: 'Rappels et tâches', glyphe: '◷', mot: 'rappels' },
   { id: 'activite', titre: 'Activité', glyphe: '≡', mot: 'journal' },
@@ -51,10 +58,19 @@ const yeux = [h('span', { class: 'g' }, '*'), h('span', { class: 'g' }, '*')];
 const mot = h('span', { class: 'mot', 'aria-hidden': 'true' });
 const nav = h('nav', { class: 'nav-sections', 'aria-label': 'Sections de Kobi' });
 const contenu = h('main', { class: 'contenu' });
+const bandeau = monterBandeauRec(
+  () => aller('direct'),
+  (r) => {
+    nav.querySelector<HTMLElement>('[data-section="direct"]')!.hidden = !r && courante !== 'direct';
+    // Le petit Kobi de la mascotte sait déjà qu'elle note ; ici, la nav le montre.
+    app.dataset.rec = String(!!r);
+  },
+);
+contenu.append(bandeau.element);
 const accueil = h('div', { class: 'vue vue-accueil', hidden: true });
 const app = h(
   'div',
-  { class: 'app', 'data-accueil': 'false' },
+  { class: 'app', 'data-accueil': 'false', 'data-rec': 'false' },
   h(
     'aside',
     { class: 'nav' },
@@ -66,18 +82,14 @@ const app = h(
 );
 document.getElementById('app')!.append(app);
 
-const brouilleur = new Scrambler(yeux, mot);
-brouilleur.setInstant(animationsReduites());
-const blinker = new Blinker((ferme) => brouilleur.blink(ferme));
-blinker.run(!animationsReduites() && !document.hidden);
-document.addEventListener('visibilitychange', () => blinker.run(!animationsReduites() && !document.hidden));
+const miniKobi = monterMiniKobi(app.querySelector<HTMLElement>('.nav-kobi')!, yeux, mot);
 
 const vues = new Map<IdSection, HTMLElement>();
 for (const s of SECTIONS) {
   nav.append(
     h(
       'button',
-      { type: 'button', class: 'nav-entree', 'data-section': s.id, onclick: () => aller(s.id) },
+      { type: 'button', class: 'nav-entree', 'data-section': s.id, hidden: !!s.reunion, onclick: () => aller(s.id) },
       h('span', { class: 'nav-glyphe', 'aria-hidden': 'true' }, s.glyphe),
       h('span', { class: 'nav-titre' }, s.titre),
     ),
@@ -92,11 +104,16 @@ for (const s of SECTIONS) {
 let carnet: VueCarnet | null = null;
 let reglages: VueReglages | null = null;
 let rappels: VueRappels | null = null;
+let direct: VueDirect | null = null;
+let activite: VueActivite | null = null;
 
 function monter(id: IdSection): void {
   const vue = vues.get(id)!;
   if (vue.childElementCount) return;
   switch (id) {
+    case 'direct':
+      direct = monterNotesEnDirect(vue);
+      break;
     case 'notes':
       carnet = monterCarnet(vue, { reglages: (panneau) => aller(`reglages/${panneau}`) });
       break;
@@ -104,7 +121,7 @@ function monter(id: IdSection): void {
       rappels = monterRappels(vue, notifier);
       break;
     case 'activite':
-      monterActivite(vue);
+      activite = monterActivite(vue);
       break;
     case 'reglages':
       reglages = monterReglages(vue, notifier);
@@ -132,12 +149,17 @@ export function aller(adresse: string): void {
       else b.removeAttribute('aria-current');
     }
     const s = SECTIONS.find((x) => x.id === id)!;
-    brouilleur.show('*', s.mot);
+    miniKobi.section(s.mot);
+    direct?.montrer(id === 'direct');
+    // Hors réunion, l'entrée « En direct » n'est là que si on y est.
+    nav.querySelector<HTMLElement>('[data-section="direct"]')!.hidden = !bandeau.courant() && id !== 'direct';
+    bandeau.element.dataset.ici = String(id === 'direct');
     document.title = `Kobi · ${s.titre}`;
     courante = id;
     // Retour sur une section : ses données ont pu changer.
     if (id === 'notes') void carnet?.rafraichir();
     if (id === 'rappels') void rappels?.rafraichir();
+    if (id === 'activite') void activite?.rafraichir();
   }
   if (id === 'reglages') reglages?.montrer(detail);
   if (id === 'notes' && detail) void carnet?.ouvrirReunion(detail);
