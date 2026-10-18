@@ -26,6 +26,7 @@ tracing = "0.1"
 
 [dev-dependencies]
 tauri = { version = "2.12", features = ["test"] }
+tempfile = "3"
 
 [features]
 # Embarque l'interface construite (`ui/dist`) au lieu du serveur de développement.

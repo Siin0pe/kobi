@@ -13,6 +13,7 @@ mod placement;
 mod porte;
 mod raccourci;
 mod session;
+mod stockage;
 mod tray;
 
 use std::sync::mpsc::Sender;
@@ -87,8 +88,9 @@ fn main() {
                     eprintln!("journal {} indisponible : {e}", dir.display());
                 }
             }
-            let config = match kobi_session::config::default_path() {
-                Some(path) => kobi_session::config::load_or_create(&path),
+            let config_path = kobi_session::config::default_path();
+            let config = match &config_path {
+                Some(path) => kobi_session::config::load_or_create(path),
                 None => kobi_session::config::Loaded {
                     config: Default::default(),
                     created: false,
@@ -98,6 +100,7 @@ fn main() {
             if let Some(problem) = &config.problem {
                 tracing::warn!(%problem, "config.toml");
             }
+            stockage::installer(app.handle(), &config.config, config_path);
             interpellation::installer(app.handle(), config.config.codebases.clone());
             raccourci::installer(app.handle(), &config.config.hotkey)?;
             let window = app
