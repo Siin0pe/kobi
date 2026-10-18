@@ -50,6 +50,8 @@ export function demoData(state: MascotState): MascotData {
       };
     case 'work':
       return { tool: 'recherche' };
+    case 'compose':
+      return {};
   }
 }
 

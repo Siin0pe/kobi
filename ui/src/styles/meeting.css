@@ -54,6 +54,14 @@
   background: #c4c7c5;
   animation: none;
 }
+/* Fin de réunion (KOB-166) : grise, point éteint, le temps de s'effacer. */
+.rec.is-ended {
+  background: #3c4043;
+}
+.rec.is-ended .rec-dot {
+  background: #9aa0a6;
+  animation: none;
+}
 .rec-label {
   overflow: hidden;
   text-overflow: ellipsis;

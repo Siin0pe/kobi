@@ -107,6 +107,25 @@
 .kobi.recording .rec-ring{display:block;animation:kobi-rec 2.4s steps(18) infinite}
 .kobi.recording.rec-paused .rec-ring{border-color:#9AA0A6;border-style:dashed;animation:none;opacity:.9}
 
+/* Fin de l'enregistrement : l'anneau, gris, s'efface (kobi.ts). */
+.kobi.rec-ending:not(.recording) .rec-ring{display:block;border-color:#9AA0A6;animation:none}
+
+/* Rédaction du compte rendu (KOB-166), bien distincte de la prise de notes :
+   pas de griffonnage, Kobi relit (les yeux balaient une ligne puis reviennent)
+   en se balançant doucement, et les feuilles s'empilent une à une à côté de lui. */
+@keyframes kobi-compose{0%,100%{transform:rotate(0) translateY(0)}30%{transform:rotate(-2deg) translateY(3px)}70%{transform:rotate(1.5deg) translateY(1px)}}
+@keyframes kobi-read{0%{translate:-8px 0}70%{translate:8px 0}80%{translate:8px 3px}100%{translate:-8px 3px}}
+@keyframes kobi-sheet{0%{transform:translate(-60px,-50px) rotate(-35deg);opacity:0}25%{opacity:1}45%,80%{transform:translate(0,0) rotate(var(--rot,0deg));opacity:1}100%{transform:translate(0,6px) rotate(var(--rot,0deg));opacity:0}}
+.kobi.m-compose .pill{animation:kobi-compose 2.4s ease-in-out infinite}
+.kobi.m-compose .eyes{animation:kobi-read 1.6s ease-in-out infinite}
+.kobi.m-compose .sheets{display:block}
+.kobi .sheets span{position:absolute;left:0;top:0;font-size:58px;line-height:1;font-variation-settings:"wght" 800;animation:kobi-sheet 2.4s ease-out infinite both}
+.kobi .sheets span:nth-child(2){--rot:-6deg;animation-delay:.8s}
+.kobi .sheets span:nth-child(3){--rot:5deg;animation-delay:1.6s}
+.kobi.reduced-motion .sheets span{opacity:1;transform:none}
+.kobi.reduced-motion .sheets span:nth-child(2){transform:translate(3px,-8px) rotate(-6deg)}
+.kobi.reduced-motion .sheets span:nth-child(3){transform:translate(-2px,-16px) rotate(5deg)}
+
 /* Fait ! : gerbe de symboles, partie du centre de la pilule. */
 .kobi .burst{position:absolute;left:150px;top:70px;width:0;height:0;z-index:3;pointer-events:none}
 /* Symboles de la veille (notes sifflées, lettres jonglées, « hic », bulles) : même style que la gerbe. */

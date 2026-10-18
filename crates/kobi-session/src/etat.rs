@@ -160,6 +160,9 @@ pub enum Mascotte {
     Done,
     Error,
     Work,
+    /// Fin de réunion : Kobi rédige le compte rendu (KOB-166). Jamais `Write`,
+    /// réservé à la prise de notes pendant l'enregistrement.
+    Compose,
 }
 
 impl Mascotte {
@@ -175,6 +178,7 @@ impl Mascotte {
             Mascotte::Done => "done",
             Mascotte::Error => "error",
             Mascotte::Work => "work",
+            Mascotte::Compose => "compose",
         }
     }
 }
@@ -225,8 +229,8 @@ impl Etat {
     pub fn mascotte(self) -> Mascotte {
         match self {
             Etat::Veille | Etat::Pause => Mascotte::Idle,
-            // Le compte rendu s'écrit : Kobi note.
-            Etat::Fin => Mascotte::Write,
+            // Le compte rendu s'écrit : Kobi rédige, l'enregistrement est fini.
+            Etat::Fin => Mascotte::Compose,
             Etat::Reunion(a) | Etat::Assistant(a) => match a {
                 Activite::Calme => Mascotte::Idle,
                 Activite::Ecoute => Mascotte::Listen,
@@ -499,7 +503,7 @@ mod tests {
             (E::Reprendre, Mascotte::Idle),
             (E::Erreur, Mascotte::Error),
             (E::Acquitter, Mascotte::Idle),
-            (E::TerminerReunion, Mascotte::Write),
+            (E::TerminerReunion, Mascotte::Compose),
             (E::CompteRenduEcrit, Mascotte::Idle),
         ];
         let mut etat = Veille;
@@ -531,10 +535,22 @@ mod tests {
     fn cles_de_la_mascotte() {
         let cles: Vec<_> = Etat::tous().map(|e| e.mascotte().cle()).collect();
         for cle in [
-            "idle", "listen", "think", "write", "answer", "suggest", "done", "error",
+            "idle", "listen", "think", "write", "answer", "suggest", "done", "error", "compose",
         ] {
             assert!(cles.contains(&cle), "{cle} jamais affiché");
         }
+    }
+
+    /// KOB-166 : la prise de notes (`write`) ne s'affiche que pendant un
+    /// enregistrement ; la fin de réunion a sa propre mascotte.
+    #[test]
+    fn prise_de_notes_seulement_pendant_l_enregistrement() {
+        for etat in Etat::tous() {
+            if etat.mascotte() == Mascotte::Write {
+                assert!(etat.transcrit(), "{etat:?} affiche la prise de notes hors enregistrement");
+            }
+        }
+        assert_eq!(Fin.mascotte(), Mascotte::Compose);
     }
 
     #[test]

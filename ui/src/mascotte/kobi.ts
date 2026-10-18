@@ -51,13 +51,16 @@ export const LOOKS: Record<MascotState, Look> = {
   done: { eye: '^', word: 'fait !', mouth: '', enter: 'cheer', gaze: [0, 0] },
   error: { eye: 'x', word: 'oups', mouth: '~', enter: 'recoil', gaze: [0, 6] },
   work: { eye: WORK_EYES.fouille, word: 'occupé', mouth: '', enter: 'lean', gaze: [-10, 16] },
+  // Réunion finie, compte rendu en cours (KOB-166) : Kobi relit, les yeux
+  // balaient les lignes, les feuilles s'empilent à côté de lui.
+  compose: { eye: 'o', word: 'je rédige', mouth: '', enter: 'settle', gaze: [-12, 12] },
 };
 
 /** États où le survol fait sourire Kobi. */
 const HAPPY_ON_HOVER: ReadonlySet<MascotState> = new Set(['idle', 'listen', 'answer', 'suggest', 'done']);
 
 /** États où Kobi cligne des yeux. */
-const BLINKS: ReadonlySet<MascotState> = new Set(['listen', 'write', 'answer', 'done']);
+const BLINKS: ReadonlySet<MascotState> = new Set(['listen', 'write', 'answer', 'done', 'compose']);
 
 /** Effet visible dans chaque état (symboles autour de la pilule). */
 const FX: Partial<Record<MascotState, string>> = {
@@ -68,6 +71,7 @@ const FX: Partial<Record<MascotState, string>> = {
   done: '.bang',
   error: '.drop',
   work: '.travail',
+  compose: '.sheets',
 };
 
 /** Délai avant le sommeil profond (veille économe, voir kobi.css). */
@@ -236,6 +240,10 @@ export class Kobi {
     const drop = el('div', 'fx drop', ',');
     drop.style.cssText = 'right:36px;top:4px';
     this.burst = el('div', 'burst');
+    // Feuilles du compte rendu, qui s'empilent une à une (KOB-166).
+    const sheets = el('div', 'fx sheets');
+    sheets.style.cssText = 'left:-86px;top:70px';
+    sheets.append(el('span', '', '≡'), el('span', '', '≡'), el('span', '', '≡'));
 
     this.drag = el('div', 'drag');
     this.lean = el('div', 'lean');
@@ -261,7 +269,7 @@ export class Kobi {
     this.sway.onRest = () => this.setLively('sway', false);
     this.gestures = new Gestures(react);
 
-    this.body.append(this.orbit.root, this.travail.root, zz, waves, bang, drop, this.drag, this.burst);
+    this.body.append(this.orbit.root, this.travail.root, zz, waves, bang, drop, sheets, this.drag, this.burst);
     this.word = el('div', 'word');
     this.root.append(this.body, this.word);
     this.scrambler = new Scrambler(this.eyes, this.word);
@@ -412,6 +420,20 @@ export class Kobi {
    */
   setRecording(recording: { paused: boolean } | null): void {
     const was = this.root.classList.contains('recording');
+    if (was && recording === null && this.live) {
+      // Fin de l'enregistrement : l'anneau pâlit et s'élargit en disparaissant.
+      this.root.classList.add('rec-ending');
+      const fin = this.ring.animate(
+        [
+          { transform: 'scale(1)', opacity: 1 },
+          { transform: 'scale(1.18)', opacity: 0 },
+        ],
+        { duration: 520, easing: 'cubic-bezier(.2,.7,.3,1)' },
+      );
+      const retirer = (): void => this.root.classList.remove('rec-ending');
+      fin.onfinish = retirer;
+      fin.oncancel = retirer;
+    }
     this.root.classList.toggle('recording', recording !== null);
     this.root.classList.toggle('rec-paused', Boolean(recording?.paused));
     if (recording && !was && this.live) {
@@ -733,6 +755,11 @@ export class Kobi {
         break;
       case 'error':
         this.every(1800, 3200, () => this.flash(['>', '<'], 420));
+        break;
+      case 'compose':
+        // Une page de finie : petit hochement, et de temps en temps un coup d'œil satisfait.
+        this.every(1500, 2600, () => !this.gestures.busy && this.gestures.play('nod'));
+        this.every(4000, 6500, () => this.flash(['^', '^'], 380));
         break;
     }
   }
