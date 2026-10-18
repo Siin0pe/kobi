@@ -84,10 +84,18 @@ pub fn installer<R: Runtime>(
     tracing::info!(codebases = ?codebases, "Claude en lecture seule");
     crate::chef::installer(
         app,
-        crate::chef::fabrique_claude(MODELE_CLAUDE, codebases),
+        crate::chef::fabrique_claude(MODELE_CLAUDE, codebases, source_memoire(app)),
         intervalle_notes_min,
     );
     ecoute::installer(app);
+}
+
+/// Mémoire des réunions passées (KOB-76) : les dossiers du stockage courant.
+fn source_memoire<R: Runtime>(app: &AppHandle<R>) -> crate::chef::SourceMemoire {
+    let app = app.clone();
+    std::sync::Arc::new(move || {
+        crate::stockage::actuel(&app).map(|st| crate::lecture::Memoire::de(&st))
+    })
 }
 
 /// Interpelle Kobi depuis le raccourci, secours du mot-clé : la phrase

@@ -879,18 +879,28 @@ impl<R: Runtime> Chef<R> {
     }
 }
 
+/// Où sont les réunions passées, lu à l'ouverture de chaque session : le
+/// dossier du stockage se règle à chaud (KOB-141).
+pub type SourceMemoire = Arc<dyn Fn() -> Option<crate::lecture::Memoire> + Send + Sync>;
+
 /// Sessions Claude Code réelles, en lecture seule (KOB-138) : Read, Grep et
-/// Glob sur les `codebases`, sans MCP ni serveur de permission, modèle
-/// rapide, prompt système de Kobi.
-pub fn fabrique_claude(modele: &'static str, codebases: Vec<PathBuf>) -> Fabrique {
-    let args = Arc::new(crate::lecture::arguments(
-        modele,
-        kobi_brain::SYSTEM_PROMPT,
-        &codebases,
-    ));
+/// Glob sur les `codebases` et la mémoire des réunions (KOB-76), sans MCP ni
+/// serveur de permission, modèle rapide, prompt système de Kobi.
+pub fn fabrique_claude(
+    modele: &'static str,
+    codebases: Vec<PathBuf>,
+    memoire: SourceMemoire,
+) -> Fabrique {
+    let codebases = Arc::new(codebases);
     let programme: Arc<tokio::sync::OnceCell<Result<PathBuf, String>>> = Arc::default();
     Arc::new(move |role| {
-        let (args, programme) = (args.clone(), programme.clone());
+        let args = crate::lecture::arguments(
+            modele,
+            kobi_brain::SYSTEM_PROMPT,
+            &codebases,
+            memoire().as_ref(),
+        );
+        let programme = programme.clone();
         Box::pin(async move {
             let programme = programme
                 .get_or_init(|| async {
@@ -912,7 +922,7 @@ pub fn fabrique_claude(modele: &'static str, codebases: Vec<PathBuf>) -> Fabriqu
             let config = kobi_brain::MeetingConfig {
                 program: programme,
                 cwd,
-                fixed_args: Some(args.as_ref().clone()),
+                fixed_args: Some(args),
                 ..Default::default()
             };
             let debut = Instant::now();
