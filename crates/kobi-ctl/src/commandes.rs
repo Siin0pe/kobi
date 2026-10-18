@@ -466,7 +466,15 @@ mod tests {
         ] {
             assert_eq!(effet(n), Lecture, "{n}");
         }
-        for n in ["app.open", "mascot.show", "mascot.hide", "mascot.discreet", "view.open", "view.close", "view.toggle"] {
+        for n in [
+            "app.open",
+            "mascot.show",
+            "mascot.hide",
+            "mascot.discreet",
+            "view.open",
+            "view.close",
+            "view.toggle",
+        ] {
             assert_eq!(effet(n), Affichage, "{n}");
         }
         for n in [

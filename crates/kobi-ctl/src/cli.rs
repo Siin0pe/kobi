@@ -685,7 +685,10 @@ mod tests {
             "Mode discret : Kobi est une pastille."
         );
         assert_eq!(lisible(c("reminders.list"), &json!([])), "(aucun)");
-        assert_eq!(lisible(c("view.open"), &json!({"vue": "ouvrir"})), "Conversation ouverte en grand.");
+        assert_eq!(
+            lisible(c("view.open"), &json!({"vue": "ouvrir"})),
+            "Conversation ouverte en grand."
+        );
         assert_eq!(params("view open"), ("view.open", json!({})));
         let set = lisible(
             c("config.set"),

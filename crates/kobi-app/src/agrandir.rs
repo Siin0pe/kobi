@@ -79,7 +79,10 @@ fn bas(r: &Rect) -> i64 {
     i64::from(r.y) + i64::from(r.height)
 }
 fn croise(a: &Rect, b: &Rect) -> bool {
-    i64::from(a.x) < droite(b) && i64::from(b.x) < droite(a) && i64::from(a.y) < bas(b) && i64::from(b.y) < bas(a)
+    i64::from(a.x) < droite(b)
+        && i64::from(b.x) < droite(a)
+        && i64::from(a.y) < bas(b)
+        && i64::from(b.y) < bas(a)
 }
 fn rect(x: i64, y: i64, l: i64, h: i64) -> Rect {
     Rect {
@@ -95,24 +98,45 @@ fn rect(x: i64, y: i64, l: i64, h: i64) -> Rect {
 /// de ses bulles : le panneau peut s'y poser.
 pub fn corps(base: Rect) -> Rect {
     let (l, h) = (i64::from(base.width), i64::from(base.height));
-    rect(i64::from(base.x) + l * 52 / 100, i64::from(base.y) + h * 28 / 100, l * 40 / 100, h * 68 / 100)
+    rect(
+        i64::from(base.x) + l * 52 / 100,
+        i64::from(base.y) + h * 28 / 100,
+        l * 40 / 100,
+        h * 68 / 100,
+    )
 }
 
 /// Panneau (pixels physiques) dans la zone de travail, puis fenêtre qui
 /// contient Kobi et le panneau.
-pub fn disposer(base: Rect, zone: Rect, panneau: (u32, u32), position: Position, marge: u32) -> (Rect, Rect) {
+pub fn disposer(
+    base: Rect,
+    zone: Rect,
+    panneau: (u32, u32),
+    position: Position,
+    marge: u32,
+) -> (Rect, Rect) {
     let m = i64::from(marge);
-    let (zx, zy, zl, zh) = (i64::from(zone.x), i64::from(zone.y), i64::from(zone.width), i64::from(zone.height));
+    let (zx, zy, zl, zh) = (
+        i64::from(zone.x),
+        i64::from(zone.y),
+        i64::from(zone.width),
+        i64::from(zone.height),
+    );
     let l = i64::from(panneau.0).min(zl - 2 * m);
     let h = i64::from(panneau.1).min(zh - 2 * m);
     let k = corps(base);
-    let borne = |v: i64, min: i64, taille: i64, total: i64| v.min(min + total - taille - m).max(min + m);
+    let borne =
+        |v: i64, min: i64, taille: i64, total: i64| v.min(min + total - taille - m).max(min + m);
     let mut p = match position {
         Position::ACote => {
             // Du côté libre : à gauche, le bord droit du panneau là où
             // finissaient les bulles ; sinon à droite du corps de Kobi.
             let fin_bulles = i64::from(base.x) + i64::from(base.width) * 49 / 100;
-            let x = if fin_bulles - l >= zx + m { fin_bulles - l } else { droite(&k) + m };
+            let x = if fin_bulles - l >= zx + m {
+                fin_bulles - l
+            } else {
+                droite(&k) + m
+            };
             let y = bas(&base) - i64::from(base.height) * 5 / 100 - h;
             rect(borne(x, zx, l, zl), borne(y, zy, h, zh), l, h)
         }
@@ -124,7 +148,12 @@ pub fn disposer(base: Rect, zone: Rect, panneau: (u32, u32), position: Position,
     let moitie = zx + zl / 2;
     if croise(&p, &k) && position == Position::MoitieDroite && i64::from(k.x) - m - moitie >= 360 {
         // La moitié droite, jusqu'au bord de Kobi.
-        p = rect(moitie, i64::from(p.y), i64::from(k.x) - m - moitie, i64::from(p.height));
+        p = rect(
+            moitie,
+            i64::from(p.y),
+            i64::from(k.x) - m - moitie,
+            i64::from(p.height),
+        );
     }
     if croise(&p, &k) {
         let a_gauche = i64::from(k.x) - m - i64::from(p.width);
@@ -176,14 +205,18 @@ pub fn agrandir_kobi<R: Runtime>(
     hauteur: Option<f64>,
     position: Option<Position>,
 ) -> Result<Option<Disposition>, String> {
-    let w = app.get_webview_window("main").ok_or("fenêtre de Kobi absente")?;
+    let w = app
+        .get_webview_window("main")
+        .ok_or("fenêtre de Kobi absente")?;
     let etat = app.state::<Agrandissement>();
     let err = |e: tauri::Error| e.to_string();
     if !grand {
         let base = etat.0.lock().map_err(|e| e.to_string())?.take();
         if let Some(b) = base {
-            w.set_size(PhysicalSize::new(b.width, b.height)).map_err(err)?;
-            w.set_position(PhysicalPosition::new(b.x, b.y)).map_err(err)?;
+            w.set_size(PhysicalSize::new(b.width, b.height))
+                .map_err(err)?;
+            w.set_position(PhysicalPosition::new(b.x, b.y))
+                .map_err(err)?;
             tracing::info!("vue agrandie fermée, fenêtre rendue à sa taille");
         }
         return Ok(None);
@@ -192,7 +225,10 @@ pub fn agrandir_kobi<R: Runtime>(
     let base = match *garde {
         Some(b) => b,
         None => {
-            let (p, t) = (w.outer_position().map_err(err)?, w.outer_size().map_err(err)?);
+            let (p, t) = (
+                w.outer_position().map_err(err)?,
+                w.outer_size().map_err(err)?,
+            );
             Rect {
                 x: p.x,
                 y: p.y,
@@ -201,7 +237,11 @@ pub fn agrandir_kobi<R: Runtime>(
             }
         }
     };
-    let Some(ecran) = w.current_monitor().map_err(err)?.or(w.primary_monitor().map_err(err)?) else {
+    let Some(ecran) = w
+        .current_monitor()
+        .map_err(err)?
+        .or(w.primary_monitor().map_err(err)?)
+    else {
         return Ok(None);
     };
     let echelle = ecran.scale_factor();
@@ -217,16 +257,29 @@ pub fn agrandir_kobi<R: Runtime>(
         (hauteur.unwrap_or(PANNEAU_PAR_DEFAUT.1) * echelle).round() as u32,
     );
     let position = position.unwrap_or_default();
-    let (fenetre, panneau) = disposer(base, zone, taille, position, (MARGE * echelle).round() as u32);
+    let (fenetre, panneau) = disposer(
+        base,
+        zone,
+        taille,
+        position,
+        (MARGE * echelle).round() as u32,
+    );
     if appliquer {
         // Déjà agrandie (autre réglage) : on repart de la petite fenêtre.
         if garde.is_none() {
             *garde = Some(base);
         }
         drop(garde);
-        w.set_position(PhysicalPosition::new(fenetre.x, fenetre.y)).map_err(err)?;
-        w.set_size(PhysicalSize::new(fenetre.width, fenetre.height)).map_err(err)?;
-        tracing::info!(?position, largeur = panneau.width, hauteur = panneau.height, "vue agrandie de la conversation");
+        w.set_position(PhysicalPosition::new(fenetre.x, fenetre.y))
+            .map_err(err)?;
+        w.set_size(PhysicalSize::new(fenetre.width, fenetre.height))
+            .map_err(err)?;
+        tracing::info!(
+            ?position,
+            largeur = panneau.width,
+            hauteur = panneau.height,
+            "vue agrandie de la conversation"
+        );
     }
     Ok(Some(relative(fenetre, base, panneau, echelle)))
 }

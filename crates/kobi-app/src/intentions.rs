@@ -125,8 +125,23 @@ const CARNET: &[&str] = &[
 
 /// Vue agrandie de la conversation (KOB-169) : un verbe pour montrer, et
 /// « en grand » (ou « agrandis »).
-const MONTRER: &[&str] = &[" montre ", " montre moi ", " affiche ", " affiche moi ", " ouvre ", " mets ", " show "];
-const GRAND: &[&str] = &[" en grand ", " en plus grand ", " plus gros ", " en gros ", " bigger ", " en grand ecran "];
+const MONTRER: &[&str] = &[
+    " montre ",
+    " montre moi ",
+    " affiche ",
+    " affiche moi ",
+    " ouvre ",
+    " mets ",
+    " show ",
+];
+const GRAND: &[&str] = &[
+    " en grand ",
+    " en plus grand ",
+    " plus gros ",
+    " en gros ",
+    " bigger ",
+    " en grand ecran ",
+];
 const AGRANDIS: &[&str] = &[" agrandis ", " agrandit ", " agrandis la ", " zoome "];
 
 /// Arrêt de la réponse : seulement en ordre très bref.
