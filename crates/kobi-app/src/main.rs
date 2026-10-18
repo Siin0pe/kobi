@@ -19,6 +19,7 @@ mod intentions;
 mod interpellation;
 mod lecture;
 mod mcp_config;
+mod menu;
 mod mot_cle;
 mod notes;
 mod placement;
@@ -150,6 +151,7 @@ fn main() {
             if let Some(problem) = &config.problem {
                 tracing::warn!(%problem, "config.toml");
             }
+            app.manage(menu::EcouteEnPause::default());
             demarrage::installer(app.handle());
             // Interface de contrôle (KOB-161) : `kobi <commande>`, `kobi mcp`.
             controle::installer(app.handle(), config_path.clone());
@@ -189,16 +191,23 @@ fn main() {
                 }
             }
             // Essai de bout en bout du menu (sans barre système, par exemple en CI
-            // sous Xvfb) : chaque entrée est déclenchée une fois, « Quitter » en dernier.
+            // sous Xvfb) : les entrées de la coque sont déclenchées, « Quitter » en dernier.
             if std::env::var_os("KOBI_ESSAI_MENU").is_some() {
                 let handle = app.handle().clone();
                 std::thread::spawn(move || {
                     for id in [
-                        "start-meeting",
+                        "enregistrer",
                         "pause",
-                        "toggle-mascot",
-                        "toggle-mascot",
-                        "quit",
+                        "pause",
+                        "carnet",
+                        "discret",
+                        "discret",
+                        "afficher",
+                        "afficher",
+                        "enregistrer",
+                        "pause",
+                        "pause",
+                        "quitter",
                     ] {
                         std::thread::sleep(std::time::Duration::from_millis(300));
                         let h = handle.clone();

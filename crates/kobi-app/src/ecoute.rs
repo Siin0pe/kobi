@@ -362,6 +362,7 @@ impl<R: Runtime> Fil<R> {
                 if self.en_pause {
                     self.en_pause = false;
                     tracing::info!(pause = false, "écoute continue : reprise par le raccourci");
+                    crate::menu::ecoute_reprise(&self.app);
                 }
                 if self.stt.is_err() {
                     self.stt = charger_stt();
