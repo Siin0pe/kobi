@@ -449,9 +449,14 @@ impl<R: Runtime> Chef<R> {
         }
         // « Rappelle-moi … », « ajoute … à ma liste » (KOB-145) : rangé sur place.
         if let Some(reponse) = self.rappel(&texte) {
-            self.transition(&[Evenement::PasDeQuestion]);
+            // Affichée comme une réponse : on lit la confirmation, puis la
+            // conversation attend la suite.
+            self.calme_a = None;
+            self.transition(&[Evenement::QuestionEnvoyee, Evenement::ReponseCommence]);
             let _ = self.app.emit(EVENEMENT_REPONSE, &reponse);
+            self.lire(&reponse);
             self.tour += 1;
+            self.dernier = self.tour;
             self.ajouter(Bulle {
                 tour: self.tour,
                 question: texte,

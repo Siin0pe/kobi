@@ -297,13 +297,7 @@ fn moment(mots: &[Mot], debut: usize, maintenant: &Zoned) -> Option<Moment> {
 /// Recopie les mots `debut..fin` du texte d'origine, sans les mots-outils
 /// qui les encadrent (« de », « d' », « que », « à ma liste »…).
 fn texte(phrase: &str, mots: &[Mot], mut debut: usize, mut fin: usize) -> Option<String> {
-    while debut < fin
-        && est(
-            mots,
-            debut,
-            &["de", "d", "que", "qu", "a", "pour", "il", "faut"],
-        )
-    {
+    while debut < fin && est(mots, debut, &["de", "d", "que", "qu", "a", "il", "faut"]) {
         debut += 1;
     }
     while fin > debut && est(mots, fin - 1, &["de", "d", "a", "pour", "et"]) {
