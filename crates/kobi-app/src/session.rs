@@ -229,6 +229,8 @@ pub fn installer<R: Runtime>(builder: Builder<R>) -> Builder<R> {
             // Dossiers de code lisibles (KOB-138), pour la fenêtre des réglages.
             crate::lecture::get_codebases,
             crate::lecture::set_codebases,
+            // Dépôts trouvés sous un dossier (KOB-153, premier lancement).
+            crate::depots::lister_depots,
             crate::stockage::reglages_stockage,
             crate::stockage::regler_stockage,
             crate::demarrage::demarrage_systeme,
