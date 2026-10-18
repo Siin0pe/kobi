@@ -1,13 +1,16 @@
 //! Kobi en lecture seule (KOB-138) : pour l'instant, Claude ne fait que lire
 //! et chercher dans les dossiers de code déclarés (`codebases` de
-//! `config.toml`). Ni écriture, ni commande, ni outil web, ni MCP : la
-//! session n'a que Read, Grep et Glob, et refuse le reste sans carte.
+//! `config.toml`). Ni écriture, ni commande, ni outil web : la session n'a
+//! que Read, Grep et Glob, plus les outils de lecture du MCP de Kobi
+//! (KOB-161), et refuse le reste sans carte.
 //!
 //! Voir « Kobi — parcours utilisateur et règles d'UX », principe 6.
 
 use std::path::{Path, PathBuf};
 
 use kobi_session::config;
+
+use crate::mcp_config::McpSession;
 
 #[cfg(test)]
 use kobi_brain::claude_code::Event;
@@ -102,13 +105,19 @@ réunions en parlent : donne la plus récente et dis qu'il y en a d'autres.
 
 /// Arguments de `claude` (après ceux du mode stream-json) pour une session
 /// en lecture seule sur `codebases`, et sur la mémoire des réunions si elle
-/// est donnée (KOB-76).
+/// est donnée (KOB-76). `mcp` : serveurs MCP de la session
+/// ([`crate::mcp_config::assembler`]), dont le MCP de Kobi (KOB-161).
 pub fn arguments(
     modele: &str,
     systeme: &str,
     codebases: &[PathBuf],
     memoire: Option<&Memoire>,
+    mcp: Option<&McpSession>,
 ) -> Vec<String> {
+    let mut autorises = OUTILS_LECTURE.map(String::from).to_vec();
+    if let Some(mcp) = mcp {
+        autorises.extend(mcp.outils_autorises.iter().cloned());
+    }
     let mut args: Vec<String> = [
         "--model",
         modele,
@@ -120,7 +129,7 @@ pub fn arguments(
         "--tools",
         &OUTILS_LECTURE.join(","),
         "--allowedTools",
-        &OUTILS_LECTURE.join(","),
+        &autorises.join(","),
         "--disallowedTools",
         &OUTILS_REFUSES.join(","),
         // Tout ce qui n'est pas autorisé d'avance est refusé, sans carte.
@@ -138,6 +147,12 @@ pub fn arguments(
     if let Some(m) = memoire {
         prompt.push_str("\n\n");
         prompt.push_str(&m.prompt());
+    }
+    if let Some(mcp) = mcp {
+        args.push("--mcp-config".into());
+        args.push(mcp.fichier.display().to_string());
+        prompt.push_str("\n\n");
+        prompt.push_str(crate::mcp_config::PROMPT_MCP_KOBI);
     }
     args.push("--append-system-prompt".into());
     args.push(prompt);
@@ -263,6 +278,7 @@ mod tests {
             "Tu es Kobi.",
             &[PathBuf::from("C:/code/kobi"), PathBuf::from("C:/code/site")],
             None,
+            None,
         );
         assert_eq!(valeur(&args, "--tools"), ["Read,Grep,Glob"]);
         assert_eq!(valeur(&args, "--allowedTools"), ["Read,Grep,Glob"]);
@@ -294,6 +310,7 @@ mod tests {
             "Tu es Kobi.",
             &[PathBuf::from("/code/kobi")],
             Some(&memoire),
+            None,
         );
         assert_eq!(
             valeur(&args, "--add-dir"),
@@ -322,8 +339,31 @@ mod tests {
             reunions: dir.path().join("rien"),
             conversations: dir.path().join("rien-non-plus"),
         };
-        let args = arguments("haiku", "x", &[], Some(&absent));
+        let args = arguments("haiku", "x", &[], Some(&absent), None);
         assert!(valeur(&args, "--add-dir").is_empty());
+    }
+
+    /// Avec le MCP de Kobi (KOB-161) : config passée par fichier, outils de
+    /// lecture de Kobi autorisés d'avance, rien d'autre.
+    #[test]
+    fn session_avec_le_mcp_de_kobi() {
+        let mcp = McpSession {
+            fichier: PathBuf::from("C:/Users/moi/Kobi/mcp/session-conversation.json"),
+            outils_autorises: vec!["mcp__kobi__notes_last".into(), "mcp__kobi__status".into()],
+        };
+        let args = arguments("haiku", "Tu es Kobi.", &[], None, Some(&mcp));
+        assert_eq!(
+            valeur(&args, "--mcp-config"),
+            ["C:/Users/moi/Kobi/mcp/session-conversation.json"]
+        );
+        assert!(args.contains(&"--strict-mcp-config".to_string()));
+        assert_eq!(
+            valeur(&args, "--allowedTools"),
+            ["Read,Grep,Glob,mcp__kobi__notes_last,mcp__kobi__status"]
+        );
+        assert_eq!(valeur(&args, "--tools"), ["Read,Grep,Glob"]);
+        let prompt = valeur(&args, "--append-system-prompt")[0];
+        assert!(prompt.contains("mcp__kobi__"), "{prompt}");
     }
 
     #[test]
@@ -360,7 +400,7 @@ mod tests {
             program,
             cwd: Some(cwd.clone()),
             partial_messages: false,
-            args: arguments("haiku", SYSTEM_PROMPT, &[code], None),
+            args: arguments("haiku", SYSTEM_PROMPT, &[code], None, None),
         })
         .unwrap();
         let mut outils_init = Vec::new();
@@ -481,7 +521,7 @@ mod tests {
             program,
             cwd: Some(cwd),
             partial_messages: false,
-            args: arguments("haiku", SYSTEM_PROMPT, &[], Some(&Memoire::de(&st))),
+            args: arguments("haiku", SYSTEM_PROMPT, &[], Some(&Memoire::de(&st)), None),
         })
         .unwrap();
         let mut demander = |question: &str| -> (String, Vec<String>) {

@@ -1018,14 +1018,23 @@ impl<R: Runtime> Chef<R> {
 pub type SourceMemoire = Arc<dyn Fn() -> Option<crate::lecture::Memoire> + Send + Sync>;
 
 /// Sessions Claude Code réelles, en lecture seule (KOB-138) : Read, Grep et
-/// Glob sur les `codebases` et la mémoire des réunions (KOB-76), sans MCP ni
-/// serveur de permission, modèle rapide, prompt système de Kobi.
+/// Glob sur les `codebases` et la mémoire des réunions (KOB-76), le MCP de
+/// Kobi en lecture (KOB-161), sans serveur de permission, modèle rapide,
+/// prompt système de Kobi.
 pub fn fabrique_claude(
     modele: &'static str,
     codebases: Vec<PathBuf>,
     memoire: SourceMemoire,
 ) -> Fabrique {
     let codebases = Arc::new(codebases);
+    // MCP de Kobi (KOB-161) ; KOB-155 : serveurs de l'utilisateur ici.
+    let mcp = kobi_session::config::kobi_dir()
+        .map(|d| d.join("mcp").join("session.json"))
+        .and_then(|f| {
+            crate::mcp_config::assembler(&f, Vec::new())
+                .map_err(|e| tracing::warn!(erreur = %e, "config MCP des sessions"))
+                .ok()
+        });
     let programme: Arc<tokio::sync::OnceCell<Result<PathBuf, String>>> = Arc::default();
     Arc::new(move |role| {
         let args = crate::lecture::arguments(
@@ -1033,6 +1042,7 @@ pub fn fabrique_claude(
             kobi_brain::SYSTEM_PROMPT,
             &codebases,
             memoire().as_ref(),
+            mcp.as_ref(),
         );
         let programme = programme.clone();
         Box::pin(async move {
