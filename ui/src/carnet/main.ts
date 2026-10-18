@@ -397,17 +397,23 @@ function marquerSelection(): void {
 
 /** La page vide montrée dit-elle « rien encore » ? `null` : pas de page vide. */
 let pageVideRien: boolean | null = null;
+/** Clignements du grand Kobi de la page vide. */
+let grandsYeux: Blinker | null = null;
 
 function pageVide(): void {
   etat.selection = null;
   marquerSelection();
   const vide = (etat.index?.reunions.length ?? 0) + (etat.index?.conversations.length ?? 0) === 0;
   const grand = h('h2', { class: 'vide-titre' });
+  const yeuxVides = [h('span', {}, '^'), h('span', {}, '^')];
+  grandsYeux?.run(false);
+  grandsYeux = new Blinker((ferme) => yeuxVides.forEach((o) => (o.textContent = ferme ? '–' : '^')));
+  grandsYeux.run(!animationsReduites());
   page.replaceChildren(
     h(
       'div',
       { class: 'feuille vide-page' },
-      h('div', { class: 'grand-kobi', 'aria-hidden': 'true' }, h('span', {}, '^'), h('span', {}, '^')),
+      h('div', { class: 'grand-kobi', 'aria-hidden': 'true' }, ...yeuxVides),
       grand,
       h('p', { class: 'vide-aide' }, vide ? 'Les réunions enregistrées et les conversations avec Kobi apparaîtront ici.' : 'Choisis une réunion ou une conversation à gauche, ou cherche un mot.'),
     ),
@@ -419,6 +425,7 @@ function pageVide(): void {
 async function ouvrir(genre: Genre, id: string, cible: Cible = {}): Promise<void> {
   const n = ++numeroOuverture;
   pageVideRien = null;
+  grandsYeux?.run(false);
   const meme = estSelectionne(genre, id);
   etat.selection = { genre, id };
   if (cible.onglet) etat.onglet = cible.onglet;
@@ -738,6 +745,7 @@ function allerA(contenu: HTMLElement, cible: Cible): void {
 function ouvrirStockage(): void {
   numeroOuverture++;
   pageVideRien = null;
+  grandsYeux?.run(false);
   etat.selection = { panneau: 'stockage' };
   marquerSelection();
   const corps = h('div', { class: 'panneau', 'data-panneau': STOCKAGE.id });

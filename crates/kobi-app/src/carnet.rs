@@ -341,7 +341,8 @@ mod tests {
         let nom = r.nom().to_owned();
         // Deux conversations.
         let mut c1 = st.nouvelle_conversation(1_792_320_000_000);
-        c1.ajouter(Qui::Moi, "Quelle heure à Tokyo ?", true).unwrap();
+        c1.ajouter(Qui::Moi, "Quelle heure à Tokyo ?", true)
+            .unwrap();
         c1.ajouter(Qui::Kobi, "Il est 23 h.", false).unwrap();
         let mut c2 = st.nouvelle_conversation(1_792_330_000_000);
         c2.ajouter(Qui::Moi, "Où est la fusée dans le code ?", false)
@@ -388,7 +389,10 @@ mod tests {
             .iter()
             .map(|t| t["type"].as_str().unwrap())
             .collect();
-        assert!(types.contains(&"reunion") && types.contains(&"conversation"), "{trouves}");
+        assert!(
+            types.contains(&"reunion") && types.contains(&"conversation"),
+            "{trouves}"
+        );
         let dans_transcription = trouves
             .as_array()
             .unwrap()
@@ -397,11 +401,7 @@ mod tests {
             .unwrap();
         assert_eq!(dans_transcription["start"], 0.0);
 
-        let md = appel(
-            "carnet_markdown",
-            json!({ "genre": "reunion", "id": nom }),
-        )
-        .unwrap();
+        let md = appel("carnet_markdown", json!({ "genre": "reunion", "id": nom })).unwrap();
         assert!(md.as_str().unwrap().contains("Budget validé"));
         assert!(appel("carnet_markdown", json!({ "genre": "inconnu", "id": nom })).is_err());
 
