@@ -1,12 +1,14 @@
-//! Acteur Claude (KOB-134) : interpellations, notes et compte rendu
+//! Acteur Claude (KOB-134, KOB-135) : interpellations, notes et compte rendu
 //! sont des tours séparés qui ne bloquent ni l'écoute ni l'enregistrement.
 //!
 //! Deux sessions tournent en parallèle, chacune avec sa file :
 //!
 //! * la **conversation** répond aux questions, une à la fois, dans l'ordre.
-//!   Une carte de confirmation détache le tour : il continue en
+//!   Un tour qui n'a rien écrit au bout de [`ANNONCE`], ou qui appelle un
+//!   outil, devient une tâche longue : Kobi l'annonce, le tour continue en
 //!   arrière-plan sur sa session, et la conversation passe sur une session
-//!   de réserve déjà chaude pendant que la carte attend son clic.
+//!   de réserve déjà chaude. Une carte de confirmation détache aussi le
+//!   tour : la conversation continue pendant que la carte attend son clic.
 //! * les **notes** mettent à jour les notes de la réunion par blocs et
 //!   écrivent le compte rendu.
 //!
@@ -25,8 +27,13 @@ use kobi_brain::{
 };
 use tokio::sync::mpsc;
 
+/// Sans texte après ce délai (ou dès un appel d'outil), le tour est annoncé
+/// comme tâche longue.
+pub const ANNONCE: Duration = Duration::from_secs(4);
 /// Délai maximal d'un bloc de notes ou du compte rendu.
 const NOTES_MAX: Duration = Duration::from_secs(180);
+/// Message affiché à l'annonce d'une tâche longue.
+pub const MESSAGE_ANNONCE: &str = "Je m'en occupe, je te donne le résultat dès qu'il est prêt.";
 /// Outils internes de Claude Code, qui ne font pas d'un tour une tâche.
 const OUTILS_INTERNES: &[&str] = &["ToolSearch", "TodoWrite"];
 
@@ -86,9 +93,11 @@ pub enum Retour {
         tour: u64,
         texte: String,
     },
-    /// Le tour attend une carte ; il continue en arrière-plan.
+    /// Le tour est devenu une tâche longue (annoncée) ou attend une carte
+    /// (détaché sans annonce) ; il continue en arrière-plan.
     Detache {
         tour: u64,
+        annonce: bool,
     },
     /// Fin d'un tour détaché.
     Resultat {
@@ -224,12 +233,45 @@ async fn conversation(
         else {
             continue;
         };
+        // Le délai d'annonce court dès la question, ouverture de session comprise.
+        let annonce = tokio::time::Instant::now() + ANNONCE;
         if session.is_none() {
-            let prete = std::mem::replace(&mut suivante, reserve(&fabrique));
-            match prete
-                .await
-                .unwrap_or_else(|e| Err(BrainError::Crashed(e.to_string())))
-            {
+            let mut prete = std::mem::replace(&mut suivante, reserve(&fabrique));
+            let ouverte = tokio::select! {
+                ouverte = &mut prete => Some(ouverte),
+                () = tokio::time::sleep_until(annonce) => None,
+            };
+            let Some(ouverte) = ouverte else {
+                // Claude tarde à démarrer : la question est annoncée et part
+                // en arrière-plan dès que sa session est prête ; la
+                // conversation continue sur la réserve suivante.
+                sortie(Retour::Detache {
+                    tour,
+                    annonce: true,
+                });
+                let (sortie, cartes) = (sortie.clone(), cartes.clone());
+                tokio::spawn(async move {
+                    match prete
+                        .await
+                        .unwrap_or_else(|e| Err(BrainError::Crashed(e.to_string())))
+                    {
+                        Ok(mut s) => {
+                            let turn = s.ask(Ask {
+                                question,
+                                transcript,
+                                notes,
+                            });
+                            finir(tour, turn, String::new(), &sortie, &cartes).await;
+                        }
+                        Err(e) => sortie(Retour::Erreur {
+                            tour,
+                            message: e.to_string(),
+                        }),
+                    }
+                });
+                continue;
+            };
+            match ouverte.unwrap_or_else(|e| Err(BrainError::Crashed(e.to_string()))) {
                 Ok(s) => session = Some(s),
                 Err(e) => {
                     sortie(Retour::Erreur {
@@ -248,7 +290,7 @@ async fn conversation(
         });
         // Les arrêts reçus entre deux tours visaient un tour déjà fini.
         while arrets.try_recv().is_ok() {}
-        match suivre(tour, turn, &sortie, &cartes, &mut arrets).await {
+        match suivre(tour, turn, annonce, &sortie, &cartes, &mut arrets).await {
             Suivi::Fini => {}
             Suivi::Casse => session = None,
             Suivi::Interrompu(mut turn) => {
@@ -278,7 +320,7 @@ enum Suivi {
     Fini,
     /// Le tour a échoué et la session est à rouvrir.
     Casse,
-    /// Carte : le reste du tour et le texte déjà reçu.
+    /// Tâche longue ou carte : le reste du tour et le texte déjà reçu.
     Detache(Turn, String),
     /// Abandonné par l'utilisateur : le reste du tour, à ignorer.
     Interrompu(Turn),
@@ -288,11 +330,14 @@ enum Suivi {
 async fn suivre(
     tour: u64,
     mut turn: Turn,
+    annonce: tokio::time::Instant,
     sortie: &Sortie,
     cartes: &Cartes,
     arrets: &mut mpsc::UnboundedReceiver<u64>,
 ) -> Suivi {
     let mut texte = String::new();
+    let delai = tokio::time::sleep_until(annonce);
+    tokio::pin!(delai);
     loop {
         tokio::select! {
             evenement = turn.next() => match evenement {
@@ -300,10 +345,15 @@ async fn suivre(
                     texte.push_str(&t);
                     sortie(Retour::Texte { tour, texte: texte.clone() });
                 }
-                Some(BrainEvent::ToolCall { name, .. }) => journaliser_outil(&name),
+                Some(BrainEvent::ToolCall { name, .. }) if !OUTILS_INTERNES.contains(&name.as_str()) => {
+                    journaliser_outil(&name);
+                    sortie(Retour::Detache { tour, annonce: true });
+                    return Suivi::Detache(turn, texte);
+                }
+                Some(BrainEvent::ToolCall { .. }) => {}
                 Some(BrainEvent::Permission(demande)) => {
                     carte(tour, demande, sortie, cartes);
-                    sortie(Retour::Detache { tour });
+                    sortie(Retour::Detache { tour, annonce: false });
                     return Suivi::Detache(turn, texte);
                 }
                 Some(BrainEvent::Done(fin)) => {
@@ -323,6 +373,10 @@ async fn suivre(
                     tracing::info!(tour, "tour interrompu");
                     return Suivi::Interrompu(turn);
                 }
+            }
+            () = &mut delai, if texte.is_empty() => {
+                sortie(Retour::Detache { tour, annonce: true });
+                return Suivi::Detache(turn, texte);
             }
         }
     }
@@ -507,6 +561,74 @@ mod tests {
                 tour: 1,
                 texte: "reçu : ".into()
             }));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tache_longue_annoncee_et_kobi_reste_disponible() {
+        let (s, recus) = sortie();
+        // Première session : un tour qui travaille 30 s sans rien écrire.
+        let longue = vec![vec![
+            Step::Wait(Duration::from_secs(30)),
+            Step::Text("résultat".into()),
+        ]];
+        let c = Cerveau::lancer(fabrique(vec![longue]), s);
+        c.demander(question(1, "lis la codebase"));
+        c.demander(question(2, "quelle heure ?"));
+        attendre(&recus, |r| matches!(r, Retour::Resultat { tour: 1, .. })).await;
+        let recus = recus.lock().unwrap();
+        let position =
+            |ok: &dyn Fn(&Retour) -> bool| recus.iter().position(|(_, r)| ok(r)).unwrap();
+        let annonce = position(&|r| {
+            *r == Retour::Detache {
+                tour: 1,
+                annonce: true,
+            }
+        });
+        let reponse = position(&|r| matches!(r, Retour::Fin { tour: 2, .. }));
+        let resultat = position(&|r| {
+            *r == Retour::Resultat {
+                tour: 1,
+                texte: "résultat".into(),
+            }
+        });
+        assert!(annonce < reponse && reponse < resultat, "{recus:?}");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn session_lente_annoncee_a_temps() {
+        let (s, recus) = sortie();
+        let ouvertes = Arc::new(Mutex::new(0));
+        let n = ouvertes.clone();
+        // La première session met 20 s à s'ouvrir (Claude Code qui démarre).
+        let fabrique: Fabrique = Arc::new(move |_role| {
+            let lente = {
+                let mut n = n.lock().unwrap();
+                *n += 1;
+                *n == 1
+            };
+            Box::pin(async move {
+                if lente {
+                    tokio::time::sleep(Duration::from_secs(20)).await;
+                }
+                Ok(Box::new(FakeBrain::new()) as Session)
+            })
+        });
+        let c = Cerveau::lancer(fabrique, s);
+        c.demander(question(1, "un"));
+        c.demander(question(2, "deux"));
+        attendre(&recus, |r| matches!(r, Retour::Resultat { tour: 1, .. })).await;
+        let recus = recus.lock().unwrap();
+        let position =
+            |ok: &dyn Fn(&Retour) -> bool| recus.iter().position(|(_, r)| ok(r)).unwrap();
+        let annonce = position(&|r| {
+            *r == Retour::Detache {
+                tour: 1,
+                annonce: true,
+            }
+        });
+        let reponse = position(&|r| matches!(r, Retour::Fin { tour: 2, .. }));
+        let resultat = position(&|r| matches!(r, Retour::Resultat { tour: 1, .. }));
+        assert!(annonce < reponse && reponse < resultat, "{recus:?}");
     }
 
     #[tokio::test]
