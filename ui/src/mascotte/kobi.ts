@@ -337,6 +337,7 @@ export class Kobi {
     this.aim();
     this.syncTimers();
     this.startLife();
+    this.scrambler.resync();
     if (RESTING.has(state)) this.deepTimer = window.setTimeout(() => this.deepSleep(), DEEP_SLEEP_MS);
   }
 
@@ -550,6 +551,7 @@ export class Kobi {
     this.aim();
     this.syncTimers();
     this.startLife();
+    this.scrambler.resync();
   }
 
   /**
@@ -837,6 +839,8 @@ export class Kobi {
 
   /** Scène interrompue (changement d'état, réveil, pause) : regard, yeux et bouche reprennent leur place. */
   private endScene(): void {
+    // Symboles d'une scène ou d'un geste coupés en route : jamais laissés sur Kobi.
+    this.burst.querySelectorAll('.fly').forEach((n) => n.remove());
     if (!this.root.dataset.idle) return;
     delete this.root.dataset.idle;
     this.setLively('scene', false);
@@ -1077,8 +1081,12 @@ export class Kobi {
         { transform: 'translate(40px,-10px) scale(1.2)', offset: 0.9 },
         { transform: 'translate(40px,-10px) scale(2)' },
       ],
-      { duration: 2400, fill: 'forwards' },
+      // Sans `fill` : la bulle se retire d'elle-même à la fin de son
+      // animation, même si la scène est coupée (KOB-171 : restée posée sur
+      // l'œil droit « o », on lisait « 8 »).
+      { duration: 2400 },
     );
+    grow.onfinish = () => bubble.remove();
     grow.oncancel = () => bubble.remove();
     this.life.after(2400, () => {
       bubble.remove();

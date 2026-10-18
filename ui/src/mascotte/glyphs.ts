@@ -146,6 +146,21 @@ export class Scrambler {
     this.endGlitch();
   }
 
+  /**
+   * Garde-fou (KOB-171) : hors brouillage, les yeux et le mot affichent
+   * exactement l'expression courante et les lettres de l'état. Appelé après
+   * chaque changement d'état, pause ou réglage.
+   */
+  resync(): void {
+    if (this.scrambling) return;
+    this.paintEyes();
+    const spans = this.word.children;
+    for (let i = 0; i < spans.length; i++) {
+      const c = this.letters[i];
+      if (c !== undefined && spans[i]!.textContent !== c) spans[i]!.textContent = c;
+    }
+  }
+
   private endGlitch(): void {
     const g = this.glitched;
     this.glitched = null;
