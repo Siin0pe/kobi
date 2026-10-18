@@ -65,6 +65,10 @@ test('démarrer puis terminer une réunion depuis la webview', async ({ page }) 
   expect(started).toMatchObject({ etat: 'reunion', transcrit: true });
   await expect(root).toHaveAttribute('data-session', 'reunion');
   await expect(root).toHaveAttribute('data-rec', 'true');
+  // Sans événement `enregistrement` de la coque, l'état de session suffit à
+  // montrer l'enregistrement sur la mascotte (anneau rouge et REC).
+  await expect(page.locator('.kobi .rec-ring')).toBeVisible();
+  await expect(page.locator('.rec')).toContainText('REC');
 
   // La mascotte suit l'état envoyé par la session.
   await page.evaluate(() =>
@@ -96,12 +100,14 @@ test('démarrer puis terminer une réunion depuis la webview', async ({ page }) 
   await page.evaluate(() => window.kobi.command('pause'));
   await expect(root).toHaveAttribute('data-session', 'pause');
   await expect(root).toHaveAttribute('data-rec', 'false');
+  await expect(page.locator('.kobi')).toHaveClass(/rec-paused/);
   await page.evaluate(() => window.kobi.command('reprendre'));
 
   const ended = await page.evaluate(() => window.kobi.command('terminer'));
   expect(ended).toMatchObject({ etat: 'veille', transcrit: false });
   await expect(root).toHaveAttribute('data-session', 'veille');
   await expect(kobi).toHaveAttribute('data-state', 'idle');
+  await expect(page.locator('.kobi .rec-ring')).toBeHidden();
 
   // Un refus de la session revient en erreur, sans changer l'affichage.
   const refusal = await page.evaluate(() => window.kobi.command('pause').then(() => 'ok', (e) => String(e)));
@@ -109,7 +115,8 @@ test('démarrer puis terminer une réunion depuis la webview', async ({ page }) 
   await expect(root).toHaveAttribute('data-session', 'veille');
 
   const invokes = await page.evaluate(() => (window as unknown as { __invokes: string[] }).__invokes);
-  expect(invokes).toEqual(['etat_session', 'demarrer', 'pause', 'reprendre', 'terminer', 'pause']);
+  // `etat_enregistrement` est inconnue de cette coque : repli sur `etat_session`.
+  expect(invokes).toEqual(['etat_session', 'etat_enregistrement', 'etat_session', 'demarrer', 'pause', 'reprendre', 'terminer', 'pause']);
   await expectNoErrors(errors);
 });
 
@@ -117,5 +124,20 @@ test('hors de Tauri, les commandes ne font rien', async ({ page }) => {
   const errors = await openUi(page, '');
   expect(await page.evaluate(() => window.kobi.command('demarrer'))).toBeUndefined();
   await expect(page.locator('[data-session]')).toHaveCount(0);
+  await expectNoErrors(errors);
+});
+
+test('l’événement `enregistrement` de la coque pilote l’affichage, l’état de session ne sert plus', async ({ page }) => {
+  await page.addInitScript(fakeTauri);
+  const errors = await openUi(page, '');
+  const emit = (e: string, p: unknown) => page.evaluate(([e, p]) => (window as unknown as { __emit(e: string, p: unknown): void }).__emit(e as string, p), [e, p] as const);
+  await emit('enregistrement', { actif: true, pause: false, debut_ms: Date.now() - 65_000, notes: 2, titre: null });
+  await expect(page.locator('.rec')).toContainText('REC');
+  await expect(page.locator('.rec-notes')).toHaveText('2 notes');
+  // Un état de session « veille » ne coupe plus l'enregistrement : la coque l'a pris en main.
+  await emit('state', { etat: 'veille', activite: null, mascotte: 'idle', transcrit: false });
+  await expect(page.locator('.kobi .rec-ring')).toBeVisible();
+  await emit('enregistrement', { actif: false, pause: false, debut_ms: 0, notes: 0, titre: null });
+  await expect(page.locator('.kobi .rec-ring')).toBeHidden();
   await expectNoErrors(errors);
 });

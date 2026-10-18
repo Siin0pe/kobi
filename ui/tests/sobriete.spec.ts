@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { expectNoErrors, openUi } from './helpers';
+import { expectEconomicalFont, expectNoErrors, openUi } from './helpers';
 
 const STATES = ['idle', 'listen', 'think', 'write', 'answer', 'suggest', 'done', 'error'] as const;
 
@@ -78,7 +78,7 @@ for (const state of ['idle', 'think', 'answer', 'listen'] as const) {
   });
 }
 
-test('après 20 s de veille, Kobi passe en sommeil profond sans redessiner son texte', async ({ page }) => {
+test('après 20 s de veille, Kobi passe en sommeil profond : le mot ondule par paliers, lentement', async ({ page }) => {
   await page.clock.install();
   const errors = await openUi(page, '');
   const kobi = page.locator('.kobi');
@@ -86,20 +86,48 @@ test('après 20 s de veille, Kobi passe en sommeil profond sans redessiner son t
   await expect(kobi).not.toHaveClass(/deep/);
   await page.clock.runFor(2_000);
   await expect(kobi).toHaveClass(/deep/);
-  // Le mot se pose en douceur (animation finie), puis plus rien ne touche à la police.
+  // Le mot vit toujours (exigence « toujours animé »), mais par paliers et lentement.
   await page.clock.runFor(1_500);
   await page.waitForTimeout(1_400);
-  const fontAnimations = await page.evaluate(() =>
-    document
-      .getAnimations()
-      .filter((a) => a.playState === 'running')
-      .filter((a) => (a.effect as KeyframeEffect).getKeyframes().some((k) => 'fontVariationSettings' in k)).length,
-  );
-  expect(fontAnimations).toBe(0);
+  await expectEconomicalFont(page);
   // La respiration continue.
   expect(await page.locator('.kobi .pill').evaluate((n) => n.getAnimations().length)).toBe(1);
   // Le moindre changement d'état réveille Kobi.
   await page.evaluate(() => window.kobi.setState('listen', window.kobi.demoData('listen')));
   await expect(kobi).not.toHaveClass(/deep/);
+  await expectNoErrors(errors);
+});
+
+test('repos économe en réunion : tout bouge encore, par paliers recalés sur une grille de 250 ms', async ({ page }) => {
+  await page.clock.install();
+  const errors = await openUi(page, '');
+  await page.evaluate(() =>
+    window.kobi.recording({ actif: true, pause: false, debut_ms: Date.now(), notes: 2, titre: 'Point hebdo', derniere_note: 'Décision : refresh token à 30 jours' }),
+  );
+  await page.clock.runFor(23_000);
+  await page.waitForTimeout(1_500);
+  await expect(page.locator('.stage')).toHaveClass(/econome/);
+  const anims = await page.evaluate(() =>
+    document
+      .getAnimations()
+      .filter((a) => a.playState === 'running')
+      .map((a) => {
+        const effect = a.effect as KeyframeEffect;
+        const steps = effect.getKeyframes().find((k) => String(k.easing).startsWith('steps'));
+        const n = Number(/steps\((\d+)/.exec(String(steps?.easing))?.[1] ?? 0);
+        const interval = n ? Number(effect.getTiming().duration) / n : 0;
+        const phase = (Number(a.startTime) + Number(effect.getTiming().delay)) % 250;
+        return { name: (a as CSSAnimation).animationName, interval, phase: Math.min(phase, 250 - phase) };
+      }),
+  );
+  // Le mot, la pilule, l'anneau, l'étiquette REC et la fiche bougent toujours.
+  for (const name of ['kobi-wave', 'kobi-bob', 'kobi-scribble', 'kobi-rec', 'rec-float', 'card-float']) {
+    expect(anims.map((a) => a.name)).toContain(name);
+  }
+  for (const a of anims) {
+    expect(a.interval % 250, a.name).toBe(0);
+    expect(a.interval, a.name).toBeGreaterThan(0);
+    expect(a.phase, a.name).toBeLessThan(1);
+  }
   await expectNoErrors(errors);
 });

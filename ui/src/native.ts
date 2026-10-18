@@ -5,6 +5,7 @@
 // la session (démarrer, pause, reprendre, terminer) et affiche l'état que la
 // session lui renvoie par l'événement `state`.
 
+import { followRecording } from './recording';
 import { isMascotState } from './states';
 import type { Stage } from './stage';
 
@@ -87,5 +88,8 @@ export function followSession(stage: Stage): void {
   void api.event.listen<string>('question', (e) => stage.update({ question: e.payload }));
   void api.event.listen<string>('answer', (e) => stage.update({ answer: e.payload }));
   void api.event.listen<{ title: string; message: string }>('erreur', (e) => stage.update({ error: e.payload }));
+  // Volume du micro (0 à 1) pendant l'écoute, s'il est émis par la coque.
+  void api.event.listen<number>('niveau', (e) => typeof e.payload === 'number' && stage.setLevel(e.payload));
   void api.core.invoke<SessionState>('etat_session').then(show);
+  followRecording(stage);
 }

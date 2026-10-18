@@ -44,11 +44,16 @@ async function copy(text: string): Promise<boolean> {
   }
 }
 
-/** Indicateur « ● REC · titre · 12:34 », mis à jour une fois par seconde. */
+/**
+ * Indicateur « ● REC · titre · 12:34 · 3 notes », collé à la mascotte, mis à
+ * jour une fois par seconde. Une note ajoutée fait rebondir le compteur.
+ */
 export class RecIndicator {
   readonly root: HTMLElement;
   private readonly label: HTMLElement;
   private readonly time: HTMLElement;
+  private readonly notes: HTMLElement;
+  private reduced = false;
   private info: MeetingInfo | null = null;
   private timer = 0;
   private paused = false;
@@ -60,7 +65,13 @@ export class RecIndicator {
     // boucle. La scène annonce le début, la pause et la fin de la réunion.
     this.time = el('span', 'rec-time');
     this.time.setAttribute('aria-hidden', 'true');
-    this.root.append(el('span', 'rec-dot'), (this.label = el('span', 'rec-label')), this.time);
+    this.notes = el('span', 'rec-notes');
+    this.notes.hidden = true;
+    this.root.append(el('span', 'rec-dot'), (this.label = el('span', 'rec-label')), this.time, this.notes);
+  }
+
+  setReducedMotion(reduced: boolean): void {
+    this.reduced = reduced;
   }
 
   get active(): boolean {
@@ -68,6 +79,7 @@ export class RecIndicator {
   }
 
   set(info: MeetingInfo | null): void {
+    const before = this.info?.notes ?? 0;
     this.info = info;
     this.root.hidden = info === null;
     this.root.classList.toggle('is-paused', Boolean(info?.paused));
@@ -75,8 +87,38 @@ export class RecIndicator {
       const word = info.paused ? 'PAUSE' : 'REC';
       this.label.textContent = info.title ? `${word} · ${info.title}` : word;
       this.root.setAttribute('aria-label', info.paused ? 'Transcription en pause' : 'Réunion transcrite en local');
+      const n = info.notes ?? 0;
+      this.notes.hidden = n === 0;
+      this.notes.textContent = `${n} note${n > 1 ? 's' : ''}`;
+      if (n > before && !this.reduced && !this.paused) this.bump(n - before);
     }
     this.tick();
+  }
+
+  /** Note ajoutée : le compteur rebondit et un « +1 » s'envole. */
+  private bump(added: number): void {
+    this.notes.animate(
+      [
+        { transform: 'scale(1)' },
+        { transform: 'scale(1.45) rotate(-6deg)', offset: 0.3 },
+        { transform: 'scale(.92)', offset: 0.6 },
+        { transform: 'scale(1)' },
+      ],
+      { duration: 520, easing: 'cubic-bezier(.2,.8,.3,1)' },
+    );
+    const plus = el('span', 'rec-plus', `+${added}`);
+    plus.setAttribute('aria-hidden', 'true');
+    this.root.append(plus);
+    const anim = plus.animate(
+      [
+        { transform: 'translateY(0) scale(.6)', opacity: 0 },
+        { transform: 'translateY(-14px) scale(1.15)', opacity: 1, offset: 0.3 },
+        { transform: 'translateY(-34px) scale(1)', opacity: 0 },
+      ],
+      { duration: 900, easing: 'cubic-bezier(.2,.7,.3,1)' },
+    );
+    anim.onfinish = () => plus.remove();
+    anim.oncancel = () => plus.remove();
   }
 
   /** Fenêtre masquée : plus de minuterie ; la durée est recalculée au retour. */
