@@ -621,6 +621,7 @@ mod tests {
             cwd: Some(cwd),
             partial_messages: false,
             args: arguments("haiku", SYSTEM_PROMPT, &[], Some(&Memoire::de(&st)), None),
+            env: Vec::new(),
         })
         .unwrap();
         let mut demander = |question: &str| -> (String, Vec<String>) {
