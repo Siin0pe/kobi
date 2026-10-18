@@ -8,8 +8,26 @@ type Tick = (now: number) => boolean;
 const subscribers = new Set<Tick>();
 let frame = 0;
 
+/** Intervalle imposé entre deux images (repos économe), 0 = chaque image. */
+let interval = 0;
+let timer = 0;
+
+function request(): void {
+  if (interval > 0) timer = window.setTimeout(() => (frame = requestAnimationFrame(loop)), interval);
+  else frame = requestAnimationFrame(loop);
+}
+
+/**
+ * Repos économe : la boucle ne tourne plus qu'une image toutes les `ms`
+ * (le métronome de la scène, econome.ts) ; 0 la rend à chaque image.
+ */
+export function setFrameInterval(ms: number): void {
+  interval = ms;
+}
+
 function loop(now: number): void {
   frame = 0;
+  timer = 0;
   for (const fn of [...subscribers]) {
     if (!subscribers.has(fn)) continue;
     let again = false;
@@ -19,18 +37,20 @@ function loop(now: number): void {
       if (!again) subscribers.delete(fn);
     }
   }
-  if (subscribers.size > 0) frame = requestAnimationFrame(loop);
+  if (subscribers.size > 0) request();
 }
 
 /** Abonne `fn` à la boucle ; renvoie la fonction qui le désabonne. */
 export function onFrame(fn: Tick): () => void {
   subscribers.add(fn);
-  if (!frame) frame = requestAnimationFrame(loop);
+  if (!frame && !timer) request();
   return () => {
     subscribers.delete(fn);
-    if (subscribers.size === 0 && frame) {
+    if (subscribers.size === 0) {
       cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
       frame = 0;
+      timer = 0;
     }
   };
 }

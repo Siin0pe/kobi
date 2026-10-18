@@ -78,7 +78,7 @@ for (const state of ['idle', 'think', 'answer', 'listen'] as const) {
   });
 }
 
-test('après 20 s de veille, Kobi passe en sommeil profond : le mot ondule par paliers, lentement', async ({ page }) => {
+test('après 20 s de veille, Kobi passe en sommeil profond : le mot ondule lentement, au pas du métronome', async ({ page }) => {
   await page.clock.install();
   const errors = await openUi(page, '');
   const kobi = page.locator('.kobi');
@@ -98,36 +98,78 @@ test('après 20 s de veille, Kobi passe en sommeil profond : le mot ondule par p
   await expectNoErrors(errors);
 });
 
-test('repos économe en réunion : tout bouge encore, par paliers recalés sur une grille de 250 ms', async ({ page }) => {
+test('repos économe en réunion : tout bouge encore, au rythme d’un seul métronome (3 images/s, puis 2)', async ({ page }) => {
   await page.clock.install();
   const errors = await openUi(page, '');
   await page.evaluate(() =>
     window.kobi.recording({ actif: true, pause: false, debut_ms: Date.now(), notes: 2, titre: 'Point hebdo', derniere_note: 'Décision : refresh token à 30 jours' }),
   );
   await page.clock.runFor(23_000);
-  await page.waitForTimeout(1_500);
+  const stage = page.locator('.stage');
+  await expect(stage).toHaveClass(/econome/);
+  await expect(stage).toHaveAttribute('data-fps', '3');
+  // Les boucles relevées sont gardées dans la page : on suit les mêmes objets
+  // (une boucle relancée par un petit événement de vie est un nouvel objet).
+  const loops = () =>
+    page.evaluate(() => {
+      const w = window as unknown as { loops?: Animation[] };
+      w.loops ??= document
+        .querySelector('.scene')!
+        .getAnimations({ subtree: true })
+        .filter((a) => a instanceof CSSAnimation && a.effect?.getTiming().iterations === Infinity);
+      return w.loops.map((a) => ({ name: (a as CSSAnimation).animationName, state: a.playState, t: Number(a.currentTime) }));
+    });
+  const before = await loops();
+  // Le mot, la pilule, l'anneau, l'étiquette REC, la fiche et le champ bougent toujours…
+  for (const name of ['kobi-wave', 'kobi-bob', 'kobi-scribble', 'kobi-rec', 'rec-float', 'card-float', 'say-chevron']) {
+    expect(before.map((a) => a.name)).toContain(name);
+  }
+  // … mais aucune ne produit d'image d'elle-même : le métronome les fait avancer ensemble.
+  expect(before.filter((a) => a.state !== 'paused')).toEqual([]);
+  await page.clock.runFor(1_000);
+  const after = await loops();
+  // Toujours tenues (pas relancées entre-temps), elles ont avancé d'une seconde.
+  const kept = after.map((a, i) => ({ ...a, d: a.t - before[i]!.t })).filter((a) => a.state === 'paused');
+  expect(kept.length).toBeGreaterThan(5);
+  for (const a of kept) {
+    expect(a.d, a.name).toBeGreaterThan(950);
+    expect(a.d, a.name).toBeLessThan(1_050);
+  }
+  // Toutes avancent exactement du même pas : elles changent sur les mêmes images.
+  await page.clock.runFor(300);
+  const later = await loops();
+  const steps = new Set(later.map((a, i) => (a.state === 'paused' && after[i]!.state === 'paused' ? Math.round(a.t - after[i]!.t) : null)).filter((d) => d !== null));
+  expect(steps.size).toBe(1);
+  expect([...steps][0]).toBeGreaterThan(0);
+  // Après une minute, 2 images/s.
+  await page.clock.runFor(60_000);
+  await expect(stage).toHaveAttribute('data-fps', '2');
+  // Le moindre changement d'état réveille tout : les boucles reprennent seules.
+  await page.evaluate(() => window.kobi.setState('listen', window.kobi.demoData('listen')));
+  await expect(stage).not.toHaveClass(/econome/);
+  await expect(stage).toHaveAttribute('data-fps', '0');
+  expect((await loops()).filter((a) => a.state === 'paused')).toEqual([]);
+  await expectNoErrors(errors);
+});
+
+test('au repos, un geste (animation Web) suit le métronome puis se termine normalement', async ({ page }) => {
+  await page.clock.install();
+  const errors = await openUi(page, '');
+  await page.clock.runFor(23_000);
   await expect(page.locator('.stage')).toHaveClass(/econome/);
-  const anims = await page.evaluate(() =>
-    document
-      .getAnimations()
-      .filter((a) => a.playState === 'running')
-      .map((a) => {
-        const effect = a.effect as KeyframeEffect;
-        const steps = effect.getKeyframes().find((k) => String(k.easing).startsWith('steps'));
-        const n = Number(/steps\((\d+)/.exec(String(steps?.easing))?.[1] ?? 0);
-        const interval = n ? Number(effect.getTiming().duration) / n : 0;
-        const phase = (Number(a.startTime) + Number(effect.getTiming().delay)) % 250;
-        return { name: (a as CSSAnimation).animationName, interval, phase: Math.min(phase, 250 - phase) };
-      }),
-  );
-  // Le mot, la pilule, l'anneau, l'étiquette REC et la fiche bougent toujours.
-  for (const name of ['kobi-wave', 'kobi-bob', 'kobi-scribble', 'kobi-rec', 'rec-float', 'card-float']) {
-    expect(anims.map((a) => a.name)).toContain(name);
-  }
-  for (const a of anims) {
-    expect(a.interval % 250, a.name).toBe(0);
-    expect(a.interval, a.name).toBeGreaterThan(0);
-    expect(a.phase, a.name).toBeLessThan(1);
-  }
+  const state = await page.evaluate(() => {
+    const w = window as unknown as { done: boolean; anim: Animation };
+    w.done = false;
+    w.anim = document.querySelector('.kobi .ch')!.animate([{ scale: 1 }, { scale: 1.2 }], { duration: 600 });
+    w.anim.onfinish = () => (w.done = true);
+    return w.anim.playState;
+  });
+  // Tenu par le métronome dès sa création : aucune image d'elle-même.
+  expect(state).toBe('paused');
+  await page.clock.runFor(400);
+  expect(await page.evaluate(() => (window as unknown as { anim: Animation }).anim.playState)).toBe('paused');
+  // Arrivé au bout, il est relâché et finit (onfinish).
+  await page.clock.runFor(800);
+  await expect.poll(() => page.evaluate(() => (window as unknown as { done: boolean }).done)).toBe(true);
   await expectNoErrors(errors);
 });

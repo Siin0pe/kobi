@@ -3,7 +3,7 @@
 // animations) et met tout en pause quand la fenêtre est masquée.
 
 import { Bubbles, type ActionDecision } from './bubbles';
-import { alignSteps } from './econome';
+import { Metronome } from './econome';
 import { Kobi } from './mascotte/kobi';
 import { ConsentCard, RecIndicator, type ConsentEvent } from './meeting';
 import {
@@ -69,6 +69,7 @@ export class Stage {
   private readonly cleanups: Array<() => void> = [];
   /** Animations arrêtées par la mise en pause, à relancer au retour. */
   private frozen: Animation[] = [];
+  private readonly metronome: Metronome;
   /** Réponse interrompue par l'utilisateur (Échap). */
   private interrupted = false;
   /** Appelé à chaque état affiché (l'historique se referme, par exemple). */
@@ -105,17 +106,16 @@ export class Stage {
 
     this.kobi = new Kobi(this.reducedMotion);
     this.scene.append(this.kobi.root, this.bubbles.root, this.rec.root);
-    // Repos économe : bulles et étiquette REC passent aux paliers de Kobi, et
-    // tout ce qui démarre ensuite (nouvelle fiche, « z ») se recale sur la grille.
+    // Repos économe : toute la scène (Kobi, bulles, REC, champ) avance au
+    // rythme d'un seul métronome (econome.ts).
+    this.metronome = new Metronome(this.scene, (fps) => (this.root.dataset.fps = String(fps)));
     this.kobi.onDeepChange = (deep) => {
       this.root.classList.toggle('econome', deep);
-      if (deep) requestAnimationFrame(() => alignSteps(this.scene));
+      // Après le changement de style : les boucles du repos sont en place.
+      if (deep) requestAnimationFrame(() => this.root.classList.contains('econome') && this.metronome.setActive(true));
+      else this.metronome.setActive(false);
     };
-    const onAnimationStart = (): void => {
-      if (this.root.classList.contains('econome')) alignSteps(this.scene);
-    };
-    this.scene.addEventListener('animationstart', onAnimationStart);
-    this.cleanups.push(() => this.scene.removeEventListener('animationstart', onAnimationStart));
+    this.cleanups.push(() => this.metronome.destroy());
     this.root.append(this.scene, this.dot, this.live);
     parent.append(this.root);
 
@@ -364,6 +364,7 @@ export class Stage {
       this.frozen = scope.getAnimations({ subtree: true }).filter((a) => a.playState === 'running');
       this.frozen.forEach((a) => a.pause());
     }
+    this.metronome.setSuspended(paused || hidden);
     this.bubbles.setPaused(paused);
     this.rec.setPaused(hidden);
     this.kobi.setPaused(paused);

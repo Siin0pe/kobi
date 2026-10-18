@@ -221,17 +221,6 @@
 .rec-notes {
   animation: rec-tick 3s ease-in-out infinite;
 }
-/* Repos économe (econome.ts) : paliers de 250 ms sur la grille commune. */
-.econome .rec {
-  animation-duration: 4s;
-  animation-timing-function: steps(16);
-}
-.econome .rec-notes {
-  animation-timing-function: steps(12);
-}
-.econome .rec-dot {
-  animation-duration: 1.5s;
-}
 .reduced-motion .rec,
 .reduced-motion .rec-notes,
 .reduced-motion .card-consent,

@@ -1,81 +1,143 @@
 // Animations de Kobi (KOB-137) : transitions sans saut, vie de chaque état,
 // curseur, volume du micro, bouche calée sur le flux, enregistrement.
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { expectEconomicalFont, expectNoErrors, openUi } from './helpers';
 
 const STATES = ['idle', 'listen', 'think', 'write', 'answer', 'suggest', 'done', 'error'] as const;
 
-test('aucune image ne saute pendant les transitions entre les 8 états', async ({ page }) => {
-  test.setTimeout(90_000);
-  const errors = await openUi(page, 'backdrop=1');
-  const pairs: Array<[string, string]> = [];
-  for (const a of STATES) for (const b of STATES) if (a !== b) pairs.push([a, b]);
-  const worst = await page.evaluate(async (pairs) => {
-    const pill = document.querySelector('.kobi .pill')!;
-    const box = () => {
-      const r = pill.getBoundingClientRect();
-      return { x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width, h: r.height };
-    };
-    let worst = { jump: 0, speed: 0, pair: '' };
-    for (const [a, b] of pairs) {
-      window.kobi.setState(a as never, window.kobi.demoData(a as never));
-      await new Promise((r) => setTimeout(r, 450));
-      // Déplacement de chaque image, ramené à une image de 16,7 ms.
-      const moves: number[] = [];
-      let last = box();
-      let lastT = performance.now();
-      window.kobi.setState(b as never, window.kobi.demoData(b as never));
-      const end = lastT + 700;
-      await new Promise<void>((resolve) => {
-        const tick = (t: number) => {
-          const now = box();
-          const frames = Math.max(1, (t - lastT) / 16.7);
-          moves.push(Math.max(Math.hypot(now.x - last.x, now.y - last.y), Math.abs(now.w - last.w), Math.abs(now.h - last.h)) / frames);
-          last = now;
-          lastT = t;
-          if (t < end) requestAnimationFrame(tick);
-          else resolve();
-        };
-        requestAnimationFrame(tick);
-      });
-      // Un saut est une image qui bouge bien plus que ses deux voisines ; un
-      // mouvement rapide mais continu accélère et freine sur plusieurs images.
-      for (let i = 1; i < moves.length - 1; i++) {
-        const jump = moves[i]! - Math.max(moves[i - 1]!, moves[i + 1]!);
-        if (jump > worst.jump) worst = { ...worst, jump, pair: `${a} → ${b}` };
-        if (moves[i]! > worst.speed) worst.speed = moves[i]!;
+/** Images séparées de plus de 2,5 images à 60 Hz : trop espacées pour juger un saut. */
+const DENSE_MS = 2.5 * 16.7;
+
+/**
+ * Enchaîne les transitions `pairs` et renvoie le pire saut de la pilule.
+ *
+ * Un saut est une image qui bouge bien plus que ses deux voisines (un
+ * mouvement rapide mais continu accélère et freine sur plusieurs images). Il
+ * n'est jugé que sur trois images rapprochées : sous charge, une image qui
+ * arrive 80 ms après la précédente concentre la partie rapide d'un geste
+ * pendant que ses voisines tombent sur ses parties lentes, sans saut réel.
+ * `judged` compte les triplets jugés, pour qu'une machine trop lente ne
+ * fasse pas passer le test à vide.
+ */
+async function worstJump(page: Page, pairs: Array<[string, string]>): Promise<{ jump: number; speed: number; pair: string; judged: number }> {
+  return page.evaluate(
+    async ([pairs, denseMs]) => {
+      const pill = document.querySelector('.kobi .pill')!;
+      const box = () => {
+        const r = pill.getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width, h: r.height };
+      };
+      const worst = { jump: 0, speed: 0, pair: '', judged: 0 };
+      // Kobi est posé : classe de l'état en place et plus aucun geste, morphing
+      // ou inertie en cours (au plus 3 s). Sous charge, un délai fixe faisait
+      // commencer la mesure au milieu du geste précédent.
+      const settled = async (state: string) => {
+        const kobi = document.querySelector('.kobi')!;
+        const layers = [...kobi.querySelectorAll('.react, .inertia, .eyes')];
+        const busy = () => !kobi.classList.contains(`m-${state}`) || layers.some((l) => l.getAnimations().some((a) => !(a instanceof CSSAnimation) && a.playState === 'running'));
+        const until = performance.now() + 3_000;
+        while (busy() && performance.now() < until) await new Promise((r) => setTimeout(r, 50));
+        await new Promise((r) => setTimeout(r, 100));
+      };
+      for (const [a, b] of pairs) {
+        window.kobi.setState(a as never, window.kobi.demoData(a as never));
+        await settled(a);
+        // Déplacement de chaque image, ramené à une image de 16,7 ms.
+        const moves: number[] = [];
+        const gaps: number[] = [];
+        let last = box();
+        let lastT = performance.now();
+        window.kobi.setState(b as never, window.kobi.demoData(b as never));
+        const end = lastT + 700;
+        await new Promise<void>((resolve) => {
+          const tick = (t: number) => {
+            const now = box();
+            const frames = Math.max(1, (t - lastT) / 16.7);
+            moves.push(Math.max(Math.hypot(now.x - last.x, now.y - last.y), Math.abs(now.w - last.w), Math.abs(now.h - last.h)) / frames);
+            gaps.push(t - lastT);
+            last = now;
+            lastT = t;
+            if (t < end) requestAnimationFrame(tick);
+            else resolve();
+          };
+          requestAnimationFrame(tick);
+        });
+        for (let i = 1; i < moves.length - 1; i++) {
+          if (moves[i]! > worst.speed) worst.speed = moves[i]!;
+          if (Math.max(gaps[i - 1]!, gaps[i]!, gaps[i + 1]!) > denseMs) continue;
+          worst.judged++;
+          const jump = moves[i]! - Math.max(moves[i - 1]!, moves[i + 1]!);
+          if (jump > worst.jump) Object.assign(worst, { jump, pair: `${a} → ${b}` });
+        }
       }
-    }
-    return worst;
-  }, pairs);
-  expect(worst.jump, `saut : ${worst.pair}`).toBeLessThan(9);
-  expect(worst.speed).toBeLessThan(30);
-  await expectNoErrors(errors);
+      return worst;
+    },
+    [pairs, DENSE_MS] as const,
+  );
+}
+
+const ALL_PAIRS: Array<[string, string]> = STATES.flatMap((a) => STATES.filter((b) => b !== a).map((b): [string, string] => [a, b]));
+
+// Retries ciblés : sous charge, la phase des images par rapport aux gestes
+// varie. Un vrai saut (la pilule se téléporte) échoue à chaque essai, et la
+// contre-épreuve vérifie que le détecteur les voit. Cas limite connu : l'arrêt
+// sec du sursaut d'Écoute (Propose → Écoute, environ 8,5 pour un seuil de 9).
+test.describe(() => {
+  test.describe.configure({ retries: 2 });
+
+  test('aucune image ne saute pendant les transitions entre les 8 états', async ({ page }) => {
+    test.setTimeout(300_000);
+    const errors = await openUi(page, 'backdrop=1');
+    const worst = await worstJump(page, ALL_PAIRS);
+    // Assez d'images jugées (une machine libre en juge plus de 1 500).
+    expect(worst.judged).toBeGreaterThan(200);
+    expect(worst.jump, `saut : ${worst.pair}`).toBeLessThan(9);
+    expect(worst.speed).toBeLessThan(30);
+    await expectNoErrors(errors);
+  });
+
+  test('chaque transition est chorégraphiée : anticipation, yeux en fente, puis décollage', async ({ page }) => {
+    const errors = await openUi(page, 'state=listen');
+    await page.waitForTimeout(700);
+    // Lu dans la même tâche que `setState` : l'anticipation est trop courte pour un aller-retour du test.
+    const during = await page.evaluate(() => {
+      window.kobi.setState('suggest', window.kobi.demoData('suggest'));
+      const k = document.querySelector('.kobi')!;
+      return {
+        state: k.getAttribute('data-state'),
+        cls: k.getAttribute('class'),
+        react: k.querySelector('.react')!.getAnimations().length,
+        eyes: k.querySelector('.eyes')!.getAnimations().length,
+      };
+    });
+    // Pendant l'anticipation, l'état est déjà annoncé mais la classe de l'ancien reste posée.
+    expect(during.state).toBe('suggest');
+    expect(during.cls).toContain('m-listen');
+    // Le geste (calque .react) et le morphing des yeux tournent.
+    expect(during.react).toBe(1);
+    expect(during.eyes).toBeGreaterThanOrEqual(1);
+    await expect(page.locator('.kobi')).toHaveClass(/m-suggest/);
+    // Le « ! » surgit.
+    await expect(page.locator('.kobi .bang')).toBeVisible();
+    await expectNoErrors(errors);
+  });
 });
 
-test('chaque transition est chorégraphiée : anticipation, yeux en fente, puis décollage', async ({ page }) => {
-  const errors = await openUi(page, 'state=listen');
-  await page.waitForTimeout(700);
-  // Lu dans la même tâche que `setState` : l'anticipation est trop courte pour un aller-retour du test.
-  const during = await page.evaluate(() => {
-    window.kobi.setState('suggest', window.kobi.demoData('suggest'));
-    const k = document.querySelector('.kobi')!;
-    return {
-      state: k.getAttribute('data-state'),
-      cls: k.getAttribute('class'),
-      react: k.querySelector('.react')!.getAnimations().length,
-      eyes: k.querySelector('.eyes')!.getAnimations().length,
+test('contre-épreuve : sans l’enveloppe d’inertie, le même détecteur voit les sauts', async ({ page }) => {
+  test.setTimeout(300_000);
+  // L'inertie (calque .inertia) adoucit chaque changement de pose ; on l'annule.
+  await page.addInitScript(() => {
+    const animate = Element.prototype.animate;
+    Element.prototype.animate = function (this: Element, ...args: Parameters<Element['animate']>) {
+      const anim = animate.apply(this, args);
+      if (this.classList.contains('inertia')) anim.cancel();
+      return anim;
     };
   });
-  // Pendant l'anticipation, l'état est déjà annoncé mais la classe de l'ancien reste posée.
-  expect(during.state).toBe('suggest');
-  expect(during.cls).toContain('m-listen');
-  // Le geste (calque .react) et le morphing des yeux tournent.
-  expect(during.react).toBe(1);
-  expect(during.eyes).toBeGreaterThanOrEqual(1);
-  await expect(page.locator('.kobi')).toHaveClass(/m-suggest/);
-  // Le « ! » surgit.
-  await expect(page.locator('.kobi .bang')).toBeVisible();
+  const errors = await openUi(page, 'backdrop=1');
+  const worst = await worstJump(page, ALL_PAIRS);
+  expect(worst.judged).toBeGreaterThan(200);
+  expect(worst.jump).toBeGreaterThan(9);
   await expectNoErrors(errors);
 });
 
@@ -267,7 +329,7 @@ test('pendant l’enregistrement, le repos de Kobi est la prise de notes, puis i
   await expectNoErrors(errors);
 });
 
-test('la prise de notes passe en mode économe après 20 s : le mot ondule par paliers, lentement', async ({ page }) => {
+test('la prise de notes passe en mode économe après 20 s : le mot ondule lentement, au pas du métronome', async ({ page }) => {
   await page.clock.install();
   const errors = await openUi(page, '');
   await page.evaluate(() => window.kobi.recording({ actif: true, pause: false, debut_ms: Date.now(), notes: 0, titre: null }));

@@ -298,6 +298,18 @@ const CLIPS = [
     },
   ],
   [
+    'repos-econome',
+    'backdrop=1',
+    async (page) => {
+      // KOB-146 : réunion au repos, 85 s. Éveillé (60 images/s), puis repos
+      // économe à 20 s (3 images/s), puis 2 images/s à 80 s : tout bouge encore.
+      await page.evaluate(() =>
+        window.kobi.recording({ actif: true, pause: false, debut_ms: Date.now() - 754_000, notes: 3, titre: null, derniere_note: 'Décision : refresh token à 30 jours' }),
+      );
+      await wait(page, 85_000);
+    },
+  ],
+  [
     'lisibilite-fond-sombre',
     'backdrop=sombre',
     async (page) => {
