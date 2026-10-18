@@ -120,8 +120,8 @@ test('repos économe en réunion : tout bouge encore, au rythme d’un seul mét
       return w.loops.map((a) => ({ name: (a as CSSAnimation).animationName, state: a.playState, t: Number(a.currentTime) }));
     });
   const before = await loops();
-  // Le mot, la pilule, l'anneau, l'étiquette REC, la fiche et le champ bougent toujours…
-  for (const name of ['kobi-wave', 'kobi-bob', 'kobi-scribble', 'kobi-rec', 'rec-float', 'card-float', 'say-chevron']) {
+  // Le mot, la pilule, l'anneau, l'étiquette REC et la fiche bougent toujours…
+  for (const name of ['kobi-wave', 'kobi-bob', 'kobi-scribble', 'kobi-rec', 'rec-float', 'card-float']) {
     expect(before.map((a) => a.name)).toContain(name);
   }
   // … mais aucune ne produit d'image d'elle-même : le métronome les fait avancer ensemble.

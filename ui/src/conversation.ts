@@ -1,13 +1,10 @@
-// Conversation (KOB-133) : champ de texte sous Kobi et historique court des
-// échanges, qu'on fait défiler dans la bulle.
+// Conversation (KOB-133) : historique court des échanges, qu'on fait défiler
+// dans la bulle. On écrit à Kobi dans sa bulle d'écriture (ecrire.ts, KOB-147).
 //
 // La coque tient la conversation (voix et clavier, même session Claude) :
 // l'interface envoie le texte tapé (`envoyer_texte`) et affiche l'historique
 // que la coque publie (événement `conversation`, commande `historique` au
 // chargement). Rien n'est gardé ici.
-//
-// Toujours animé, mais jamais l'élément cliquable lui-même : le champ ne bouge
-// pas, ce sont son chevron, son curseur et son invite qui vivent.
 
 import { tauri } from './native';
 import type { Stage } from './stage';
@@ -34,8 +31,6 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, t
 }
 
 export class Conversation {
-  readonly form: HTMLFormElement;
-  readonly input: HTMLInputElement;
   readonly history: HTMLElement;
   /** Texte envoyé (Entrée). */
   onSend: ((text: string) => void) | null = null;
@@ -44,33 +39,6 @@ export class Conversation {
   private idleTimer = 0;
 
   constructor(private readonly stage: Stage) {
-    this.form = el('form', 'say');
-    this.form.setAttribute('role', 'search');
-    this.form.setAttribute('aria-label', 'Écrire à Kobi');
-    const chevron = el('span', 'say-chevron', '›');
-    chevron.setAttribute('aria-hidden', 'true');
-    this.input = el('input', 'say-input');
-    this.input.type = 'text';
-    this.input.name = 'texte';
-    this.input.autocomplete = 'off';
-    this.input.spellcheck = false;
-    this.input.placeholder = 'Écrire à Kobi…';
-    this.input.setAttribute('aria-label', 'Écrire à Kobi');
-    const enter = el('span', 'say-enter', '↵');
-    enter.setAttribute('aria-hidden', 'true');
-    this.form.append(chevron, this.input, enter);
-    this.form.addEventListener('submit', (e) => {
-      e.preventDefault();
-      this.send();
-    });
-    this.input.addEventListener('input', () => this.form.classList.toggle('has-text', this.input.value.trim() !== ''));
-    this.input.addEventListener('keydown', (e) => {
-      if (e.key === 'ArrowUp' && this.input.value === '' && this.bulles.length > 0) {
-        e.preventDefault();
-        this.openHistory();
-      }
-    });
-
     this.history = el('div', 'card card-history');
     this.history.dataset.panel = 'history';
     this.history.setAttribute('role', 'log');
@@ -82,7 +50,6 @@ export class Conversation {
     this.history.addEventListener('pointermove', () => this.armIdle());
 
     stage.mount(this.history);
-    stage.mount(this.form);
     // Faire défiler vers le haut, sur la bulle ou sur Kobi, ouvre l'historique.
     stage.root.addEventListener(
       'wheel',
@@ -91,13 +58,6 @@ export class Conversation {
       },
       { passive: true },
     );
-    // Taper au clavier n'importe où écrit dans le champ.
-    document.addEventListener('keydown', (e) => {
-      if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || e.key.length !== 1) return;
-      const target = e.target as Element | null;
-      if (target?.closest('input, textarea, select, [contenteditable]')) return;
-      this.input.focus({ preventScroll: true });
-    });
     const previous = stage.onStateChange;
     stage.onStateChange = (state) => {
       previous?.(state);
@@ -131,14 +91,9 @@ export class Conversation {
     this.stage.root.classList.remove('history-open');
   }
 
-  private send(): void {
-    const text = this.input.value.trim();
-    if (!text) return;
-    this.input.value = '';
-    this.form.classList.remove('has-text');
+  /** Texte tapé dans la bulle d'écriture, déjà avalé par Kobi : il part à la coque. */
+  send(text: string): void {
     this.closeHistory();
-    // Réaction immédiate : la question s'affiche avant toute réponse de la coque.
-    this.stage.setState('listen', { question: text });
     this.onSend?.(text);
   }
 

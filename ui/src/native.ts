@@ -23,16 +23,36 @@ export function isNative(): boolean {
   return tauri() !== undefined;
 }
 
-/** Glisser la mascotte déplace la fenêtre ; les cartes et leurs boutons restent cliquables. */
+/** Seuil (px) au-delà duquel un appui sur Kobi devient un glisser. */
+const DRAG_THRESHOLD = 4;
+
+/**
+ * Glisser la mascotte déplace la fenêtre ; un simple clic reste un clic (il
+ * ouvre la bulle pour écrire à Kobi, KOB-147). Les cartes, leurs boutons et
+ * la bulle restent cliquables.
+ */
 export function enableWindowDrag(root: HTMLElement): void {
   const api = tauri();
   if (!api) return;
   root.addEventListener('mousedown', (e) => {
     if (e.button !== 0) return;
     const target = e.target as Element | null;
-    if (target?.closest('button, a, input, textarea, select, .card, .rec')) return;
+    if (target?.closest('button, a, input, textarea, select, .card, .rec, .ecrire')) return;
+    // Pas de sélection ni de perte du focus de la bulle.
     e.preventDefault();
-    void api.window.getCurrentWindow().startDragging();
+    const x0 = e.screenX;
+    const y0 = e.screenY;
+    const stop = (): void => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', stop);
+    };
+    const move = (m: MouseEvent): void => {
+      if (Math.hypot(m.screenX - x0, m.screenY - y0) < DRAG_THRESHOLD) return;
+      stop();
+      void api.window.getCurrentWindow().startDragging();
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', stop);
   });
 }
 

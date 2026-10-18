@@ -22,20 +22,22 @@ async function boxes(page: Page, selector: string): Promise<unknown[]> {
   return out;
 }
 
-test('Entrée envoie le texte tapé (envoyer_texte) et la question s’affiche tout de suite', async ({ page }) => {
+test('Entrée envoie le texte tapé (envoyer_texte) : Kobi l’avale et réfléchit aussitôt', async ({ page }) => {
   await mockTauri(page);
   const errors = await openUi(page, '');
   const input = page.getByRole('textbox', { name: 'Écrire à Kobi' });
+  // Plus de champ permanent (KOB-147) : la bulle s'ouvre à la première touche.
+  await expect(input).toBeHidden();
+  await page.keyboard.type('où est géré le refresh token ?');
   await expect(input).toBeVisible();
-  await input.fill('où est géré le refresh token ?');
   await input.press('Enter');
   await expect(input).toHaveValue('');
   // Réaction immédiate, avant toute réponse de la coque.
-  await expect(page.locator('.stage')).toHaveAttribute('data-state', 'listen');
-  await expect(page.locator('[data-card=question] .text')).toHaveText('où est géré le refresh token ?');
-  expect(await calls(page)).toContainEqual(['envoyer_texte', { texte: 'où est géré le refresh token ?' }]);
+  await expect(page.locator('.stage')).toHaveAttribute('data-state', 'think');
+  await expect.poll(() => calls(page)).toContainEqual(['envoyer_texte', { texte: 'où est géré le refresh token ?' }]);
   // Un texte vide n'envoie rien.
   await input.press('Enter');
+  await page.waitForTimeout(600);
   expect((await calls(page)).filter(([c]) => c === 'envoyer_texte')).toHaveLength(1);
   await expectNoErrors(errors);
 });
@@ -73,7 +75,8 @@ test('l’historique (commande historique, événement conversation) se fait dé
   // Échap referme.
   await page.keyboard.press('Escape');
   await expect(history).toBeHidden();
-  // Flèche haut dans le champ vide rouvre ; une nouvelle question referme.
+  // Flèche haut dans la bulle vide rouvre ; une nouvelle question referme.
+  await page.evaluate(() => window.kobi.ecrire());
   await page.getByRole('textbox', { name: 'Écrire à Kobi' }).press('ArrowUp');
   await expect(history).toBeVisible();
   await emit(page, 'state', { etat: 'veille', activite: 'ecoute', mascotte: 'listen', transcrit: false });
@@ -93,6 +96,7 @@ test('tâche longue : annoncée, Kobi reste disponible, résultat livré en noti
   await expect(running).toContainText('Je m’en occupe');
   await expect(running).toContainText(longue);
   // Une autre question passe pendant ce temps : la notification reste.
+  await page.evaluate(() => window.kobi.ecrire());
   await page.getByRole('textbox', { name: 'Écrire à Kobi' }).fill('quelle heure est-il ?');
   await page.getByRole('textbox', { name: 'Écrire à Kobi' }).press('Enter');
   await emit(page, 'conversation', [bulle(1, longue, 'Je m’en occupe, le résultat arrive.', 'tache'), bulle(2, 'quelle heure est-il ?', 'Il est 10 h 12.', 'fini', true)]);
@@ -171,10 +175,10 @@ test('réunion : la dernière note de l’événement enregistrement s’écrit 
   await emit(page, 'enregistrement', { actif: true, pause: false, debut_ms: debut, notes: 2, titre: 'Point hebdo', derniere_note: 'Action : doc API (Léa)' });
   await expect(page.locator('[data-card=notes] .text')).toHaveText('Action : doc API (Léa)');
   await expect(page.locator('.rec-notes')).toContainText('2');
-  // Le champ reste disponible pendant la réunion.
-  await page.getByRole('textbox', { name: 'Écrire à Kobi' }).fill('résume');
+  // On peut toujours écrire à Kobi pendant la réunion.
+  await page.keyboard.type('résume');
   await page.getByRole('textbox', { name: 'Écrire à Kobi' }).press('Enter');
-  expect(await calls(page)).toContainEqual(['envoyer_texte', { texte: 'résume' }]);
+  await expect.poll(() => calls(page)).toContainEqual(['envoyer_texte', { texte: 'résume' }]);
   await expectNoErrors(errors);
 });
 
@@ -182,19 +186,23 @@ test('toujours animé, sans faire bouger ce qui se clique ; « réduire les anim
   await mockTauri(page);
   const errors = await openUi(page, '');
   await emit(page, 'conversation', [bulle(1, 'longue tâche', '', 'tache')]);
+  await page.evaluate(() => window.kobi.ecrire());
+  await page.keyboard.type('bonjour');
   const live = (sel: string) => page.locator(sel).evaluate((n) => n.getAnimations({ subtree: true }).filter((a) => a.playState === 'running').length);
   await page.waitForTimeout(600);
-  expect(await live('.say')).toBeGreaterThanOrEqual(2);
+  // La pointe et l'invite ↵ de la bulle vivent (la pointe est un pseudo-élément).
+  expect(await page.evaluate(() => document.getAnimations().filter((a) => a.playState === 'running' && ['ecrire-pointe', 'ecrire-entree'].includes((a as CSSAnimation).animationName)).length)).toBe(2);
   expect(await live('.notif')).toBeGreaterThanOrEqual(3);
-  // Le champ et la notification eux-mêmes ne bougent pas.
-  expect(await page.locator('.say').evaluate((n) => n.getAnimations().filter((a) => a.playState === 'running').length)).toBe(0);
+  // La bulle (une fois ouverte) et la notification elles-mêmes ne bougent pas.
+  expect(await page.locator('.ecrire').evaluate((n) => n.getAnimations().filter((a) => a.playState === 'running').length)).toBe(0);
   expect(await page.locator('.notif').evaluate((n) => n.getAnimations().filter((a) => a.playState === 'running').length)).toBe(0);
-  const b = await boxes(page, '.say-input');
+  const b = await boxes(page, '.ecrire-champ');
   for (const x of b) expect(x).toEqual(b[0]);
 
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await expect(page.locator('.stage')).toHaveClass(/reduced-motion/);
-  expect(await live('.say')).toBe(0);
+  expect(await live('.ecrire')).toBe(0);
+  expect(await page.evaluate(() => document.getAnimations().filter((a) => a.playState === 'running' && (a as CSSAnimation).animationName?.startsWith('ecrire-')).length)).toBe(0);
   expect(await live('.notif')).toBe(0);
   await expectNoErrors(errors);
 });

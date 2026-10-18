@@ -158,6 +158,8 @@ export class Kobi {
   /** Réveillé par le survol pendant la veille. */
   private awake = false;
   private glance: readonly [number, number] | null = null;
+  /** Point regardé à la demande (curseur de la bulle d'écriture, KOB-147). */
+  private target: { x: number; y: number } | null = null;
   private lastIdleEvent = '';
   private readonly cleanups: Array<() => void> = [];
 
@@ -526,19 +528,20 @@ export class Kobi {
   private aim(): void {
     const state = this.state ?? 'idle';
     let [x, y] = LOOKS[state].gaze;
-    if (this.pointer && this.live) [x, y] = this.towardPointer();
+    // La bulle est loin à gauche : un gain plus doux, pour que les yeux suivent le curseur d'un bout à l'autre.
+    if (this.target && this.live) [x, y] = this.towardPointer(this.target, 0.55);
+    else if (this.pointer && this.live) [x, y] = this.towardPointer();
     else if (this.glance) [x, y] = this.glance;
     const t = `translate(${x.toFixed(1)}px,${y.toFixed(1)}px)`;
     if (this.gaze.style.transform !== t) this.gaze.style.transform = t;
   }
 
-  private towardPointer(): [number, number] {
+  private towardPointer(p: { x: number; y: number } = this.pointer!, gain = 1.4): [number, number] {
     const r = this.pill.getBoundingClientRect();
-    const p = this.pointer!;
     const dx = (p.x - (r.left + r.width / 2)) / Math.max(1, r.width);
     const dy = (p.y - (r.top + r.height / 2)) / Math.max(1, r.height);
     const clamp = (v: number) => Math.max(-1, Math.min(1, v));
-    return [clamp(dx * 1.4) * 24, clamp(dy * 1.4) * 18];
+    return [clamp(dx * gain) * 24, clamp(dy * gain) * 18];
   }
 
   /** Le regard et le corps suivent le curseur quand il passe sur la fenêtre. */
@@ -604,7 +607,7 @@ export class Kobi {
   }
 
   private sleepAgain(): void {
-    if (this.state !== 'idle' || this.pointer) return;
+    if (this.state !== 'idle' || this.pointer || this.target) return;
     this.awake = false;
     this.scrambler.express(['–', 'o']);
     this.life.after(260, () => {
@@ -842,5 +845,76 @@ export class Kobi {
     // Le rythme de la vie ralentit.
     this.life.clear();
     this.startLife();
+  }
+
+  // ----- Écrire à Kobi (KOB-147) : la bulle de saisie fait vivre Kobi. -----
+
+  /**
+   * Kobi regarde un point de la fenêtre (le curseur de la bulle d'écriture),
+   * avant le curseur de la souris ; `null` le relâche. En veille, il se réveille
+   * pour lire, puis se rendort quand on le relâche.
+   */
+  lookAt(point: { x: number; y: number } | null): void {
+    const had = this.target !== null;
+    this.target = point;
+    if (point && this.live && this.state === 'idle' && !this.awake) {
+      this.wake();
+      this.reading(true);
+    }
+    if (!point && had) {
+      this.reading(false);
+      if (this.awake && !this.pointer) this.life.after(900, () => this.sleepAgain());
+    }
+    this.aim();
+  }
+
+  /** En veille, Kobi lit ce qu'on lui écrit : plus de « zzz », il dit « je lis ». */
+  private reading(on: boolean): void {
+    if (this.root.classList.contains('reading') === on) return;
+    this.root.classList.toggle('reading', on);
+    if (this.state !== 'idle') return;
+    if (on) this.scrambler.show('o', 'je lis');
+    else this.scrambler.show(LOOKS.idle.eye, LOOKS.idle.word);
+  }
+
+  /** Une touche frappée dans la bulle : petit sursaut. */
+  keyJolt(): void {
+    if (!this.live) return;
+    this.pill.animate([{ transform: 'none' }, { transform: 'translateY(-5px) scale(.97,1.04)', offset: 0.35 }, { transform: 'none' }], {
+      duration: 190,
+      easing: 'cubic-bezier(.2,.8,.3,1)',
+      composite: 'add',
+    });
+  }
+
+  /** On hésite au milieu d'une phrase : Kobi s'impatiente (regard en coin, il tapote). */
+  impatient(): void {
+    if (!this.live) return;
+    this.scrambler.express(['¬', '¬']);
+    if (!this.gestures.busy) this.gestures.play('tap');
+    this.life.after(900, () => this.scrambler.express(this.awake ? ['o', 'o'] : null));
+  }
+
+  /**
+   * Le texte envoyé arrive dans sa bouche : Kobi l'ouvre grand, avale au bout
+   * de `gulpMs`, savoure. La scène passe ensuite en Réfléchit.
+   */
+  swallow(gulpMs: number): void {
+    if (!this.live) return;
+    this.mouth.textContent = 'O';
+    this.scrambler.express(['O', 'O']);
+    this.life.after(gulpMs, () => {
+      this.mouth.textContent = 'o';
+      this.gestures.play('gulp');
+    });
+    this.life.after(gulpMs + 160, () => {
+      this.mouth.textContent = '';
+      this.scrambler.express(['^', '^']);
+    });
+  }
+
+  /** Bouche de Kobi (coordonnées de la fenêtre) : la bulle d'écriture en sort et y rentre. */
+  mouthRect(): DOMRect {
+    return this.mouth.getBoundingClientRect();
   }
 }

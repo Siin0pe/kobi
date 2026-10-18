@@ -4,11 +4,13 @@
 //!   interpelle Kobi comme « Kobi, … », la phrase suivante est la question
 //!   (voir [`crate::ecoute`]). Il ne démarre jamais d'enregistrement ;
 //! * `hotkey_record` (`Ctrl+Shift+R` par défaut) : démarre l'enregistrement
-//!   de la réunion, ou l'arrête s'il tourne (puis compte rendu).
+//!   de la réunion, ou l'arrête s'il tourne (puis compte rendu) ;
+//! * `hotkey_write` (`Ctrl+Alt+K` par défaut) : montre Kobi et ouvre sa bulle
+//!   pour lui écrire (KOB-147).
 
 use std::str::FromStr;
 
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 use crate::chef::{publier, ChefPartage, Message};
@@ -35,6 +37,23 @@ pub fn lire(cle: &str, valeur: &str, defaut: &str) -> (Shortcut, Option<String>)
 struct Raccourcis {
     interpeller: Shortcut,
     enregistrer: Shortcut,
+    ecrire: Shortcut,
+}
+
+/// Événement qui ouvre la bulle d'écriture dans l'interface.
+pub const EVENEMENT_ECRIRE: &str = "ecrire";
+
+/// Montre Kobi (même replié ou masqué), lui donne le focus clavier et ouvre
+/// sa bulle : on peut taper tout de suite.
+fn ouvrir_bulle<R: Runtime>(app: &AppHandle<R>) {
+    let Some(fenetre) = app.get_webview_window("main") else {
+        return;
+    };
+    let _ = fenetre.show();
+    let _ = fenetre.unminimize();
+    let _ = fenetre.set_focus();
+    let _ = fenetre.emit(EVENEMENT_ECRIRE, ());
+    tracing::info!("raccourci global : écrire à Kobi");
 }
 
 /// Démarre l'enregistrement, ou l'arrête s'il tourne.
@@ -66,12 +85,14 @@ pub fn installer<R: Runtime>(
         &config.hotkey_record,
         &defaut.hotkey_record,
     );
-    for probleme in [p1, p2].into_iter().flatten() {
+    let (ecrire, p3) = lire("hotkey_write", &config.hotkey_write, &defaut.hotkey_write);
+    for probleme in [p1, p2, p3].into_iter().flatten() {
         tracing::warn!(%probleme, "raccourci de la config ignoré");
     }
     app.manage(Raccourcis {
         interpeller,
         enregistrer,
+        ecrire,
     });
     app.plugin(
         tauri_plugin_global_shortcut::Builder::new()
@@ -82,6 +103,8 @@ pub fn installer<R: Runtime>(
                 let r = app.state::<Raccourcis>();
                 if *raccourci == r.enregistrer {
                     basculer_enregistrement(app);
+                } else if *raccourci == r.ecrire {
+                    ouvrir_bulle(app);
                 } else if *raccourci == r.interpeller {
                     match crate::interpellation::declencher(app) {
                         Ok(()) => tracing::info!("raccourci global : interpellation"),
@@ -91,7 +114,7 @@ pub fn installer<R: Runtime>(
             })
             .build(),
     )?;
-    for raccourci in [interpeller, enregistrer] {
+    for raccourci in [interpeller, enregistrer, ecrire] {
         if let Err(e) = app.global_shortcut().register(raccourci) {
             tracing::warn!(raccourci = ?raccourci, erreur = %e, "raccourci global non enregistré");
         } else {
@@ -122,6 +145,14 @@ mod tests {
             Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyR)
         );
         assert_ne!(defaut, record);
+        let (ecrire, probleme) = lire("hotkey_write", &c.hotkey_write, &c.hotkey_write);
+        assert!(probleme.is_none());
+        assert_eq!(
+            ecrire,
+            Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyK)
+        );
+        assert_ne!(ecrire, defaut);
+        assert_ne!(ecrire, record);
         let (autre, probleme) = lire("hotkey", "Alt+K", &c.hotkey);
         assert!(probleme.is_none());
         assert_eq!(autre, Shortcut::new(Some(Modifiers::ALT), Code::KeyK));

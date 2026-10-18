@@ -224,6 +224,23 @@ export const GESTURES = {
     [0.75, 'rotate(-2deg)'],
     [1, 'none'],
   ]),
+  /** Écrire à Kobi (KOB-147) : on hésite, Kobi tapote d'impatience. */
+  tap: def(720, 0, [
+    [0, 'none'],
+    [0.15, 'translateY(-6px) rotate(-2deg)'],
+    [0.3, 'translateY(0) scale(1.03,.97)'],
+    [0.5, 'translateY(-6px) rotate(2deg)'],
+    [0.65, 'translateY(0) scale(1.03,.97)'],
+    [1, 'none'],
+  ]),
+  /** Écrire à Kobi : le texte envoyé est avalé (la gorge descend, on se redresse). */
+  gulp: def(560, 0, [
+    [0, 'none'],
+    [0.25, 'translateY(8px) scale(1.1,.86)'],
+    [0.55, 'translateY(-10px) scale(.94,1.08)'],
+    [0.8, 'translateY(1px) scale(1.02,.98)'],
+    [1, 'none'],
+  ]),
 } satisfies Record<string, GestureDef>;
 
 export type Gesture = keyof typeof GESTURES;
