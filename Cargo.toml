@@ -1,8 +1,17 @@
 [workspace]
 resolver = "2"
 members = ["crates/*"]
+# Crates tiers patchés : ni membres, ni lintés par clippy --workspace.
+exclude = ["third_party"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
+
+# rustpotter 3.0.2 (fonction `rustpotter` de kobi-wake, KOB-27) tire
+# candle-core 0.2.2, qui ne compile pas avec le half 2.5+ exigé par candle 0.9
+# (Kyutai, KOB-19). Copie patchée : voir third_party/candle-core-0.2.2/KOBI.md.
+# Le patch ne remplace que la 0.2.2 ; candle 0.9 vient toujours de crates.io.
+[patch.crates-io]
+candle-core = { path = "third_party/candle-core-0.2.2" }

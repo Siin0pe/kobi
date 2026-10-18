@@ -2,10 +2,14 @@
 //!
 //! Chaque détecteur reçoit l'audio 16 kHz mono en morceaux de taille
 //! quelconque et signale les détections. Deux candidats sont comparés au J0 :
-//! openWakeWord ([`oww::OpenWakeWord`], KOB-26) et rustpotter (KOB-27).
+//! openWakeWord ([`oww::OpenWakeWord`], KOB-26) et rustpotter
+//! (`rustpotter::RustpotterDetector`, KOB-27, derrière la fonction
+//! `rustpotter`).
 
 pub mod oww;
 pub mod runtime;
+#[cfg(feature = "rustpotter")]
+pub mod rustpotter;
 
 /// Fréquence d'échantillonnage attendue par tous les détecteurs.
 pub const SAMPLE_RATE: u32 = 16_000;
@@ -28,6 +32,8 @@ pub enum WakeError {
     Ort(String),
     #[error("sortie inattendue du modèle {model} : {detail}")]
     BadOutput { model: &'static str, detail: String },
+    #[error("rustpotter : {0}")]
+    Rustpotter(String),
 }
 
 /// Interface commune aux détecteurs de mot-clé.
