@@ -22,7 +22,7 @@ pub const PROMPT_MCP_KOBI: &str = "\
 Les outils `mcp__kobi__*` sont les tiens : ton état, tes réunions enregistrées (notes, \
 comptes rendus, transcriptions), tes conversations, tes rappels et tes réglages. \
 Sers-t'en pour répondre à « qu'est-ce qu'on a décidé hier ? », « quels sont mes rappels ? », \
-« que disent mes notes ? ». Pour l'instant, ils ne font que lire.";
+« que disent mes notes ? ». Pour l'instant, ils ne font que lire. Quand tu prends des notes ou écris un compte rendu, ne les appelle pas : tout ce qu'il te faut est dans le message, et l'état de la réunion y change encore.";
 
 /// Un serveur MCP d'une session.
 #[derive(Debug, Clone, PartialEq)]

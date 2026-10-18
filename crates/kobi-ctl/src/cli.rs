@@ -404,6 +404,18 @@ pub fn lisible(commande: &Commande, r: &Value) -> String {
             }
         ),
         "meetings.export" => s(&r["markdown"]),
+        "mascot.discreet" => if r["discret"] == true {
+            "Mode discret : Kobi est une pastille."
+        } else {
+            "Mode discret quitté."
+        }
+        .into(),
+        "mascot.show" | "mascot.hide" => if r["visible"] == true {
+            "Mascotte visible."
+        } else {
+            "Mascotte cachée (Kobi reste dans la barre système)."
+        }
+        .into(),
         "app.open" => format!(
             "Ouvert : {}{}",
             s(&r["section"]),
@@ -672,7 +684,11 @@ mod tests {
             "{st}"
         );
         assert_eq!(lisible(c("config.get"), &json!(true)), "true");
-        assert_eq!(lisible(c("mascot.show"), &json!({})), "OK");
+        assert_eq!(lisible(c("app.quit"), &json!({})), "OK");
+        assert_eq!(
+            lisible(c("mascot.discreet"), &json!({"discret": true})),
+            "Mode discret : Kobi est une pastille."
+        );
         assert_eq!(lisible(c("reminders.list"), &json!([])), "(aucun)");
         let set = lisible(
             c("config.set"),
