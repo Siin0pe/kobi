@@ -2,6 +2,12 @@
 // toujours par des nœuds texte : rien de ce qui vient du disque n'est
 // interprété comme du HTML.
 
+import { suivreClasseAnimations } from './animations';
+
+// Chaque fenêtre secondaire importe ce module : la classe `reduced-motion`
+// de `<html>` y suit le réglage « Animations » de Kobi.
+suivreClasseAnimations();
+
 type Enfant = Node | string | null | undefined | false;
 type Attributs = Record<string, string | number | boolean | null | undefined | EventListener>;
 

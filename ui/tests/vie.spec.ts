@@ -148,3 +148,27 @@ test('réglage « Animations » changé dans une autre fenêtre : la mascotte su
   await expect(page.locator('.stage')).toHaveClass(/reduced-motion/);
   await expectNoErrors(errors);
 });
+
+test('réunion, réglage « toujours » avec Windows réduit : REC et fiche de notes, cliquables, ne bougent pas', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const errors = await openUi(page, 'backdrop=1');
+  await page.evaluate(() => window.kobi.recording({ actif: true, pause: false, debut_ms: Date.now(), notes: 2, titre: 'Point hebdo', derniere_note: 'Budget validé' }));
+  await expect(page.locator('.stage')).not.toHaveClass(/reduced-motion/);
+  await page.waitForTimeout(700);
+  const boxes = () =>
+    page.evaluate(() =>
+      ['.rec', '.card-notes'].map((s) => {
+        const r = document.querySelector(s)!.getBoundingClientRect();
+        return [r.x, r.y, r.width, r.height].map((v) => Math.round(v * 10) / 10).join(',');
+      }),
+    );
+  const first = await boxes();
+  for (let i = 0; i < 8; i++) {
+    await page.waitForTimeout(200);
+    expect(await boxes()).toEqual(first);
+  }
+  // La vie passe par les enfants : le surtitre de la fiche et le point rouge.
+  const vivants = await page.evaluate(() => ['.card-notes .kicker', '.rec-dot'].map((s) => document.querySelector(s)!.getAnimations().filter((a) => a.playState === 'running').length));
+  expect(vivants.every((n) => n > 0)).toBe(true);
+  await expectNoErrors(errors);
+});

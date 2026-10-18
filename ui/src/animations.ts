@@ -52,6 +52,21 @@ export function animationsReduitesSelonReglage(): boolean {
 const ecouteurs = new Set<() => void>();
 
 /**
+ * Fenêtres secondaires (app Kobi, Carnet, Réglages, premier lancement,
+ * notes) : la classe `reduced-motion` sur `<html>` suit le réglage ; leurs
+ * feuilles de style et `animationsReduites()` (dom.ts) la lisent. Au
+ * chargement, elle n'est que posée si besoin (jamais retirée) : une page qui
+ * la pose elle-même la garde. Ensuite, chaque changement du réglage la tient à jour.
+ */
+let classeSuivie = false;
+export function suivreClasseAnimations(): void {
+  if (classeSuivie || typeof document === 'undefined') return;
+  classeSuivie = true;
+  if (animationsReduitesSelonReglage()) document.documentElement.classList.add('reduced-motion');
+  suivreAnimations((reduites) => document.documentElement.classList.toggle('reduced-motion', reduites));
+}
+
+/**
  * Appelle `fn(reduites)` à chaque changement du réglage (ici ou dans une autre
  * fenêtre) ou, en mode « suivre Windows », du réglage système.
  */
