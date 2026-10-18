@@ -85,6 +85,11 @@ test('entrée « Écrire à Kobi » du menu (événement kobi:ecrire) et raccour
   await expect(bulle(page)).toBeHidden();
   await emit(page, 'ecrire', null);
   await opened(page);
+  await page.keyboard.press('Escape');
+  await expect(bulle(page)).toBeHidden();
+  // Entrée `ecrire` du menu du clic droit (événement kobi:menu, KOB-139).
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('kobi:menu', { detail: 'ecrire' })));
+  await opened(page);
   await expectNoErrors(errors);
 });
 
@@ -106,8 +111,10 @@ test('pendant la frappe : lettres brouillées puis posées, Kobi suit le curseur
   await expect(just).toHaveText('x');
   await expect(page.locator('.ecrire-miroir')).toHaveText('où estx​');
   // Chaque touche fait sursauter la pilule.
-  const jolts = await page.locator('.kobi .pill').evaluate((n) => n.getAnimations().filter((a) => !(a instanceof CSSAnimation)).length);
-  expect(jolts).toBeGreaterThanOrEqual(0);
+  await page.keyboard.press('y');
+  const jolts = await page.locator('.kobi .pill').evaluate((n) => n.getAnimations().filter((a) => !(a instanceof CSSAnimation) && (a.effect as KeyframeEffect).composite === 'add').length);
+  expect(jolts).toBeGreaterThanOrEqual(1);
+  await page.keyboard.press('Backspace');
   await page.keyboard.press('Backspace');
   // Le regard suit le curseur : au début du texte, il est plus à gauche qu'à la fin.
   await page.keyboard.type(' géré le refresh token ?', { delay: 60 });

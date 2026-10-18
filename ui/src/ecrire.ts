@@ -137,6 +137,8 @@ export class Ecrire {
       this.open();
     });
     window.addEventListener('kobi:ecrire', () => this.open());
+    // Menu du clic droit (KOB-139) : entrée `ecrire`.
+    window.addEventListener('kobi:menu', (e) => (e as CustomEvent<string>).detail === 'ecrire' && this.open());
     void tauri()?.event.listen('ecrire', () => this.open());
 
     const previous = stage.onStateChange;
