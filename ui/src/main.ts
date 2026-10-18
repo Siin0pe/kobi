@@ -12,12 +12,14 @@ import { applyCarte, enableInterrupt, followCartes, type CarteUi } from './carte
 import { Conversation, followConversation, type Bulle } from './conversation';
 import { Tasks, followRappels, type Rappel } from './taches';
 import { Ecrire } from './ecrire';
+import { followReport, ReportCard, type CompteRenduUi } from './compte-rendu';
 import './styles/fonts.css';
 import './styles/stage.css';
 import './styles/bubbles.css';
 import './styles/meeting.css';
 import './styles/conversation.css';
 import './styles/ecrire.css';
+import './styles/compte-rendu.css';
 
 const params = new URLSearchParams(location.search);
 
@@ -45,6 +47,9 @@ ecrire.onSend = (texte) => conversation.send(texte);
 ecrire.onHistory = () => conversation.openHistory();
 ecrire.yields = () => conversation.historyOpen || ['answer', 'think', 'listen'].includes(stage.currentState);
 enableInterrupt(stage, conversation, followCartes(stage));
+// Compte rendu de fin de réunion (KOB-74).
+const report = new ReportCard(stage);
+followReport(report);
 
 let stopDemo: () => void = () => {};
 
@@ -87,6 +92,8 @@ declare global {
       interrupt(): void;
       /** Ouvre la bulle pour écrire à Kobi (menu, raccourci). */
       ecrire(): void;
+      /** Compte rendu de fin de réunion, comme l'événement `compte_rendu` de la coque. */
+      compteRendu(c: CompteRenduUi): void;
     };
   }
 }
@@ -114,6 +121,7 @@ window.kobi = {
   carte: (c) => applyCarte(stage, c),
   interrupt: () => stage.interrupt(),
   ecrire: () => ecrire.open(),
+  compteRendu: (c) => report.show(c),
   play: (state) => {
     stopDemo();
     stopDemo = playDemo(

@@ -126,15 +126,20 @@ test('repos économe en réunion : tout bouge encore, au rythme d’un seul mét
   }
   // … mais aucune ne produit d'image d'elle-même : le métronome les fait avancer ensemble.
   expect(before.filter((a) => a.state !== 'paused')).toEqual([]);
-  await page.clock.runFor(1_000);
+  await page.clock.runFor(2_000);
   const after = await loops();
-  // Toujours tenues (pas relancées entre-temps), elles ont avancé d'une seconde.
+  // Toujours tenues (pas relancées entre-temps), elles ont avancé de deux
+  // secondes, à un tic près : le métronome (3 images/s) ne les avance qu'à
+  // ses tics, et une fenêtre de 2 000 ms d'horloge en contient 6 ou 7 selon
+  // la phase (avance mesurée 2 000 ou 2 333 ms ; 1 000 ou 1 333 sur 1 s).
+  const TIC = 1000 / 3;
   const kept = after.map((a, i) => ({ ...a, d: a.t - before[i]!.t })).filter((a) => a.state === 'paused');
   expect(kept.length).toBeGreaterThan(5);
   for (const a of kept) {
-    expect(a.d, a.name).toBeGreaterThan(950);
-    expect(a.d, a.name).toBeLessThan(1_050);
+    expect(Math.abs(a.d - 2_000), a.name).toBeLessThanOrEqual(TIC + 1);
   }
+  // Et toutes du même pas (mêmes tics) : une seule valeur d'avance.
+  expect(new Set(kept.map((a) => Math.round(a.d))).size).toBe(1);
   // Toutes avancent exactement du même pas : elles changent sur les mêmes images.
   await page.clock.runFor(300);
   const later = await loops();

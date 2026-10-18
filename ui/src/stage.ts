@@ -287,6 +287,11 @@ export class Stage {
     this.live.textContent = text;
   }
 
+  /** Phrase lue par les lecteurs d'écran (compte rendu prêt…). */
+  announce(text: string): void {
+    this.say(text);
+  }
+
   /** Met à jour les données sans changer d'état (texte en flux, sources). */
   update(data: MascotData): void {
     // Réponse interrompue (Échap) : la suite du flux ne s'affiche plus.
