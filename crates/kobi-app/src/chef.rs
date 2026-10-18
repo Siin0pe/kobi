@@ -153,8 +153,12 @@ pub struct ActiviteUi {
 }
 
 impl ActiviteUi {
-    pub fn nouvelle(demande: &kobi_brain::DemandeOutil, at_ms: u64, dossiers: &[PathBuf]) -> Self {
-        let etape = demande.action.etape(dossiers);
+    pub fn nouvelle(
+        demande: &kobi_brain::DemandeOutil,
+        at_ms: u64,
+        ctx: &kobi_perms::Contexte,
+    ) -> Self {
+        let etape = demande.action.etape(&ctx.dossiers);
         let outil = match &demande.action {
             kobi_brain::Action::Mcp { serveur, .. } => serveur.clone(),
             _ => serde_json::to_value(etape.famille)
@@ -169,7 +173,7 @@ impl ActiviteUi {
             famille: etape.famille,
             resume: etape.resume,
             chemin_relatif: etape.chemin_relatif,
-            classe: crate::lecture::classe(&demande.action),
+            classe: crate::lecture::classe(&demande.action, ctx),
             decision: None,
             at_ms,
         }
@@ -1099,9 +1103,25 @@ impl<R: Runtime> Chef<R> {
         }
     }
 
+    /// Où Kobi a le droit d'aller, pour classer les étapes du fil : les
+    /// dossiers de code, la mémoire des réunions et les outils de lecture du
+    /// MCP de Kobi.
+    fn contexte(&self) -> kobi_perms::Contexte {
+        let mut dossiers = dossiers_de_code();
+        if let Some(st) = crate::stockage::actuel(&self.app) {
+            dossiers.push(st.dossier_reunions());
+            dossiers.push(st.dossier_conversations());
+        }
+        let mut ctx = kobi_perms::Contexte::new(dossiers);
+        for outil in kobi_ctl::mcp::outils_de_lecture(crate::mcp_config::SERVEUR_KOBI) {
+            ctx.mcp.add_read_only(outil);
+        }
+        ctx
+    }
+
     /// Outil appelé : une ligne du fil sous Kobi, gardée sous la bulle.
     fn activite_outil(&mut self, demande: &kobi_brain::DemandeOutil, at_ms: u64) {
-        let ui = ActiviteUi::nouvelle(demande, at_ms, &dossiers_de_code());
+        let ui = ActiviteUi::nouvelle(demande, at_ms, &self.contexte());
         tracing::info!(
             tour = ui.tour,
             famille = ?ui.famille,
@@ -1334,10 +1354,19 @@ pub fn fabrique_claude(
     dossiers: crate::lecture::Dossiers,
     memoire: SourceMemoire,
 ) -> Fabrique {
+    // Commandes en lecture seule (KOB-154) : le hook qui les valide.
+    let reglages = kobi_session::config::kobi_dir()
+        .map(|d| d.join("mcp").join("reglages-claude.json"))
+        .and_then(|f| {
+            crate::commandes::reglages(&f)
+                .map_err(|e| tracing::warn!(erreur = %e, "réglages des commandes : Kobi ne lancera pas de commande"))
+                .ok()
+        });
     let programme: Arc<tokio::sync::OnceCell<Result<PathBuf, String>>> = Arc::default();
     Arc::new(move |role| {
         let codebases = Arc::new(dossiers.read().unwrap_or_else(|e| e.into_inner()).clone());
         let (programme, memoire) = (programme.clone(), memoire());
+        let reglages = reglages.clone();
         Box::pin(async move {
             let programme = programme
                 .get_or_init(|| async {
@@ -1358,7 +1387,8 @@ pub fn fabrique_claude(
             }
             // Serveurs MCP relus à chaque session : un changement dans les
             // réglages vaut pour la conversation suivante (KOB-155).
-            let mcp = crate::mcp::session_claude(role, modele, codebases.clone(), memoire);
+            let mcp =
+                crate::mcp::session_claude(role, modele, codebases.clone(), memoire, reglages);
             let config = kobi_brain::MeetingConfig {
                 program: programme,
                 cwd,
