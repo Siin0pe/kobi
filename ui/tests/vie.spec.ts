@@ -11,13 +11,26 @@ test('la veille a au moins 15 scènes, chacune vit puis rend la main sans laisse
   const names = await page.evaluate(() => (window.kobi.stage.kobi as unknown as { idleNames(): string[] }).idleNames());
   expect(names.length).toBeGreaterThanOrEqual(15);
   for (const name of names) {
-    const played = await page.evaluate((n) => (window.kobi.stage.kobi as unknown as { playIdle(n: string): boolean }).playIdle(n), name);
+    // Quelque chose bouge : un geste, un symbole, une lettre, un regard (tenus
+    // par le métronome après 20 s). Relevé dans la page dès le lancement de la
+    // scène : un regard en coin n'est qu'une transition courte, finie avant un
+    // aller-retour du test sous charge (KOB-172).
+    const { played, idle, moved } = await page.evaluate(async (n) => {
+      const kobi = document.querySelector('.kobi')!;
+      const played = (window.kobi.stage.kobi as unknown as { playIdle(n: string): boolean }).playIdle(n);
+      const idle = kobi.getAttribute('data-idle');
+      const bouge = () => kobi.getAnimations({ subtree: true }).filter((a) => !(a instanceof CSSAnimation) && (a.playState === 'running' || a.playState === 'paused')).length + kobi.querySelectorAll('.burst span').length;
+      const fin = performance.now() + 1500;
+      let moved = bouge();
+      while (moved === 0 && performance.now() < fin) {
+        await new Promise((r) => requestAnimationFrame(r));
+        moved = bouge();
+      }
+      return { played, idle, moved };
+    }, name);
     expect(played, name).toBe(true);
-    await expect(page.locator('.kobi')).toHaveAttribute('data-idle', name);
-    // Quelque chose bouge : un geste, un symbole, une lettre (tenus par le métronome après 20 s).
-    await expect
-      .poll(() => page.evaluate(() => document.querySelector('.kobi')!.getAnimations({ subtree: true }).filter((a) => !(a instanceof CSSAnimation) && (a.playState === 'running' || a.playState === 'paused')).length + document.querySelectorAll('.kobi .burst span').length), { timeout: 1500, message: name })
-      .toBeGreaterThan(0);
+    expect(idle, name).toBe(name);
+    expect(moved, name).toBeGreaterThan(0);
     // La scène se termine, les symboles sont retirés.
     await expect(page.locator('.kobi')).not.toHaveAttribute('data-idle', name, { timeout: 6000 });
     await expect.poll(() => page.locator('.kobi .burst span').count(), { timeout: 2000, message: name }).toBe(0);
