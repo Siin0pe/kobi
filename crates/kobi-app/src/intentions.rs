@@ -79,11 +79,11 @@ const DEMARRER: &[&str] = &[
 ];
 /// « Kobi, enregistre » tout court : seulement en ordre bref.
 const ENREGISTRE: &[&str] = &[" enregistre ", " enregistre nous ", " record "];
+/// Ordres d'arrêt sans ambiguïté. « Fin de la réunion », « c'est fini »,
+/// « la réunion est finie » sont aussi des mentions (« on en reparle à la fin
+/// de la réunion ») : Claude en juge (KOB-165).
 const TERMINER: &[&str] = &[
     " termine la reunion ",
-    " fin de la reunion ",
-    " la reunion est terminee ",
-    " la reunion est finie ",
     " arrete la reunion ",
     " arrete l enregistrement ",
     " arrete d enregistrer ",
@@ -97,13 +97,6 @@ const TERMINER: &[&str] = &[
     " end the meeting ",
     " stop recording ",
     " stop the recording ",
-];
-/// « C'est fini », « on a fini » : seulement en ordre bref.
-const FINI: &[&str] = &[
-    " c est fini ",
-    " c est termine ",
-    " on a fini ",
-    " on a termine ",
 ];
 const PAUSE: &[&str] = &[
     " pause ",
@@ -314,7 +307,7 @@ pub fn intention(question: &str) -> Option<Intention> {
     }
     let contient = |motifs: &[&str]| motifs.iter().any(|m| n.contains(m));
     // Terminer avant démarrer : « arrête d'enregistrer » contient « enregistre ».
-    if contient(TERMINER) || (mots <= 5 && contient(FINI)) {
+    if contient(TERMINER) {
         Some(Intention::TerminerReunion)
     } else if mots <= 3 && contient(STOP) {
         Some(Intention::Interrompre)
@@ -367,9 +360,6 @@ mod tests {
             ("arrête", Interrompre),
             ("ouvre le carnet", OuvrirCarnet),
             ("Montre-moi le carnet s'il te plaît.", OuvrirCarnet),
-            ("c'est la fin de la réunion, merci", TerminerReunion),
-            ("c'est fini", TerminerReunion),
-            ("bon, on a fini", TerminerReunion),
             ("Répète.", Repeter),
             ("tu peux répéter s'il te plaît ?", Repeter),
             ("redis-le", Repeter),
@@ -446,6 +436,12 @@ mod tests {
             "annule ma réunion de demain",
             "où en est le projet Kobi ?",
             "explique-moi ça en anglais et en espagnol",
+            // Mentions ou formules ambiguës : Claude en juge (KOB-165).
+            "on en reparle à la fin de la réunion",
+            "c'est la fin de la réunion, merci",
+            "c'est fini pour le point démo",
+            "bon, on a fini",
+            "la réunion est finie",
             "",
         ] {
             assert_eq!(intention(texte), None, "{texte}");
