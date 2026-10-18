@@ -98,7 +98,7 @@ test('après 20 s de veille, Kobi passe en sommeil profond : le mot ondule lente
   await expectNoErrors(errors);
 });
 
-test('repos économe en réunion : tout bouge encore, au rythme d’un seul métronome (4 images/s, puis 2)', async ({ page }) => {
+test('repos économe en réunion : tout bouge encore, au rythme d’un seul métronome (3 images/s, puis 2)', async ({ page }) => {
   await page.clock.install();
   const errors = await openUi(page, '');
   await page.evaluate(() =>
@@ -107,7 +107,7 @@ test('repos économe en réunion : tout bouge encore, au rythme d’un seul mét
   await page.clock.runFor(23_000);
   const stage = page.locator('.stage');
   await expect(stage).toHaveClass(/econome/);
-  await expect(stage).toHaveAttribute('data-fps', '4');
+  await expect(stage).toHaveAttribute('data-fps', '3');
   /** Boucles CSS de la scène : nom, état, temps courant. */
   const loops = () =>
     page.evaluate(() =>
@@ -136,8 +136,8 @@ test('repos économe en réunion : tout bouge encore, au rythme d’un seul mét
   const steps = new Set(later.map((a, i) => Math.round(a.t - after[i]!.t)));
   expect(steps.size).toBe(1);
   expect([...steps][0]).toBeGreaterThan(0);
-  // Après deux minutes, 2 images/s.
-  await page.clock.runFor(120_000);
+  // Après une minute, 2 images/s.
+  await page.clock.runFor(60_000);
   await expect(stage).toHaveAttribute('data-fps', '2');
   // Le moindre changement d'état réveille tout : les boucles reprennent seules.
   await page.evaluate(() => window.kobi.setState('listen', window.kobi.demoData('listen')));

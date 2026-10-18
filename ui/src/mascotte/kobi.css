@@ -111,7 +111,7 @@
 .kobi .burst span{--halo:6px;position:absolute;left:-14px;top:-24px;font-size:44px;line-height:1;color:#0B0B0B;font-variation-settings:"wght" 900,"CASL" 1;will-change:transform,opacity}
 
 /* Repos économe (après 20 s de veille ou de prise de notes) : tout continue
-   de bouger, au rythme du métronome de la scène (econome.ts : 4 images/s,
+   de bouger, au rythme du métronome de la scène (econome.ts : 3 images/s,
    puis 2). Mesuré dans l'app (WebKitGTK sans GPU), redessiner la graisse d'une
    lettre cernée de son contour est le poste le plus cher : l'ondulation du mot
    ralentit, les autres mouvements gardent leur vitesse. Un seul « z » s'envole. */

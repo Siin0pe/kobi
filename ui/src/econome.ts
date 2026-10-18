@@ -4,15 +4,16 @@
 // GPU chaque image coûte : WebKitGTK repeint et recompose la fenêtre. Les
 // boucles CSS infinies sont donc mises en pause et une seule minuterie les fait
 // avancer ensemble : toutes les animations changent sur la même image, au
-// rythme choisi (4 images/s, puis 2 après deux minutes), quelle que soit leur
-// courbe. Les animations courtes (arrivées, gestes, lettres qui sautillent)
+// rythme choisi (3 images/s, puis 2 après une minute), quelle que soit leur
+// courbe. Mesuré dans l'app (WebKitGTK sans GPU, KOB-146) : le coût d'une
+// image varie peu avec ce qui bouge, c'est leur nombre qui compte. Les animations courtes (arrivées, gestes, lettres qui sautillent)
 // tournent normalement : elles sont rares et finissent vite.
 
 /** Images par seconde du repos économe, puis du sommeil prolongé. */
-export const ECONOMY_FPS = 4;
+export const ECONOMY_FPS = 3;
 export const DEEP_FPS = 2;
 /** Délai avant le sommeil prolongé. */
-export const DEEP_AFTER_MS = 120_000;
+export const DEEP_AFTER_MS = 60_000;
 
 function isLoop(a: Animation): boolean {
   return a instanceof CSSAnimation && a.effect?.getTiming().iterations === Infinity;
