@@ -1382,6 +1382,118 @@ rl.on("line", (l) => {
         assert_eq!(outils[0].description, "Liste.");
     }
 
+    /// Essai contre le vrai Claude Code et le vrai Linear (KOB-155), tel que
+    /// configuré dans Claude Code (connexion OAuth de Claude Code, même nom
+    /// et même URL) : une lecture passe sans demande, une création de ticket
+    /// arrive au serveur de permission de Kobi, qui la refuse ici. Ignoré par
+    /// défaut : `cargo test -p kobi-app -- --ignored linear_reel --nocapture`.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "demande Claude Code connecté, avec Linear"]
+    async fn linear_reel() {
+        use kobi_brain::{Ask, Brain, BrainEvent, ClaudeCodeBrain, Detection, MeetingConfig};
+        let program = match kobi_brain::claude_code::detect::detect(Duration::from_secs(30)).await {
+            Detection::Ready { install, .. } => install.program,
+            autre => panic!("Claude Code indisponible : {autre:?}"),
+        };
+        let mut kobi = McpConfig::default();
+        let mut linear = Serveur::http("https://mcp.linear.app/mcp");
+        // Sans l'autorisation propre de Kobi, les annotations ne sont pas
+        // lues : l'essai marque à la main les outils de lecture courants.
+        for o in [
+            "list_issues",
+            "get_issue",
+            "list_teams",
+            "get_team",
+            "list_issue_statuses",
+            "get_user",
+            "list_users",
+            "list_projects",
+            "list_cycles",
+        ] {
+            linear.outils.insert(o.into(), NatureOutil::Lecture);
+        }
+        linear
+            .outils
+            .insert("save_issue".into(), NatureOutil::Ecriture);
+        kobi.serveurs.insert("linear".into(), linear);
+        let session = pour_session(&kobi, &CoffreMemoire::default());
+        let dir = tempfile::tempdir().unwrap();
+        let fichier = dir.path().join("session.json");
+        let serveurs = session.serveurs.clone();
+        let prompt = prompt(&session.noms());
+        let f = fichier.clone();
+        let args = kobi_brain::ArgsWithPerms(Arc::new(move |perms: &Value| {
+            let mut tous: Map<String, Value> = serveurs.iter().cloned().collect();
+            tous.insert(kobi_perms::SERVER_NAME.into(), perms.clone());
+            std::fs::write(&f, json!({ "mcpServers": tous }).to_string()).unwrap();
+            let mcp = crate::mcp_config::McpSession {
+                fichier: f.clone(),
+                outils_autorises: Vec::new(),
+                permission_prompt_tool: Some(kobi_perms::PERMISSION_PROMPT_TOOL.into()),
+                prompt: Some(prompt.clone()),
+            };
+            Ok(crate::lecture::arguments(
+                "haiku",
+                kobi_brain::SYSTEM_PROMPT,
+                &[],
+                None,
+                Some(&mcp),
+            ))
+        }));
+        let mut brain = ClaudeCodeBrain::start(MeetingConfig {
+            program,
+            cwd: Some(dir.path().to_owned()),
+            args_with_perms: Some(args),
+            permission_rules: session.catalogue.regles(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        async fn tour(
+            brain: &mut ClaudeCodeBrain,
+            question: &str,
+        ) -> (String, Vec<String>, Vec<String>) {
+            let mut turn = brain.ask(Ask {
+                question: question.into(),
+                transcript: String::new(),
+                notes: String::new(),
+            });
+            let (mut texte, mut outils, mut demandes) = (String::new(), Vec::new(), Vec::new());
+            while let Some(e) = turn.next().await {
+                match e {
+                    BrainEvent::Text(t) => texte.push_str(&t),
+                    BrainEvent::ToolCall { name, .. } => outils.push(name),
+                    BrainEvent::Permission(p) => {
+                        demandes.push(p.request.tool_name.clone());
+                        p.deny("Refusé par l'essai KOB-155.");
+                    }
+                    BrainEvent::Done(_) => break,
+                    BrainEvent::Error(e) => panic!("{e}"),
+                }
+            }
+            (texte, outils, demandes)
+        }
+        let (lecture, o1, d1) = tour(
+            &mut brain,
+            "Quels sont mes tickets Linear en cours (statut In Progress) dans l'équipe Kobi ? Donne juste les identifiants.",
+        )
+        .await;
+        println!("lecture -> {lecture}\n  outils {o1:?}\n  demandes {d1:?}");
+        let (ecriture, o2, d2) = tour(
+            &mut brain,
+            "Crée un ticket Linear dans l'équipe Kobi intitulé « Essai KOB-155, à supprimer ».",
+        )
+        .await;
+        println!("écriture -> {ecriture}\n  outils {o2:?}\n  demandes {d2:?}");
+        brain.close(Duration::from_secs(5)).await;
+        assert!(o1.iter().any(|o| o.starts_with("mcp__linear__")), "{o1:?}");
+        assert!(d1.is_empty(), "lecture sans carte : {d1:?}");
+        assert!(
+            d2.iter().any(|o| o == "mcp__linear__save_issue"),
+            "écriture par la carte : {d2:?}"
+        );
+    }
+
     #[tokio::test]
     async fn test_d_un_serveur_absent() {
         let s = Serveur::stdio("kobi-serveur-introuvable", vec![]);
