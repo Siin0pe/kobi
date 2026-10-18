@@ -15,6 +15,8 @@ pub enum Intention {
     TerminerReunion,
     /// « Stop », « attends », « tais-toi » : coupe la réponse en cours.
     Interrompre,
+    /// « Ouvre le carnet » (KOB-140).
+    OuvrirCarnet,
 }
 
 /// Question en minuscules, sans accents ni ponctuation, mots séparés par une
@@ -92,6 +94,16 @@ const REPRENDRE: &[&str] = &[
     " reprends la reunion ",
 ];
 
+const CARNET: &[&str] = &[
+    " ouvre le carnet ",
+    " ouvre mon carnet ",
+    " ouvre ton carnet ",
+    " montre le carnet ",
+    " montre moi le carnet ",
+    " affiche le carnet ",
+    " open the notebook ",
+];
+
 /// Arrêt de la réponse : seulement en ordre très bref.
 const STOP: &[&str] = &[
     " stop ",
@@ -129,6 +141,8 @@ pub fn intention(question: &str) -> Option<Intention> {
         Some(Intention::TerminerReunion)
     } else if mots <= 3 && contient(STOP) {
         Some(Intention::Interrompre)
+    } else if mots <= 8 && contient(CARNET) {
+        Some(Intention::OuvrirCarnet)
     } else if contient(DEMARRER) || (mots <= 2 && contient(ENREGISTRE)) {
         Some(Intention::DemarrerReunion)
     // « Pause » et « reprends » seuls sont des mots courants : seulement
@@ -169,6 +183,8 @@ mod tests {
             ("Attends !", Interrompre),
             ("tais-toi", Interrompre),
             ("arrête", Interrompre),
+            ("ouvre le carnet", OuvrirCarnet),
+            ("Montre-moi le carnet s'il te plaît.", OuvrirCarnet),
             ("c'est la fin de la réunion, merci", TerminerReunion),
             ("c'est fini", TerminerReunion),
             ("bon, on a fini", TerminerReunion),
@@ -190,6 +206,7 @@ mod tests {
             "prends des notes sur ce ticket",
             "on fait une pause café dans dix minutes ?",
             "reprends l'explication du budget depuis le début",
+            "qu'est-ce que tu ranges dans le carnet de la réunion de lundi ?",
             "",
         ] {
             assert_eq!(intention(texte), None, "{texte}");

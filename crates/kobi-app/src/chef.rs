@@ -499,6 +499,13 @@ impl<R: Runtime> Chef<R> {
                 self.interrompre();
                 return String::new();
             }
+            Intention::OuvrirCarnet => match crate::carnet::ouvrir(&self.app) {
+                Ok(()) => "J'ouvre le Carnet.".into(),
+                Err(e) => {
+                    tracing::warn!(erreur = %e, "carnet");
+                    format!("Je n'arrive pas à ouvrir le Carnet : {e}")
+                }
+            },
         };
         self.emettre_enregistrement();
         let _ = self.app.emit(EVENEMENT_REPONSE, &reponse);
