@@ -126,14 +126,21 @@ test('repos économe en réunion : tout bouge encore, au rythme d’un seul mét
   expect(before.filter((a) => a.state !== 'paused')).toEqual([]);
   await page.clock.runFor(1_000);
   const after = await loops();
-  for (let i = 0; i < before.length; i++) {
-    expect(after[i]!.t - before[i]!.t, after[i]!.name).toBeGreaterThan(950);
-    expect(after[i]!.t - before[i]!.t, after[i]!.name).toBeLessThan(1_050);
+  // Comparées par nom ; une boucle relancée entre deux relevés (petit
+  // événement de la vie de Kobi) repart de zéro et ne compte pas.
+  const byName = (list: typeof before) => new Map(list.map((a) => [a.name, a.t]));
+  const t0 = byName(before);
+  const advanced = [...byName(after)].filter(([name, t]) => t0.has(name) && t >= t0.get(name)!);
+  expect(advanced.length).toBeGreaterThan(5);
+  for (const [name, t] of advanced) {
+    expect(t - t0.get(name)!, name).toBeGreaterThan(950);
+    expect(t - t0.get(name)!, name).toBeLessThan(1_050);
   }
   // Toutes avancent exactement du même pas : elles changent sur les mêmes images.
   await page.clock.runFor(300);
   const later = await loops();
-  const steps = new Set(later.map((a, i) => Math.round(a.t - after[i]!.t)));
+  const t1 = byName(after);
+  const steps = new Set([...byName(later)].filter(([name, t]) => t1.has(name) && t >= t1.get(name)!).map(([name, t]) => Math.round(t - t1.get(name)!)));
   expect(steps.size).toBe(1);
   expect([...steps][0]).toBeGreaterThan(0);
   // Après une minute, 2 images/s.
