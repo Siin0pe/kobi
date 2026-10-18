@@ -128,6 +128,19 @@ test('widget simple : la bulle est limitée à trois lignes, « Lire en grand »
   await expectNoErrors(errors);
 });
 
+test('widget simple : le fil d’activité passe dans la vue (étapes repliées), les notifications restent', async ({ page }) => {
+  const errors = await kobi(page, { auto: 'jamais' });
+  await emit(page, 'state', { etat: 'assistant', activite: 'travaille', mascotte: 'work', transcrit: false });
+  await emit(page, 'activite', { tour: 1, id: 'a1', outil: 'Grep', type: 'recherche', resume: 'cherche « refresh »', chemin_relatif: null, classe: 'lecture', at_ms: Date.now() });
+  await page.waitForTimeout(400);
+  await expect(page.locator('.fil')).toBeHidden();
+  const etape = { tour: 1, id: 'a1', outil: 'Grep', type: 'recherche', resume: 'cherche « refresh »', chemin_relatif: null, classe: 'lecture', at_ms: Date.now() };
+  await emit(page, 'conversation', [{ tour: 1, question: 'où est le refresh ?', reponse: 'Dans auth.ts.', statut: 'fini', clavier: true, etapes: [etape] }]);
+  await emit(page, 'vue', { action: 'ouvrir' });
+  await expect(vue(page).locator('.vex-etapes summary')).toHaveText('1 étape');
+  await expectNoErrors(errors);
+});
+
 test('à la demande : « Kobi, montre en grand », le raccourci et `kobi view` passent par l’événement vue de la coque', async ({ page }) => {
   const errors = await kobi(page, { auto: 'jamais' });
   await repond(page, 'bonjour', 'Bonjour !');

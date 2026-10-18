@@ -170,7 +170,8 @@
 
 /* Widget simple (réglage par défaut, KOB-169) : Kobi et une courte bulle de
    trois lignes au plus, le début de la réponse ; le reste se lit en grand.
-   Fil d'activité, notifications et historique attendent la vue agrandie. */
+   Le fil d'activité attend la vue agrandie (étapes repliées sous chaque
+   réponse) ; les notifications (rappel, tâche livrée) restent, une à la fois. */
 .affichage-simple .bubbles .card-answer .defile {
   max-height: calc(3 * 1.5em);
   overflow: hidden;
@@ -178,8 +179,7 @@
 .affichage-simple .card-answer:has(.defile.peut-descendre)::after {
   display: none;
 }
-.affichage-simple .fil,
-.affichage-simple .notifs {
+.affichage-simple .fil {
   visibility: hidden;
 }
 
