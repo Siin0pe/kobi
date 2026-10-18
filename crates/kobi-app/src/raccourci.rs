@@ -7,7 +7,7 @@
 //!   de la réunion, ou l'arrête s'il tourne (puis compte rendu) ;
 //! * `hotkey_write` (`Ctrl+Alt+K` par défaut) : montre Kobi et ouvre sa bulle
 //!   pour lui écrire (KOB-147) ;
-//! * `hotkey_view` (`Ctrl+Alt+L` par défaut) : ouvre ou range la vue agrandie
+//! * `hotkey_view` (`Ctrl+Alt+G` par défaut) : ouvre ou range la vue agrandie
 //!   de la conversation (KOB-169).
 
 use std::str::FromStr;
@@ -164,7 +164,7 @@ mod tests {
         assert!(probleme.is_none());
         assert_eq!(
             vue,
-            Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyL)
+            Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyG)
         );
         assert!(![defaut, record, ecrire].contains(&vue));
         let (autre, probleme) = lire("hotkey", "Alt+K", &c.hotkey);

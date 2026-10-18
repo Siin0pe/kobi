@@ -34,7 +34,7 @@ const GROUPES: [
   {
     cle: 'auto',
     titre: 'Ouvrir la conversation en grand',
-    aide: 'On peut aussi l’ouvrir d’un clic sur la bulle, en disant « Kobi, montre en grand » ou avec Ctrl+Alt+L.',
+    aide: 'On peut aussi l’ouvrir d’un clic sur la bulle, en disant « Kobi, montre en grand » ou avec Ctrl+Alt+G.',
     options: [
       { valeur: 'longues', titre: 'Pour les réponses longues', detail: 'Dès que la bulle ne peut plus tout montrer.' },
       { valeur: 'toujours', titre: 'Toujours', detail: 'À chaque réponse.' },

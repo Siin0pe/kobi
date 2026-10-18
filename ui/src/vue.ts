@@ -76,7 +76,7 @@ export class Vue {
     const fermer = el('button', 'lecture-fermer', '×');
     fermer.type = 'button';
     fermer.setAttribute('aria-label', 'Ranger la conversation');
-    fermer.addEventListener('click', () => void this.fermer());
+    fermer.addEventListener('click', () => void this.fermer('bouton'));
     tete.append(el('span', 'lecture-titre', 'Conversation'), fermer);
     this.corps = el('div', 'lecture-corps defile');
     this.liste = el('div', 'lecture-liste');
@@ -95,10 +95,7 @@ export class Vue {
     stage.root.addEventListener('pointerdown', (e) => {
       const t = e.target as Element | null;
       if (!this.ouverte || t?.closest('.lecture, .scene, .dot')) return;
-      void this.fermer();
-    });
-    window.addEventListener('blur', () => {
-      if (this.ouverte && this.placee) void this.fermer();
+      void this.fermer('clic à côté');
     });
     // Échap range la vue avant tout le reste (historique, interruption).
     window.addEventListener(
@@ -107,7 +104,7 @@ export class Vue {
         if (e.key !== 'Escape' || !this.ouverte) return;
         e.preventDefault();
         e.stopImmediatePropagation();
-        void this.fermer();
+        void this.fermer('Échap');
       },
       true,
     );
@@ -143,20 +140,20 @@ export class Vue {
   }
 
   commande(action: string | undefined): void {
-    if (action === 'fermer') void this.fermer();
-    else if (action === 'basculer') void (this.ouverte ? this.fermer() : this.ouvrir());
-    else void this.ouvrir();
+    if (action === 'fermer') void this.fermer('demande');
+    else if (action === 'basculer') void (this.ouverte ? this.fermer('demande') : this.ouvrir('demande'));
+    else void this.ouvrir('demande');
   }
 
   /** Ouvre la vue (ou la garde ouverte) : la fenêtre s'agrandit d'abord. */
-  async ouvrir(): Promise<void> {
+  async ouvrir(raison = 'clic'): Promise<void> {
     window.clearTimeout(this.timer);
     if (this.ouverte) return;
     await this.enCours;
     this.ouverte = true;
     this.stage.root.classList.add('vue-ouverte');
     this.rendre();
-    this.enCours = this.agrandir();
+    this.enCours = this.agrandir(raison);
     await this.enCours;
     this.enCours = null;
     this.root.hidden = false;
@@ -166,7 +163,7 @@ export class Vue {
     this.armer();
   }
 
-  async fermer(): Promise<void> {
+  async fermer(raison = 'demande'): Promise<void> {
     if (!this.ouverte) return;
     await this.enCours;
     this.ouverte = false;
@@ -177,7 +174,7 @@ export class Vue {
     this.root.hidden = true;
     this.root.dataset.etat = 'rangee';
     this.stage.root.classList.remove('vue-ouverte');
-    this.enCours = this.rendreFenetre();
+    this.enCours = this.rendreFenetre(raison);
     await this.enCours;
     this.enCours = null;
   }
@@ -192,7 +189,7 @@ export class Vue {
     this.root.dataset.taille = a.taille;
     // Vue ouverte : la nouvelle taille ou la nouvelle place s'applique tout de suite.
     if (this.ouverte && !this.enCours) {
-      this.enCours = this.agrandir().finally(() => (this.enCours = null));
+      this.enCours = this.agrandir('réglage').finally(() => (this.enCours = null));
     }
     this.armer();
   }
@@ -207,7 +204,7 @@ export class Vue {
     if (!ACTIF.has(state)) this.rangeeIci = false;
     if (state === 'answer' && !this.ouverte && !this.rangeeIci) {
       const auto = this.reglages.auto;
-      if (auto === 'toujours' && (reponse ?? '') !== '') void this.ouvrir();
+      if (auto === 'toujours' && (reponse ?? '') !== '') void this.ouvrir('auto');
       // « Réponses longues » : dès que la bulle ne peut plus tout montrer.
       else this.verifierDebordement();
     }
@@ -219,7 +216,7 @@ export class Vue {
     this.verifie = true;
     requestAnimationFrame(() => {
       this.verifie = false;
-      if (!this.ouverte && this.stage.currentState === 'answer' && this.deborde()) void this.ouvrir();
+      if (!this.ouverte && this.stage.currentState === 'answer' && this.deborde()) void this.ouvrir('réponse longue');
     });
   }
 
@@ -235,7 +232,7 @@ export class Vue {
     if (!this.ouverte || this.reglages.delai === 0 || ACTIF.has(this.stage.currentState)) return;
     this.timer = window.setTimeout(() => {
       if (this.survol || ACTIF.has(this.stage.currentState)) this.armer();
-      else void this.fermer();
+      else void this.fermer('délai');
     }, this.reglages.delai * 1000);
   }
 
@@ -308,7 +305,7 @@ export class Vue {
   }
 
   /** Demande la place à la coque et pose la scène et le panneau. */
-  private async agrandir(): Promise<void> {
+  private async agrandir(raison: string): Promise<void> {
     const [largeur, hauteur] = TAILLES[this.reglages.taille];
     const api = tauri();
     if (!api) {
@@ -316,7 +313,7 @@ export class Vue {
       this.poser({ x: MARGE, y: MARGE, largeur: Math.min(largeur, window.innerWidth * 0.55), hauteur: Math.min(hauteur, window.innerHeight - 2 * MARGE) });
       return;
     }
-    const args = { largeur, hauteur, position: this.reglages.position };
+    const args = { largeur, hauteur, position: this.reglages.position, raison };
     try {
       const d = await api.core.invoke<Disposition | null>('agrandir_kobi', { grand: true, appliquer: false, ...args });
       if (!d) return;
@@ -324,9 +321,8 @@ export class Vue {
       this.stage.setPlacement(d.kobi);
       this.poser(d.panneau);
       this.placee = true;
-      const resized = prochainRedimensionnement();
       await api.core.invoke('agrandir_kobi', { grand: true, appliquer: true, ...args });
-      await resized;
+      await tailleAtteinte((w) => w >= d.kobi.x + d.kobi.largeur - 2);
     } catch {
       this.stage.setPlacement(null);
     } finally {
@@ -335,15 +331,17 @@ export class Vue {
   }
 
   /** La fenêtre reprend sa taille ; la scène reste en place pendant ce temps. */
-  private async rendreFenetre(): Promise<void> {
+  private async rendreFenetre(raison: string): Promise<void> {
     const api = tauri();
     if (!api || !this.placee) return;
     this.placee = false;
     this.stage.freezeScale(true);
+    const petite = this.stage.agrandie;
     try {
-      const resized = prochainRedimensionnement();
-      await api.core.invoke('agrandir_kobi', { grand: false, appliquer: true });
-      await resized;
+      await api.core.invoke('agrandir_kobi', { grand: false, appliquer: true, raison });
+      // La scène ne se recale qu'une fois la fenêtre vraiment rendue à sa
+      // taille (Windows peut mettre du temps à la redimensionner).
+      if (petite) await tailleAtteinte((w) => w <= petite.largeur + 2);
     } catch {
       // Déjà à sa taille.
     } finally {
@@ -380,14 +378,14 @@ export class Vue {
   }
 }
 
-function prochainRedimensionnement(): Promise<void> {
+/** Attend que la largeur de la fenêtre vérifie `ok` (au plus 3 s). */
+function tailleAtteinte(ok: (largeur: number) => boolean): Promise<void> {
   return new Promise((resolve) => {
-    const fin = (): void => {
-      window.removeEventListener('resize', fin);
-      window.clearTimeout(t);
-      resolve();
+    const debut = performance.now();
+    const voir = (): void => {
+      if (ok(window.innerWidth) || performance.now() - debut > 3_000) resolve();
+      else requestAnimationFrame(voir);
     };
-    const t = window.setTimeout(fin, 400);
-    window.addEventListener('resize', fin);
+    voir();
   });
 }

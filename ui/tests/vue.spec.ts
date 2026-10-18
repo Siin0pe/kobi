@@ -86,7 +86,7 @@ test('réponse longue : la bulle en montre le début (3 lignes), la vue agrandie
   expect(await vue(page).evaluate((n) => parseFloat(getComputedStyle(n).fontSize))).toBe(18);
   // Sobriété : dans la scène, la bulle de réponse s'efface, la conversation se lit dans la vue.
   await expect(carte(page)).toBeHidden();
-  expect(await calls(page)).toContainEqual(['agrandir_kobi', { grand: true, appliquer: true, largeur: 640, hauteur: 560, position: 'a-cote' }]);
+  expect(await calls(page)).toContainEqual(['agrandir_kobi', { grand: true, appliquer: true, largeur: 640, hauteur: 560, position: 'a-cote', raison: 'réponse longue' }]);
   await page.screenshot({ path: test.info().outputPath('vue-auto.png') });
   // Échap la range ; la fenêtre reprend sa taille, Kobi n'a pas bougé.
   await page.keyboard.press('Escape');

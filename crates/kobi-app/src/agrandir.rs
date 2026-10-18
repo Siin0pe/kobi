@@ -204,7 +204,9 @@ pub fn agrandir_kobi<R: Runtime>(
     largeur: Option<f64>,
     hauteur: Option<f64>,
     position: Option<Position>,
+    raison: Option<String>,
 ) -> Result<Option<Disposition>, String> {
+    let raison = raison.unwrap_or_default();
     let w = app
         .get_webview_window("main")
         .ok_or("fenêtre de Kobi absente")?;
@@ -217,7 +219,7 @@ pub fn agrandir_kobi<R: Runtime>(
                 .map_err(err)?;
             w.set_position(PhysicalPosition::new(b.x, b.y))
                 .map_err(err)?;
-            tracing::info!("vue agrandie fermée, fenêtre rendue à sa taille");
+            tracing::info!(%raison, "vue agrandie fermée, fenêtre rendue à sa taille");
         }
         return Ok(None);
     }
@@ -275,6 +277,7 @@ pub fn agrandir_kobi<R: Runtime>(
         w.set_size(PhysicalSize::new(fenetre.width, fenetre.height))
             .map_err(err)?;
         tracing::info!(
+            %raison,
             ?position,
             largeur = panneau.width,
             hauteur = panneau.height,

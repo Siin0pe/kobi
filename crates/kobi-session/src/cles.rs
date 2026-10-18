@@ -46,7 +46,7 @@ pub const CLES: &[(&str, Application, &str)] = &[
     (
         "hotkey_view",
         AuRedemarrage,
-        "Raccourci qui ouvre ou range la conversation en grand (Ctrl+Alt+L).",
+        "Raccourci qui ouvre ou range la conversation en grand (Ctrl+Alt+G).",
     ),
     (
         "codebases",
