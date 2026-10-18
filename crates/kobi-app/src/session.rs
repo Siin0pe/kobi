@@ -156,7 +156,18 @@ pub fn installer<R: Runtime>(builder: Builder<R>) -> Builder<R> {
             crate::stockage::reglages_stockage,
             crate::stockage::regler_stockage,
             crate::demarrage::demarrage_systeme,
-            crate::demarrage::regler_demarrage_systeme
+            crate::demarrage::regler_demarrage_systeme,
+            crate::carnet::ouvrir_carnet,
+            crate::carnet::carnet_index,
+            crate::carnet::carnet_reunion,
+            crate::carnet::carnet_conversation,
+            crate::carnet::carnet_chercher,
+            crate::carnet::carnet_markdown,
+            crate::carnet::carnet_exporter,
+            crate::carnet::carnet_ouvrir_dossier,
+            crate::carnet::carnet_supprimer,
+            crate::carnet::carnet_rappel_fait,
+            crate::carnet::choisir_dossier
         ])
 }
 

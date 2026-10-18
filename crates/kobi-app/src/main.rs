@@ -4,6 +4,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod carnet;
 mod demarrage;
 mod diag;
 mod ecoute;
@@ -83,6 +84,7 @@ fn main() {
     #[cfg(target_os = "linux")]
     choose_webkit_renderer();
     session::installer(tauri::Builder::default())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             if let Some(dir) = kobi_session::logs::default_dir() {
                 if let Err(e) = kobi_session::logs::init(&dir) {

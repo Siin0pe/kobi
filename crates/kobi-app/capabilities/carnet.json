@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "carnet",
+  "description": "Fenêtre du Carnet : commandes de l'app (lecture du stockage, export, suppression).",
+  "windows": ["carnet"],
+  "permissions": ["core:default"]
+}
