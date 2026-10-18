@@ -285,13 +285,18 @@ pub fn raccourcis() -> Raccourcis {
     let defaut = config::Config::default();
     // Un raccourci illisible est remplacé par le défaut : on montre celui
     // qui marche vraiment.
-    let valide = |cle: &str, valeur: &str, defaut: &str| match crate::raccourci::lire(cle, valeur, defaut) {
-        (_, None) => valeur.to_owned(),
-        (_, Some(_)) => defaut.to_owned(),
-    };
+    let valide =
+        |cle: &str, valeur: &str, defaut: &str| match crate::raccourci::lire(cle, valeur, defaut) {
+            (_, None) => valeur.to_owned(),
+            (_, Some(_)) => defaut.to_owned(),
+        };
     Raccourcis {
         parler: valide("hotkey", &config.hotkey, &defaut.hotkey),
-        reunion: valide("hotkey_record", &config.hotkey_record, &defaut.hotkey_record),
+        reunion: valide(
+            "hotkey_record",
+            &config.hotkey_record,
+            &defaut.hotkey_record,
+        ),
     }
 }
 
