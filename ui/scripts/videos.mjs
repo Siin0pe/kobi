@@ -156,6 +156,21 @@ const CLIPS = [
     },
   ],
   [
+    'reunion-demarrage-consentement',
+    'backdrop=1&state=listen',
+    async (page) => {
+      // Démarrage : la carte de consentement arrive et reste immobile (ses
+      // boutons se cliquent), seuls son surtitre, son titre et le halo vivent.
+      await wait(page, 800);
+      await page.evaluate(() => window.kobi.startMeeting('Point hebdo'));
+      await wait(page, 5000);
+      await page.getByRole('button', { name: 'EN' }).click();
+      await wait(page, 1500);
+      await page.getByRole('button', { name: 'C’est fait' }).click();
+      await wait(page, 3000);
+    },
+  ],
+  [
     'lisibilite-fond-sombre',
     'backdrop=sombre',
     async (page) => {
