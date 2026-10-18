@@ -404,6 +404,8 @@ impl<R: Runtime> Chef<R> {
             Message::Rappel(r) => {
                 tracing::info!(id = %r.id, "rappel livré à l'interface");
                 let _ = self.app.emit(crate::rappels::EVENEMENT_RAPPEL, &r);
+                // À voix haute aussi, si la voix est active (KOB-142).
+                crate::voix::dire(&self.app, &format!("Rappel : {}", r.texte));
             }
         }
     }
@@ -454,6 +456,7 @@ impl<R: Runtime> Chef<R> {
             self.calme_a = None;
             self.transition(&[Evenement::QuestionEnvoyee, Evenement::ReponseCommence]);
             let _ = self.app.emit(EVENEMENT_REPONSE, &reponse);
+            crate::voix::dire(&self.app, &reponse);
             self.lire(&reponse);
             self.tour += 1;
             self.dernier = self.tour;
