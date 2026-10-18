@@ -178,7 +178,15 @@ body[data-etat='attente'] .derniere {
 }
 .section {
   margin-top: 8px;
+}
+/* Premier affichage : sections et puces entrent en cascade. */
+.sections.premier .section,
+.sections.premier li {
   animation: entre 0.4s var(--ressort) backwards;
+  animation-delay: calc(var(--i, 0) * 45ms);
+}
+.section .nombre {
+  display: inline-block;
 }
 .section summary {
   display: flex;

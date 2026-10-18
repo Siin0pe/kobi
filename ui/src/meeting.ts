@@ -46,7 +46,8 @@ async function copy(text: string): Promise<boolean> {
 
 /**
  * Indicateur « ● REC · titre · 12:34 · 3 notes », collé à la mascotte, mis à
- * jour une fois par seconde. Une note ajoutée fait rebondir le compteur.
+ * jour une fois par seconde, aux chiffres qui roulent. Une note ajoutée fait
+ * rebondir le compteur ; le point rouge pulse.
  */
 export class RecIndicator {
   readonly root: HTMLElement;
@@ -89,7 +90,7 @@ export class RecIndicator {
       this.root.setAttribute('aria-label', info.paused ? 'Transcription en pause' : 'Réunion transcrite en local');
       const n = info.notes ?? 0;
       this.notes.hidden = n === 0;
-      this.notes.textContent = `${n} note${n > 1 ? 's' : ''}`;
+      this.digits(this.notes, String(n), ` note${n > 1 ? 's' : ''}`);
       if (n > before && !this.reduced && !this.paused) this.bump(n - before);
     }
     this.tick();
@@ -121,6 +122,42 @@ export class RecIndicator {
     anim.oncancel = () => plus.remove();
   }
 
+  /**
+   * Chiffres qui roulent : un élément par caractère ; celui qui change arrive
+   * par le haut comme sur un compteur mécanique (animation Web, tenue par le
+   * métronome au repos). `suffixe` suit les chiffres (« notes »). Le texte de
+   * `node` reste lisible tel quel (« 12:34 », « 3 notes »).
+   */
+  private digits(node: HTMLElement, chiffres: string, suffixe = ''): void {
+    const chars = Array.from(chiffres);
+    let spans = [...node.querySelectorAll<HTMLElement>(':scope > .chiffre')];
+    if (spans.length !== chars.length) {
+      node.replaceChildren(...chars.map((c) => el('span', 'chiffre', c)));
+      spans = [...node.querySelectorAll<HTMLElement>(':scope > .chiffre')];
+    } else {
+      chars.forEach((c, i) => {
+        const span = spans[i]!;
+        if (span.textContent === c) return;
+        span.textContent = c;
+        if (this.reduced || this.paused) return;
+        span.animate(
+          [
+            { transform: 'translateY(-85%)', opacity: 0 },
+            { transform: 'translateY(12%)', opacity: 1, offset: 0.7 },
+            { transform: 'none', opacity: 1 },
+          ],
+          { duration: 340, easing: 'cubic-bezier(.2,.8,.3,1)' },
+        );
+      });
+    }
+    const tail = node.lastChild;
+    if (suffixe) {
+      if (tail?.nodeType === Node.TEXT_NODE) {
+        if (tail.textContent !== suffixe) tail.textContent = suffixe;
+      } else node.append(document.createTextNode(suffixe));
+    } else if (tail?.nodeType === Node.TEXT_NODE) tail.remove();
+  }
+
   /** Fenêtre masquée : plus de minuterie ; la durée est recalculée au retour. */
   setPaused(paused: boolean): void {
     this.paused = paused;
@@ -136,8 +173,7 @@ export class RecIndicator {
     this.timer = 0;
     if (!this.info) return;
     const ms = Date.now() - this.info.startedAt;
-    const text = elapsed(ms);
-    if (this.time.textContent !== text) this.time.textContent = text;
+    this.digits(this.time, elapsed(ms));
     if (this.paused) return;
     // Se cale sur la seconde suivante.
     this.timer = window.setTimeout(() => this.tick(), 1000 - (ms % 1000) + 5);

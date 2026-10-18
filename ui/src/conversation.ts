@@ -7,6 +7,7 @@
 // chargement). Rien n'est gardé ici.
 
 import { etapeLigne, type Etape } from './activite';
+import { dealFromKobi, leaveToKobi, reduced } from './effets';
 import { tauri } from './native';
 import type { Stage } from './stage';
 
@@ -40,6 +41,8 @@ export class Conversation {
   private readonly list: HTMLElement;
   private bulles: Bulle[] = [];
   private idleTimer = 0;
+  /** L'historique retourne dans Kobi (sortie animée en cours). */
+  private closing = false;
 
   constructor(private readonly stage: Stage) {
     this.history = el('div', 'card card-history');
@@ -70,7 +73,7 @@ export class Conversation {
   }
 
   get historyOpen(): boolean {
-    return !this.history.hidden;
+    return !this.history.hidden && !this.closing;
   }
 
   /** Historique publié par la coque (du plus ancien au plus récent). */
@@ -79,19 +82,45 @@ export class Conversation {
     this.renderHistory();
   }
 
+  /** L'historique sort de Kobi ; ses échanges entrent en cascade, du plus récent au plus ancien. */
   openHistory(): void {
     if (this.bulles.length === 0) return;
+    const reopen = this.closing;
+    this.closing = false;
+    this.history.getAnimations().forEach((a) => a.cancel());
+    const wasHidden = this.history.hidden;
     this.history.hidden = false;
     this.stage.root.classList.add('history-open');
     this.list.scrollTop = this.list.scrollHeight;
     this.armIdle();
+    if (!wasHidden && !reopen) return;
+    dealFromKobi(this.history);
+    if (reduced(this.history)) return;
+    const items = [...this.list.querySelectorAll<HTMLElement>('.ex')].reverse();
+    items.slice(0, 8).forEach((item, i) =>
+      item.animate(
+        [
+          { transform: 'translate(-10px, 12px) rotate(-2deg)', opacity: 0 },
+          { transform: 'translate(2px, -2px) rotate(.5deg)', opacity: 1, offset: 0.7 },
+          { transform: 'none', opacity: 1 },
+        ],
+        { duration: 380, delay: 160 + i * 60, easing: 'cubic-bezier(.2,.8,.3,1)', fill: 'backwards' },
+      ),
+    );
   }
 
+  /** L'historique retourne dans Kobi ; les bulles reviennent tout de suite. */
   closeHistory(): void {
-    if (this.history.hidden) return;
+    if (this.history.hidden || this.closing) return;
     window.clearTimeout(this.idleTimer);
-    this.history.hidden = true;
     this.stage.root.classList.remove('history-open');
+    this.closing = true;
+    leaveToKobi(this.history, () => {
+      if (!this.closing) return;
+      this.closing = false;
+      this.history.hidden = true;
+      this.history.getAnimations().forEach((a) => a.cancel());
+    });
   }
 
   /** Texte tapé dans la bulle d'écriture, déjà avalé par Kobi : il part à la coque. */

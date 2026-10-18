@@ -87,6 +87,8 @@ test('une nouvelle note arrive : relue sur l’événement, mise en valeur, sect
   await expect(page.locator('.derniere')).toHaveClass(/arrive/);
   await expect(page.locator('[data-section="questions"] li')).toHaveText(['Date du séminaire ?']);
   await expect(page.locator('[data-section="questions"] li')).toHaveClass(/nouvelle/);
+  // Seul le premier affichage entre en cascade : un rafraîchissement ne rejoue rien.
+  await expect(page.locator('.sections')).not.toHaveClass(/premier/);
   // Les anciennes puces ne sont pas « nouvelles », la section repliée le reste.
   await expect(page.locator('[data-section="actions"] li.nouvelle')).toHaveCount(0);
   await expect(page.locator('[data-section="decisions"]')).not.toHaveAttribute('open', '');

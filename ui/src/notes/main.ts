@@ -60,6 +60,10 @@ blinker.run(!animationsReduites());
 let courant: NotesEnCours | null = null;
 /** Puces déjà montrées : les nouvelles arrivent en glissant. */
 const vues = new Set<string>();
+/** Durée de la mise en valeur d'une puce nouvelle (`li.nouvelle`, notes.css). */
+const NOUVELLE_MS = 1_600;
+/** Puces nouvelles encore mises en valeur : un redessin reprend leur animation où elle en était. */
+const nouveautes = new Map<string, number>();
 let premierAffichage = true;
 
 function compte(texte: string): number {
@@ -77,6 +81,18 @@ function section(cle: string, libelle: string, texte: string, vide: string): HTM
   // Une section repliée le reste d'un rafraîchissement à l'autre.
   const ancienne = sections.querySelector<HTMLDetailsElement>(`details[data-section="${cle}"]`);
   if (ancienne && !ancienne.open) details.removeAttribute('open');
+  // Le compte change : le nouveau chiffre arrive par le haut, comme le compteur REC de Kobi.
+  const avant = ancienne?.querySelector('.nombre')?.textContent;
+  if (avant !== undefined && avant !== String(n) && !animationsReduites()) {
+    details.querySelector<HTMLElement>('.nombre')!.animate(
+      [
+        { transform: 'translateY(-90%) scale(1.3)', opacity: 0 },
+        { transform: 'translateY(10%) scale(1.15)', opacity: 1, offset: 0.65 },
+        { transform: 'none' },
+      ],
+      { duration: 420, easing: 'cubic-bezier(.2,.8,.3,1)' },
+    );
+  }
   return details;
 }
 
@@ -100,15 +116,27 @@ function dessiner(n: NotesEnCours | null): void {
     ...n.autres.map(([t, texte], i) => section(`autre-${i}`, t, texte, '')),
   ];
   sections.replaceChildren(...blocs);
+  // Premier affichage : sections et puces entrent en cascade ; ensuite, seules
+  // les nouveautés bougent (un rafraîchissement ne rejoue rien).
+  sections.classList.toggle('premier', premierAffichage);
+  if (premierAffichage) sections.querySelectorAll<HTMLElement>('.section, li').forEach((e, i) => e.style.setProperty('--i', String(i)));
   const nouvelles: HTMLElement[] = [];
+  const maintenant = performance.now();
   for (const li of sections.querySelectorAll('li')) {
     const cle = li.textContent ?? '';
     if (!vues.has(cle)) {
       if (!premierAffichage) {
-        li.classList.add('nouvelle');
+        nouveautes.set(cle, maintenant);
         nouvelles.push(li);
       }
       vues.add(cle);
+    }
+    const depuis = nouveautes.get(cle);
+    if (depuis === undefined) continue;
+    if (maintenant - depuis >= NOUVELLE_MS) nouveautes.delete(cle);
+    else {
+      li.classList.add('nouvelle');
+      li.style.animationDelay = `-${Math.round(maintenant - depuis)}ms`;
     }
   }
   // La dernière note est la dernière puce apparue (une décision ajoutée en
@@ -117,10 +145,13 @@ function dessiner(n: NotesEnCours | null): void {
   if (texte) {
     if (derniere.dataset.texte !== texte) {
       derniere.dataset.texte = texte;
+      const ligne = h('p', { class: 'derniere-texte' });
       derniere.replaceChildren(
         h('p', { class: 'derniere-etiquette' }, 'Dernière note', n.ecrit_ms ? h('span', { class: 'quand' }, ` · ${heure(n.ecrit_ms)}`) : null),
-        h('p', { class: 'derniere-texte' }, texte),
+        ligne,
       );
+      // La note s'écrit avec le brouillage de Kobi.
+      poserTitre(ligne, texte);
       if (!premierAffichage) {
         // Relance l'animation d'arrivée.
         derniere.classList.remove('arrive');
