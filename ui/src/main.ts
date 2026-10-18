@@ -5,6 +5,7 @@
 import { isMascotState, STATES, type MascotData, type MascotState } from './states';
 import { demoData, playDemo } from './demo';
 import { command, enableWindowDrag, followSession, tauri, type Command, type SessionState } from './native';
+import { KobiMenu } from './menu';
 import { applyRecording, type RecordingState } from './recording';
 import { relierNotes } from './notes-lien';
 import { Stage } from './stage';
@@ -22,6 +23,7 @@ import './styles/conversation.css';
 import './styles/ecrire.css';
 import './styles/compte-rendu.css';
 import './styles/activite.css';
+import './styles/menu.css';
 
 const params = new URLSearchParams(location.search);
 
@@ -37,6 +39,7 @@ const stage = new Stage(document.getElementById('app')!, {
 enableWindowDrag(stage.root);
 relierNotes(stage.root);
 followSession(stage);
+const menu = new KobiMenu(stage);
 
 // Conversation (KOB-133), tâches longues (KOB-135), cartes et interruption.
 const conversation = new Conversation(stage);
@@ -72,6 +75,8 @@ declare global {
   interface Window {
     kobi: {
       stage: Stage;
+      /** Menu du clic droit. */
+      menu: KobiMenu;
       states: readonly MascotState[];
       setState(state: MascotState, data?: MascotData): void;
       update(data: MascotData): void;
@@ -109,6 +114,7 @@ declare global {
 
 window.kobi = {
   stage,
+  menu,
   states: STATES,
   setState: (state, data) => {
     stopDemo();

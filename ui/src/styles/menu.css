@@ -1,0 +1,363 @@
+/* Menu du clic droit (KOB-139) : une carte de Kobi, encre sur papier, ombre
+   dure et police Recursive, qui jaillit du point cliqué. Dimensions en px de
+   la fenêtre native (410 × 280), pas de la scène mise à l'échelle. */
+
+/* Plus de sélection ni de glisser du navigateur, sauf dans les champs de saisie. */
+.stage.no-select,
+.stage.no-select * {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-user-drag: none;
+  -webkit-touch-callout: none;
+}
+.stage.no-select input,
+.stage.no-select textarea,
+.stage.no-select [contenteditable='true'] {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+@keyframes kmenu-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.55) rotate(-4deg);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.04) rotate(0.6deg);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) rotate(0deg);
+  }
+}
+@keyframes kmenu-out {
+  to {
+    opacity: 0;
+    transform: scale(0.85) rotate(2deg);
+  }
+}
+@keyframes kmenu-item-in {
+  from {
+    opacity: 0;
+    translate: -10px 0;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
+@keyframes kmenu-wiggle {
+  0%,
+  100% {
+    rotate: 0deg;
+  }
+  30% {
+    rotate: -14deg;
+    scale: 1.15;
+  }
+  65% {
+    rotate: 9deg;
+  }
+}
+@keyframes kmenu-blink {
+  50% {
+    opacity: 0.25;
+  }
+}
+@keyframes kmenu-chosen {
+  0% {
+    scale: 1;
+  }
+  45% {
+    scale: 0.96;
+  }
+  100% {
+    scale: 1.02;
+  }
+}
+
+.kmenu {
+  position: fixed;
+  z-index: 50;
+  box-sizing: border-box;
+  /* Largeur du contenu : les libellés ne sont jamais coupés. */
+  width: max-content;
+  min-width: 214px;
+  max-width: calc(100vw - 12px);
+  padding: 5px;
+  border: 2.5px solid var(--ink);
+  border-radius: 14px 14px 14px 5px;
+  background: var(--paper);
+  color: var(--ink);
+  /* Ombre dure, et liseré clair pour un bureau sombre. */
+  box-shadow:
+    0 0 0 1.5px rgba(255, 255, 255, 0.7),
+    4px 4px 0 var(--ink);
+  font-family: var(--font);
+  transform-origin: var(--ox, 0) var(--oy, 0);
+}
+.kmenu[hidden] {
+  display: none;
+}
+.kmenu.opening {
+  animation: kmenu-pop 0.32s cubic-bezier(0.3, 1.5, 0.5, 1) both;
+}
+.kmenu.closing {
+  animation: kmenu-out 0.14s ease-in both;
+  pointer-events: none;
+}
+
+.kmenu-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 7px 4px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-variation-settings: 'MONO' 1, 'wght' 600;
+  color: var(--muted);
+}
+.kmenu-brand {
+  font-size: 13px;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink);
+  font-variation-settings: 'CASL' 1, 'wght' 1000;
+}
+.kmenu-head.recording .kmenu-state {
+  color: var(--danger);
+  animation: kmenu-blink 1.4s ease-in-out infinite;
+}
+
+.kmenu-list {
+  display: flex;
+  flex-direction: column;
+}
+.kmenu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 22px;
+  margin: 0;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 8px;
+  /* Surlignage de l'entrée active (le survol lui donne le focus) : l'accent
+     glisse de la gauche. */
+  background: linear-gradient(var(--accent), var(--accent)) no-repeat left / 0% 100%;
+  color: var(--ink);
+  font: 600 12.5px var(--font);
+  font-variation-settings: 'CASL' 0.6, 'wght' 620;
+  text-align: left;
+  cursor: pointer;
+  outline: none;
+  transition:
+    background-size 0.18s cubic-bezier(0.3, 1.2, 0.5, 1),
+    color 0.12s;
+}
+.kmenu.opening .kmenu-item {
+  animation: kmenu-item-in 0.26s cubic-bezier(0.3, 1.4, 0.5, 1) both;
+  animation-delay: calc(0.04s + var(--i) * 0.025s);
+}
+.kmenu-item:focus {
+  background-size: 100% 100%;
+}
+.kmenu-item:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--ink);
+}
+.kmenu-item:focus .kmenu-icon {
+  animation: kmenu-wiggle 0.42s ease-in-out;
+}
+.kmenu-item.danger {
+  color: #b3220a;
+}
+.kmenu-item.danger:focus {
+  background-image: linear-gradient(var(--danger), var(--danger));
+  color: var(--ink);
+}
+.kmenu-item.chosen {
+  background-image: linear-gradient(var(--ink), var(--ink));
+  background-size: 100% 100%;
+  color: var(--accent);
+  animation: kmenu-chosen 0.12s ease-out both;
+}
+.kmenu-icon {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.kmenu-item[data-id='enregistrer'] .kmenu-icon {
+  fill: var(--danger);
+  stroke: var(--ink);
+}
+.kmenu-label {
+  flex: 1;
+  padding-right: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kmenu-hint {
+  flex: none;
+  padding: 1px 4px;
+  border: 1.2px solid currentColor;
+  border-radius: 4px;
+  font: 9px var(--font);
+  font-variation-settings: 'MONO' 1, 'wght' 500;
+  opacity: 0.6;
+}
+.kmenu-sep {
+  height: 0;
+  margin: 3px 6px;
+  border-top: 1.5px dashed rgba(11, 11, 11, 0.3);
+}
+
+/* Message court (fenêtre absente, refus de la session). */
+@keyframes kmenu-toast {
+  0% {
+    opacity: 0;
+    translate: 0 8px;
+  }
+  12%,
+  85% {
+    opacity: 1;
+    translate: 0 0;
+  }
+  100% {
+    opacity: 0;
+    translate: 0 -4px;
+  }
+}
+.kmenu-toast {
+  position: fixed;
+  left: 50%;
+  /* En haut : le bas de la fenêtre est au champ de saisie (KOB-133). */
+  top: 10px;
+  z-index: 51;
+  max-width: calc(100% - 24px);
+  transform: translateX(-50%);
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--ink);
+  color: var(--accent);
+  font: 12px var(--font);
+  font-variation-settings: 'CASL' 1, 'wght' 650;
+  white-space: nowrap;
+}
+.kmenu-toast[hidden] {
+  display: none;
+}
+.kmenu-toast.show {
+  animation: kmenu-toast 2.5s ease both;
+}
+
+/* Écoute en pause hors réunion : pastille « micro coupé » en haut à gauche
+   (le bas est au champ de saisie). */
+.kmenu-micoff {
+  position: fixed;
+  left: 10px;
+  top: 10px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px 3px 6px;
+  border: 2px solid var(--ink);
+  border-radius: 999px;
+  background: var(--paper);
+  box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.7);
+  font: 10px var(--font);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-variation-settings: 'MONO' 1, 'wght' 700;
+}
+.kmenu-micoff[hidden] {
+  display: none;
+}
+.kmenu-micoff-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+  animation: kmenu-blink 2.4s ease-in-out infinite;
+}
+.stage.compact .kmenu-micoff {
+  display: none;
+}
+
+/* Quitter pendant une réunion. */
+.kmenu-confirm {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  z-index: 52;
+  box-sizing: border-box;
+  width: min(300px, calc(100% - 24px));
+  padding: 12px 14px;
+  border: 2.5px solid var(--ink);
+  border-radius: 16px 16px 16px 5px;
+  background: var(--paper);
+  box-shadow:
+    0 0 0 1.5px rgba(255, 255, 255, 0.7),
+    4px 4px 0 var(--ink);
+  /* `translate` à part : l'animation d'arrivée anime `transform`. */
+  translate: -50% -50%;
+  animation: kmenu-pop 0.32s cubic-bezier(0.3, 1.5, 0.5, 1) both;
+  transform-origin: 50% 50%;
+}
+.kmenu-confirm p {
+  margin: 0;
+}
+.kmenu-confirm-title {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--danger);
+  font-variation-settings: 'MONO' 1, 'wght' 800;
+}
+.kmenu-confirm-text {
+  margin-top: 4px !important;
+  font-size: 15px;
+  font-variation-settings: 'CASL' 1, 'wght' 800;
+}
+.kmenu-confirm-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+.kmenu-btn {
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 2px solid var(--ink);
+  background: transparent;
+  color: var(--ink);
+  font: 800 12.5px var(--font);
+  cursor: pointer;
+}
+.kmenu-btn-danger {
+  background: var(--danger);
+}
+.kmenu-btn:focus-visible {
+  outline: 3px solid var(--ink);
+  outline-offset: 2px;
+}
+
+/* Réduire les animations : le menu et ses messages apparaissent sans mouvement. */
+.reduced-motion .kmenu,
+.reduced-motion .kmenu *,
+.reduced-motion .kmenu-toast,
+.reduced-motion .kmenu-micoff-dot,
+.reduced-motion .kmenu-confirm {
+  animation: none !important;
+  transition: none !important;
+}

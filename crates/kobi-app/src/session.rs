@@ -121,7 +121,7 @@ fn etat_session<R: Runtime>(app: AppHandle<R>) -> EtatUi {
 
 /// Passe la commande au chef d'orchestre (qui crée et ferme les fichiers de
 /// la réunion) ; sans lui (tests de l'IPC), applique seulement la transition.
-fn par_le_chef<R: Runtime>(
+pub(crate) fn par_le_chef<R: Runtime>(
     app: &AppHandle<R>,
     intention: Intention,
     evenements: &[Evenement],
@@ -265,7 +265,9 @@ pub fn installer<R: Runtime>(builder: Builder<R>) -> Builder<R> {
             crate::notes::notes_en_cours,
             crate::notes::basculer_notes,
             crate::notes::replier_notes,
-            crate::notes::fermer_notes
+            crate::notes::fermer_notes,
+            crate::menu::menu_kobi,
+            crate::menu::etat_ecoute
         ])
 }
 
