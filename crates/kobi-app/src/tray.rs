@@ -112,14 +112,31 @@ pub fn handle<R: Runtime>(app: &AppHandle<R>, id: &str) {
             }
         }
         MenuAction::Quit => app.exit(0),
-        // Pause : ni micro ni transcription jusqu'au prochain clic (KOB-132).
+        // En réunion, met l'enregistrement en pause (ou le reprend) ; hors
+        // réunion, coupe le micro jusqu'au prochain clic (KOB-132).
         MenuAction::Pause => {
-            if let Err(e) = crate::ecoute::commander(app, crate::ecoute::Commande::BasculerPause) {
+            let reunion = app
+                .try_state::<crate::chef::ChefPartage<R>>()
+                .map(|c| c.0.lock().map(|c| c.enregistrement()).unwrap_or_default())
+                .unwrap_or_default();
+            if reunion.actif {
+                let i = if reunion.pause {
+                    crate::intentions::Intention::Reprendre
+                } else {
+                    crate::intentions::Intention::Pause
+                };
+                crate::chef::publier(app, crate::chef::Message::Commande(i));
+            } else if let Err(e) =
+                crate::ecoute::commander(app, crate::ecoute::Commande::BasculerPause)
+            {
                 tracing::warn!(erreur = %e, "menu : pause de l'écoute impossible");
             }
         }
-        // Réunion : la session (J1) écoutera l'événement.
-        MenuAction::StartMeeting => {}
+        // Demande explicite d'enregistrement (KOB-134).
+        MenuAction::StartMeeting => crate::chef::publier(
+            app,
+            crate::chef::Message::Commande(crate::intentions::Intention::DemarrerReunion),
+        ),
     }
 }
 

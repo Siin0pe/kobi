@@ -12,6 +12,9 @@ use kobi_stt::Segment;
 use serde::Serialize;
 use tauri::{AppHandle, Builder, Emitter, Manager, Runtime};
 
+use crate::chef::{publier, Bulle, ChefPartage, Enregistrement, Message};
+use crate::intentions::Intention;
+
 /// Nom de l'événement qui porte l'état de la session.
 pub const EVENEMENT_ETAT: &str = "state";
 /// Nom de l'événement qui porte un segment de transcription.
@@ -115,29 +118,93 @@ fn etat_session<R: Runtime>(app: AppHandle<R>) -> EtatUi {
     etat(&app)
 }
 
+/// Passe la commande au chef d'orchestre (qui crée et ferme les fichiers de
+/// la réunion) ; sans lui (tests de l'IPC), applique seulement la transition.
+fn par_le_chef<R: Runtime>(
+    app: &AppHandle<R>,
+    intention: Intention,
+    evenements: &[Evenement],
+) -> Result<EtatUi, String> {
+    match app.try_state::<ChefPartage<R>>() {
+        Some(chef) => {
+            chef.0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .commande(intention);
+            Ok(etat(app))
+        }
+        None => appliquer(app, evenements),
+    }
+}
+
 #[tauri::command]
 fn demarrer<R: Runtime>(app: AppHandle<R>) -> Result<EtatUi, String> {
-    appliquer(&app, &[Evenement::DemarrerReunion])
+    par_le_chef(
+        &app,
+        Intention::DemarrerReunion,
+        &[Evenement::DemarrerReunion],
+    )
 }
 
 #[tauri::command]
 fn pause<R: Runtime>(app: AppHandle<R>) -> Result<EtatUi, String> {
-    appliquer(&app, &[Evenement::Pause])
+    par_le_chef(&app, Intention::Pause, &[Evenement::Pause])
 }
 
 #[tauri::command]
 fn reprendre<R: Runtime>(app: AppHandle<R>) -> Result<EtatUi, String> {
-    appliquer(&app, &[Evenement::Reprendre])
+    par_le_chef(&app, Intention::Reprendre, &[Evenement::Reprendre])
 }
 
-/// Termine la réunion. Le compte rendu n'existe pas encore (J3) : la fin est
-/// suivie tout de suite du retour en veille.
+/// Termine la réunion : l'enregistrement s'arrête tout de suite, le compte
+/// rendu s'écrit ensuite (sans le chef, retour direct en veille).
 #[tauri::command]
 fn terminer<R: Runtime>(app: AppHandle<R>) -> Result<EtatUi, String> {
-    appliquer(
+    par_le_chef(
         &app,
+        Intention::TerminerReunion,
         &[Evenement::TerminerReunion, Evenement::CompteRenduEcrit],
     )
+}
+
+/// Message tapé dans le champ sous la mascotte : même conversation que la voix.
+#[tauri::command]
+fn envoyer_texte<R: Runtime>(app: AppHandle<R>, texte: String) {
+    publier(&app, Message::Question { texte, voix: false });
+}
+
+/// Échap : la réponse en cours s'arrête net.
+#[tauri::command]
+fn interrompre<R: Runtime>(app: AppHandle<R>) {
+    publier(&app, Message::Interrompre);
+}
+
+/// Clic sur une carte de confirmation (`id` de la carte, `accepte`).
+#[tauri::command]
+fn decider_carte<R: Runtime>(app: AppHandle<R>, id: String, accepte: bool) -> Result<(), String> {
+    let carte = id.parse().map_err(|_| format!("carte inconnue : {id}"))?;
+    publier(&app, Message::Decision { carte, accepte });
+    Ok(())
+}
+
+/// État de l'enregistrement, au démarrage de la webview.
+#[tauri::command]
+fn etat_enregistrement<R: Runtime>(app: AppHandle<R>) -> Enregistrement {
+    app.try_state::<ChefPartage<R>>()
+        .map(|c| {
+            c.0.lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .enregistrement()
+        })
+        .unwrap_or_default()
+}
+
+/// Dernières bulles de la conversation.
+#[tauri::command]
+fn historique<R: Runtime>(app: AppHandle<R>) -> Vec<Bulle> {
+    app.try_state::<ChefPartage<R>>()
+        .map(|c| c.0.lock().unwrap_or_else(|e| e.into_inner()).historique())
+        .unwrap_or_default()
 }
 
 /// Branche la session sur l'application : état partagé et commandes.
@@ -150,6 +217,11 @@ pub fn installer<R: Runtime>(builder: Builder<R>) -> Builder<R> {
             pause,
             reprendre,
             terminer,
+            envoyer_texte,
+            interrompre,
+            decider_carte,
+            etat_enregistrement,
+            historique,
             // Dossiers de code lisibles (KOB-138), pour la fenêtre des réglages.
             crate::lecture::get_codebases,
             crate::lecture::set_codebases,

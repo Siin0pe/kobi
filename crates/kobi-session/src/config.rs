@@ -292,6 +292,8 @@ pub struct Config {
     pub wake_word: String,
     /// Raccourci global, au format des accélérateurs Tauri.
     pub hotkey: String,
+    /// Raccourci qui démarre ou arrête l'enregistrement de la réunion.
+    pub hotkey_record: String,
     /// Dossiers de code que Kobi peut lire (KOB-138), passés à Claude Code en
     /// `--add-dir`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -314,6 +316,7 @@ impl Default for Config {
             brain: Brain::default(),
             wake_word: "Kobi".into(),
             hotkey: "Ctrl+Shift+Space".into(),
+            hotkey_record: "Ctrl+Shift+R".into(),
             codebases: Vec::new(),
             audio: AudioConfig::default(),
             stt: SttConfig::default(),
@@ -478,6 +481,7 @@ mod tests {
         assert_eq!(c.brain, Brain::Auto);
         assert_eq!(c.wake_word, "Kobi");
         assert_eq!(c.hotkey, "Ctrl+Shift+Space");
+        assert_eq!(c.hotkey_record, "Ctrl+Shift+R");
         assert_eq!(c.audio.sources, AudioSources::Both);
         assert_eq!(c.stt.engine, "auto");
         assert_eq!(c.notes.mode, NotesMode::Blocks);

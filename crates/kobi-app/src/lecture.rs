@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use kobi_session::config;
 
+#[cfg(test)]
 use kobi_brain::claude_code::Event;
 
 /// Seuls outils de la session.
@@ -97,7 +98,9 @@ pub fn codebases_valides(codebases: &[PathBuf]) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Outils appelés dans un message `assistant` du flux.
+/// Outils appelés dans un message `assistant` du flux (l'app les voit par
+/// `BrainEvent::ToolCall`, voir [`crate::cerveau`]).
+#[cfg(test)]
 pub fn outils_appeles(event: &Event) -> Vec<String> {
     let Event::Assistant { message } = event else {
         return Vec::new();

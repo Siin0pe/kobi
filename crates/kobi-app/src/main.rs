@@ -5,9 +5,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod carnet;
+mod cerveau;
+mod chef;
 mod demarrage;
 mod diag;
 mod ecoute;
+mod intentions;
 mod interpellation;
 mod lecture;
 mod mot_cle;
@@ -108,8 +111,12 @@ fn main() {
             }
             demarrage::installer(app.handle());
             stockage::installer(app.handle(), &config.config, config_path);
-            interpellation::installer(app.handle(), config.config.codebases.clone());
-            raccourci::installer(app.handle(), &config.config.hotkey)?;
+            interpellation::installer(
+                app.handle(),
+                config.config.notes.interval_min,
+                config.config.codebases.clone(),
+            );
+            raccourci::installer(app.handle(), &config.config)?;
             let window = app
                 .get_webview_window("main")
                 .expect("fenêtre « main » déclarée dans tauri.conf.json");
