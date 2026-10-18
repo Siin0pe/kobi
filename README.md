@@ -22,7 +22,15 @@ kobi reminders add "Appeler Léa" --due 2026-10-19T09:00
 kobi help                            # toutes les commandes
 ```
 
-`--json` donne le résultat brut. Codes de retour : 0 succès, 1 commande refusée, 2 usage, 3 Kobi ne tourne pas, 4 jeton refusé. Sous Windows, `kobi.exe` est l'app graphique : dans un terminal, `kobi-ctl.exe` fait la même chose et rend proprement son code de retour.
+`--json` donne le résultat brut. Codes de retour : 0 succès, 1 commande refusée, 2 usage, 3 Kobi ne tourne pas, 4 jeton refusé.
+
+**Installation de la commande `kobi`.** Sous Windows, l'installeur place la CLI dans `bin\kobi.exe`, à côté de l'app (par défaut `%LOCALAPPDATA%\Kobi\bin`), et ajoute ce dossier au `PATH` de l'utilisateur : ouvrez un nouveau terminal et tapez `kobi status`. La désinstallation retire le dossier du `PATH`. Si votre `PATH` est trop long pour que l'installeur le modifie sans risque, il n'y touche pas : ajoutez le dossier vous-même ou utilisez le chemin complet. L'app graphique `Kobi.exe` comprend aussi ces commandes, mais un terminal Windows n'attend pas sa fin : préférez `kobi` (ou `kobi-ctl.exe`), qui rend proprement son code de retour.
+
+Construire l'installeur Windows avec la CLI :
+
+```powershell
+powershell -ExecutionPolicy Bypass -File crates\kobi-app\windows\installeur.ps1
+```
 
 ### Brancher Kobi dans Claude Code (ou un autre agent)
 
@@ -30,4 +38,4 @@ kobi help                            # toutes les commandes
 claude mcp add kobi -- kobi mcp
 ```
 
-Avec le chemin complet si `kobi` n'est pas dans le `PATH`, par exemple `claude mcp add kobi -- "C:\Program Files\Kobi\kobi.exe" mcp`. Les outils (`status`, `notes_last`, `meetings_get`, `meeting_start`, `config_set`…) annoncent chacun s'ils lisent (`readOnlyHint`) ou modifient. Kobi branche ce même MCP dans ses propres sessions, en lecture seule tant que la validation à la voix ou par carte n'est pas en place.
+Avec le chemin complet si `kobi` n'est pas dans le `PATH`, par exemple `claude mcp add kobi -- "%LOCALAPPDATA%\Kobi\bin\kobi.exe" mcp`. Les outils (`status`, `notes_last`, `meetings_get`, `meeting_start`, `config_set`…) annoncent chacun s'ils lisent (`readOnlyHint`) ou modifient. Kobi branche ce même MCP dans ses propres sessions, en lecture seule tant que la validation à la voix ou par carte n'est pas en place.
