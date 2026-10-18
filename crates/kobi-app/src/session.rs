@@ -234,6 +234,15 @@ pub fn installer<R: Runtime>(builder: Builder<R>) -> Builder<R> {
             crate::lecture::set_codebases,
             // Dépôts trouvés sous un dossier (KOB-153, premier lancement).
             crate::depots::lister_depots,
+            // Serveurs MCP connectés (KOB-155), Réglages → MCP.
+            crate::mcp::mcp_serveurs,
+            crate::mcp::mcp_ajouter,
+            crate::mcp::mcp_supprimer,
+            crate::mcp::mcp_regler,
+            crate::mcp::mcp_tester,
+            crate::mcp::mcp_autoriser,
+            crate::mcp::mcp_candidats,
+            crate::mcp::mcp_importer,
             crate::stockage::reglages_stockage,
             crate::stockage::regler_stockage,
             crate::demarrage::demarrage_systeme,

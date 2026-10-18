@@ -40,6 +40,11 @@ pub struct ServeurMcp {
 pub struct McpSession {
     pub fichier: PathBuf,
     pub outils_autorises: Vec<String>,
+    /// Outil de `--permission-prompt-tool` (serveur de permission de Kobi,
+    /// KOB-155) ; absent : ce qui n'est pas autorisé d'avance est refusé.
+    pub permission_prompt_tool: Option<String>,
+    /// Prompt à ajouter pour les serveurs de l'utilisateur (KOB-155).
+    pub prompt: Option<String>,
 }
 
 /// Le MCP de Kobi, servi par l'exécutable `exe` en mode agent (lecture
@@ -90,6 +95,8 @@ fn assembler_avec(
     Ok(McpSession {
         fichier: fichier.to_owned(),
         outils_autorises: outils,
+        permission_prompt_tool: None,
+        prompt: None,
     })
 }
 

@@ -27,6 +27,8 @@ pub struct Rules {
     /// Liste blanche du workspace : noms exacts, ou `mcp__serveur__*` pour
     /// tout un serveur.
     allowlist: Vec<String>,
+    /// Outils d'écriture d'un serveur réglé « faire sans demander » (KOB-155).
+    sans_demander: BTreeSet<String>,
 }
 
 impl Rules {
@@ -35,6 +37,7 @@ impl Rules {
         Self {
             read_only: BTreeSet::new(),
             allowlist: allowlist.into_iter().map(Into::into).collect(),
+            sans_demander: BTreeSet::new(),
         }
     }
 
@@ -64,9 +67,17 @@ impl Rules {
         self.read_only.insert(tool_name.into());
     }
 
+    /// Outil d'écriture autorisé sans carte (serveur « faire sans demander »).
+    pub fn add_sans_demander(&mut self, tool_name: impl Into<String>) {
+        self.sans_demander.insert(tool_name.into());
+    }
+
     pub fn verdict(&self, tool_name: &str) -> Verdict {
         if self.read_only.contains(tool_name) {
             return Verdict::Allow("outil en lecture seule (readOnlyHint)");
+        }
+        if self.sans_demander.contains(tool_name) {
+            return Verdict::Allow("serveur MCP réglé « faire sans demander »");
         }
         let listed = self
             .allowlist

@@ -1323,31 +1323,21 @@ fn dossiers_de_code() -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
-/// Sessions Claude Code réelles, en lecture seule (KOB-138) : Read, Grep et
-/// Glob sur les dossiers de code et la mémoire des réunions (KOB-76), le MCP
-/// de Kobi en lecture (KOB-161), sans serveur de permission, modèle rapide,
-/// prompt système de Kobi avec la carte des dépôts (KOB-153). Les dossiers
-/// sont relus à chaque ouverture : un changement vaut pour la session
-/// suivante.
+/// Sessions Claude Code réelles : Read, Grep et Glob sur les dossiers de code
+/// et la mémoire des réunions (KOB-138, KOB-76), le MCP de Kobi en lecture
+/// (KOB-161), les serveurs MCP de l'utilisateur derrière le serveur de
+/// permission de Kobi (KOB-155), modèle rapide, prompt système de Kobi avec
+/// la carte des dépôts (KOB-153). Dossiers et serveurs sont relus à chaque
+/// ouverture : un changement vaut pour la session suivante.
 pub fn fabrique_claude(
     modele: &'static str,
     dossiers: crate::lecture::Dossiers,
     memoire: SourceMemoire,
 ) -> Fabrique {
-    // MCP de Kobi (KOB-161) ; KOB-155 : serveurs de l'utilisateur ici.
-    let mcp = kobi_session::config::kobi_dir()
-        .map(|d| d.join("mcp").join("session.json"))
-        .and_then(|f| {
-            crate::mcp_config::assembler(&f, Vec::new())
-                .map_err(|e| tracing::warn!(erreur = %e, "config MCP des sessions"))
-                .ok()
-        });
     let programme: Arc<tokio::sync::OnceCell<Result<PathBuf, String>>> = Arc::default();
     Arc::new(move |role| {
-        let codebases = dossiers.read().unwrap_or_else(|e| e.into_inner()).clone();
-        let memoire = memoire();
-        let mcp = mcp.clone();
-        let programme = programme.clone();
+        let codebases = Arc::new(dossiers.read().unwrap_or_else(|e| e.into_inner()).clone());
+        let (programme, memoire) = (programme.clone(), memoire());
         Box::pin(async move {
             let programme = programme
                 .get_or_init(|| async {
@@ -1366,25 +1356,15 @@ pub fn fabrique_claude(
             if let Some(cwd) = &cwd {
                 let _ = std::fs::create_dir_all(cwd);
             }
-            // La carte des dépôts parcourt le disque : hors du runtime.
-            let args = tokio::task::spawn_blocking({
-                let codebases = codebases.clone();
-                move || {
-                    crate::lecture::arguments(
-                        modele,
-                        kobi_brain::SYSTEM_PROMPT,
-                        &codebases,
-                        memoire.as_ref(),
-                        mcp.as_ref(),
-                    )
-                }
-            })
-            .await
-            .map_err(|e| kobi_brain::BrainError::Unavailable(e.to_string()))?;
+            // Serveurs MCP relus à chaque session : un changement dans les
+            // réglages vaut pour la conversation suivante (KOB-155).
+            let mcp = crate::mcp::session_claude(role, modele, codebases.clone(), memoire);
             let config = kobi_brain::MeetingConfig {
                 program: programme,
                 cwd,
-                fixed_args: Some(args),
+                args_with_perms: Some(mcp.args),
+                permission_rules: mcp.regles,
+                env: mcp.env,
                 ..Default::default()
             };
             let debut = Instant::now();

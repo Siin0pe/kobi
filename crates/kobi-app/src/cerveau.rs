@@ -484,17 +484,26 @@ fn activite(tour: u64, id: String, action: Action, sortie: &Sortie) {
     });
 }
 
-/// Chaque outil appelé est journalisé : seuls Read, Grep et Glob doivent
-/// apparaître (KOB-138).
+/// Chaque outil appelé est journalisé : seuls Read, Grep, Glob (KOB-138)
+/// et les outils MCP (KOB-155) doivent apparaître.
 fn journaliser_outil(outil: &str) {
     if crate::lecture::permis(outil) {
         tracing::info!(%outil, "outil de lecture");
+    } else if outil.starts_with("mcp__") {
+        tracing::info!(%outil, "outil MCP");
     } else if !OUTILS_INTERNES.contains(&outil) {
         tracing::warn!(%outil, "outil hors lecture seule demandé par Claude");
     }
 }
 
 fn carte(tour: u64, demande: ApprovalRequest, sortie: &Sortie, cartes: &Cartes) {
+    // Hors MCP, Kobi ne fait que lire, et seulement dans les dossiers de
+    // code : un Read ailleurs est refusé sans carte (KOB-138, KOB-155).
+    if !demande.request.tool_name.starts_with("mcp__") {
+        tracing::info!(outil = %demande.request.tool_name, "refusé sans carte : hors MCP");
+        demande.deny("Hors des outils MCP, Kobi ne fait que lire dans les dossiers de code.");
+        return;
+    }
     let carte = nouvelle_carte();
     let (outil, entree) = (
         demande.request.tool_name.clone(),
