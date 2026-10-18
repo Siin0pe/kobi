@@ -17,7 +17,9 @@ async function setHidden(page: Page, hidden: boolean): Promise<void> {
   }, hidden);
 }
 
-test('le réglage système « réduire les animations » est suivi, même en cours de route', async ({ page }) => {
+test('en mode « comme Windows », le réglage système « réduire les animations » est suivi, même en cours de route', async ({ page }) => {
+  // Réglage « Animations » de Kobi sur « comme Windows » (par défaut : toujours).
+  await page.addInitScript(() => localStorage.setItem('kobi.animations', 'systeme'));
   await page.emulateMedia({ reducedMotion: 'reduce' });
   const errors = await openUi(page, '');
   await expect(page.locator('.stage')).toHaveClass(/reduced-motion/);

@@ -2,6 +2,7 @@
 // lecteurs d'écran. Elle applique les réglages système (réduire les
 // animations) et met tout en pause quand la fenêtre est masquée.
 
+import { animationsReduitesSelonReglage, suivreAnimations } from './animations';
 import { Bubbles, type ActionDecision } from './bubbles';
 import { Metronome } from './econome';
 import { Kobi } from './mascotte/kobi';
@@ -30,7 +31,7 @@ export interface StageOptions {
    * La fenêtre native reste transparente.
    */
   backdrop?: boolean | 'sombre' | 'clair';
-  /** Force « réduire les animations » (tests) ; sinon suit le réglage système. */
+  /** Force « réduire les animations » (tests) ; sinon suit le réglage « Animations » de Kobi. */
   reducedMotion?: boolean;
   /** Se cale sur l'élément parent (aperçu) au lieu de la fenêtre. */
   inFrame?: boolean;
@@ -63,7 +64,6 @@ export class Stage {
   private paused = false;
   private windowHidden = false;
   private reducedMotion: boolean;
-  private readonly motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
   private readonly forcedMotion: boolean | undefined;
   private readonly inFrame: boolean;
   private readonly cleanups: Array<() => void> = [];
@@ -79,7 +79,7 @@ export class Stage {
 
   constructor(parent: HTMLElement, options: StageOptions = {}) {
     this.forcedMotion = options.reducedMotion;
-    this.reducedMotion = options.reducedMotion ?? this.motionQuery.matches;
+    this.reducedMotion = options.reducedMotion ?? animationsReduitesSelonReglage();
 
     this.root = document.createElement('div');
     this.root.className = 'stage';
@@ -117,6 +117,13 @@ export class Stage {
       if (deep) requestAnimationFrame(() => this.root.classList.contains('econome') && this.metronome.setActive(true));
       else this.metronome.setActive(false);
     };
+    // Scène de la veille ou ballottement pendant le repos : 60 images/s le
+    // temps du geste, puis le métronome reprend (KOB-149).
+    this.kobi.onLivelyChange = (lively) => {
+      if (!this.root.classList.contains('econome')) return;
+      if (lively) this.metronome.setActive(false);
+      else requestAnimationFrame(() => this.root.classList.contains('econome') && this.metronome.setActive(true));
+    };
     this.cleanups.push(() => this.metronome.destroy());
     this.root.append(this.scene, this.dot, this.live);
     parent.append(this.root);
@@ -138,11 +145,9 @@ export class Stage {
     document.addEventListener('visibilitychange', onVisibility);
     this.cleanups.push(() => document.removeEventListener('visibilitychange', onVisibility));
 
-    if (this.forcedMotion === undefined) {
-      const onMotion = (e: MediaQueryListEvent): void => this.setReducedMotion(e.matches);
-      this.motionQuery.addEventListener('change', onMotion);
-      this.cleanups.push(() => this.motionQuery.removeEventListener('change', onMotion));
-    }
+    // Réglage « Animations » de Kobi (toujours, comme Windows, réduites),
+    // changé ici ou dans les Réglages, ou réglage de Windows en mode « comme Windows ».
+    if (this.forcedMotion === undefined) this.cleanups.push(suivreAnimations((reduced) => this.setReducedMotion(reduced)));
     this.root.classList.toggle('reduced-motion', this.reducedMotion);
     this.bubbles.setReducedMotion(this.reducedMotion);
     this.rec.setReducedMotion(this.reducedMotion);

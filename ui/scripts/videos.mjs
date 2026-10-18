@@ -72,6 +72,86 @@ const CLIPS = [
       await wait(page, 5000);
     },
   ],
+  // KOB-149 : répertoire de la veille, pincement, fenêtre déplacée, voix, frappe.
+  [
+    'veille-repertoire',
+    'backdrop=1',
+    async (page) => {
+      await wait(page, 800);
+      const names = await page.evaluate(() => window.kobi.stage.kobi.idleNames());
+      for (const n of names) {
+        await page.evaluate((n) => window.kobi.stage.kobi.playIdle(n), n);
+        await page.waitForFunction(() => !document.querySelector('.kobi').dataset.idle, null, { timeout: 8000 });
+        await wait(page, 500);
+      }
+    },
+  ],
+  [
+    'pincement-survol',
+    'backdrop=1',
+    async (page) => {
+      await wait(page, 800);
+      for (const s of ['idle', 'listen', 'done', 'answer']) {
+        await set(page, s);
+        await wait(page, 900);
+        await page.mouse.move(150, 300);
+        await page.mouse.move(580, 260, { steps: 12 });
+        await wait(page, 700);
+        await page.mouse.down();
+        await wait(page, 300);
+        await page.mouse.up();
+        await wait(page, 1300);
+        await page.mouse.move(-10, 300);
+        await page.evaluate(() => document.dispatchEvent(new MouseEvent('mouseout', { relatedTarget: null })));
+        await wait(page, 600);
+      }
+    },
+  ],
+  [
+    'fenetre-deplacee',
+    'backdrop=1',
+    async (page) => {
+      // Comme l'événement tauri://move de la fenêtre native : on secoue la fenêtre.
+      await wait(page, 800);
+      const jostle = (dx, dy) => page.evaluate(([dx, dy]) => window.kobi.stage.kobi.jostle(dx, dy), [dx, dy]);
+      for (const [dx, dy, n] of [[18, 0, 12], [-22, 4, 10], [0, -16, 8], [25, 10, 6]]) {
+        for (let i = 0; i < n; i++) {
+          await jostle(dx, dy);
+          await wait(page, 16);
+        }
+        await wait(page, 1600);
+      }
+    },
+  ],
+  [
+    'ecoute-volume',
+    'backdrop=1&state=listen',
+    async (page) => {
+      await wait(page, 900);
+      for (let i = 0; i < 160; i++) {
+        const v = Math.max(0, Math.sin(i / 6) * 0.8 + (Math.random() - 0.3) * 0.4);
+        await page.evaluate((v) => window.kobi.setLevel(v), v);
+        await wait(page, 50);
+      }
+      await wait(page, 1500);
+    },
+  ],
+  [
+    'frappe-brouillee',
+    'backdrop=1',
+    async (page) => {
+      await wait(page, 600);
+      await page.evaluate(() => window.kobi.setState('answer', { question: 'Où est le rafraîchissement du jeton ?', answer: '' }));
+      const answer = 'Dans src/auth/refresh.ts : la route /auth/refresh renouvelle le jeton toutes les 15 minutes, et le mobile garde le sien 30 jours.';
+      let t = '';
+      for (const w of answer.split(' ')) {
+        t = t ? `${t} ${w}` : w;
+        await page.evaluate((t) => window.kobi.update({ answer: t }), t);
+        await wait(page, 140);
+      }
+      await wait(page, 3000);
+    },
+  ],
   [
     'curseur',
     'backdrop=1&state=listen',
