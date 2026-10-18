@@ -4,6 +4,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod demarrage;
 mod diag;
 mod ecoute;
 mod interpellation;
@@ -100,6 +101,7 @@ fn main() {
             if let Some(problem) = &config.problem {
                 tracing::warn!(%problem, "config.toml");
             }
+            demarrage::installer(app.handle());
             stockage::installer(app.handle(), &config.config, config_path);
             interpellation::installer(app.handle(), config.config.codebases.clone());
             raccourci::installer(app.handle(), &config.config.hotkey)?;

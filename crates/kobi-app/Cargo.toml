@@ -24,6 +24,9 @@ tauri = { version = "2.12", features = ["macos-private-api", "tray-icon"] }
 tauri-plugin-global-shortcut = "2"
 tracing = "0.1"
 
+[target.'cfg(windows)'.dependencies]
+winreg = "0.56"
+
 [dev-dependencies]
 tauri = { version = "2.12", features = ["test"] }
 tempfile = "3"
