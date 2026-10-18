@@ -216,6 +216,10 @@ pub struct Chef<R: Runtime> {
     /// La conversation attend la suite à la fin de la voix, pas avant
     /// (KOB-133) : la fenêtre de 20 s repart quand Kobi se tait.
     suite_apres_voix: bool,
+    /// Dernière question répondue et sa réponse (« répète », « plus court »…).
+    derniere: Option<(String, String)>,
+    /// Tâches longues en cours : début et question (« où en est… ? »).
+    taches: BTreeMap<u64, (Instant, String)>,
     /// Tours abandonnés : ce qui en revient encore est ignoré.
     interrompus: HashSet<u64>,
 }
@@ -285,6 +289,21 @@ fn boucle<R: Runtime>(app: AppHandle<R>, rx: Receiver<Message>) {
         }
         chef.tick();
     }
+}
+
+/// Réponse à « répète » ou « plus court » avant toute réponse.
+const SANS_REPONSE: &str = "Je n'ai encore rien répondu.";
+
+/// Consigne envoyée à Claude pour reprendre la dernière réponse. Elle la
+/// rappelle en entier : la session de conversation a pu changer depuis
+/// (tâche longue détachée, interruption).
+pub fn reprise(intention: Intention, (question, reponse): &(String, String)) -> String {
+    let demande = match intention {
+        Intention::PlusCourt => "Redis-la en plus court, en une phrase.",
+        Intention::Developpe => "Développe-la, avec plus de détails, en cinq phrases au plus.",
+        _ => "Redis-la en anglais.",
+    };
+    format!("Ta dernière réponse, à la question « {question} », était : « {reponse} ». {demande}")
 }
 
 /// Lignes de notes (puces et cases).
@@ -370,6 +389,8 @@ impl<R: Runtime> Chef<R> {
             conversation: None,
             voix: None,
             suite_apres_voix: false,
+            derniere: None,
+            taches: BTreeMap::new(),
             interrompus: HashSet::new(),
         }
     }
@@ -490,9 +511,39 @@ impl<R: Runtime> Chef<R> {
             }
             None => {}
         }
-        if intention(&texte) == Some(Intention::Interrompre) {
-            self.interrompre();
-            return;
+        let mut consigne = None;
+        match intention(&texte) {
+            Some(Intention::Interrompre) => {
+                self.interrompre();
+                return;
+            }
+            Some(Intention::Repeter) => {
+                let reponse = match &self.derniere {
+                    Some((_, r)) => r.clone(),
+                    None => self.pas_encore_de_reponse(),
+                };
+                self.repondre_localement(texte, reponse, voix);
+                return;
+            }
+            Some(Intention::OuEnEst) => {
+                let reponse = self.avancement();
+                self.repondre_localement(texte, reponse, voix);
+                return;
+            }
+            Some(Intention::Annuler) => {
+                let reponse = self.annuler();
+                self.repondre_localement(texte, reponse, voix);
+                return;
+            }
+            Some(i @ (Intention::PlusCourt | Intention::Developpe | Intention::EnAnglais)) => {
+                let Some(c) = self.derniere.as_ref().map(|d| reprise(i, d)) else {
+                    let reponse = self.pas_encore_de_reponse();
+                    self.repondre_localement(texte, reponse, voix);
+                    return;
+                };
+                consigne = Some(c);
+            }
+            _ => {}
         }
         // « Rappelle-moi … », « ajoute … à ma liste » (KOB-145) : rangé sur place.
         if let Some(reponse) = self.rappel(&texte) {
@@ -514,7 +565,7 @@ impl<R: Runtime> Chef<R> {
             });
             return;
         }
-        if let Some(i) = intention(&texte) {
+        if let Some(i) = intention(&texte).filter(|_| consigne.is_none()) {
             tracing::info!(intention = ?i, "ordre vocal");
             self.transition(&[Evenement::PasDeQuestion]);
             let reponse = self.commande(i);
@@ -541,7 +592,7 @@ impl<R: Runtime> Chef<R> {
             .unwrap_or_default();
         self.cerveau.demander(Demande::Question {
             tour: self.tour,
-            question: texte.clone(),
+            question: consigne.unwrap_or_else(|| texte.clone()),
             transcript: std::mem::take(&mut self.pour_conversation),
             notes,
         });
@@ -639,6 +690,13 @@ impl<R: Runtime> Chef<R> {
                     format!("Je n'arrive pas à ouvrir le Carnet : {e}")
                 }
             },
+            // Reprises et suivi des tâches : seulement par la question.
+            Intention::Repeter
+            | Intention::PlusCourt
+            | Intention::Developpe
+            | Intention::EnAnglais
+            | Intention::OuEnEst
+            | Intention::Annuler => return String::new(),
         };
         self.emettre_enregistrement();
         let _ = self.app.emit(EVENEMENT_REPONSE, &reponse);
@@ -722,6 +780,69 @@ impl<R: Runtime> Chef<R> {
         self.pour_conversation.push_str(&ligne);
     }
 
+    /// Réponse que Kobi donne sans Claude (« répète », « où en est… ? »,
+    /// « annule ») : affichée et lue comme une réponse ordinaire.
+    fn repondre_localement(&mut self, question: String, reponse: String, voix: bool) {
+        self.tour += 1;
+        self.dernier = self.tour;
+        self.calme_a = None;
+        self.transition(&[Evenement::QuestionEnvoyee]);
+        self.transition(&[Evenement::ReponseCommence]);
+        let _ = self.app.emit(EVENEMENT_REPONSE, &reponse);
+        crate::voix::dire(&self.app, &reponse);
+        tracing::info!(tour = self.tour, "réponse locale");
+        self.ranger(Qui::Moi, &question, voix);
+        self.ranger(Qui::Kobi, &reponse, false);
+        self.ajouter(Bulle {
+            tour: self.tour,
+            question,
+            reponse: reponse.clone(),
+            statut: "fini",
+            clavier: !voix,
+        });
+        self.lire(&reponse);
+    }
+
+    /// « Répète » avant toute réponse : rien à répéter, ou une tâche qui
+    /// tourne encore.
+    fn pas_encore_de_reponse(&self) -> String {
+        if self.taches.is_empty() {
+            SANS_REPONSE.into()
+        } else {
+            self.avancement()
+        }
+    }
+
+    /// Avancement des tâches longues.
+    fn avancement(&self) -> String {
+        if self.taches.is_empty() {
+            return "Aucune tâche en cours.".into();
+        }
+        let taches: Vec<String> = self
+            .taches
+            .values()
+            .map(|(debut, q)| format!("« {q} », depuis {} s", debut.elapsed().as_secs()))
+            .collect();
+        format!("Je travaille encore sur {}.", taches.join(" ; "))
+    }
+
+    /// Annule la dernière tâche longue lancée.
+    fn annuler(&mut self) -> String {
+        let Some((&tour, (_, question))) = self.taches.iter().next_back() else {
+            return "Aucune tâche à annuler.".into();
+        };
+        let question = question.clone();
+        self.taches.remove(&tour);
+        self.interrompus.insert(tour);
+        self.cerveau.demander(Demande::Annuler { tour });
+        if let Some(b) = self.bulle(tour) {
+            b.statut = "fini";
+            b.reponse = "Tâche annulée.".into();
+        }
+        self.emettre_historique();
+        format!("J'ai annulé « {question} ».")
+    }
+
     /// Coupe la réponse en cours : la bulle garde le texte déjà reçu, la
     /// suite du tour est ignorée, et Kobi revient tout de suite au calme.
     pub fn interrompre(&mut self) {
@@ -788,6 +909,7 @@ impl<R: Runtime> Chef<R> {
             }
             Retour::Fin { tour, texte } => {
                 tracing::info!(tour, "réponse terminée");
+                self.retenir(tour, &texte);
                 self.ranger(Qui::Kobi, &texte, false);
                 if let Some(b) = self.bulle(tour) {
                     b.reponse.clone_from(&texte);
@@ -810,6 +932,11 @@ impl<R: Runtime> Chef<R> {
             Retour::Detache { tour, annonce } => {
                 tracing::info!(tour, annonce, "tour détaché");
                 if annonce {
+                    let question = self
+                        .bulle(tour)
+                        .map(|b| b.question.clone())
+                        .unwrap_or_default();
+                    self.taches.insert(tour, (Instant::now(), question));
                     if let Some(b) = self.bulle(tour) {
                         b.statut = "tache";
                         if b.reponse.is_empty() {
@@ -831,6 +958,8 @@ impl<R: Runtime> Chef<R> {
             }
             Retour::Resultat { tour, texte } => {
                 tracing::info!(tour, "résultat livré");
+                self.taches.remove(&tour);
+                self.retenir(tour, &texte);
                 self.ranger(Qui::Kobi, &texte, false);
                 let question = self.bulle(tour).map(|b| {
                     b.reponse.clone_from(&texte);
@@ -855,6 +984,7 @@ impl<R: Runtime> Chef<R> {
                 }
             }
             Retour::Erreur { tour, message } => {
+                self.taches.remove(&tour);
                 tracing::warn!(tour, %message, "tour en erreur");
                 if self.voix.as_ref().is_some_and(|(t, _)| *t == tour) {
                     self.voix = None;
@@ -936,6 +1066,13 @@ impl<R: Runtime> Chef<R> {
             .terminer_reunion(texte, r.notes, maintenant_ms());
         self.transition(&[Evenement::CompteRenduEcrit]);
         self.emettre_enregistrement();
+    }
+
+    /// Garde la dernière réponse pour « répète », « plus court »…
+    fn retenir(&mut self, tour: u64, texte: &str) {
+        if let Some(question) = self.bulle(tour).map(|b| b.question.clone()) {
+            self.derniere = Some((question, texte.to_owned()));
+        }
     }
 
     /// Nouvelles de l'écrivain.
@@ -1190,6 +1327,16 @@ mod tests {
             derniere_note("", "- `cargo test` à lancer").as_deref(),
             Some("cargo test à lancer")
         );
+    }
+
+    #[test]
+    fn reprise_rappelle_la_reponse() {
+        let d = ("quelle heure ?".to_string(), "Il est midi.".to_string());
+        let c = reprise(Intention::EnAnglais, &d);
+        assert!(c.contains("« quelle heure ? »") && c.contains("« Il est midi. »"));
+        assert!(c.ends_with("en anglais."));
+        assert!(reprise(Intention::PlusCourt, &d).contains("plus court"));
+        assert!(reprise(Intention::Developpe, &d).contains("Développe"));
     }
 
     #[test]
