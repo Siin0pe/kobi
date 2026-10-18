@@ -228,7 +228,6 @@ pub struct Config {
     pub wake_word: String,
     /// Raccourci global, au format des accélérateurs Tauri.
     pub hotkey: String,
-    pub skin: String,
     pub audio: AudioConfig,
     pub stt: SttConfig,
     pub notes: NotesConfig,
@@ -245,7 +244,6 @@ impl Default for Config {
             brain: Brain::default(),
             wake_word: "Kobi".into(),
             hotkey: "Ctrl+Shift+Space".into(),
-            skin: "kobi".into(),
             audio: AudioConfig::default(),
             stt: SttConfig::default(),
             notes: NotesConfig::default(),
@@ -413,7 +411,6 @@ mod tests {
         assert_eq!(c.notes.interval_min, 3);
         assert!(c.voice.assistant);
         assert!(!c.voice.meeting);
-        assert_eq!(c.skin, "kobi");
         assert_eq!(c.meetings.retention_days, Retention::Unlimited);
     }
 
@@ -439,6 +436,18 @@ retention_days = 90
     }
 
     #[test]
+    fn ancien_reglage_skin_toujours_lisible() {
+        // Il n'y a plus qu'un skin (KOB-136) : la clé `skin` d'une ancienne
+        // config est lue sans erreur et conservée à l'écriture.
+        let text = "skin = \"kobi\"\nbrain = \"api\"\n";
+        let c = Config::parse(text, Path::new("config.toml")).unwrap();
+        assert_eq!(c.brain, Brain::Api);
+        assert_eq!(c.extra["skin"].as_str(), Some("kobi"));
+        let back: toml::Table = toml::from_str(&c.to_toml().unwrap()).unwrap();
+        assert_eq!(back["skin"].as_str(), Some("kobi"));
+    }
+
+    #[test]
     fn vide_donne_les_defauts() {
         let c = Config::parse("", Path::new("config.toml")).unwrap();
         assert_eq!(c, Config::default());
@@ -452,7 +461,7 @@ retention_days = 90
         fs::write(
             &path,
             r#"
-skin = "matrice"
+ancien_reglage = "x"
 futur_reglage = 42
 
 [notes]
@@ -477,7 +486,7 @@ liste = [1, 2, 3]
 
         let back: toml::Table = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(back["hotkey"].as_str(), Some("Ctrl+Alt+K"));
-        assert_eq!(back["skin"].as_str(), Some("matrice"));
+        assert_eq!(back["ancien_reglage"].as_str(), Some("x"));
         assert_eq!(back["futur_reglage"].as_integer(), Some(42));
         assert_eq!(back["notes"]["mode"].as_str(), Some("end"));
         assert_eq!(back["notes"]["couleur"].as_str(), Some("vert"));
@@ -492,7 +501,7 @@ liste = [1, 2, 3]
         let dir = tempfile::tempdir().unwrap();
         let path = path_in(&dir);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let broken = "skin = \"gelee\"\n[notes\ninterval_min = 4\n";
+        let broken = "brain = \"api\"\n[notes\ninterval_min = 4\n";
         fs::write(&path, broken).unwrap();
 
         let loaded = load_or_create(&path);
@@ -546,12 +555,12 @@ liste = [1, 2, 3]
         let dir = tempfile::tempdir().unwrap();
         let path = path_in(&dir);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, "skin = = \"essaim\"").unwrap();
+        fs::write(&path, "brain = = \"api\"").unwrap();
 
         save(&Config::default(), &path).unwrap();
 
         let backup = with_suffix(&path, BACKUP_SUFFIX);
-        assert_eq!(fs::read_to_string(backup).unwrap(), "skin = = \"essaim\"");
+        assert_eq!(fs::read_to_string(backup).unwrap(), "brain = = \"api\"");
         let written = fs::read_to_string(&path).unwrap();
         assert_eq!(Config::parse(&written, &path).unwrap(), Config::default());
         assert!(!with_suffix(&path, "tmp").exists());

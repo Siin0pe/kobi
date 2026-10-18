@@ -1,7 +1,7 @@
 // Données de démonstration (reprises du prototype) : chaque état avec des
 // données complètes, pour le développement, les tests et les captures.
 
-import type { MascotData, MascotState } from './contract';
+import type { MascotData, MascotState } from './states';
 
 export const DEMO_QUESTION = 'où est géré le refresh token ? Il expire trop vite.';
 export const DEMO_NOTES = 'Décision : refresh token → 30 j\nAction : mettre à jour la doc API\nQuestion : impact sur le mobile ?';

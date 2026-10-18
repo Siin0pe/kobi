@@ -13,8 +13,8 @@ async function sample(page: import('@playwright/test').Page, ms: number) {
         const tick = (now: number) => {
           out.push({
             t: now - t0,
-            eye: document.querySelector('.skin-kobi .g')!.textContent ?? '',
-            word: document.querySelector('.skin-kobi .word')!.textContent ?? '',
+            eye: document.querySelector('.kobi .g')!.textContent ?? '',
+            word: document.querySelector('.kobi .word')!.textContent ?? '',
           });
           if (now - t0 < ms) requestAnimationFrame(tick);
           else resolve(out);
@@ -36,8 +36,8 @@ async function sampleClock(page: import('@playwright/test').Page, ms: number) {
     out.push({
       t,
       ...(await page.evaluate(() => ({
-        eye: document.querySelector('.skin-kobi .g')!.textContent ?? '',
-        word: document.querySelector('.skin-kobi .word')!.textContent ?? '',
+        eye: document.querySelector('.kobi .g')!.textContent ?? '',
+        word: document.querySelector('.kobi .word')!.textContent ?? '',
       }))),
     });
     await page.clock.runFor(16);
@@ -47,7 +47,7 @@ async function sampleClock(page: import('@playwright/test').Page, ms: number) {
 
 test('au changement d’état, yeux et mot sont brouillés puis posés lettre par lettre', async ({ page }) => {
   await page.clock.install();
-  const errors = await openUi(page, 'skin=kobi');
+  const errors = await openUi(page, '');
   await page.clock.pauseAt(Date.now() + 2_000);
   await page.clock.runFor(800);
   await page.evaluate(() => window.kobi.setState('suggest', window.kobi.demoData('suggest')));
@@ -79,16 +79,16 @@ test('au changement d’état, yeux et mot sont brouillés puis posés lettre pa
 async function watchEyes(page: import('@playwright/test').Page): Promise<void> {
   await page.evaluate(() => {
     const log: Array<{ t: number; eye: string; state: string }> = [];
-    const skin = document.querySelector<HTMLElement>('.skin-kobi')!;
+    const kobi = document.querySelector<HTMLElement>('.kobi')!;
     // L'état est noté avec chaque changement : l'horloge simulée continue
     // d'avancer entre deux appels du test, un clignement d'Écoute peut donc
     // tomber juste avant le passage en Réfléchit.
     const record = (records: MutationRecord[]) => {
       for (const r of records)
-        for (const n of r.addedNodes) log.push({ t: performance.now(), eye: n.textContent ?? '', state: skin.dataset.state ?? '' });
+        for (const n of r.addedNodes) log.push({ t: performance.now(), eye: n.textContent ?? '', state: kobi.dataset.state ?? '' });
     };
     const observer = new MutationObserver(record);
-    observer.observe(document.querySelector('.skin-kobi .g')!, { childList: true });
+    observer.observe(document.querySelector('.kobi .g')!, { childList: true });
     // Les enregistrements en attente sont vidés avant chaque lecture : sinon un
     // clignement de fin de phase serait compté dans la suivante.
     (window as unknown as { eyeLog: () => typeof log }).eyeLog = () => {
@@ -104,7 +104,7 @@ async function eyeLog(page: import('@playwright/test').Page): Promise<Array<{ t:
 
 test('Kobi cligne des yeux en écoute, jamais en réflexion', async ({ page }) => {
   await page.clock.install();
-  const errors = await openUi(page, 'skin=kobi');
+  const errors = await openUi(page, '');
   await watchEyes(page);
   await page.evaluate(() => window.kobi.setState('listen', window.kobi.demoData('listen')));
   await page.clock.runFor(12_000);
@@ -131,7 +131,7 @@ test('Kobi cligne des yeux en écoute, jamais en réflexion', async ({ page }) =
 });
 
 test('réduire les animations : ni brouillage ni clignement', async ({ page }) => {
-  const errors = await openUi(page, 'skin=kobi&reduced=1');
+  const errors = await openUi(page, 'reduced=1');
   await page.evaluate(() => window.kobi.setState('answer', window.kobi.demoData('answer')));
   const frames = await sample(page, 300);
   expect(frames.every((f) => f.eye === '^' && f.word === 'alors')).toBe(true);

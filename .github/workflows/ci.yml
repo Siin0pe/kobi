@@ -90,17 +90,15 @@ jobs:
       - name: Tests
         run: npm test
 
-      - name: Captures de chaque état de chaque skin
+      - name: Captures de chaque état de Kobi
         run: |
           sudo apt-get install -y ffmpeg
-          for skin in kobi gribouille mercure matrice gelee essaim; do
-            node scripts/captures.mjs --skin "$skin" --out "captures/$skin" --seconds 2.5
-          done
+          node scripts/captures.mjs --out captures/kobi --seconds 2.5
 
       - name: Publier les captures
         uses: actions/upload-artifact@v4
         with:
-          name: captures-skins
+          name: captures-kobi
           path: ui/captures
           retention-days: 30
 

@@ -20,37 +20,37 @@ function pose(page: Page): Promise<number[]> {
       const t = getComputedStyle(n).transform;
       return t && t !== 'none' ? new DOMMatrix(t) : new DOMMatrix();
     };
-    const total = m(document.querySelector('.skin-kobi .inertia')!).multiply(m(document.querySelector('.skin-kobi .pill')!));
+    const total = m(document.querySelector('.kobi .inertia')!).multiply(m(document.querySelector('.kobi .pill')!));
     return [total.a, total.b, total.c, total.d, total.e, total.f];
   });
 }
 
-test('le skin Kobi passe les 8 états sans erreur', async ({ page }) => {
-  const errors = await openUi(page, 'skin=kobi&backdrop=1');
-  const skin = page.locator('.skin-kobi');
+test('Kobi passe les 8 états sans erreur', async ({ page }) => {
+  const errors = await openUi(page, 'backdrop=1');
+  const kobi = page.locator('.kobi');
   for (const state of STATES) {
     await page.evaluate((s) => window.kobi.setState(s, window.kobi.demoData(s)), state);
-    await expect(skin).toHaveAttribute('data-state', state);
-    await expect(skin).toHaveClass(new RegExp(`m-${state}`));
-    await expect(page.locator('.skin-kobi .word')).toHaveText(LOOKS[state].word);
-    await expect(page.locator('.skin-kobi .g').first()).toHaveText(LOOKS[state].eye);
+    await expect(kobi).toHaveAttribute('data-state', state);
+    await expect(kobi).toHaveClass(new RegExp(`m-${state}`));
+    await expect(page.locator('.kobi .word')).toHaveText(LOOKS[state].word);
+    await expect(page.locator('.kobi .g').first()).toHaveText(LOOKS[state].eye);
     await page.waitForTimeout(300);
   }
   await expectNoErrors(errors);
 });
 
 test('les symboles orbitent seulement en Réfléchit', async ({ page }) => {
-  const errors = await openUi(page, 'skin=kobi&state=think');
-  await expect(page.locator('.skin-kobi .orbit')).toBeVisible();
-  expect(await page.locator('.skin-kobi .orbit span').evaluateAll((n) => n.map((s) => s.getAnimations().length))).toEqual([1, 1, 1, 1, 1, 1]);
+  const errors = await openUi(page, 'state=think');
+  await expect(page.locator('.kobi .orbit')).toBeVisible();
+  expect(await page.locator('.kobi .orbit span').evaluateAll((n) => n.map((s) => s.getAnimations().length))).toEqual([1, 1, 1, 1, 1, 1]);
   await page.evaluate(() => window.kobi.setState('answer'));
-  await expect(page.locator('.skin-kobi .orbit')).toBeHidden();
-  expect(await page.locator('.skin-kobi .orbit span').evaluateAll((n) => n.flatMap((s) => s.getAnimations()).length)).toBe(0);
+  await expect(page.locator('.kobi .orbit')).toBeHidden();
+  expect(await page.locator('.kobi .orbit span').evaluateAll((n) => n.flatMap((s) => s.getAnimations()).length)).toBe(0);
   await expectNoErrors(errors);
 });
 
 test('le changement d’état ne fait pas sauter la pilule', async ({ page }) => {
-  const errors = await openUi(page, 'skin=kobi&state=think');
+  const errors = await openUi(page, 'state=think');
   // Réfléchit se balance de ±3° : on change d'état en pleine inclinaison.
   for (const next of ['suggest', 'error', 'idle', 'write'] as const) {
     await page.waitForTimeout(650);
@@ -60,7 +60,7 @@ test('le changement d’état ne fait pas sauter la pilule', async ({ page }) =>
         return t && t !== 'none' ? new DOMMatrix(t) : new DOMMatrix();
       };
       const read = () =>
-        m(document.querySelector('.skin-kobi .inertia')!).multiply(m(document.querySelector('.skin-kobi .pill')!));
+        m(document.querySelector('.kobi .inertia')!).multiply(m(document.querySelector('.kobi .pill')!));
       const b = read();
       window.kobi.setState(s, window.kobi.demoData(s));
       const a = read();
@@ -73,17 +73,17 @@ test('le changement d’état ne fait pas sauter la pilule', async ({ page }) =>
 });
 
 test('la bouche parle seulement en Répond', async ({ page }) => {
-  const errors = await openUi(page, 'skin=kobi&state=answer');
+  const errors = await openUi(page, 'state=answer');
   const seen = new Set<string>();
   for (let i = 0; i < 12; i++) {
-    seen.add((await page.locator('.skin-kobi .mouth').textContent()) ?? '');
+    seen.add((await page.locator('.kobi .mouth').textContent()) ?? '');
     await page.waitForTimeout(60);
   }
   expect(seen.size).toBeGreaterThan(1);
   await page.evaluate(() => window.kobi.setState('error'));
-  await expect(page.locator('.skin-kobi .mouth')).toHaveText('~');
+  await expect(page.locator('.kobi .mouth')).toHaveText('~');
   await page.evaluate(() => window.kobi.setState('idle'));
-  await expect(page.locator('.skin-kobi .mouth')).toHaveText('');
+  await expect(page.locator('.kobi .mouth')).toHaveText('');
   await expectNoErrors(errors);
 });
 
@@ -92,7 +92,7 @@ test('les polices viennent du paquet, jamais d’Internet', async ({ page }) => 
   page.on('request', (r) => {
     if (!r.url().startsWith('http://127.0.0.1')) external.push(r.url());
   });
-  const errors = await openUi(page, 'skin=kobi&state=think');
+  const errors = await openUi(page, 'state=think');
   expect(await page.evaluate(() => document.fonts.check('84px Recursive'))).toBe(true);
   expect(external).toEqual([]);
   await expectNoErrors(errors);

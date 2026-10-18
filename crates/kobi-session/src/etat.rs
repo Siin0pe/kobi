@@ -137,7 +137,7 @@ impl fmt::Display for Refus {
 
 impl std::error::Error for Refus {}
 
-/// État affiché par la mascotte (clés du contrat des skins).
+/// État affiché par la mascotte (`idle`, `listen`…, voir `ui/src/states.ts`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Mascotte {
     Idle,

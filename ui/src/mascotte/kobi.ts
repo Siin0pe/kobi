@@ -1,9 +1,9 @@
-// Skin Kobi, style Glyphe : un visage fait de lettres. Port du prototype
+// Kobi, style Glyphe : un visage fait de lettres. Port du prototype
 // docs/design/mascotte/Glyphe.dc.html ; le CSS et les keyframes sont repris,
 // la logique (horloge de 60 ms qui redessinait tout) est réécrite : seules
 // les animations de l'état courant tournent, la plupart dans le moteur CSS.
 
-import type { MascotData, MascotState, Skin, SkinEnv } from '../../contract';
+import type { MascotState } from '../states';
 import { Blinker, Scrambler } from './glyphs';
 import { Inertia } from './motion';
 import { Orbit } from './orbit';
@@ -42,29 +42,17 @@ function el(tag: string, className?: string, text?: string): HTMLElement {
   return node;
 }
 
-export class KobiSkin implements Skin {
-  readonly id = 'kobi';
-  readonly name = 'Kobi';
-  readonly theme = {
-    backdrop: '#D7FF3A',
-    ink: '#0B0B0B',
-    paper: '#F7FFE0',
-    accent: '#D7FF3A',
-    muted: '#3A4200',
-    danger: '#FF4D2E',
-    font: "'Recursive', system-ui, sans-serif",
-    dots: { idle: '#0B0B0B', listen: '#D7FF3A' },
-  };
-
-  private root!: HTMLElement;
-  private pill!: HTMLElement;
-  private eyes!: HTMLElement[];
-  private mouth!: HTMLElement;
-  private word!: HTMLElement;
+/** La mascotte, posée par la scène dans la partie droite (x ≥ 400 px). */
+export class Kobi {
+  readonly root: HTMLElement;
+  private readonly pill: HTMLElement;
+  private readonly eyes: HTMLElement[];
+  private readonly mouth: HTMLElement;
+  private readonly word: HTMLElement;
   private orbit = new Orbit();
-  private inertia!: Inertia;
-  private scrambler!: Scrambler;
-  private blinker!: Blinker;
+  private readonly inertia: Inertia;
+  private readonly scrambler: Scrambler;
+  private readonly blinker: Blinker;
   private state: MascotState | null = null;
   private reduced = false;
   private paused = false;
@@ -72,9 +60,10 @@ export class KobiSkin implements Skin {
   private deepTimer = 0;
   private mouthStep = 0;
 
-  mount(host: HTMLElement, env: SkinEnv): void {
-    this.reduced = env.reducedMotion;
-    this.root = el('div', 'skin-kobi');
+  constructor(reducedMotion: boolean) {
+    this.reduced = reducedMotion;
+    this.root = el('div', 'kobi');
+    this.root.setAttribute('aria-hidden', 'true');
     this.root.classList.toggle('reduced-motion', this.reduced);
 
     const body = el('div', 'body');
@@ -105,17 +94,16 @@ export class KobiSkin implements Skin {
     this.scrambler = new Scrambler(this.eyes, this.word);
     this.scrambler.setInstant(this.reduced);
     this.blinker = new Blinker((closed) => this.scrambler.blink(closed));
-    host.append(this.root);
   }
 
-  setState(state: MascotState, _data: Readonly<MascotData>): void {
+  setState(state: MascotState): void {
     if (state === this.state) return;
     const previous = this.state;
     this.state = state;
     const look = LOOKS[state];
 
     this.inertia.carry(() => {
-      this.root.className = `skin-kobi m-${state}`;
+      this.root.className = `kobi m-${state}`;
       this.root.classList.toggle('reduced-motion', this.reduced);
       this.root.classList.toggle('paused', this.paused);
     }, previous !== null && !this.reduced);
@@ -151,10 +139,6 @@ export class KobiSkin implements Skin {
       const to = getComputedStyle(l).fontVariationSettings;
       l.animate([{ fontVariationSettings: from[i]! }, { fontVariationSettings: to }], { duration: 1200, easing: 'ease-in-out' });
     });
-  }
-
-  setData(_data: Readonly<MascotData>): void {
-    // La mascotte ne dépend pas des données : les cartes communes les affichent.
   }
 
   setPaused(paused: boolean): void {
@@ -202,8 +186,4 @@ export class KobiSkin implements Skin {
       this.mouthTimer = 0;
     }
   }
-}
-
-export function createKobiSkin(): Skin {
-  return new KobiSkin();
 }

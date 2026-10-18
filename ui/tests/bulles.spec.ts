@@ -4,7 +4,7 @@ import { expectNoErrors, openUi } from './helpers';
 const ANSWER = 'C’est dans api/src/auth/refresh.ts, ligne 88. Durée actuelle : 15 min. Un ticket ouvert en parle déjà.';
 
 test('la réponse en flux se tape sans jamais reculer', async ({ page }) => {
-  const errors = await openUi(page, 'skin=kobi');
+  const errors = await openUi(page, '');
   await page.evaluate(() => window.kobi.play('answer'));
   const text = page.locator('[data-card=answer] .text');
   const lengths: number[] = [];
@@ -20,14 +20,14 @@ test('la réponse en flux se tape sans jamais reculer', async ({ page }) => {
 });
 
 test('réduire les animations : le texte apparaît d’un coup', async ({ page }) => {
-  const errors = await openUi(page, 'skin=kobi&reduced=1');
+  const errors = await openUi(page, 'reduced=1');
   await page.evaluate(() => window.kobi.setState('write', window.kobi.demoData('write')));
   await expect(page.locator('[data-card=notes] .text')).toHaveText(/Question : impact sur le mobile \?$/, { timeout: 200 });
   await expectNoErrors(errors);
 });
 
 test('les sources apparaissent une à une puis sont trouvées', async ({ page }) => {
-  const errors = await openUi(page, 'skin=kobi');
+  const errors = await openUi(page, '');
   await page.evaluate(() => window.kobi.play('think'));
   const pills = page.locator('[data-card=sources] .source');
   await expect(pills).toHaveCount(0);
@@ -43,7 +43,7 @@ test('la carte remplacée s’efface puis disparaît', async ({ page }) => {
   // Horloge simulée : la sortie dure 180 ms, trop peu pour une assertion en
   // temps réel sur une machine chargée (test instable sinon).
   await page.clock.install();
-  const errors = await openUi(page, 'skin=kobi&state=listen');
+  const errors = await openUi(page, 'state=listen');
   await page.clock.pauseAt(Date.now() + 1_000);
   await page.evaluate(() => window.kobi.setState('write', window.kobi.demoData('write')));
   await expect(page.locator('.card-question.leaving')).toHaveCount(1);
@@ -54,7 +54,7 @@ test('la carte remplacée s’efface puis disparaît', async ({ page }) => {
 });
 
 test('le compte à rebours de l’erreur met la carte à jour', async ({ page }) => {
-  const errors = await openUi(page, 'skin=kobi');
+  const errors = await openUi(page, '');
   await page.evaluate(() => window.kobi.play('error'));
   const message = page.locator('[data-card=error] .message');
   await expect(message).toContainText('5 s');
@@ -63,7 +63,7 @@ test('le compte à rebours de l’erreur met la carte à jour', async ({ page })
 });
 
 test('la carte confirmée remplace les boutons', async ({ page }) => {
-  const errors = await openUi(page, 'skin=kobi&state=suggest');
+  const errors = await openUi(page, 'state=suggest');
   await expect(page.getByRole('button', { name: 'Pas maintenant' })).toBeVisible();
   await page.evaluate(() => window.kobi.setState('done', window.kobi.demoData('done')));
   const card = page.locator('[data-card=action]');

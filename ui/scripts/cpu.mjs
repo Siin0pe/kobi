@@ -1,6 +1,6 @@
 // CPU consommé par la mascotte, mesuré sur l'arbre de processus (Linux, /proc).
 //
-//   Chromium headless :  node scripts/cpu.mjs chromium [--skin kobi] [--states idle,think] [--seconds 30]
+//   Chromium headless :  node scripts/cpu.mjs chromium [--states idle,think] [--seconds 30]
 //   App Tauri (WebKitGTK) : node scripts/cpu.mjs tauri --bin ../target/debug/kobi [--seconds 30]
 //
 // Le pourcentage est donné pour un cœur (100 % = un cœur occupé) et pour la
@@ -84,7 +84,6 @@ const header = [
 ];
 
 if (mode === 'chromium') {
-  const skin = arg('skin', 'kobi');
   const states = arg('states', 'idle').split(',');
   const PORT = 4176;
   const server = spawn('node', ['node_modules/vite/bin/vite.js', 'preview', '--port', String(PORT), '--strictPort', '--host', '127.0.0.1'], {
@@ -103,10 +102,10 @@ if (mode === 'chromium') {
     const page = await browser.newPage({ viewport: { width: 410, height: 280 } });
     console.log(header.join('\n'));
     for (const state of states) {
-      await page.goto(`http://127.0.0.1:${PORT}/?skin=${skin}&state=${state}`);
+      await page.goto(`http://127.0.0.1:${PORT}/?state=${state}`);
       await page.waitForFunction(() => 'kobi' in window);
       await sleep(warmup * 1000);
-      console.log(row(`Chromium headless, ${skin}, ${state}`, await measure(pid, notNode)));
+      console.log(row(`Chromium headless, ${state}`, await measure(pid, notNode)));
     }
     // Fenêtre masquée : le navigateur coupe le rendu et la scène met tout en pause.
     await page.evaluate(() => {
@@ -114,7 +113,7 @@ if (mode === 'chromium') {
       document.dispatchEvent(new Event('visibilitychange'));
     });
     await sleep(warmup * 1000);
-    console.log(row(`Chromium headless, ${skin}, ${states.at(-1)}, page masquée (pause)`, await measure(pid, notNode)));
+    console.log(row(`Chromium headless, ${states.at(-1)}, page masquée (pause)`, await measure(pid, notNode)));
     await browser.close();
   } finally {
     process.kill(-server.pid);

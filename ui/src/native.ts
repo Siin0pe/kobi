@@ -5,7 +5,7 @@
 // la session (démarrer, pause, reprendre, terminer) et affiche l'état que la
 // session lui renvoie par l'événement `state`.
 
-import { isMascotState } from './contract';
+import { isMascotState } from './states';
 import type { Stage } from './stage';
 
 interface TauriGlobal {
@@ -41,7 +41,7 @@ export interface SessionState {
   etat: 'veille' | 'reunion' | 'pause' | 'fin';
   /** Activité en réunion (`calme`, `ecoute`…), `null` hors réunion. */
   activite: string | null;
-  /** Clé du contrat des skins. */
+  /** État de la mascotte (`idle`, `listen`…). */
   mascotte: string;
   /** La transcription tourne (indicateur REC). */
   transcrit: boolean;

@@ -1,12 +1,10 @@
 // Point d'entrée de l'interface. Paramètres d'URL (développement, tests,
-// captures) : `skin`, `state`, `backdrop=1`, `reduced=1`, `discret=1`,
+// captures) : `state`, `backdrop=1`, `reduced=1`, `discret=1`,
 // `reunion=<titre>` (+ `depuis=<s>`, `carte=0`).
 
-import { isMascotState, STATES, type MascotData, type MascotState } from './contract';
+import { isMascotState, STATES, type MascotData, type MascotState } from './states';
 import { demoData, playDemo } from './demo';
 import { command, enableWindowDrag, followSession, type Command, type SessionState } from './native';
-import { loadSkin, onSkinChange } from './skin-choice';
-import { skinFactory } from './skins/registry';
 import { Stage } from './stage';
 import './styles/fonts.css';
 import './styles/stage.css';
@@ -20,10 +18,6 @@ const stage = new Stage(document.getElementById('app')!, {
   backdrop: params.get('backdrop') === '1',
   reducedMotion: reduced === null ? undefined : reduced === '1',
 });
-// Skin imposé par l'URL (tests, captures), sinon celui choisi dans les réglages.
-const forced = params.get('skin');
-stage.useSkin(skinFactory(forced ?? (await loadSkin())));
-if (!forced) onSkinChange((id) => stage.useSkin(skinFactory(id)));
 enableWindowDrag(stage.root);
 followSession(stage);
 
@@ -44,7 +38,6 @@ declare global {
       states: readonly MascotState[];
       setState(state: MascotState, data?: MascotData): void;
       update(data: MascotData): void;
-      useSkin(id: string): void;
       /** Réunion : indicateur REC et carte « prévenez les participants ». */
       startMeeting(title?: string): void;
       endMeeting(): void;
@@ -67,7 +60,6 @@ window.kobi = {
     stage.setState(state, data ?? {});
   },
   update: (data) => stage.update(data),
-  useSkin: (id) => void stage.useSkin(skinFactory(id)),
   setCompact: (compact) => stage.setCompact(compact),
   startMeeting: (title) => stage.startMeeting({ title, startedAt: Date.now() }),
   endMeeting: () => stage.endMeeting(),

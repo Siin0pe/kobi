@@ -1,8 +1,8 @@
-// Bulles et cartes communes à tous les skins : question, sources consultées,
+// Bulles et cartes de Kobi : question, sources consultées,
 // fiche de notes, réponse, carte d'action, carte d'erreur. Elles prennent les
-// couleurs et la police du thème du skin (variables CSS posées par la scène).
+// couleurs et la police de Kobi (variables CSS de la scène).
 
-import type { ActionCard, MascotData, MascotState } from './contract';
+import type { ActionCard, MascotData, MascotState } from './states';
 import { Typewriter } from './typewriter';
 
 export interface ActionDecision {

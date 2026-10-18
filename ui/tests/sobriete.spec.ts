@@ -19,7 +19,7 @@ async function setHidden(page: Page, hidden: boolean): Promise<void> {
 
 test('le réglage système « réduire les animations » est suivi, même en cours de route', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  const errors = await openUi(page, 'skin=kobi');
+  const errors = await openUi(page, '');
   await expect(page.locator('.stage')).toHaveClass(/reduced-motion/);
   for (const state of STATES) {
     await page.evaluate((s) => window.kobi.setState(s, window.kobi.demoData(s)), state);
@@ -34,7 +34,7 @@ test('le réglage système « réduire les animations » est suivi, même en cou
 });
 
 test('chaque état a un libellé pour les lecteurs d’écran', async ({ page }) => {
-  const errors = await openUi(page, 'skin=kobi');
+  const errors = await openUi(page, '');
   const live = page.getByRole('status');
   const spoken = new Set<string>();
   for (const state of STATES) {
@@ -44,7 +44,7 @@ test('chaque état a un libellé pour les lecteurs d’écran', async ({ page })
   }
   expect(spoken.size).toBe(STATES.length);
   // Le dessin de la mascotte (symboles brouillés…) est masqué aux lecteurs d'écran.
-  await expect(page.locator('.skin-host')).toHaveAttribute('aria-hidden', 'true');
+  await expect(page.locator('.kobi')).toHaveAttribute('aria-hidden', 'true');
   await expect(live).toHaveAttribute('aria-live', 'polite');
   await expectNoErrors(errors);
 });
@@ -52,7 +52,7 @@ test('chaque état a un libellé pour les lecteurs d’écran', async ({ page })
 for (const state of ['idle', 'think', 'answer', 'listen'] as const) {
   test(`fenêtre masquée : tout s’arrête (${state})`, async ({ page }) => {
     await page.clock.install();
-    const errors = await openUi(page, 'skin=kobi');
+    const errors = await openUi(page, '');
     await page.evaluate((s) => window.kobi.play(s), state);
     await page.clock.runFor(1500);
     expect(await running(page)).toBeGreaterThan(0);
@@ -60,17 +60,17 @@ for (const state of ['idle', 'think', 'answer', 'listen'] as const) {
     await setHidden(page, true);
     expect(await running(page)).toBe(0);
     // Aucune minuterie ne modifie plus le dessin (bouche, clignements, brouillage).
-    const before = await page.locator('.skin-kobi').innerHTML();
+    const before = await page.locator('.kobi').innerHTML();
     await page.evaluate(() => {
       (window as unknown as { mutations: number }).mutations = 0;
       new MutationObserver((r) => ((window as unknown as { mutations: number }).mutations += r.length)).observe(
-        document.querySelector('.skin-kobi')!,
+        document.querySelector('.kobi')!,
         { subtree: true, childList: true, characterData: true, attributes: true },
       );
     });
     await page.clock.runFor(10_000);
     expect(await page.evaluate(() => (window as unknown as { mutations: number }).mutations)).toBe(0);
-    expect(await page.locator('.skin-kobi').innerHTML()).toBe(before);
+    expect(await page.locator('.kobi').innerHTML()).toBe(before);
 
     await setHidden(page, false);
     expect(await running(page)).toBeGreaterThan(0);
@@ -80,12 +80,12 @@ for (const state of ['idle', 'think', 'answer', 'listen'] as const) {
 
 test('après 20 s de veille, Kobi passe en sommeil profond sans redessiner son texte', async ({ page }) => {
   await page.clock.install();
-  const errors = await openUi(page, 'skin=kobi');
-  const skin = page.locator('.skin-kobi');
+  const errors = await openUi(page, '');
+  const kobi = page.locator('.kobi');
   await page.clock.runFor(19_000);
-  await expect(skin).not.toHaveClass(/deep/);
+  await expect(kobi).not.toHaveClass(/deep/);
   await page.clock.runFor(2_000);
-  await expect(skin).toHaveClass(/deep/);
+  await expect(kobi).toHaveClass(/deep/);
   // Le mot se pose en douceur (animation finie), puis plus rien ne touche à la police.
   await page.clock.runFor(1_500);
   await page.waitForTimeout(1_400);
@@ -97,9 +97,9 @@ test('après 20 s de veille, Kobi passe en sommeil profond sans redessiner son t
   );
   expect(fontAnimations).toBe(0);
   // La respiration continue.
-  expect(await page.locator('.skin-kobi .pill').evaluate((n) => n.getAnimations().length)).toBe(1);
+  expect(await page.locator('.kobi .pill').evaluate((n) => n.getAnimations().length)).toBe(1);
   // Le moindre changement d'état réveille Kobi.
   await page.evaluate(() => window.kobi.setState('listen', window.kobi.demoData('listen')));
-  await expect(skin).not.toHaveClass(/deep/);
+  await expect(kobi).not.toHaveClass(/deep/);
   await expectNoErrors(errors);
 });

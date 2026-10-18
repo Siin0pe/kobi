@@ -5,7 +5,7 @@ const STATES = ['idle', 'listen', 'think', 'write', 'answer', 'suggest', 'done',
 
 test('l’indicateur REC reste visible pendant toute la réunion, avec sa durée', async ({ page }) => {
   await page.clock.install();
-  const errors = await openUi(page, 'skin=kobi&reunion=Point%20hebdo&depuis=754&carte=0');
+  const errors = await openUi(page, 'reunion=Point%20hebdo&depuis=754&carte=0');
   const rec = page.locator('.rec');
   await expect(rec).toBeVisible();
   await expect(rec).toContainText('REC · Point hebdo');
@@ -27,7 +27,7 @@ test('l’indicateur REC reste visible pendant toute la réunion, avec sa durée
 
 test('au démarrage, la carte propose un message prêt à coller, en français ou en anglais', async ({ page, context }) => {
   await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: 'http://127.0.0.1:' + (process.env.KOBI_UI_PORT ?? '4173') });
-  const errors = await openUi(page, 'skin=kobi&state=listen');
+  const errors = await openUi(page, 'state=listen');
   await page.evaluate(() => {
     (window as unknown as { consent: unknown[] }).consent = [];
     window.kobi.stage.onConsent = (e) => (window as unknown as { consent: unknown[] }).consent.push(e);
@@ -59,7 +59,7 @@ test('au démarrage, la carte propose un message prêt à coller, en français o
 });
 
 test('pause : REC devient PAUSE ; en mode discret, la pastille porte le point rouge', async ({ page }) => {
-  const errors = await openUi(page, 'skin=kobi&discret=1');
+  const errors = await openUi(page, 'discret=1');
   await page.evaluate(() => window.kobi.startMeeting());
   // La carte attend une action : la pastille se déplie.
   await expect(page.locator('.scene')).toBeVisible();
