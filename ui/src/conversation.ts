@@ -60,6 +60,9 @@ export class Conversation {
     stage.root.addEventListener(
       'wheel',
       (e) => {
+        // Une réponse longue qui défile garde sa molette (KOB-163).
+        const zone = (e.target as Element | null)?.closest<HTMLElement>('.card-answer .defile');
+        if (zone && zone.scrollHeight > zone.clientHeight + 2 && zone.scrollTop > 0) return;
         if (this.history.hidden && e.deltaY < 0 && this.bulles.length > 0) this.openHistory();
       },
       { passive: true },
