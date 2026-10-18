@@ -294,10 +294,26 @@ pub fn executer<R: Runtime>(
                 .map_err(|e| erreur(Code::Internal, e))?;
             Ok(json!({ "pause": pause }))
         }
-        "voice.say" => Err(erreur(
-            Code::Unavailable,
-            "Kobi n'a pas encore de voix (KOB-142, réponse à voix haute)",
-        )),
+        "voice.say" => {
+            let texte_dit = texte(&params, "text").unwrap_or_default().trim();
+            if texte_dit.is_empty() {
+                return Err(erreur(Code::InvalidValue, "texte vide"));
+            }
+            if app.try_state::<crate::voix::Voix>().is_none() {
+                return Err(erreur(
+                    Code::Unavailable,
+                    "la voix de Kobi n'est pas lancée",
+                ));
+            }
+            if !crate::voix::etat_voix(app).actif {
+                return Err(erreur(
+                    Code::Conflict,
+                    "Kobi répond en texte seul ici : kobi config set voice.assistant true (ou voice.meeting en réunion)",
+                ));
+            }
+            crate::voix::dire(app, texte_dit);
+            Ok(json!({ "dit": texte_dit }))
+        }
         autre => Err(erreur(
             Code::UnknownCommand,
             format!("commande sans exécution dans l'app : {autre}"),
@@ -586,6 +602,23 @@ fn regler<R: Runtime>(
     }
     config::save(&m.config, &chemin).map_err(|e| erreur(Code::Internal, e.to_string()))?;
     let mut application = m.application;
+    // Voix (KOB-142) : le réglage se change à chaud.
+    if let (Some(actif), true) = (
+        m.apres.as_bool(),
+        app.try_state::<crate::voix::Voix>().is_some(),
+    ) {
+        match cle {
+            "voice.assistant" => {
+                crate::voix::regler(app, Some(actif), None);
+                application = Application::AChaud;
+            }
+            "voice.meeting" => {
+                crate::voix::regler(app, None, Some(actif));
+                application = Application::AChaud;
+            }
+            _ => {}
+        }
+    }
     if cle.starts_with("stockage.") {
         if let Err(e) = crate::stockage::basculer(app, &m.config) {
             tracing::warn!(erreur = %e, "contrôle : dossier écrit, bascule au redémarrage");
@@ -908,6 +941,33 @@ mod tests {
         assert_eq!(
             cli(&e, "mascot.show", json!({})).unwrap_err().code,
             Code::Unavailable
+        );
+    }
+
+    /// Voix (KOB-142) : le réglage change à chaud, `voice say` suit le réglage.
+    #[test]
+    fn voix_reglee_a_chaud() {
+        let e = essai();
+        crate::voix::installer_sans_parleur(e.app.handle(), &Config::default().voice);
+        let r = cli(
+            &e,
+            "config.set",
+            json!({"key": "voice.assistant", "value": false}),
+        )
+        .unwrap();
+        assert_eq!(r["apply"], "hot");
+        assert!(!crate::voix::etat_voix(e.app.handle()).quotidien);
+        assert_eq!(
+            cli(&e, "voice.say", json!({"text": "bonjour"}))
+                .unwrap_err()
+                .code,
+            Code::Conflict
+        );
+        cli(&e, "config.undo", json!({})).unwrap();
+        assert!(crate::voix::etat_voix(e.app.handle()).quotidien);
+        assert_eq!(
+            cli(&e, "voice.say", json!({"text": "bonjour"})).unwrap()["dit"],
+            "bonjour"
         );
     }
 

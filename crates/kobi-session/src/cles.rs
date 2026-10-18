@@ -68,16 +68,13 @@ pub const CLES: &[(&str, Application, &str)] = &[
         AuRedemarrage,
         "Intervalle des notes en blocs, de 1 à 10 minutes.",
     ),
+    // Appliqués à chaud par l'app quand la voix tourne (KOB-142).
     (
         "voice.assistant",
-        AuRedemarrage,
+        AChaud,
         "Réponses à voix haute hors réunion.",
     ),
-    (
-        "voice.meeting",
-        AuRedemarrage,
-        "Réponses à voix haute en réunion.",
-    ),
+    ("voice.meeting", AChaud, "Réponses à voix haute en réunion."),
     (
         "meetings.retention_days",
         AuRedemarrage,
@@ -310,7 +307,7 @@ mod tests {
             (json!(true), json!(false))
         );
         assert!(!m.config.voice.assistant);
-        assert_eq!(m.application, AuRedemarrage);
+        assert_eq!(m.application, AChaud);
 
         let m = modifier(&c, "notes.mode", json!("end")).unwrap();
         assert_eq!(m.config.notes.mode, NotesMode::End);
