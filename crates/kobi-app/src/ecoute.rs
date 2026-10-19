@@ -171,7 +171,7 @@ fn jouer(samples: Vec<f32>) -> Receiver<AudioFrame> {
 /// `entendu` reçoit chaque segment (partiel ou final) et dit s'il faut
 /// l'ignorer : c'est la voix de Kobi qui revient dans le micro (KOB-142).
 fn transcrire(
-    stt: &mut NemotronEngine,
+    stt: &mut impl SttEngine,
     porte: &mut Porte,
     ecouteur: &mut Ecouteur,
     diag: &mut Option<Diag>,
@@ -186,6 +186,11 @@ fn transcrire(
     let mut finals = Vec::new();
     let etait_ouverte = porte.ouverte();
     let sorties = porte.trame(frame.t, frame.samples);
+    // Une parole commence après un silence non transmis : flux neuf si la
+    // phrase précédente est conclue (KOB-190).
+    if porte.ouverte() && !etait_ouverte {
+        stt.nouvel_enonce(kobi_stt::Source::Moi);
+    }
     if let (Some(d), true) = (diag.as_mut(), porte.ouverte() != etait_ouverte) {
         d.note(if porte.ouverte() {
             "porte ouverte : parole"
@@ -578,11 +583,16 @@ mod tests {
         let mut porte = Porte::new(kobi_stt::SAMPLE_RATE);
         let (mut actions, mut finals) = (Vec::new(), Vec::new());
         let silence = vec![0.0; 48_000];
-        for (i, morceau) in samples.chunks(160).chain(silence.chunks(160)).enumerate() {
+        // Trames de 10 ms ; `KOBI_TRAME` (échantillons) pour celles du micro.
+        let n = std::env::var("KOBI_TRAME")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(160);
+        for (i, morceau) in samples.chunks(n).chain(silence.chunks(n)).enumerate() {
             let frame = kobi_stt::AudioFrame {
                 source: kobi_stt::Source::Moi,
                 samples: morceau.to_vec(),
-                t: i as f64 * 0.01,
+                t: (i * n) as f64 / kobi_stt::SAMPLE_RATE as f64,
             };
             let t = frame.end();
             let (suite, _) = transcrire(stt, &mut porte, &mut ecouteur, diag, frame, t, &|_| false);
@@ -592,6 +602,68 @@ mod tests {
             actions.extend(suite);
         }
         (actions, finals)
+    }
+
+    /// KOB-190 : chaque parole qui suit un silence (porte rouverte) repart
+    /// d'un énoncé neuf du moteur ; jamais au milieu d'une parole.
+    #[test]
+    fn nouvel_enonce_a_chaque_parole() {
+        #[derive(Default)]
+        struct Faux {
+            enonces: Vec<f64>,
+            pos: f64,
+        }
+        impl SttEngine for Faux {
+            fn name(&self) -> &str {
+                "faux"
+            }
+            fn push(
+                &mut self,
+                frame: &kobi_stt::AudioFrame,
+            ) -> kobi_stt::Result<Vec<kobi_stt::Segment>> {
+                self.pos = frame.end();
+                Ok(Vec::new())
+            }
+            fn finish(&mut self) -> kobi_stt::Result<Vec<kobi_stt::Segment>> {
+                Ok(Vec::new())
+            }
+            fn nouvel_enonce(&mut self, _source: kobi_stt::Source) {
+                self.enonces.push(self.pos);
+            }
+        }
+        let mut stt = Faux::default();
+        let mut porte = Porte::new(kobi_stt::SAMPLE_RATE);
+        let mut ecouteur = Ecouteur::default();
+        // 1 s de silence, 0,6 s de parole, 4 s de silence, 0,6 s de parole,
+        // 3 s de silence ; trames de 100 ms, comme le micro.
+        let parole: Vec<f32> = (0..1600).map(|i| 0.2 * (i as f32 * 0.3).sin()).collect();
+        let silence = vec![0.0f32; 1600];
+        let plan = [(10, false), (6, true), (40, false), (6, true), (30, false)];
+        let mut t = 0.0;
+        for (n, fort) in plan {
+            for _ in 0..n {
+                let frame = kobi_stt::AudioFrame {
+                    source: kobi_stt::Source::Moi,
+                    samples: if fort {
+                        parole.clone()
+                    } else {
+                        silence.clone()
+                    },
+                    t,
+                };
+                t += 0.1;
+                transcrire(
+                    &mut stt,
+                    &mut porte,
+                    &mut ecouteur,
+                    &mut None,
+                    frame,
+                    t,
+                    &|_| false,
+                );
+            }
+        }
+        assert_eq!(stt.enonces.len(), 2, "{:?}", stt.enonces);
     }
 
     /// Un WAV : `KOBI_ECOUTE_WAV=<fichier.wav> cargo test -p kobi-app
