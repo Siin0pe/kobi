@@ -1497,13 +1497,15 @@ impl<R: Runtime> Chef<R> {
         }
     }
 
-    /// En réunion, la question dit à Claude où en est l'enregistrement : il
-    /// pilote la réunion (KOB-165).
-    /// La question, précédée du moment présent et de l'état de la réunion.
+    /// La question, précédée du moment présent et de l'état de la réunion :
+    /// où en est l'enregistrement, que Claude pilote (KOB-165), ou qu'aucune
+    /// réunion n'est en cours (KOB-181).
     fn avec_contexte(&self, question: String) -> String {
         let maintenant = moment(&jiff::Zoned::now());
         let etat = match &self.reunion {
-            None => return format!("{maintenant}\n{question}"),
+            // Dit aussi hors réunion : sans cela, Claude en suppose une
+            // (« comment se passe ta réunion ? », KOB-181).
+            None => return format!("{maintenant}\n(Aucune réunion en cours.)\n{question}"),
             Some(r) if r.fin_demandee => "arrêté, compte rendu à venir",
             Some(r) if r.pause => "en pause",
             Some(_) => "en cours",

@@ -48,6 +48,19 @@ pub const OUTILS_REFUSES: &[&str] = &[
 ];
 
 /// Ajouté au prompt système de Kobi.
+/// Ajouté au prompt de la conversation (KOB-181) : le prompt système de Kobi
+/// le présente en assistant de réunion, et Claude répondait « je suis là
+/// pendant la réunion », au vouvoiement, à un « bonjour » hors réunion.
+pub const PROMPT_CONVERSATION: &str = "\
+## Au quotidien comme en réunion
+
+On te parle aussi en dehors de toute réunion, sur le bureau. Chaque question donne \
+l'état de la réunion : « (Réunion : enregistrement …) » pendant une réunion, « (Aucune réunion \
+en cours.) » sinon. Hors réunion, ne parle jamais de réunion et ne suppose pas qu'il y en a \
+une : réponds simplement, comme dans une conversation.
+
+Tutoie toujours l'utilisateur.";
+
 pub const PROMPT_LECTURE: &str = "\
 ## Pour l'instant, tu ne fais que lire
 
@@ -181,6 +194,10 @@ pub fn arguments(
         args.push(dossier.display().to_string());
     }
     let mut prompt = format!("{systeme}\n\n{PROMPT_LECTURE}");
+    if pilote {
+        prompt.push_str("\n\n");
+        prompt.push_str(PROMPT_CONVERSATION);
+    }
     if let Some(m) = memoire {
         prompt.push_str("\n\n");
         prompt.push_str(&m.prompt());
@@ -454,6 +471,7 @@ mod tests {
         // Session des notes : le pilotage de la réunion lui est refusé.
         assert!(valeur(&args, "--disallowedTools")[0].contains("mcp__kobi__meeting_stop"));
         assert!(!prompt.contains("## Piloter la réunion"));
+        assert!(!prompt.contains("## Au quotidien comme en réunion"));
     }
 
     /// Conversation (KOB-165) : Claude pilote la réunion sans carte.
@@ -482,6 +500,12 @@ mod tests {
         assert!(!valeur(&args, "--disallowedTools")[0].contains("meeting"));
         let prompt = valeur(&args, "--append-system-prompt")[0];
         assert!(prompt.contains("## Piloter la réunion"), "{prompt}");
+        // Hors réunion, ni réunion ni vouvoiement (KOB-181).
+        assert!(
+            prompt.contains("## Au quotidien comme en réunion"),
+            "{prompt}"
+        );
+        assert!(prompt.contains("Tutoie toujours"), "{prompt}");
         // Sans MCP de Kobi, rien à piloter.
         let args = arguments("haiku", "Tu es Kobi.", &[], None, None, true);
         assert!(!valeur(&args, "--allowedTools")[0].contains("meeting"));
