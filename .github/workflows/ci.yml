@@ -27,7 +27,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libpulse-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev pkg-config
+          sudo apt-get install -y libasound2-dev libpulse-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev pkg-config
 
       - name: Toolchain (rust-toolchain.toml)
         run: rustup show active-toolchain || rustup toolchain install
