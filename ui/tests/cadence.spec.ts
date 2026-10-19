@@ -88,8 +88,10 @@ test('au repos, le mot ondule sans aucune graisse animée (ni mise en page par i
   await expectNoErrors(errors);
 });
 
+// KOB-240 : cadence réglée sans effet tant que KOB-200 ne la refait pas sans
+// boucle par image ; ces tests reviendront avec elle.
 for (const fps of [5, 15, 30] as const) {
-  test(`${fps} images/s : tout avance ensemble, ${fps} fois par seconde`, async ({ page }) => {
+  test.fixme(`${fps} images/s : tout avance ensemble, ${fps} fois par seconde`, async ({ page }) => {
     await page.clock.install();
     const errors = await openUi(page, '');
     await poser(page, { fps });
@@ -114,30 +116,33 @@ test('60, 120 et « suivre l’écran » : l’écran donne la cadence (60 Hz, p
     await expect(stage).toHaveAttribute('data-cadence', '60');
     await expect(stage).toHaveAttribute('data-fps', '0');
   }
-  // Écran à 120 Hz : 120 et « suivre l'écran » laissent le navigateur faire ;
-  // 60 est tenu par le métronome, une image sur deux.
+  // Écran à 120 Hz : le navigateur anime toujours lui-même, 60 compris
+  // (KOB-240 : tenu par le métronome, tout se repeignait à chaque image).
   await ecran(page, 120);
   await expect(stage).toHaveAttribute('data-cadence', '120');
   await expect(stage).toHaveAttribute('data-fps', '0');
   await poser(page, { fps: 120 });
   await expect(stage).toHaveAttribute('data-fps', '0');
   await poser(page, { fps: 60 });
-  await expect(stage).toHaveAttribute('data-fps', '60');
+  await expect(stage).toHaveAttribute('data-fps', '0');
   await expect(stage).toHaveAttribute('data-cadence', '60');
   await expectNoErrors(errors);
 });
 
-test('changement à chaud : 30 tient tout, 60 relâche tout, 5 retient tout', async ({ page }) => {
+// KOB-240 : une cadence réglée ne tient plus les boucles (le métronome les
+// faisait avancer à chaque image, repeint continu) ; le réglage reste
+// enregistré, sans effet, jusqu'à ce que KOB-200 le refasse sans boucle.
+test('réglage bas (30, 5) : rien n’est tenu, le navigateur anime lui-même', async ({ page }) => {
   await page.clock.install();
   const errors = await openUi(page, '');
-  await poser(page, { fps: 30 });
-  expect((await boucles(page)).filter((s) => s !== 'paused')).toEqual([]);
-  await poser(page, { fps: 60 });
-  await page.clock.runFor(100);
-  expect((await boucles(page)).filter((s) => s === 'paused')).toEqual([]);
-  await poser(page, { fps: 5 });
-  expect((await boucles(page)).filter((s) => s !== 'paused')).toEqual([]);
-  attendre(await images(page, 1_000), 5);
+  const stage = page.locator('.stage');
+  for (const fps of [30, 5, 60] as const) {
+    await poser(page, { fps });
+    await page.clock.runFor(100);
+    expect((await boucles(page)).filter((s) => s === 'paused')).toEqual([]);
+    await expect(stage).toHaveAttribute('data-fps', '0');
+    await expect(stage).toHaveAttribute('data-cadence', String(fps));
+  }
   await expectNoErrors(errors);
 });
 
@@ -146,7 +151,8 @@ test('économie d’énergie : au repos prolongé, elle plafonne la cadence rég
   const errors = await openUi(page, '');
   const stage = page.locator('.stage');
   await poser(page, { fps: 30, economie: true });
-  await expect(stage).toHaveAttribute('data-fps', '30');
+  // Cadence réglée sans effet (KOB-240) : le navigateur anime d'abord.
+  await expect(stage).toHaveAttribute('data-fps', '0');
   await page.clock.runFor(23_000);
   await expect(stage).toHaveClass(/econome/);
   await expect(stage).toHaveAttribute('data-fps', '3');
@@ -155,7 +161,7 @@ test('économie d’énergie : au repos prolongé, elle plafonne la cadence rég
   // Désactivée à chaud : la cadence réglée revient.
   await poser(page, { economie: false });
   await expect(stage).not.toHaveClass(/econome/);
-  await expect(stage).toHaveAttribute('data-fps', '30');
+  await expect(stage).toHaveAttribute('data-fps', '0');
   await expectNoErrors(errors);
 });
 
@@ -163,10 +169,12 @@ test('réglage lu dans config.toml au chargement, puis suivi (kobi config set an
   await mockTauri(page, { reglage_animations: { fps: 15, economie: false } });
   const errors = await openUi(page, '');
   const stage = page.locator('.stage');
-  await expect(stage).toHaveAttribute('data-fps', '15');
+  // Réglage lu et suivi (data-cadence) ; sans effet sur le métronome (KOB-240).
+  await expect(stage).toHaveAttribute('data-cadence', '15');
   await page.evaluate(() => (window as unknown as { __emit: (e: string, p: unknown) => void }).__emit('reglage', { key: 'animations.fps', value: 30 }));
-  await expect(stage).toHaveAttribute('data-fps', '30');
+  await expect(stage).toHaveAttribute('data-cadence', '30');
   await page.evaluate(() => (window as unknown as { __emit: (e: string, p: unknown) => void }).__emit('reglage', { key: 'animations.fps', value: 'ecran' }));
+  await expect(stage).toHaveAttribute('data-cadence', '60');
   await expect(stage).toHaveAttribute('data-fps', '0');
   await expectNoErrors(errors);
 });
@@ -184,7 +192,8 @@ test('réglage dans l’app : « Images par seconde » et « Économie d’éner
   const appels = await page.evaluate(() => (window as unknown as { __calls: Array<[string, unknown]> }).__calls.filter(([c]) => c === 'regler_animations'));
   expect(appels).toEqual([['regler_animations', { cle: 'fps', valeur: 15 }]]);
   await expect(fps.getByRole('radio', { name: /15 images\/s/ })).toHaveAttribute('aria-checked', 'true');
-  // L'app suit aussi le réglage.
-  await expect(page.locator('html')).toHaveAttribute('data-fps', '15');
+  // L'app suit aussi le réglage (sans effet sur son métronome, KOB-240).
+  await expect(page.locator('html')).toHaveAttribute('data-cadence', '15');
+  await expect(page.locator('html')).toHaveAttribute('data-fps', '0');
   await expectNoErrors(errors);
 });
