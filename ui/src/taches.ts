@@ -122,7 +122,12 @@ export class Tasks {
 
   /**
    * Rappel à l'heure dite : il reste jusqu'au clic (on ne rate pas un
-   * rappel), la cloche sonne et Kobi le dit dans sa bulle s'il est au repos.
+   * rappel), la cloche sonne et Kobi le dit à voix haute (la coque).
+   *
+   * La vue agrandie de la conversation (KOB-169) cache les notifications le
+   * temps de la lecture : un rappel la range d'abord, sans quoi il arrivait
+   * caché (KOB-176). Pas de bulle « Rappel : … » en plus : elle répétait la
+   * notification et, en réponse, rouvrait la vue.
    */
   reminder(r: Rappel): void {
     const key = `rappel-${r.id}`;
@@ -139,10 +144,10 @@ export class Tasks {
     n.append(icon, body);
     n.setAttribute('aria-label', `Rappel : ${r.texte}`);
     n.addEventListener('click', () => this.dismiss(key));
+    window.dispatchEvent(new CustomEvent('kobi:vue', { detail: 'fermer' }));
     this.root.append(n);
     dealFromKobi(n);
     this.keep();
-    if (this.stage.root.dataset.state === 'idle') this.stage.setState('answer', { answer: `Rappel : ${r.texte}` });
   }
 
   /**
