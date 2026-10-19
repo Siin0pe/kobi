@@ -950,7 +950,6 @@ impl<R: Runtime> Chef<R> {
         r.fin_demandee = true;
         r.fin_differee = Some(Instant::now() + ANNULATION);
         self.transition(&[Evenement::TerminerReunion]);
-        self.emettre_enregistrement();
         // « Reprends » s'entend sans redire « Kobi » pendant l'annulation.
         let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::Annulable);
         tracing::info!("réunion arrêtée, annulable");
@@ -966,7 +965,6 @@ impl<R: Runtime> Chef<R> {
         r.fin_demandee = false;
         r.fin_differee = None;
         self.transition(&[Evenement::Reprendre]);
-        self.emettre_enregistrement();
         tracing::info!("arrêt de la réunion annulé");
         "J'enregistre de nouveau : la réunion continue.".into()
     }

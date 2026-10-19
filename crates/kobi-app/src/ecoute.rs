@@ -425,8 +425,11 @@ impl<R: Runtime> Fil<R> {
         // Sa propre voix est ignorée ; une autre voix pendant qu'il parle le
         // fait taire (KOB-142).
         let app = &self.app;
+        let annulation = self.ecouteur.en_annulation();
         let entendu = |texte: &str| {
-            if crate::voix::est_ma_voix(app, texte) {
+            if crate::voix::est_ma_voix(app, texte)
+                && !ordre_d_annulation(texte, annulation, crate::voix::parle(app))
+            {
                 return true;
             }
             crate::voix::entendu(app, texte);
@@ -511,6 +514,18 @@ impl<R: Runtime> Fil<R> {
     }
 }
 
+/// « Reprends » juste après un arrêt (KOB-165) : Kobi vient de dire « Dis
+/// « reprends » si c'était une erreur », et le filtre d'écho prendrait la
+/// réponse pour sa propre voix. Une fois qu'il s'est tu, un ordre bref qui
+/// annule l'arrêt passe ; l'écho de la phrase entière, plus longue, reste
+/// ignoré.
+fn ordre_d_annulation(texte: &str, annulation: bool, kobi_parle: bool) -> bool {
+    annulation
+        && !kobi_parle
+        && texte.split_whitespace().count() <= 2
+        && crate::intentions::annule_la_fin(texte)
+}
+
 /// Niveau RMS ramené entre 0 et 1 : -60 dBFS (silence) à -10 dBFS (voix forte).
 pub fn niveau_normalise(rms: f64) -> f32 {
     let db = 20.0 * rms.max(1e-10).log10();
@@ -522,6 +537,24 @@ mod tests {
     use super::*;
     use crate::interpellation::modele_nemotron;
     use std::path::Path;
+
+    /// « Reprends » après un arrêt n'est pas pris pour l'écho de « Dis
+    /// « reprends » si c'était une erreur » (essai audio injecté, KOB-165).
+    #[test]
+    fn reprends_n_est_pas_un_echo() {
+        assert!(ordre_d_annulation("Reprends.", true, false));
+        assert!(ordre_d_annulation("non, continue", true, false));
+        // Kobi parle encore, ou rien à annuler : filtre d'écho ordinaire.
+        assert!(!ordre_d_annulation("Reprends.", true, true));
+        assert!(!ordre_d_annulation("Reprends.", false, false));
+        // L'écho de sa phrase, plus longue, reste un écho.
+        assert!(!ordre_d_annulation(
+            "Dis reprends si c'était une erreur",
+            true,
+            false
+        ));
+        assert!(!ordre_d_annulation("une erreur", true, false));
+    }
 
     #[test]
     fn niveau_entre_zero_et_un() {

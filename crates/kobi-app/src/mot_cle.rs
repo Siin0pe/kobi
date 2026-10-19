@@ -519,6 +519,11 @@ impl Ecouteur {
         }
     }
 
+    /// Arrêt de la réunion annulable en cours ([`Ecouteur::annulable`]) ?
+    pub fn en_annulation(&self) -> bool {
+        matches!(self.attente, Attente::Annulation { .. })
+    }
+
     /// Fin de la conversation imposée (entrée en réunion).
     pub fn oublier(&mut self) {
         if matches!(self.attente, Attente::Conversation { .. }) {
