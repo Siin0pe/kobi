@@ -1,0 +1,195 @@
+/* Panneau « Outils MCP » (KOB-155). S'appuie sur reglages.css. */
+
+.mcp-serveurs,
+.mcp-candidats,
+.mcp-outils {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.mcp-serveurs {
+  display: grid;
+  gap: 12px;
+  max-width: 640px;
+}
+.mcp-serveur {
+  border: 2px solid var(--ink);
+  border-radius: 16px;
+  padding: 12px 14px 14px;
+  background: rgba(255, 255, 255, 0.45);
+  animation: entre 0.45s var(--ressort) backwards;
+  transition: opacity 0.2s, box-shadow 0.25s var(--ressort), transform 0.25s var(--ressort);
+}
+.mcp-serveur:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 3px 3px 0 var(--ink);
+}
+.mcp-serveur[data-actif='false'] {
+  opacity: 0.62;
+}
+.mcp-entete {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.mcp-entete .boutons {
+  margin-left: auto;
+}
+.mcp-titre {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.mcp-nom {
+  font-size: 16px;
+  font-variation-settings: 'wght' 800, 'CASL' 1;
+}
+.mcp-resume {
+  margin: 8px 0 0;
+  font-variation-settings: 'MONO' 1, 'wght' 500;
+  font-size: 12.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mcp-secrets code[data-present='false'] {
+  color: #b3200a;
+}
+.mcp-ecriture {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+.mcp-ecriture-titre {
+  font-size: 13.5px;
+  font-variation-settings: 'wght' 650;
+}
+.mcp-test:not(:empty) {
+  margin-top: 12px;
+}
+.mcp-outils {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+  max-height: 180px;
+  overflow: auto;
+}
+.mcp-outil {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 2px solid var(--ink);
+  border-radius: 999px;
+  padding: 2px 4px 2px 10px;
+  font-size: 12px;
+  animation: entre 0.35s var(--ressort) backwards;
+}
+.mcp-outil code {
+  font-variation-settings: 'MONO' 1;
+}
+.mcp-nature {
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 11px;
+  font-variation-settings: 'wght' 700;
+  background: var(--papier);
+}
+.mcp-outil[data-nature='lecture'] .mcp-nature {
+  background: var(--acide);
+}
+.mcp-outil[data-nature='ecriture'] .mcp-nature {
+  background: var(--ink);
+  color: var(--acide);
+}
+.mcp-outil[data-nature='suppression'] .mcp-nature {
+  background: var(--danger);
+  color: var(--ink);
+}
+
+.mcp-candidats {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 12px;
+  max-width: 640px;
+}
+.mcp-candidat label {
+  display: grid;
+  grid-template-columns: auto auto 1fr auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+.mcp-candidat label:hover {
+  background: rgba(215, 255, 58, 0.35);
+}
+.mcp-candidat[data-deja='true'] label {
+  cursor: default;
+  opacity: 0.55;
+}
+.mcp-candidat .mcp-resume {
+  margin: 0;
+}
+.mcp-candidat input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--ink);
+}
+.mcp-portee {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.mcp-ajout summary {
+  cursor: pointer;
+  font-size: 15px;
+  font-variation-settings: 'wght' 750, 'CASL' 1;
+  margin-bottom: 12px;
+}
+.mcp-champs {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0 6px;
+  max-width: 560px;
+}
+.mcp-champ {
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+  font-variation-settings: 'wght' 650;
+}
+.mcp-champ input,
+.mcp-champ textarea {
+  font: inherit;
+  font-variation-settings: 'MONO' 1, 'wght' 450;
+  font-size: 13px;
+  border: 2px solid var(--ink);
+  border-radius: 10px;
+  padding: 7px 10px;
+  background: #fff;
+  color: var(--ink);
+  resize: vertical;
+}
+.mcp-champ input:focus-visible,
+.mcp-champ textarea:focus-visible {
+  outline: 3px solid var(--acide);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mcp-serveur,
+  .mcp-outil {
+    animation: none;
+    transition: none;
+  }
+  .mcp-serveur:hover {
+    transform: none;
+  }
+}

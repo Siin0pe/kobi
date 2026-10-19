@@ -18,6 +18,7 @@ mod ecrivain;
 mod intentions;
 mod interpellation;
 mod lecture;
+mod mcp;
 mod mcp_config;
 mod menu;
 mod mot_cle;

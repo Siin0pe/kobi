@@ -36,7 +36,7 @@ fn options(name: &str, journal: &Path, perms: Option<&PermsServer>) -> ClaudeOpt
     });
     let mut args = vec!["--scenario".to_owned(), scenario(name)];
     if let Some(perms) = perms {
-        servers["kobi"] = perms.mcp_config()["mcpServers"]["kobi"].clone();
+        servers["kobi-perms"] = perms.mcp_config()["mcpServers"]["kobi-perms"].clone();
         args.extend([
             "--permission-prompt-tool".into(),
             PERMISSION_PROMPT_TOOL.into(),

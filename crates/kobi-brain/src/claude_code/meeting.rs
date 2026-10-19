@@ -68,6 +68,26 @@ pub struct MeetingConfig {
     /// remplacent ceux de [`MeetingConfig::args`] et aucune carte n'est
     /// possible (Kobi en lecture seule, KOB-138).
     pub fixed_args: Option<Vec<String>>,
+    /// Arguments construits par l'application une fois le serveur de
+    /// permission lancé (KOB-155) : ils reçoivent sa config MCP
+    /// (`{"type":"http","url":…}`) et remplacent [`MeetingConfig::args`].
+    /// Prioritaire sur `fixed_args`.
+    pub args_with_perms: Option<ArgsWithPerms>,
+    /// Variables d'environnement du process `claude` (secrets MCP).
+    pub env: Vec<(String, String)>,
+}
+
+/// Fabrique d'arguments de [`MeetingConfig::args_with_perms`].
+#[derive(Clone)]
+pub struct ArgsWithPerms(pub Arc<ArgsFn>);
+
+/// Config MCP du serveur de permission → arguments de `claude`.
+pub type ArgsFn = dyn Fn(&Value) -> Result<Vec<String>, String> + Send + Sync;
+
+impl std::fmt::Debug for ArgsWithPerms {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ArgsWithPerms(..)")
+    }
 }
 
 impl Default for MeetingConfig {
@@ -87,6 +107,8 @@ impl Default for MeetingConfig {
             permission_rules: kobi_perms::Rules::default(),
             extra_args: Vec::new(),
             fixed_args: None,
+            args_with_perms: None,
+            env: Vec::new(),
         }
     }
 }
@@ -166,12 +188,12 @@ impl ClaudeCodeBrain {
     /// [`MeetingConfig::fixed_args`]) puis process `claude`.
     pub async fn start(config: MeetingConfig) -> Result<Self, BrainError> {
         let (perms, approvals, args) = match &config.fixed_args {
-            Some(args) => {
+            Some(args) if config.args_with_perms.is_none() => {
                 // Canal fermé : aucune demande de permission n'arrivera.
                 let (_, approvals) = mpsc::channel(1);
                 (None, approvals, args.clone())
             }
-            None => {
+            _ => {
                 let (perms, approvals) = PermsServer::start_with_rules(
                     config.permission_timeout,
                     config.permission_rules.clone(),
@@ -179,7 +201,24 @@ impl ClaudeCodeBrain {
                 .await
                 .map_err(|e| BrainError::Unavailable(format!("serveur de permission : {e}")))?;
                 let kobi = perms.mcp_config()["mcpServers"][kobi_perms::SERVER_NAME].clone();
-                let args = config.args(&kobi);
+                let args = match &config.args_with_perms {
+                    // La fabrique peut lire le disque (carte des dépôts) :
+                    // hors du runtime.
+                    Some(fabrique) => match tokio::task::spawn_blocking({
+                        let (fabrique, kobi) = (fabrique.0.clone(), kobi.clone());
+                        move || fabrique(&kobi)
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(e.to_string()))
+                    {
+                        Ok(args) => args,
+                        Err(e) => {
+                            perms.shutdown().await;
+                            return Err(BrainError::Unavailable(e));
+                        }
+                    },
+                    None => config.args(&kobi),
+                };
                 (Some(perms), approvals, args)
             }
         };
@@ -188,6 +227,7 @@ impl ClaudeCodeBrain {
             cwd: config.cwd.clone(),
             partial_messages: true,
             args,
+            env: config.env.clone(),
         };
         let claude = match ClaudeCode::spawn(&opts) {
             Ok(c) => c,
@@ -399,11 +439,14 @@ mod tests {
             args[i + 1].clone()
         };
         let mcp: Value = serde_json::from_str(&value("--mcp-config")).unwrap();
-        assert_eq!(mcp["mcpServers"]["kobi"], kobi);
+        assert_eq!(mcp["mcpServers"]["kobi-perms"], kobi);
         assert_eq!(mcp["mcpServers"]["linear"]["type"], "http");
         assert!(args.contains(&"--strict-mcp-config".to_owned()));
         assert_eq!(value("--permission-mode"), "default");
-        assert_eq!(value("--permission-prompt-tool"), "mcp__kobi__approve");
+        assert_eq!(
+            value("--permission-prompt-tool"),
+            "mcp__kobi-perms__approve"
+        );
         assert_eq!(
             value("--disallowedTools"),
             "Bash BashOutput KillShell PowerShell Edit MultiEdit Write NotebookEdit"

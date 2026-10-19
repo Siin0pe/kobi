@@ -1,5 +1,5 @@
-//! kobi-perms : serveur MCP local « kobi » branché sur
-//! `claude --permission-prompt-tool mcp__kobi__approve`.
+//! kobi-perms : serveur MCP local « kobi-perms » branché sur
+//! `claude --permission-prompt-tool mcp__kobi-perms__approve`.
 //!
 //! Claude Code appelle l'outil `approve` avant chaque outil qui demande une
 //! autorisation. Le serveur tourne dans le process de Kobi (HTTP streamable
@@ -13,6 +13,7 @@
 //! sans carte.
 
 pub mod cards;
+pub mod mcp;
 pub mod rules;
 
 pub use cards::{Card, Cards};
@@ -33,10 +34,11 @@ use serde_json::{json, Value};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-/// Nom du serveur dans la config MCP passée à Claude Code.
-pub const SERVER_NAME: &str = "kobi";
+/// Nom du serveur dans la config MCP passée à Claude Code. Distinct de
+/// « kobi », le MCP de pilotage de Kobi (KOB-161).
+pub const SERVER_NAME: &str = "kobi-perms";
 /// Valeur de `--permission-prompt-tool`.
-pub const PERMISSION_PROMPT_TOOL: &str = "mcp__kobi__approve";
+pub const PERMISSION_PROMPT_TOOL: &str = "mcp__kobi-perms__approve";
 /// Délai par défaut avant refus (dossier de conception : 60 s).
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -310,7 +312,7 @@ mod tests {
         let url = server.url();
         assert!(url.starts_with("http://127.0.0.1:") && url.ends_with("/mcp"));
         assert_eq!(
-            server.mcp_config()["mcpServers"]["kobi"]["url"],
+            server.mcp_config()["mcpServers"]["kobi-perms"]["url"],
             url.as_str()
         );
         server.shutdown().await;

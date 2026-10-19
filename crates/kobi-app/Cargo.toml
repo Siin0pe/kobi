@@ -16,10 +16,11 @@ tauri-build = { version = "2.7", features = [] }
 kobi-audio = { path = "../kobi-audio" }
 kobi-brain = { path = "../kobi-brain" }
 kobi-ctl = { path = "../kobi-ctl" }
+kobi-perms = { path = "../kobi-perms" }
 kobi-session = { path = "../kobi-session" }
 kobi-stt = { path = "../kobi-stt", features = ["nemotron"] }
 kobi-tts = { path = "../kobi-tts", features = ["piper", "lecture"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
 bzip2 = "0.5"
 tar = "0.4"
 toml = "0.9"
@@ -30,6 +31,12 @@ tauri = { version = "2.12", features = ["macos-private-api", "tray-icon"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-global-shortcut = "2"
 tracing = "0.1"
+# Serveurs MCP connectés (KOB-155) : test des serveurs et autorisation OAuth,
+# secrets dans le gestionnaire d'identifiants du système.
+async-trait = "0.1"
+keyring = { version = "3", features = ["windows-native", "apple-native", "linux-native"] }
+reqwest = { version = "0.13", default-features = false }
+rmcp = { version = "3.5", features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "reqwest", "auth"] }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56"

@@ -5,6 +5,7 @@ pub mod config;
 pub mod donnees;
 pub mod etat;
 pub mod logs;
+pub mod mcp;
 pub mod modeles;
 pub mod rappels;
 pub mod reunion;

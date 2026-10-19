@@ -46,6 +46,10 @@ pub struct ClaudeOptions {
     pub partial_messages: bool,
     /// Arguments supplémentaires (`--mcp-config`, `--add-dir`, `--model`…).
     pub args: Vec<String>,
+    /// Variables d'environnement en plus pour le process : les secrets des
+    /// serveurs MCP, que la config MCP cite en `${NOM}` (KOB-155), jamais
+    /// sur la ligne de commande.
+    pub env: Vec<(String, String)>,
 }
 
 impl Default for ClaudeOptions {
@@ -55,6 +59,7 @@ impl Default for ClaudeOptions {
             cwd: None,
             partial_messages: true,
             args: Vec::new(),
+            env: Vec::new(),
         }
     }
 }
@@ -106,6 +111,7 @@ impl ClaudeCode {
         if let Some(cwd) = &opts.cwd {
             cmd.current_dir(cwd);
         }
+        cmd.envs(opts.env.iter().map(|(k, v)| (k, v)));
         let mut child = cmd.spawn().map_err(|source| Error::Spawn {
             program: opts.program.display().to_string(),
             source,

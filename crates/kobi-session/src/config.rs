@@ -307,6 +307,8 @@ pub struct Config {
     pub meetings: MeetingsConfig,
     pub conversations: ConversationsConfig,
     pub stockage: StockageConfig,
+    /// Serveurs MCP connectés (KOB-155).
+    pub mcp: crate::mcp::McpConfig,
     /// Clés inconnues, conservées telles quelles à l'écriture.
     #[serde(flatten)]
     pub extra: toml::Table,
@@ -328,6 +330,7 @@ impl Default for Config {
             meetings: MeetingsConfig::default(),
             conversations: ConversationsConfig::default(),
             stockage: StockageConfig::default(),
+            mcp: crate::mcp::McpConfig::default(),
             extra: toml::Table::new(),
         }
     }

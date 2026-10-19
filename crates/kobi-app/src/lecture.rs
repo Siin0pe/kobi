@@ -144,12 +144,24 @@ pub fn arguments(
         &autorises.join(","),
         "--disallowedTools",
         &OUTILS_REFUSES.join(","),
-        // Tout ce qui n'est pas autorisé d'avance est refusé, sans carte.
-        "--permission-mode",
-        "dontAsk",
     ]
     .map(String::from)
     .into();
+    match mcp.and_then(|m| m.permission_prompt_tool.as_deref()) {
+        // Ce qui n'est pas autorisé d'avance passe par le serveur de
+        // permission de Kobi : outils MCP qui écrivent → carte (KOB-155).
+        Some(outil) => args.extend(
+            [
+                "--permission-mode",
+                "default",
+                "--permission-prompt-tool",
+                outil,
+            ]
+            .map(String::from),
+        ),
+        // Tout ce qui n'est pas autorisé d'avance est refusé, sans carte.
+        None => args.extend(["--permission-mode", "dontAsk"].map(String::from)),
+    }
     let dossiers_memoire = memoire.into_iter().flat_map(Memoire::dossiers);
     for dossier in codebases.iter().chain(dossiers_memoire) {
         args.push("--add-dir".into());
@@ -165,6 +177,10 @@ pub fn arguments(
         args.push(mcp.fichier.display().to_string());
         prompt.push_str("\n\n");
         prompt.push_str(crate::mcp_config::PROMPT_MCP_KOBI);
+        if let Some(utilisateur) = &mcp.prompt {
+            prompt.push_str("\n\n");
+            prompt.push_str(utilisateur);
+        }
     }
     args.push("--append-system-prompt".into());
     // Carte des dépôts (KOB-153) : bloc à part, en fin de prompt.
@@ -403,6 +419,8 @@ mod tests {
         let mcp = McpSession {
             fichier: PathBuf::from("C:/Users/moi/Kobi/mcp/session-conversation.json"),
             outils_autorises: vec!["mcp__kobi__notes_last".into(), "mcp__kobi__status".into()],
+            permission_prompt_tool: None,
+            prompt: None,
         };
         let args = arguments("haiku", "Tu es Kobi.", &[], None, Some(&mcp));
         assert_eq!(
@@ -417,6 +435,30 @@ mod tests {
         assert_eq!(valeur(&args, "--tools"), ["Read,Grep,Glob"]);
         let prompt = valeur(&args, "--append-system-prompt")[0];
         assert!(prompt.contains("mcp__kobi__"), "{prompt}");
+    }
+
+    /// Avec des serveurs de l'utilisateur (KOB-155) : le serveur de
+    /// permission de Kobi décide, au lieu de refuser tout ce qui n'est pas
+    /// autorisé d'avance.
+    #[test]
+    fn session_avec_les_serveurs_de_l_utilisateur() {
+        let mcp = McpSession {
+            fichier: PathBuf::from("C:/Users/moi/Kobi/mcp/session-conversation-1234.json"),
+            outils_autorises: vec!["mcp__kobi__status".into()],
+            permission_prompt_tool: Some("mcp__kobi-perms__approve".into()),
+            prompt: Some("## Outils MCP connectés".into()),
+        };
+        let args = arguments("haiku", "Tu es Kobi.", &[], None, Some(&mcp));
+        assert_eq!(valeur(&args, "--permission-mode"), ["default"]);
+        assert_eq!(
+            valeur(&args, "--permission-prompt-tool"),
+            ["mcp__kobi-perms__approve"]
+        );
+        // Écriture et commandes restent interdites, MCP ou pas.
+        assert!(valeur(&args, "--disallowedTools")[0].contains("Write"));
+        let prompt = valeur(&args, "--append-system-prompt")[0];
+        // Les outils connectés précèdent la carte des dépôts (KOB-153), en fin.
+        assert!(prompt.contains("\n\n## Outils MCP connectés"), "{prompt}");
     }
 
     #[test]
@@ -454,6 +496,7 @@ mod tests {
             cwd: Some(cwd.clone()),
             partial_messages: false,
             args: arguments("haiku", SYSTEM_PROMPT, &[code], None, None),
+            env: Vec::new(),
         })
         .unwrap();
         let mut outils_init = Vec::new();
@@ -575,6 +618,7 @@ mod tests {
             cwd: Some(cwd),
             partial_messages: false,
             args: arguments("haiku", SYSTEM_PROMPT, &[], Some(&Memoire::de(&st)), None),
+            env: Vec::new(),
         })
         .unwrap();
         let mut demander = |question: &str| -> (String, Vec<String>) {
