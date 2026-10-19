@@ -62,6 +62,8 @@ export function chargerReglageAnimations(): void {
 const FREQUENCES = [30, 48, 50, 60, 72, 75, 90, 100, 120, 144, 165, 240];
 let ecran = 60;
 let mesuree = false;
+/** Fréquence imposée (tests, démo) : la mesure en cours ne la remplace pas. */
+let imposee = false;
 
 /** Fréquence de rafraîchissement de l'écran (mesurée au premier appel, 60 en attendant). */
 export function frequenceEcran(): number {
@@ -87,7 +89,7 @@ function mesurerEcran(): void {
     }
     const ecarts = temps.slice(1).map((v, i) => v - temps[i]!).sort((a, b) => a - b);
     const median = ecarts[Math.floor(ecarts.length / 2)]!;
-    if (median > 2 && median < 50) {
+    if (median > 2 && median < 50 && !imposee) {
       const hz = 1000 / median;
       ecran = FREQUENCES.reduce((a, b) => (Math.abs(b - hz) < Math.abs(a - hz) ? b : a));
     }
@@ -138,6 +140,7 @@ if (typeof window !== 'undefined') {
     ecran(hz: number): void {
       ecran = hz;
       mesuree = true;
+      imposee = true;
       ecouteursEcran.forEach((fn) => fn());
     },
   };

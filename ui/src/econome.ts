@@ -39,6 +39,21 @@ function isLoop(a: Animation): boolean {
   return a instanceof CSSAnimation && a.effect?.getTiming().iterations === Infinity;
 }
 
+/**
+ * Tout ce qui bouge sous `root` : boucles et animations finies, transitions
+ * CSS et animations Web (KOB-200 : « tout suit ce nombre » ; l'essai Xvfb
+ * montrait des rafales à 60 images/s à 5 images/s réglées). Pseudo-éléments
+ * compris : l'ondulation du mot vit dans `::before`/`::after`, et WebKit ne
+ * les rend pas par `root.getAnimations({ subtree: true })` ;
+ * `document.getAnimations()` les donne partout.
+ */
+function enCours(root: Element): Animation[] {
+  return document.getAnimations().filter((a) => {
+    const cible = (a.effect as KeyframeEffect | null)?.target;
+    return a.playState === 'running' && !!cible && root.contains(cible);
+  });
+}
+
 export class Metronome {
   /** Animations tenues par le métronome, avec l'instant où elles ont été avancées. */
   private readonly held = new Map<Animation, number>();
@@ -52,11 +67,11 @@ export class Metronome {
   private lively = false;
   private suspended = false;
   private fps = ECONOMY_FPS;
-  private readonly onStart = (e: Event): void => {
-    if (!this.rate) return;
-    const target = e.target as Element;
-    // Une boucle qui démarre (fiche, « z ») suit le métronome.
-    for (const a of target.getAnimations()) if (isLoop(a) && a.playState === 'running') this.hold(a);
+  private readonly onStart = (): void => {
+    if (!this.rate || this.geste()) return;
+    // Une animation ou une transition qui démarre (fiche, « z », couche d'une
+    // lettre, regard) suit le métronome.
+    for (const a of enCours(this.root)) this.hold(a);
   };
 
   /** @param root élément dont les boucles sont tenues ; `onRate` reçoit le rythme (tests). */
@@ -65,6 +80,7 @@ export class Metronome {
     private readonly onRate?: (fps: number) => void,
   ) {
     root.addEventListener('animationstart', this.onStart);
+    root.addEventListener('transitionrun', this.onStart);
   }
 
   /** Images par seconde imposées, 0 : celles de l'écran (le navigateur anime). */
@@ -109,6 +125,7 @@ export class Metronome {
     this.setActive(false);
     this.setCadence(0);
     this.root.removeEventListener('animationstart', this.onStart);
+    this.root.removeEventListener('transitionrun', this.onStart);
   }
 
   /**
@@ -132,7 +149,8 @@ export class Metronome {
   private appliquer(): void {
     if (this.rate) {
       active.add(this);
-      for (const a of this.root.getAnimations({ subtree: true })) if (isLoop(a) && a.playState === 'running') this.hold(a);
+      // Les gestes à pleine vitesse (repos économe) ne sont pas tenus, les boucles si.
+      for (const a of enCours(this.root)) if (isLoop(a) || !this.geste()) this.hold(a);
       this.run();
     } else {
       active.delete(this);
