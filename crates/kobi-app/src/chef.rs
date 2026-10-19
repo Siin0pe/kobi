@@ -69,6 +69,9 @@ pub enum Message {
         texte: String,
         voix: bool,
     },
+    /// Phrase dite qui cite Kobi sans qu'on sache si elle lui parle
+    /// (KOB-168) : Claude peut ne rien répondre, Kobi reste alors silencieux.
+    QuestionPeutEtre(String),
     /// L'interpellation n'a pas été suivie d'une question.
     SansQuestion,
     /// Segment final de la transcription continue.
@@ -293,6 +296,20 @@ pub struct Chef<R: Runtime> {
     interrompus: HashSet<u64>,
     /// Carte de validation ouverte (KOB-156) : « oui » ou « non » lui répond.
     validation: Option<String>,
+    /// La question en cours de traitement ne s'adresse peut-être pas à Kobi.
+    peut_etre: bool,
+    /// Tour d'une telle question : sa réponse n'est montrée qu'une fois
+    /// finie, et une réponse « rien » le laisse silencieux (KOB-168).
+    tour_peut_etre: Option<u64>,
+}
+
+/// Consigne jointe à une phrase qui cite Kobi sans lui parler à coup sûr
+/// (KOB-168).
+const CONSIGNE_PEUT_ETRE: &str = "Cette phrase, entendue au micro, contient ton nom mais ne s'adresse peut-être pas à toi (on peut parler de toi à quelqu'un d'autre). Si elle ne t'est pas adressée, réponds seulement « — » et rien d'autre ; sinon réponds normalement.\n\nPhrase : ";
+
+/// Réponse « rien » à une phrase qui ne s'adressait pas à Kobi.
+fn est_silence(reponse: &str) -> bool {
+    matches!(reponse.trim(), "" | "—" | "–" | "-" | "…" | "(silence)")
 }
 
 /// Chef partagé (état géré par Tauri).
@@ -464,6 +481,8 @@ impl<R: Runtime> Chef<R> {
             taches: BTreeMap::new(),
             interrompus: HashSet::new(),
             validation: None,
+            peut_etre: false,
+            tour_peut_etre: None,
         }
     }
 
@@ -533,6 +552,11 @@ impl<R: Runtime> Chef<R> {
                 self.transition(&[Evenement::PasDeQuestion]);
             }
             Message::Question { texte, voix } => self.question(texte, voix),
+            Message::QuestionPeutEtre(texte) => {
+                self.peut_etre = true;
+                self.question(texte, true);
+                self.peut_etre = false;
+            }
             Message::Segment(s) => self.segment(s),
             Message::Commande(i) => {
                 self.commande(i);
@@ -680,6 +704,10 @@ impl<R: Runtime> Chef<R> {
             .as_ref()
             .map(|r| r.notes.clone())
             .unwrap_or_default();
+        if self.peut_etre && consigne.is_none() {
+            consigne = Some(format!("{CONSIGNE_PEUT_ETRE}{texte}"));
+            self.tour_peut_etre = Some(self.tour);
+        }
         self.cerveau.demander(Demande::Question {
             tour: self.tour,
             question: consigne.unwrap_or_else(|| texte.clone()),
@@ -1018,6 +1046,24 @@ impl<R: Runtime> Chef<R> {
             return;
         }
         match retour {
+            // Phrase peut-être pas pour Kobi : rien ne s'affiche avant la fin.
+            Retour::Texte { tour, .. } if self.tour_peut_etre == Some(tour) => {}
+            Retour::Fin { tour, texte }
+                if self.tour_peut_etre == Some(tour) && est_silence(&texte) =>
+            {
+                tracing::info!(tour, "phrase qui ne s'adressait pas à Kobi : silence");
+                self.tour_peut_etre = None;
+                self.historique.retain(|b| b.tour != tour);
+                if self.voix.as_ref().is_some_and(|(t, _)| *t == tour) {
+                    self.voix = None;
+                }
+                if tour == self.dernier {
+                    // Retour au calme sans montrer de réponse.
+                    self.transition(&[Evenement::ReponseCommence]);
+                    self.transition(&[Evenement::ReponseTerminee]);
+                }
+                self.emettre_historique();
+            }
             Retour::Texte { tour, texte } => {
                 if let Some(b) = self.bulle(tour) {
                     b.reponse.clone_from(&texte);
@@ -1036,6 +1082,9 @@ impl<R: Runtime> Chef<R> {
             }
             Retour::Fin { tour, texte } => {
                 tracing::info!(tour, "réponse terminée");
+                if self.tour_peut_etre == Some(tour) {
+                    self.tour_peut_etre = None;
+                }
                 self.retenir(tour, &texte);
                 self.ranger(Qui::Kobi, &texte, false);
                 if let Some(b) = self.bulle(tour) {
@@ -1512,6 +1561,19 @@ pub fn fabrique_claude(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Phrase qui ne s'adressait peut-être pas à Kobi (KOB-168) : « — » ou
+    /// rien en réponse le laisse silencieux ; une vraie réponse s'affiche.
+    #[test]
+    fn reponse_silence_a_une_phrase_qui_ne_lui_parlait_pas() {
+        for silence in ["", "  ", "—", " — ", "–", "-", "…", "(silence)"] {
+            assert!(est_silence(silence), "{silence:?}");
+        }
+        assert!(!est_silence("Il est 14 h 05."));
+        assert!(!est_silence("— Il est 14 h 05."));
+        assert!(CONSIGNE_PEUT_ETRE.contains("réponds seulement « — »"));
+        assert!(CONSIGNE_PEUT_ETRE.ends_with("Phrase : "));
+    }
 
     #[test]
     fn compte_rendu_resume_pour_la_carte() {

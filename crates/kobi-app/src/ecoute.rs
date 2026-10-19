@@ -488,6 +488,13 @@ impl<R: Runtime> Fil<R> {
                         voix: true,
                     }
                 }
+                Action::EnvoyerPeutEtre(q) => {
+                    tracing::info!(
+                        longueur = q.len(),
+                        "phrase qui cite Kobi, peut-être pour lui"
+                    );
+                    Message::QuestionPeutEtre(q)
+                }
                 Action::Abandonner => {
                     tracing::info!("interpellation sans question");
                     Message::SansQuestion

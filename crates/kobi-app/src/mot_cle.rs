@@ -98,6 +98,150 @@ fn question(texte: &str) -> &str {
     }
 }
 
+/// À qui s'adresse une phrase qui contient le nom (KOB-168).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Adresse {
+    /// On parle à Kobi : « Kobi, … », « …, Kobi ? », « Est-ce que, Kobi, … ».
+    Appel,
+    /// On parle de Kobi à quelqu'un d'autre : « ce que Kobi dit », « avec Kobi ».
+    Cite,
+    /// Ni l'un ni l'autre à coup sûr.
+    Doute,
+}
+
+/// Petits mots qui peuvent précéder l'appel sans en faire une citation.
+const INTERJECTIONS: &[&str] = &[
+    "euh", "eh", "he", "hey", "ho", "oh", "ah", "bah", "ben", "bon", "alors", "oui", "non", "ok",
+    "okay", "dis", "dites", "moi", "allo", "salut", "bonjour", "bonsoir", "coucou", "tiens",
+    "ecoute", "pardon", "hm", "hmm", "mais", "et", "donc",
+];
+
+/// Mots qui, juste avant le nom, en font une citation : « à Kobi », « que Kobi ».
+const AVANT_CITATION: &[&str] = &[
+    "a", "au", "aux", "de", "d", "du", "des", "que", "qu", "avec", "pour", "par", "sur", "chez",
+    "le", "la", "les", "l", "comme", "sans", "contre", "entre", "vers", "selon", "dont", "ce",
+    "cet", "mon", "ton", "son", "notre", "votre", "leur", "ou", "si",
+];
+
+/// Verbes qui, juste après le nom sans virgule, en font le sujet d'une
+/// phrase sur lui : « Kobi dit », « Kobi a planté ». Pas ceux qui peuvent
+/// être un ordre (« Kobi note ça », « Kobi raconte ») : en tête, c'est un appel.
+const APRES_CITATION: &[&str] = &[
+    "dit", "disait", "a", "avait", "aura", "est", "etait", "sera", "fait", "faisait", "pense",
+    "peut", "pourrait", "sait", "va", "allait", "veut", "voulait", "doit", "devrait", "ne", "n",
+    "aime", "comprend", "marche", "plante", "bugue", "entend", "connait", "semble", "s", "se", "m",
+    "nous", "lui", "y", "en",
+];
+
+/// Deuxième personne : la phrase parle à quelqu'un.
+const TOI: &[&str] = &[
+    "tu", "t", "toi", "te", "ton", "ta", "tes", "vous", "votre", "vos",
+];
+
+/// Mots (sans accents ni majuscules) d'un morceau de phrase.
+fn mots(morceau: &str) -> Vec<String> {
+    morceau
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|m| !m.is_empty())
+        .map(normaliser)
+        .collect()
+}
+
+/// Phrase qui contient le nom : à qui elle s'adresse, et la question pour
+/// Kobi. Nom en tête (après « euh, dis… ») : la question est ce qui suit,
+/// comme avant ; ailleurs, c'est la phrase entière sans le nom, avec ses
+/// virgules d'apostrophe (« Tu en penses quoi, Kobi ? » → « Tu en penses
+/// quoi ? »). `None` sans le nom.
+pub fn interpellation(texte: &str) -> Option<(Adresse, String)> {
+    let (debut, fin) = trouver(texte)?;
+    let avant = &texte[..debut];
+    let apres = &texte[fin..];
+    let mots_avant = mots(avant);
+    let mots_apres = mots(apres);
+    let virgule_avant = avant.trim_end().ends_with(',');
+    let ponctuation_apres = apres
+        .trim_start()
+        .chars()
+        .next()
+        .is_none_or(|c| matches!(c, ',' | '.' | '?' | '!' | ';' | ':' | '…'));
+    let virgule_apres = apres.trim_start().starts_with(',');
+    let precedent = mots_avant.last().map(String::as_str);
+    let suivant = mots_apres.first().map(String::as_str);
+    let toi = mots_avant
+        .iter()
+        .chain(&mots_apres)
+        .any(|m| TOI.contains(&m.as_str()));
+    let sujet = !ponctuation_apres && suivant.is_some_and(|m| APRES_CITATION.contains(&m));
+    let en_tete = mots_avant
+        .iter()
+        .all(|m| INTERJECTIONS.contains(&m.as_str()));
+    let en_fin = mots_apres.is_empty();
+    // « Est-ce que Kobi… » : le « que » de la question n'est pas celui de
+    // « ce que Kobi dit ».
+    let est_ce_que = mots_avant.len() >= 3
+        && mots_avant[mots_avant.len() - 3..]
+            .iter()
+            .map(String::as_str)
+            .eq(["est", "ce", "que"]);
+    let cite_avant =
+        !virgule_avant && !est_ce_que && precedent.is_some_and(|m| AVANT_CITATION.contains(&m));
+
+    let adresse = if en_tete {
+        if sujet && !toi {
+            Adresse::Cite
+        } else {
+            Adresse::Appel
+        }
+    } else if en_fin {
+        if cite_avant {
+            Adresse::Cite
+        } else {
+            Adresse::Appel
+        }
+    } else if virgule_avant && virgule_apres {
+        Adresse::Appel
+    } else if cite_avant || (sujet && !toi) {
+        Adresse::Cite
+    } else if toi {
+        Adresse::Appel
+    } else {
+        Adresse::Doute
+    };
+
+    let question = if en_tete {
+        nettoyer(apres).to_string()
+    } else {
+        // Le nom et ses virgules d'apostrophe sortent ; la ponctuation de fin
+        // reste (« quoi ? »).
+        let avant = avant.trim_end();
+        let avant = avant.strip_suffix(',').unwrap_or(avant).trim_end();
+        let apres = apres.trim_start();
+        let apres = apres.strip_prefix(',').unwrap_or(apres).trim_start();
+        let phrase = if apres.is_empty() || apres.starts_with(['.', ',', '…']) {
+            format!("{avant}{apres}")
+        } else {
+            format!("{avant} {apres}")
+        };
+        nettoyer(&phrase).to_string()
+    };
+    // Rien que de la ponctuation (« Kobi ? ») : pas de question.
+    let question = if question.chars().any(char::is_alphanumeric) {
+        question
+    } else {
+        String::new()
+    };
+    Some((adresse, question))
+}
+
+/// Le nom vient-il en tête de la phrase (après « euh, dis… ») ?
+fn nom_en_tete(texte: &str) -> bool {
+    trouver(texte).is_some_and(|(debut, _)| {
+        mots(&texte[..debut])
+            .iter()
+            .all(|m| INTERJECTIONS.contains(&m.as_str()))
+    })
+}
+
 /// Ce que l'écoute demande à la session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
@@ -107,6 +251,10 @@ pub enum Action {
     Question(String),
     /// Question finie, à envoyer à Claude.
     Envoyer(String),
+    /// Phrase finie qui cite Kobi sans qu'on sache si elle lui parle
+    /// (KOB-168) : Claude la reçoit marquée « peut-être pas pour toi » et
+    /// peut ne rien répondre. Jamais en réunion : Kobi s'y tait.
+    EnvoyerPeutEtre(String),
     /// Rien n'a suivi l'interpellation : retour au calme.
     Abandonner,
 }
@@ -116,8 +264,9 @@ enum Attente {
     /// Personne n'a appelé Kobi.
     Nom,
     /// Nom entendu dans la phrase en cours (segments partiels) ; `t` est
-    /// l'instant où il l'a été.
-    Phrase { t: f64 },
+    /// l'instant où il l'a été. `annonce` : Kobi s'est mis à écouter (pas
+    /// quand la phrase, pour l'instant, le cite sans lui parler).
+    Phrase { t: f64, annonce: bool },
     /// Interpellé (« Kobi. » seul ou raccourci) : la phrase suivante est la
     /// question. `parle` est l'instant où elle a commencé.
     Suite { depuis: f64, parle: Option<f64> },
@@ -167,8 +316,15 @@ pub struct Ecouteur {
     /// Dernière question affichée.
     derniere: String,
     /// Mode conversation permis. Hors réunion seulement : en réunion, les
-    /// participants se parlent entre eux.
+    /// participants se parlent entre eux (et une phrase qui cite Kobi sans
+    /// lui parler à coup sûr ne le dérange pas).
     pub conversation: bool,
+    /// Dernière phrase finie sans le nom, et l'instant où elle a fini : la
+    /// question quand le nom vient seul juste après (« Tu en penses quoi ? »
+    /// … « Kobi ? »), ou son début quand elle a été coupée.
+    precedent: Option<(String, f64)>,
+    /// Début de la phrase en cours (premier segment partiel).
+    debut: Option<f64>,
 }
 
 impl Default for Ecouteur {
@@ -177,9 +333,15 @@ impl Default for Ecouteur {
             attente: Attente::Nom,
             derniere: String::new(),
             conversation: true,
+            precedent: None,
+            debut: None,
         }
     }
 }
+
+/// Écart maximal entre la phrase précédente et celle qui contient le nom
+/// pour qu'elles forment une seule question, en secondes.
+pub const PHRASE_PRECEDENTE: f64 = 2.5;
 
 impl Ecouteur {
     /// Écouteur neuf ; `conversation` : voir le champ du même nom.
@@ -200,32 +362,22 @@ impl Ecouteur {
                 }
             }
             // « Merci Kobi » n'est pas une interpellation.
-            Attente::Nom if fin_de_conversation(texte) => {}
-            Attente::Nom | Attente::Phrase { .. } => match reperer(texte) {
-                Some(suite) => {
-                    if self.attente == Attente::Nom {
-                        actions.push(Action::Interpeller);
-                        self.attente = Attente::Phrase { t };
-                    }
-                    if finale {
-                        if suite.is_empty() {
-                            self.attente = Attente::Suite {
-                                depuis: t,
-                                parle: None,
-                            };
-                        } else {
-                            actions.push(self.envoyer(suite, t));
-                        }
-                    } else {
-                        self.afficher(suite, &mut actions);
-                    }
+            Attente::Nom if fin_de_conversation(texte) => self.phrase_sans_nom(texte, finale, t),
+            Attente::Nom | Attente::Phrase { .. } => match interpellation(texte) {
+                Some((adresse, q)) => {
+                    self.phrase_avec_nom(texte, adresse, &q, finale, t, &mut actions)
                 }
                 // La reconnaissance a révisé la phrase : le nom n'y est plus.
                 None if finale && self.attente != Attente::Nom => {
+                    let annonce = matches!(self.attente, Attente::Phrase { annonce: true, .. });
                     self.attente = Attente::Nom;
-                    actions.push(Action::Abandonner);
+                    self.derniere.clear();
+                    if annonce {
+                        actions.push(Action::Abandonner);
+                    }
+                    self.phrase_sans_nom(texte, finale, t);
                 }
-                None => {}
+                None => self.phrase_sans_nom(texte, finale, t),
             },
             Attente::Suite { depuis, parle } | Attente::Conversation { depuis, parle } => {
                 let conversation = matches!(self.attente, Attente::Conversation { .. });
@@ -278,7 +430,14 @@ impl Ecouteur {
                 self.attente = Attente::Nom;
                 Vec::new()
             }
-            Attente::Phrase { t: debut }
+            Attente::Phrase {
+                t: debut,
+                annonce: false,
+            } if t - debut > QUESTION_MAX => {
+                self.attente = Attente::Nom;
+                Vec::new()
+            }
+            Attente::Phrase { t: debut, .. }
             | Attente::Suite {
                 parle: Some(debut), ..
             }
@@ -331,6 +490,99 @@ impl Ecouteur {
     pub fn oublier(&mut self) {
         if matches!(self.attente, Attente::Conversation { .. }) {
             self.attente = Attente::Nom;
+        }
+    }
+
+    /// Segment d'une phrase qui ne contient pas le nom (hors interpellation) :
+    /// retenue pour la question d'un nom dit seul juste après.
+    fn phrase_sans_nom(&mut self, texte: &str, finale: bool, t: f64) {
+        if finale {
+            let texte = nettoyer(texte);
+            self.precedent = (!texte.is_empty()).then(|| (texte.to_string(), t));
+            self.debut = None;
+        } else {
+            self.debut.get_or_insert(t);
+        }
+    }
+
+    /// Phrase qui contient le nom (KOB-168) : Kobi se met à écouter s'il est
+    /// appelé (ou peut-être) ; la phrase finie part à Claude, se tait si elle
+    /// le cite seulement. En réunion, un doute vaut silence.
+    fn phrase_avec_nom(
+        &mut self,
+        texte: &str,
+        adresse: Adresse,
+        q: &str,
+        finale: bool,
+        t: f64,
+        actions: &mut Vec<Action>,
+    ) {
+        let reunion = !self.conversation;
+        let ecoute = match adresse {
+            // En réunion, une phrase en cours ne fait écouter Kobi que si elle
+            // commence par son nom : la fin de la phrase décide du reste.
+            Adresse::Appel => finale || !reunion || nom_en_tete(texte),
+            Adresse::Doute => !reunion,
+            Adresse::Cite => false,
+        };
+        let annonce = match self.attente {
+            Attente::Phrase { annonce, .. } => annonce,
+            _ => false,
+        };
+        if ecoute && !annonce {
+            actions.push(Action::Interpeller);
+        }
+        let debut = match self.attente {
+            Attente::Phrase { t, .. } => t,
+            _ => t,
+        };
+        self.attente = Attente::Phrase {
+            t: debut,
+            annonce: annonce || ecoute,
+        };
+        // La phrase précédente, toute proche, en fait partie quand le nom vient
+        // seul, ou quand elle s'arrêtait en plein milieu.
+        let precedent = self
+            .precedent
+            .take()
+            .filter(|(_, fin)| self.debut.unwrap_or(t) - fin <= PHRASE_PRECEDENTE)
+            .filter(|(p, _)| q.is_empty() || !p.ends_with(['.', '?', '!', '…']))
+            .map(|(p, _)| p);
+        let question = match (&precedent, q.is_empty()) {
+            (Some(p), true) => p.clone(),
+            (Some(p), false) => format!("{p} {q}"),
+            (None, _) => q.to_string(),
+        };
+        if !finale {
+            if ecoute {
+                self.afficher(&question, actions);
+            }
+            self.precedent = precedent.map(|p| (p, t));
+            self.debut.get_or_insert(t);
+            return;
+        }
+        self.debut = None;
+        if !ecoute {
+            // Citation, ou doute en réunion : Kobi ne répond pas.
+            self.attente = Attente::Nom;
+            self.derniere.clear();
+            if annonce {
+                actions.push(Action::Abandonner);
+            }
+            return;
+        }
+        if question.is_empty() {
+            // « Kobi. » seul : la phrase suivante est la question.
+            self.attente = Attente::Suite {
+                depuis: t,
+                parle: None,
+            };
+        } else if adresse == Adresse::Doute {
+            self.attente = self.apres(t);
+            self.derniere.clear();
+            actions.push(Action::EnvoyerPeutEtre(question));
+        } else {
+            actions.push(self.envoyer(&question, t));
         }
     }
 
@@ -622,5 +874,322 @@ mod tests {
         assert!(e.tick(10.0).is_empty());
         assert!(fin_de_conversation("C'est bon, merci."));
         assert!(!fin_de_conversation("merci de résumer le budget"));
+    }
+
+    /// Plus de 40 phrases (KOB-168) : nom au début, au milieu, à la fin,
+    /// cité sans être appelé, variantes de transcription, phrases réelles de
+    /// la réunion du 18/10.
+    #[test]
+    fn appele_ou_cite() {
+        use Adresse::*;
+        let cas: &[(&str, Adresse, &str)] = &[
+            // Nom au début : la question est ce qui suit.
+            (
+                "Kobi, quelle heure est-il ?",
+                Appel,
+                "quelle heure est-il ?",
+            ),
+            ("Kobi quelle heure est-il", Appel, "quelle heure est-il"),
+            ("Euh, Kobi, tu peux résumer ?", Appel, "tu peux résumer ?"),
+            (
+                "Dis Kobi, c'est quoi la météo ?",
+                Appel,
+                "c'est quoi la météo ?",
+            ),
+            (
+                "dis-moi Cobi, c'est quoi la météo",
+                Appel,
+                "c'est quoi la météo",
+            ),
+            ("Hé Koby, ouvre le carnet", Appel, "ouvre le carnet"),
+            ("Bon alors Kobi, on en est où ?", Appel, "on en est où ?"),
+            (
+                "Kobi, est-ce que tu m'entends ?",
+                Appel,
+                "est-ce que tu m'entends ?",
+            ),
+            (
+                "Kobi est-ce que tu peux noter ça",
+                Appel,
+                "est-ce que tu peux noter ça",
+            ),
+            ("Kobe, démarre la réunion", Appel, "démarre la réunion"),
+            ("Oui Kobé, vas-y", Appel, "vas-y"),
+            ("Kobi.", Appel, ""),
+            // Nom à la fin : la phrase entière.
+            ("Tu en penses quoi, Kobi ?", Appel, "Tu en penses quoi ?"),
+            (
+                "Tu peux me dire l'heure, Kobi ?",
+                Appel,
+                "Tu peux me dire l'heure ?",
+            ),
+            (
+                "Euh, qu'est-ce que t'en penses toi, Koby",
+                Appel,
+                "Euh, qu'est-ce que t'en penses toi",
+            ),
+            ("Quelle heure est-il Kobi ?", Appel, "Quelle heure est-il ?"),
+            (
+                "C'est quoi le prochain point, Cobi ?",
+                Appel,
+                "C'est quoi le prochain point ?",
+            ),
+            ("Résume la réunion, Kobi.", Appel, "Résume la réunion"),
+            (
+                "Rappelle-moi d'appeler Léa demain Kobi",
+                Appel,
+                "Rappelle-moi d'appeler Léa demain",
+            ),
+            (
+                "On fait comment pour le devis, Kobi ?",
+                Appel,
+                "On fait comment pour le devis ?",
+            ),
+            // Nom au milieu, entre virgules ou avec « tu » : appel.
+            (
+                "Est-ce que, Kobi, tu peux me rappeler l'heure ?",
+                Appel,
+                "Est-ce que tu peux me rappeler l'heure ?",
+            ),
+            (
+                "Est-ce que tu peux, Kobi, me rappeler la réunion ?",
+                Appel,
+                "Est-ce que tu peux me rappeler la réunion ?",
+            ),
+            ("Et là, Kobi, on fait quoi ?", Appel, "Et là on fait quoi ?"),
+            (
+                "Est-ce que tu peux Kobi me rappeler ça",
+                Appel,
+                "Est-ce que tu peux me rappeler ça",
+            ),
+            // Transcription réelle (essai du 19/10) : la virgule avant le nom manque.
+            (
+                "Est-ce que Kobe, tu peux me rappeler le nom du projet",
+                Appel,
+                "Est-ce que tu peux me rappeler le nom du projet",
+            ),
+            (
+                "Est-ce que Kobi tu as noté le budget ?",
+                Appel,
+                "Est-ce que tu as noté le budget ?",
+            ),
+            (
+                "Je suis d'accord avec Kobi, tu sais",
+                Cite,
+                "Je suis d'accord avec tu sais",
+            ),
+            (
+                "Alors toi Kobi tu en dis quoi ?",
+                Appel,
+                "Alors toi tu en dis quoi ?",
+            ),
+            (
+                "Franchement, Koby, t'as une idée ?",
+                Appel,
+                "Franchement t'as une idée ?",
+            ),
+            // Cité sans être appelé : citation.
+            (
+                "Par rapport à ce que Cobi dit, je ne suis pas d'accord",
+                Cite,
+                "Par rapport à ce que dit, je ne suis pas d'accord",
+            ),
+            ("Je suis d'accord avec Kobi", Cite, "Je suis d'accord avec"),
+            (
+                "C'est ce que disait Kobi tout à l'heure",
+                Doute,
+                "C'est ce que disait tout à l'heure",
+            ),
+            ("Kobi a raison sur ce point", Cite, "a raison sur ce point"),
+            ("Kobi dit n'importe quoi", Cite, "dit n'importe quoi"),
+            (
+                "Hier Kobi a planté pendant la démo",
+                Cite,
+                "Hier a planté pendant la démo",
+            ),
+            (
+                "On en parlera à Kobi plus tard",
+                Cite,
+                "On en parlera à plus tard",
+            ),
+            (
+                "Le compte rendu de Kobi est dans le carnet",
+                Cite,
+                "Le compte rendu de est dans le carnet",
+            ),
+            (
+                "Je crois que Kobi note tout",
+                Cite,
+                "Je crois que note tout",
+            ),
+            (
+                "Il faudrait montrer ça à Kobi",
+                Cite,
+                "Il faudrait montrer ça à",
+            ),
+            ("Tu as essayé avec Kobi ?", Cite, "Tu as essayé avec ?"),
+            ("Sans Kobi on aurait oublié", Cite, "Sans on aurait oublié"),
+            (
+                "Kobi ne marche pas chez moi",
+                Cite,
+                "ne marche pas chez moi",
+            ),
+            // Ni l'un ni l'autre : doute.
+            (
+                "Le truc Kobi pour les réunions",
+                Doute,
+                "Le truc pour les réunions",
+            ),
+            ("Il y a Kobi qui écoute", Cite, "Il y a qui écoute"),
+            (
+                "Normalement Kobi enregistre aussi",
+                Doute,
+                "Normalement enregistre aussi",
+            ),
+        ];
+        assert!(cas.len() >= 40);
+        for (texte, adresse, question) in cas {
+            assert_eq!(
+                interpellation(texte),
+                Some((*adresse, (*question).to_string())),
+                "{texte}"
+            );
+        }
+        assert_eq!(interpellation("Quelle heure est-il ?"), None);
+    }
+
+    #[test]
+    fn nom_a_la_fin_de_la_phrase() {
+        let mut e = Ecouteur::default();
+        let actions = rejouer(
+            &mut e,
+            &[
+                ("tu en penses", false, 1.0),
+                ("tu en penses quoi Kobi", false, 1.8),
+                ("Tu en penses quoi, Kobi ?", true, 2.5),
+            ],
+        );
+        assert_eq!(
+            actions,
+            [
+                Interpeller,
+                Question("tu en penses quoi".into()),
+                Envoyer("Tu en penses quoi ?".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn nom_seul_juste_apres_la_question() {
+        let mut e = Ecouteur::default();
+        let actions = rejouer(
+            &mut e,
+            &[
+                ("tu en penses quoi", false, 1.0),
+                ("Tu en penses quoi ?", true, 2.0),
+                ("Kobi ?", true, 3.2),
+            ],
+        );
+        assert_eq!(
+            actions,
+            [Interpeller, Envoyer("Tu en penses quoi ?".into())]
+        );
+        // Trop loin de la phrase précédente : on attend la suivante.
+        let mut e = Ecouteur::default();
+        let actions = rejouer(
+            &mut e,
+            &[("Tu en penses quoi ?", true, 2.0), ("Kobi ?", true, 9.0)],
+        );
+        assert_eq!(actions, [Interpeller]);
+    }
+
+    #[test]
+    fn phrase_coupee_puis_nom() {
+        let mut e = Ecouteur::default();
+        let actions = rejouer(
+            &mut e,
+            &[
+                ("Est-ce que tu pourrais", true, 1.5),
+                ("Kobi me rappeler", false, 2.4),
+                ("Kobi, me rappeler l'heure du train ?", true, 3.5),
+            ],
+        );
+        assert_eq!(
+            actions,
+            [
+                Interpeller,
+                Question("Est-ce que tu pourrais me rappeler".into()),
+                Envoyer("Est-ce que tu pourrais me rappeler l'heure du train ?".into()),
+            ]
+        );
+        // « Kobi raconte », « Kobi note ça » : des ordres, pas des citations.
+        assert_eq!(
+            interpellation("Kobi note ça").map(|(a, _)| a),
+            Some(Adresse::Appel)
+        );
+        assert_eq!(
+            interpellation("Kobi raconte").map(|(a, _)| a),
+            Some(Adresse::Appel)
+        );
+    }
+
+    #[test]
+    fn citation_sans_interpellation() {
+        let mut e = Ecouteur::default();
+        let actions = rejouer(
+            &mut e,
+            &[
+                ("par rapport à ce que Cobi", false, 1.0),
+                (
+                    "Par rapport à ce que Cobi dit, on garde le plan.",
+                    true,
+                    2.5,
+                ),
+            ],
+        );
+        assert!(actions.is_empty(), "{actions:?}");
+        // Une phrase d'abord ambiguë, qui se révèle une citation : Kobi se tait.
+        let mut e = Ecouteur::default();
+        let actions = rejouer(
+            &mut e,
+            &[
+                ("normalement Kobi", false, 1.0),
+                ("Normalement Kobi a tout noté.", true, 2.0),
+            ],
+        );
+        assert_eq!(
+            actions,
+            [Interpeller, Question("normalement".into()), Abandonner]
+        );
+    }
+
+    #[test]
+    fn doute_hors_reunion_silence_en_reunion() {
+        let mut e = Ecouteur::default();
+        let actions = rejouer(&mut e, &[("Le truc Kobi pour les réunions", true, 1.0)]);
+        assert_eq!(
+            actions,
+            [
+                Interpeller,
+                EnvoyerPeutEtre("Le truc pour les réunions".into())
+            ]
+        );
+        // En réunion, un doute ne dérange personne, même quand la phrase en
+        // cours semblait l'appeler.
+        let mut e = Ecouteur::new(false);
+        let actions = rejouer(
+            &mut e,
+            &[
+                ("le truc Kobi", false, 0.5),
+                ("Le truc Kobi pour les réunions", true, 1.0),
+            ],
+        );
+        assert!(actions.is_empty(), "{actions:?}");
+        // Mais un appel, oui.
+        let actions = rejouer(&mut e, &[("Tu en penses quoi, Kobi ?", true, 5.0)]);
+        assert_eq!(
+            actions,
+            [Interpeller, Envoyer("Tu en penses quoi ?".into())]
+        );
     }
 }
