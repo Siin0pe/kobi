@@ -54,8 +54,8 @@ impl SoundServer {
     }
 }
 
-/// Interroge le serveur de son (PulseAudio ou PipeWire). Échoue s'il n'y en a pas.
-pub fn detect() -> Result<ServerInfo> {
+/// Connexion au serveur de son (PulseAudio ou PipeWire). Échoue s'il n'y en a pas.
+fn connecter() -> Result<(Mainloop, PaContext)> {
     let mut mainloop = Mainloop::new().ok_or_else(|| anyhow!("boucle PulseAudio"))?;
     let mut context =
         PaContext::new(&mainloop, "Kobi").ok_or_else(|| anyhow!("contexte PulseAudio"))?;
@@ -66,7 +66,7 @@ pub fn detect() -> Result<ServerInfo> {
     loop {
         iterate(&mut mainloop)?;
         match context.get_state() {
-            State::Ready => break,
+            State::Ready => return Ok((mainloop, context)),
             State::Failed | State::Terminated => {
                 bail!("aucun serveur PulseAudio ou PipeWire joignable")
             }
@@ -74,6 +74,19 @@ pub fn detect() -> Result<ServerInfo> {
             _ => {}
         }
     }
+}
+
+/// Attend la fin d'une requête au serveur.
+fn attendre<T: ?Sized>(mainloop: &mut Mainloop, op: &pulse::operation::Operation<T>) -> Result<()> {
+    while op.get_state() == pulse::operation::State::Running {
+        iterate(mainloop)?;
+    }
+    Ok(())
+}
+
+/// Interroge le serveur de son (PulseAudio ou PipeWire). Échoue s'il n'y en a pas.
+pub fn detect() -> Result<ServerInfo> {
+    let (mut mainloop, mut context) = connecter()?;
     let found = Arc::new(std::sync::Mutex::new(None));
     let slot = found.clone();
     let op = context.introspect().get_server_info(move |i| {
@@ -85,12 +98,47 @@ pub fn detect() -> Result<ServerInfo> {
             default_sink: i.default_sink_name.as_deref().map(str::to_string),
         });
     });
-    while op.get_state() == pulse::operation::State::Running {
-        iterate(&mut mainloop)?;
-    }
+    attendre(&mut mainloop, &op)?;
     context.disconnect();
     let info = found.lock().unwrap().take();
     info.ok_or_else(|| anyhow!("informations du serveur de son indisponibles"))
+}
+
+/// Sortie du serveur de son : `nom` désigne le sink, dont le monitor est
+/// capturé ; `description` est ce que l'utilisateur reconnaît
+/// (« Haut-parleurs intégrés », « Casque USB »).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sortie {
+    pub nom: String,
+    pub description: String,
+}
+
+/// Sorties (sinks) du serveur de son, celles qu'on peut écouter par leur
+/// monitor (KOB-193 : pas les PCM ALSA que liste cpal).
+pub fn sorties() -> Result<Vec<Sortie>> {
+    let (mut mainloop, mut context) = connecter()?;
+    let liste = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let slot = liste.clone();
+    let op = context.introspect().get_sink_info_list(move |r| {
+        if let pulse::callbacks::ListResult::Item(s) = r {
+            let Some(nom) = s.name.as_deref().filter(|n| !n.is_empty()) else {
+                return;
+            };
+            let description = s
+                .description
+                .as_deref()
+                .filter(|d| !d.trim().is_empty())
+                .unwrap_or(nom);
+            slot.lock().unwrap().push(Sortie {
+                nom: nom.to_string(),
+                description: description.to_string(),
+            });
+        }
+    });
+    attendre(&mut mainloop, &op)?;
+    context.disconnect();
+    let sorties = std::mem::take(&mut *liste.lock().unwrap());
+    Ok(sorties)
 }
 
 fn iterate(mainloop: &mut Mainloop) -> Result<()> {

@@ -79,10 +79,10 @@ function fakeTauri(o: Options): void {
               ];
             return [{ nom: 'kobi', chemin: args.dossier, branche: 'main', langage: 'Rust' }];
           case 'son_ordi':
-            return { actif: sonOrdi, sortie: null, capte: false, sorties: ['Haut-parleurs', 'Casque USB'], defaut: 'Haut-parleurs' };
+            return { actif: sonOrdi, sortie: null, capte: false, sorties: [{ nom: 'Haut-parleurs', libelle: 'Haut-parleurs' }, { nom: 'Casque USB', libelle: 'Casque USB' }], defaut: 'Haut-parleurs' };
           case 'regler_son_ordi':
             sonOrdi = Boolean(args.actif);
-            return { actif: sonOrdi, sortie: args.sortie ?? null, capte: false, sorties: ['Haut-parleurs', 'Casque USB'], defaut: 'Haut-parleurs' };
+            return { actif: sonOrdi, sortie: args.sortie ?? null, capte: false, sorties: [{ nom: 'Haut-parleurs', libelle: 'Haut-parleurs' }, { nom: 'Casque USB', libelle: 'Casque USB' }], defaut: 'Haut-parleurs' };
           case 'demarrage_systeme':
             return demarrage().actif;
           case 'regler_demarrage_systeme':

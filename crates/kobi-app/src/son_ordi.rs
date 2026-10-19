@@ -342,6 +342,14 @@ pub fn enregistrer(chemin: &Path, actif: bool, sortie: Option<&str>) -> Result<R
     Ok(Reglage::depuis(&lu.config))
 }
 
+/// Une sortie proposée : `nom` est enregistré dans le réglage, `libelle`
+/// est affiché.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SortieUi {
+    pub nom: String,
+    pub libelle: String,
+}
+
 /// Ce que montre Réglages → Son de l'ordinateur.
 #[derive(Debug, Clone, Serialize)]
 pub struct EtatSonOrdi {
@@ -349,23 +357,65 @@ pub struct EtatSonOrdi {
     pub reglage: Reglage,
     /// La piste « eux » est ouverte en ce moment (réunion en cours).
     pub capte: bool,
-    /// Sorties audio du système, capturables en loopback.
-    pub sorties: Vec<String>,
-    /// Nom de la sortie par défaut.
+    /// Sorties audio du système, capturables.
+    pub sorties: Vec<SortieUi>,
+    /// Libellé de la sortie par défaut.
     pub defaut: Option<String>,
 }
 
-fn etat_ui<R: Runtime>(app: &AppHandle<R>) -> EtatSonOrdi {
-    let (sorties, defaut) = match kobi_audio::list_devices() {
+/// Sorties capturables et libellé de celle par défaut. Sous Linux, les
+/// sinks PulseAudio ou PipeWire, dont le monitor est capturé (KOB-193) :
+/// les périphériques de cpal y sont les PCM ALSA (« Discard all samples »,
+/// « Rate Converter Plugin »…), pas des sorties.
+#[cfg(target_os = "linux")]
+fn sorties() -> (Vec<SortieUi>, Option<String>) {
+    let defaut = kobi_audio::pulse::detect()
+        .ok()
+        .and_then(|i| i.default_sink);
+    match kobi_audio::pulse::sorties() {
+        Ok(liste) => {
+            let defaut = defaut.and_then(|d| {
+                liste
+                    .iter()
+                    .find(|s| s.nom == d)
+                    .map(|s| s.description.clone())
+            });
+            let sorties = liste
+                .into_iter()
+                .map(|s| SortieUi {
+                    nom: s.nom,
+                    libelle: s.description,
+                })
+                .collect();
+            (sorties, defaut)
+        }
+        Err(_) => (Vec::new(), None),
+    }
+}
+
+/// Sorties capturables en loopback (WASAPI, CoreAudio) et celle par défaut.
+#[cfg(not(target_os = "linux"))]
+fn sorties() -> (Vec<SortieUi>, Option<String>) {
+    match kobi_audio::list_devices() {
         Ok(l) => (
-            l.outputs.iter().map(|d| d.name.clone()).collect(),
+            l.outputs
+                .iter()
+                .map(|d| SortieUi {
+                    nom: d.name.clone(),
+                    libelle: d.name.clone(),
+                })
+                .collect(),
             l.outputs
                 .iter()
                 .find(|d| d.is_default)
                 .map(|d| d.name.clone()),
         ),
         Err(_) => (Vec::new(), None),
-    };
+    }
+}
+
+fn etat_ui<R: Runtime>(app: &AppHandle<R>) -> EtatSonOrdi {
+    let (sorties, defaut) = sorties();
     EtatSonOrdi {
         reglage: reglage(app).unwrap_or(Reglage {
             actif: false,
