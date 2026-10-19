@@ -134,6 +134,8 @@ export class Ecrire {
       if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || e.key.length !== 1 || e.isComposing) return;
       const target = e.target as Element | null;
       if (target?.closest('input, textarea, select, [contenteditable], [role=menu], [role=menuitem]')) return;
+      // Espace sur un bouton ou « N étapes » : il les actionne (KOB-213).
+      if (e.key === ' ' && target?.closest('button, summary')) return;
       // La touche qui ouvre la bulle y est écrite par nous : le navigateur ne
       // la redirige pas toujours vers un champ qui vient d'apparaître et de
       // prendre le focus dans la même frappe (WebView2), elle serait avalée.

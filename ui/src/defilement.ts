@@ -37,6 +37,9 @@ export class Defilement {
     }, { passive: true });
     zone.addEventListener('pointerdown', (e) => {
       if (e.button !== 0 || zone.scrollHeight <= zone.clientHeight) return;
+      // Un bouton ou « N étapes » se clique : pas de glisser ni de capture du
+      // pointeur, qui détournaient le clic quand la main bougeait (KOB-213).
+      if ((e.target as Element | null)?.closest('button, a, summary, input, textarea, select')) return;
       this.drag = { y: e.clientY, top: zone.scrollTop };
       zone.setPointerCapture(e.pointerId);
     });

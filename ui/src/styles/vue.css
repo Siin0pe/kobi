@@ -150,10 +150,29 @@
   margin-top: 10px;
   font-size: 0.8em;
 }
+/* Toute la ligne se clique ; le survol l'éclaire sans la déplacer (KOB-213). */
 .vex-etapes summary {
+  display: block;
+  margin-left: -8px;
+  padding: 4px 8px;
+  border-radius: 8px;
   color: var(--accent);
   cursor: pointer;
   font-variation-settings: 'MONO' 1, 'wght' 600;
+}
+.vex-etapes summary::before {
+  content: '▸ ';
+}
+.vex-etapes[open] summary::before {
+  content: '▾ ';
+}
+.vex-etapes summary::-webkit-details-marker {
+  display: none;
+}
+.vex-etapes summary:hover,
+.vex-etapes summary:focus-visible {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  outline: none;
 }
 
 .reduced-motion .lecture *,
