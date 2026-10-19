@@ -78,3 +78,43 @@ synthétisée et horodatée séparément.
   garde « Kobi ».
 * Dans `mixte`, un même interlocuteur change de voix quand il change de
   langue : les voix Piper sont monolingues.
+
+# Corpus réel français (SUMM-RE)
+
+Pour mesurer le français de vraies réunions (KOB-212), `summre.py` extrait
+cinq passages d'environ 5 minutes du split `test` de
+[SUMM-RE](https://huggingface.co/datasets/linagora/SUMM-RE) : des réunions de
+3 ou 4 personnes en français spontané (hésitations, chevauchements, rires),
+enregistrées sur Zoom, à domicile, en studio et en laboratoire, avec un micro
+par participant, transcrites et alignées à la main.
+
+Licence : **CC BY-SA 4.0** ; crédit : SUMM-RE, LINAGORA et Laboratoire Parole
+et Langage (Aix-Marseille Université), projet ANR-20-CE23-0017. Le corpus
+n'est pas versionné : le script le reconstruit à l'identique depuis une
+révision épinglée du jeu.
+
+```sh
+pip install pyarrow numpy soundfile soxr fsspec aiohttp requests
+python bench/corpus/summre.py            # vers ~/Kobi-bench/corpus-reel-fr
+python bench/corpus/summre.py --out DIR --cache DIR
+```
+
+Le premier lancement télécharge environ 4 Go de fichiers parquet (pistes de
+48 kHz) et garde les pistes ré-échantillonnées à 16 kHz dans `--cache`.
+
+Même format que le corpus synthétique (`moi.wav`, `eux.wav`,
+`reference.jsonl`, `reference.txt`, `manifest.json`), avec en plus :
+
+* `moi` est le participant qui parle le plus dans l'extrait, `eux` la somme
+  des autres pistes (le son de l'ordinateur en visio) ;
+* chaque ligne de `reference.jsonl` porte `locuteur`, `text_brut` (texte
+  SUMM-RE d'origine) et `words` (mots horodatés à la main) ;
+* dans `text`, rires (`@`), inaudibles (`*`), mots coupés (`addi-`) et
+  hésitations (`euh`, `mh`…) sont retirés, `parce_que` devient `parce que` ;
+* les pistes restent brutes, bruit de fond compris : la voix des voisins
+  arrive dans chaque micro au niveau du bruit de fond, 20 à 30 dB sous la
+  parole propre (`--attenuation N` atténuerait chaque micro hors de sa
+  parole annotée).
+
+Limite : aucun passage n'interpelle « Kobi » ; le repérage du nom se mesure
+sur le corpus synthétique et les corpus du mot-clé.
