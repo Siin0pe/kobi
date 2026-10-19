@@ -10,6 +10,7 @@ test('la réponse en flux se tape sans jamais reculer', async ({ page }) => {
   const lengths: number[] = [];
   for (let i = 0; i < 25; i++) {
     lengths.push(((await text.textContent()) ?? '').length);
+    // Échantillonnage du texte toutes les 120 ms.
     await page.waitForTimeout(120);
   }
   expect(lengths[0]).toBeLessThan(10);

@@ -4,6 +4,8 @@ import { expectNoErrors, openUi } from './helpers';
 // Vidéo du menu du clic droit (KOB-139), jointe au ticket : fenêtre native
 // (410 × 280) filmée en 820 × 560.
 test.use({ viewport: { width: 410, height: 280 }, deviceScaleFactor: 2, video: { mode: 'on', size: { width: 820, height: 560 } } });
+// Vidéo pour le ticket seulement, pas en vérification (KOB-172).
+test.skip(!process.env.KOBI_PW_VIDEOS, 'vidéo des tickets : KOBI_PW_VIDEOS=1');
 
 const menu = (page: Page) => page.getByRole('menu', { name: 'Menu de Kobi' });
 const LABELS = ['Parler à Kobi', 'Écrire à Kobi', 'Enregistrer la réunion', 'Pause de l’écoute', 'Ouvrir Kobi', 'Ouvrir le Carnet', 'Réglages', 'Répondre à voix haute', 'Mode discret', 'Quitter Kobi'];

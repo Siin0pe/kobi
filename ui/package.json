@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "preview": "vite preview --port 4173 --strictPort",
     "test": "playwright test",
+    "test:pr": "node scripts/tests-pr.mjs",
     "captures": "node scripts/captures.mjs"
   },
   "devDependencies": {

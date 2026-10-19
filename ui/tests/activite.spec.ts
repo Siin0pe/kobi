@@ -194,8 +194,7 @@ test('résultat d’une tâche montré dans la bulle : pas de notification « R�
   await emit(page, 'conversation', bulle('fini', 'Dans chef.rs, ligne 910.'));
   await emit(page, 'state', { ...WORK, activite: 'repond', mascotte: 'answer' });
   await emit(page, 'answer', 'Dans chef.rs, ligne 910.');
-  await page.waitForTimeout(800);
-  await expect(page.locator('.notif')).toHaveCount(0);
   await expect(page.locator('[data-card=answer] .text')).toHaveText('Dans chef.rs, ligne 910.');
+  await expect(page.locator('.notif')).toHaveCount(0);
   await expectNoErrors(errors);
 });

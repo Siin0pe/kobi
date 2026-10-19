@@ -51,8 +51,7 @@ test('repliée, la mascotte ne coûte rien : seule la pastille peut s’animer',
   expect(running).toEqual(['dot']);
   await page.evaluate(() => window.kobi.setState('idle'));
   await page.clock.runFor(1000);
-  // Laisse finir la transition de couleur (0,3 s, horloge réelle).
-  await page.waitForTimeout(500);
-  expect(await page.evaluate(() => document.getAnimations().filter((a) => a.playState === 'running').length)).toBe(0);
+  // La transition de couleur (0,3 s, horloge réelle) se termine.
+  await expect.poll(() => page.evaluate(() => document.getAnimations().filter((a) => a.playState === 'running').length)).toBe(0);
   await expectNoErrors(errors);
 });

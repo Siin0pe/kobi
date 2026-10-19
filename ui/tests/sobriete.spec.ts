@@ -25,8 +25,7 @@ test('en mode « comme Windows », le réglage système « réduire les animatio
   await expect(page.locator('.stage')).toHaveClass(/reduced-motion/);
   for (const state of STATES) {
     await page.evaluate((s) => window.kobi.setState(s, window.kobi.demoData(s)), state);
-    await page.waitForTimeout(100);
-    expect(await running(page), state).toBe(0);
+    await expect.poll(() => running(page), { message: state }).toBe(0);
   }
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await expect(page.locator('.stage')).not.toHaveClass(/reduced-motion/);
@@ -90,6 +89,7 @@ test('après 20 s de veille, Kobi passe en sommeil profond : le mot ondule lente
   await expect(kobi).toHaveClass(/deep/);
   // Le mot vit toujours (exigence « toujours animé »), mais par paliers et lentement.
   await page.clock.runFor(1_500);
+  // Animations CSS de la police : en temps réel, hors de l'horloge simulée.
   await page.waitForTimeout(1_400);
   await expectEconomicalFont(page);
   // La respiration continue.

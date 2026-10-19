@@ -2,22 +2,35 @@
 // au clic, inertie quand la fenêtre bouge, yeux qui suivent la voix, tête de
 // frappe brouillée. Garde-fous : rien ne bouge avec « réduire les animations ».
 import { expect, test } from '@playwright/test';
-import { emit, expectNoErrors, mockTauri, openUi } from './helpers';
+import { emit, expectNoErrors, kobiPose, mockTauri, openUi } from './helpers';
 
 test('la veille a au moins 15 scènes, chacune vit puis rend la main sans laisser de symbole', async ({ page }) => {
   test.setTimeout(120_000);
   const errors = await openUi(page, 'backdrop=1');
-  await page.waitForTimeout(800);
+  await kobiPose(page);
   const names = await page.evaluate(() => (window.kobi.stage.kobi as unknown as { idleNames(): string[] }).idleNames());
   expect(names.length).toBeGreaterThanOrEqual(15);
   for (const name of names) {
-    const played = await page.evaluate((n) => (window.kobi.stage.kobi as unknown as { playIdle(n: string): boolean }).playIdle(n), name);
+    // Quelque chose bouge : un geste, un symbole, une lettre, un regard (tenus
+    // par le métronome après 20 s). Relevé dans la page dès le lancement de la
+    // scène : un regard en coin n'est qu'une transition courte, finie avant un
+    // aller-retour du test sous charge (KOB-172).
+    const { played, idle, moved } = await page.evaluate(async (n) => {
+      const kobi = document.querySelector('.kobi')!;
+      const played = (window.kobi.stage.kobi as unknown as { playIdle(n: string): boolean }).playIdle(n);
+      const idle = kobi.getAttribute('data-idle');
+      const bouge = () => kobi.getAnimations({ subtree: true }).filter((a) => !(a instanceof CSSAnimation) && (a.playState === 'running' || a.playState === 'paused')).length + kobi.querySelectorAll('.burst span').length;
+      const fin = performance.now() + 1500;
+      let moved = bouge();
+      while (moved === 0 && performance.now() < fin) {
+        await new Promise((r) => requestAnimationFrame(r));
+        moved = bouge();
+      }
+      return { played, idle, moved };
+    }, name);
     expect(played, name).toBe(true);
-    await expect(page.locator('.kobi')).toHaveAttribute('data-idle', name);
-    // Quelque chose bouge : un geste, un symbole, une lettre (tenus par le métronome après 20 s).
-    await expect
-      .poll(() => page.evaluate(() => document.querySelector('.kobi')!.getAnimations({ subtree: true }).filter((a) => !(a instanceof CSSAnimation) && (a.playState === 'running' || a.playState === 'paused')).length + document.querySelectorAll('.kobi .burst span').length), { timeout: 1500, message: name })
-      .toBeGreaterThan(0);
+    expect(idle, name).toBe(name);
+    expect(moved, name).toBeGreaterThan(0);
     // La scène se termine, les symboles sont retirés.
     await expect(page.locator('.kobi')).not.toHaveAttribute('data-idle', name, { timeout: 6000 });
     await expect.poll(() => page.locator('.kobi .burst span').count(), { timeout: 2000, message: name }).toBe(0);
@@ -26,16 +39,29 @@ test('la veille a au moins 15 scènes, chacune vit puis rend la main sans laisse
 });
 
 test('clic sur Kobi : il se fait pincer (écrasé), puis sursaute de surprise', async ({ page }) => {
+  // Gestes joués sur le calque .react, relevés dans la page : l'écrasement ne
+  // dure que 240 ms, trop peu pour être lu à coup sûr sous charge (KOB-172).
+  await page.addInitScript(() => {
+    const gestes: string[][] = [];
+    (window as unknown as { __gestes: string[][] }).__gestes = gestes;
+    const animate = Element.prototype.animate;
+    Element.prototype.animate = function (this: Element, ...args: Parameters<Element['animate']>) {
+      if (this.classList.contains('react') && Array.isArray(args[0])) gestes.push((args[0] as Keyframe[]).map((k) => String(k.transform ?? '')));
+      return animate.apply(this, args);
+    };
+  });
   const errors = await openUi(page, 'state=listen&backdrop=1');
-  await page.waitForTimeout(900);
+  await expect(page.locator('.kobi')).toHaveClass(/m-listen/);
   const box = (await page.locator('.kobi .pill').boundingBox())!;
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-  await page.waitForTimeout(700);
+  await page.evaluate(() => ((window as unknown as { __gestes: string[][] }).__gestes.length = 0));
   await page.mouse.down();
   await expect(page.locator('.kobi')).toHaveAttribute('data-pinched', '1');
   await expect(page.locator('.kobi .g').first()).toHaveText('>');
-  // Écrasé : plus large que haut.
-  await expect.poll(() => page.locator('.kobi .react').evaluate((n) => new DOMMatrix(getComputedStyle(n).transform).a)).toBeGreaterThan(1.05);
+  // Écrasé (plus large que haut), puis le sursaut part de la pose écrasée.
+  const gestes = () => page.evaluate(() => (window as unknown as { __gestes: string[][] }).__gestes);
+  await expect.poll(async () => (await gestes()).some((g) => g.includes('scale(1.2,.72)'))).toBe(true);
+  await expect.poll(async () => (await gestes()).some((g) => g.includes('translateY(-26px) scale(.88,1.16) rotate(3deg)'))).toBe(true);
   await page.mouse.up();
   await expect(page.locator('.kobi .g').first()).toHaveText('O');
   await expect(page.locator('.kobi')).not.toHaveAttribute('data-pinched', '1', { timeout: 2000 });
@@ -45,7 +71,7 @@ test('clic sur Kobi : il se fait pincer (écrasé), puis sursaute de surprise', 
 test('la fenêtre déplacée : Kobi ballotte puis revient au repos (événement tauri://move)', async ({ page }) => {
   await mockTauri(page);
   const errors = await openUi(page, 'backdrop=1');
-  await page.waitForTimeout(600);
+  await kobiPose(page);
   const drag = page.locator('.kobi .drag');
   for (let i = 0; i <= 6; i++) await emit(page, 'tauri://move', { x: 100 + i * 25, y: 300 });
   await expect.poll(() => drag.evaluate((n) => n.style.transform)).toMatch(/translate\(-\d/);
@@ -56,7 +82,7 @@ test('la fenêtre déplacée : Kobi ballotte puis revient au repos (événement 
 
 test('en écoute, les yeux grossissent avec la voix', async ({ page }) => {
   const errors = await openUi(page, 'state=listen');
-  await page.waitForTimeout(700);
+  await kobiPose(page);
   const eyes = page.locator('.kobi .eyes');
   expect(await eyes.evaluate((n) => getComputedStyle(n).scale)).toMatch(/^(none|1)$/);
   await page.evaluate(() => window.kobi.setLevel(1));
@@ -71,6 +97,7 @@ test('réduire les animations : ni scène de veille, ni pincement, ni ballotteme
   const box = (await page.locator('.kobi .pill').boundingBox())!;
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
   for (let i = 0; i <= 4; i++) await emit(page, 'tauri://move', { x: 100 + i * 40, y: 300 });
+  // Contrôle négatif : 200 ms laissés à un geste pour apparaître.
   await page.waitForTimeout(200);
   expect(await page.locator('.kobi').getAttribute('data-pinched')).toBeNull();
   expect(await page.locator('.kobi .drag').evaluate((n) => n.style.transform)).toBe('');
@@ -80,7 +107,7 @@ test('réduire les animations : ni scène de veille, ni pincement, ni ballotteme
 
 test('fenêtre masquée : aucune scène de veille ne se lance', async ({ page }) => {
   const errors = await openUi(page, '');
-  await page.waitForTimeout(500);
+  await kobiPose(page);
   await page.evaluate(() => {
     Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
     document.dispatchEvent(new Event('visibilitychange'));
@@ -99,6 +126,7 @@ test('la frappe passe par un symbole brouillé en tête, puis le texte est exact
   for (let i = 0; i < 40; i++) {
     const t = (await text.textContent()) ?? '';
     if (t.length > 0 && t.length < answer.length) heads.add(t.slice(-1));
+    // Échantillonnage de la tête de frappe toutes les 25 ms.
     await page.waitForTimeout(25);
   }
   expect([...heads].some((c) => '#%&@*?!/<>{}=+$'.includes(c))).toBe(true);
@@ -167,7 +195,7 @@ test('réunion, réglage « toujours » avec Windows réduit : REC et fiche de n
   const errors = await openUi(page, 'backdrop=1');
   await page.evaluate(() => window.kobi.recording({ actif: true, pause: false, debut_ms: Date.now(), notes: 2, titre: 'Point hebdo', derniere_note: 'Budget validé' }));
   await expect(page.locator('.stage')).not.toHaveClass(/reduced-motion/);
-  await page.waitForTimeout(700);
+  await kobiPose(page);
   const boxes = () =>
     page.evaluate(() =>
       ['.rec', '.card-notes'].map((s) => {
@@ -177,6 +205,7 @@ test('réunion, réglage « toujours » avec Windows réduit : REC et fiche de n
     );
   const first = await boxes();
   for (let i = 0; i < 8; i++) {
+    // Échantillonnage : la position est relevée toutes les 200 ms.
     await page.waitForTimeout(200);
     expect(await boxes()).toEqual(first);
   }
@@ -188,9 +217,10 @@ test('réunion, réglage « toujours » avec Windows réduit : REC et fiche de n
 
 test('fenêtre masquée pendant que le regard est tourné : le regard recentré ne tourne plus', async ({ page }) => {
   const errors = await openUi(page, 'state=listen');
-  await page.waitForTimeout(700);
+  await kobiPose(page);
   await page.mouse.move(805, 30);
   await expect.poll(() => page.locator('.kobi .gaze').evaluate((n) => n.style.transform)).toMatch(/translate\(1\d|translate\(2\d/);
+  // Voulu : le regard reste tourné un moment avant que la fenêtre soit masquée.
   await page.waitForTimeout(500);
   await page.evaluate(() => {
     Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });

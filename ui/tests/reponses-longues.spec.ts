@@ -41,9 +41,9 @@ async function answer(page: Page, text: string): Promise<void> {
   await page.evaluate((t) => window.kobi.setState('answer', { answer: t }), text);
 }
 
-/** Attend la fin de la frappe. */
+/** Attend la fin de la frappe (1 500 mots se tapent en temps réel : ~15 s au calme, davantage sur un PC chargé, KOB-172). */
 async function typed(page: Page): Promise<void> {
-  await expect(card(page)).toHaveAttribute('data-typing', '0', { timeout: 15_000 });
+  await expect(card(page)).toHaveAttribute('data-typing', '0', { timeout: 45_000 });
 }
 
 /** Rien ne sort de la fenêtre, le texte garde sa taille. */
@@ -189,6 +189,13 @@ test('fenêtre agrandie vers le côté libre : Kobi ne bouge pas, la réponse se
   const errors = await openUi(page, '');
   const pill = () => page.locator('.kobi .pill').boundingBox();
   const fromCorner = async () => {
+    // Boucles de Kobi (respiration…) ramenées à leur première image : la mesure
+    // ne dépend plus de la phase où elle tombe (KOB-172).
+    await page.evaluate(() => {
+      for (const a of document.querySelector('.kobi')!.getAnimations({ subtree: true })) {
+        if (a.effect?.getTiming().iterations === Infinity) a.currentTime = 0;
+      }
+    });
     const b = (await pill())!;
     const vp = page.viewportSize()!;
     return { right: Math.round(vp.width - (b.x + b.width)), bottom: Math.round(vp.height - (b.y + b.height)), w: Math.round(b.width) };

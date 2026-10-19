@@ -1,4 +1,4 @@
-import { expect, type Page } from '@playwright/test';
+import { expect, type Locator, type Page } from '@playwright/test';
 
 /** Ouvre l'interface et échoue au moindre message d'erreur dans la console. */
 export async function openUi(page: Page, query: string): Promise<string[]> {
@@ -84,4 +84,23 @@ export function calls(page: Page): Promise<Calls> {
 /** Émet un événement de la coque simulée. */
 export async function emit(page: Page, event: string, payload: unknown): Promise<void> {
   await page.evaluate(([event, payload]) => (window as unknown as { __emit(e: string, p: unknown): void }).__emit(event as string, payload), [event, payload] as const);
+}
+
+/**
+ * Kobi posé (KOB-172) : la classe de l'état affiché est en place et plus aucun
+ * geste, morphing des yeux ni inertie ne tourne. Remplace les attentes fixes
+ * après l'ouverture ou un changement d'état, qui ne suffisaient pas sous charge.
+ */
+export async function kobiPose(page: Page): Promise<void> {
+  await page.waitForFunction(() => {
+    const kobi = document.querySelector('.kobi');
+    const state = kobi?.getAttribute('data-state');
+    if (!kobi || !state || !kobi.classList.contains(`m-${state}`)) return false;
+    return ![...kobi.querySelectorAll('.react, .inertia, .eyes')].some((l) => l.getAnimations().some((a) => !(a instanceof CSSAnimation) && a.playState === 'running'));
+  });
+}
+
+/** Plus aucune animation qui tourne sur l'élément (et ses enfants si `subtree`) : il a fini d'arriver. */
+export async function sansAnimation(locator: Locator, subtree = false): Promise<void> {
+  await expect.poll(() => locator.evaluate((n, s) => n.getAnimations({ subtree: s }).filter((a) => a.playState === 'running').length, subtree)).toBe(0);
 }

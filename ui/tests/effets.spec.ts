@@ -14,6 +14,7 @@ async function boxes(page: Page, sel: string): Promise<unknown[]> {
   const out = [];
   for (let i = 0; i < 5; i++) {
     out.push(await page.locator(sel).first().boundingBox());
+    // Échantillonnage : la position est relevée toutes les 200 ms.
     await page.waitForTimeout(200);
   }
   return out;
@@ -78,7 +79,9 @@ test('REC : les chiffres roulent, le texte reste « 12:34 », le point pulse, l�
   await page.clock.runFor(1_000);
   await expect(time).toHaveText('12:35');
   const rolling = await time.locator('.chiffre').evaluateAll((spans) => spans.map((s) => s.getAnimations().length));
-  expect(rolling).toEqual([0, 0, 0, 0, 1]);
+  // Sous charge, le roulement précédent peut ne pas être fini (KOB-172).
+  expect(rolling.slice(0, 4)).toEqual([0, 0, 0, 0]);
+  expect(rolling[4]).toBeGreaterThanOrEqual(1);
   // Le point pulse (onde), l'étiquette elle-même ne bouge pas.
   expect(await page.locator('.rec-dot').evaluate((n) => n.getAnimations({ subtree: true }).map((a) => (a as CSSAnimation).animationName))).toContain('rec-onde');
   expect(await page.locator('.rec').evaluate((n) => n.getAnimations().length)).toBe(0);

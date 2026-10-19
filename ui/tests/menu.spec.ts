@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { expectNoErrors, openUi } from './helpers';
+import { expectNoErrors, openUi, sansAnimation } from './helpers';
 
 // Menu du clic droit (KOB-139), à la taille de la fenêtre native (410 × 280).
 test.use({ viewport: { width: 410, height: 280 } });
@@ -33,7 +33,7 @@ test('clic droit sur Kobi : le menu de Kobi, pas celui du navigateur', async ({ 
   expect(await labels(page)).toEqual(LABELS);
   await expect(menu(page).getByRole('menuitem').first()).toBeFocused();
   // Le menu tient dans la fenêtre, une fois posé.
-  await page.waitForTimeout(450);
+  await sansAnimation(menu(page), true);
   const box = (await menu(page).boundingBox())!;
   expect(box.x).toBeGreaterThanOrEqual(0);
   expect(box.y).toBeGreaterThanOrEqual(0);
@@ -50,7 +50,7 @@ test('clic droit sur Kobi : le menu de Kobi, pas celui du navigateur', async ({ 
 test('clic droit près du bord : le menu reste dans la fenêtre', async ({ page }) => {
   const errors = await openUi(page, '');
   await page.mouse.click(405, 275, { button: 'right' });
-  await page.waitForTimeout(450);
+  await sansAnimation(menu(page), true);
   const box = (await menu(page).boundingBox())!;
   expect(box.x + box.width).toBeLessThanOrEqual(410);
   expect(box.y + box.height).toBeLessThanOrEqual(280);
@@ -191,7 +191,7 @@ test('quitter pendant une réunion demande confirmation', async ({ page }) => {
   const dialog = page.getByRole('alertdialog', { name: 'Une réunion est en cours.' });
   await expect(dialog).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'Annuler' })).toBeFocused();
-  await page.waitForTimeout(400);
+  await sansAnimation(dialog);
   // Centrée dans la fenêtre, entière.
   const box = (await dialog.boundingBox())!;
   expect(Math.abs(box.x + box.width / 2 - 205)).toBeLessThan(3);
