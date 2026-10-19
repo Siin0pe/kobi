@@ -311,6 +311,9 @@ pub struct Chef<R: Runtime> {
     /// Tour d'une telle question : sa réponse n'est montrée qu'une fois
     /// finie, et une réponse « rien » le laisse silencieux (KOB-168).
     tour_peut_etre: Option<u64>,
+    /// Compte rendu remis à l'écrivain, pas encore sur le disque : quitter
+    /// l'attend encore (KOB-226).
+    compte_rendu_a_ecrire: bool,
 }
 
 /// Consigne jointe à une phrase qui cite Kobi sans lui parler à coup sûr
@@ -498,6 +501,7 @@ impl<R: Runtime> Chef<R> {
             validations: Default::default(),
             peut_etre: false,
             tour_peut_etre: None,
+            compte_rendu_a_ecrire: false,
         }
     }
 
@@ -851,6 +855,14 @@ impl<R: Runtime> Chef<R> {
             crate::voix::dire(&self.app, &reponse);
         }
         reponse
+    }
+
+    /// Une réunion est-elle ouverte ? Reste vrai pendant que le compte rendu
+    /// s'écrit, jusqu'à ce qu'il soit sur le disque, quand
+    /// [`Chef::enregistrement`] annonce déjà REC éteint (KOB-166) : quitter
+    /// attend alors le compte rendu (KOB-226).
+    pub fn reunion_ouverte(&self) -> bool {
+        self.reunion.is_some() || self.compte_rendu_a_ecrire
     }
 
     /// Un arrêt de la réunion peut-il encore s'annuler ?
@@ -1470,6 +1482,7 @@ impl<R: Runtime> Chef<R> {
                 format!("# Compte rendu\n\nLe compte rendu n'a pas pu être écrit ({e}).\n\n## Notes\n\n{}", r.notes)
             }
         };
+        self.compte_rendu_a_ecrire = true;
         self.ecrivain
             .terminer_reunion(texte, r.notes, maintenant_ms());
         self.transition(&[Evenement::CompteRenduEcrit]);
@@ -1510,6 +1523,7 @@ impl<R: Runtime> Chef<R> {
                 let _ = self.app.emit(EVENEMENT_NOTES, charge);
             }
             Nouvelle::CompteRenduEcrit(chemin) => {
+                self.compte_rendu_a_ecrire = false;
                 tracing::info!(fichier = %chemin.display(), "compte rendu écrit");
                 let reunion = chemin
                     .parent()
@@ -1535,6 +1549,9 @@ impl<R: Runtime> Chef<R> {
                 });
             }
             Nouvelle::Erreur(message) => {
+                // Dont un compte rendu qui n'a pas pu être rangé : plus rien
+                // à attendre pour quitter.
+                self.compte_rendu_a_ecrire = false;
                 tracing::warn!(%message, "écriture sur le disque");
                 self.erreur("Enregistrement sur le disque", &message);
             }

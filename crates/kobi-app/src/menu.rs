@@ -181,6 +181,20 @@ fn en_reunion<R: Runtime>(app: &AppHandle<R>) -> bool {
     reunion(app).is_some()
 }
 
+/// Réunion ouverte, compte rendu en cours d'écriture compris : quitter doit
+/// alors l'attendre. REC (`en_reunion`) s'éteint dès la fin demandée
+/// (KOB-166), avant que le compte rendu soit écrit (KOB-226).
+fn reunion_ouverte<R: Runtime>(app: &AppHandle<R>) -> bool {
+    match app.try_state::<ChefPartage<R>>() {
+        Some(chef) => chef
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .reunion_ouverte(),
+        None => en_reunion(app),
+    }
+}
+
 /// Termine la réunion par le chef (fichiers de la réunion fermés).
 fn terminer<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     par_le_chef(
@@ -295,18 +309,18 @@ pub fn appliquer_entree<R: Runtime>(app: &AppHandle<R>, entree: Entree) -> Resul
             }
             Ok(Effet::Fait)
         }
-        Entree::Quitter if en_reunion(app) => {
+        Entree::Quitter if reunion_ouverte(app) => {
             montrer(app);
             Ok(Effet::Confirmer)
         }
         Entree::Quitter => Ok(Effet::Fermer),
         Entree::QuitterConfirme => {
-            if !en_reunion(app) {
+            if !reunion_ouverte(app) {
                 return Ok(Effet::Fermer);
             }
             terminer(app)?;
             // Le chef écrit le compte rendu en arrière-plan (Claude).
-            Ok(if en_reunion(app) {
+            Ok(if reunion_ouverte(app) {
                 Effet::FermerApresCompteRendu
             } else {
                 Effet::Fermer
@@ -331,12 +345,12 @@ pub fn executer<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<(), String> 
             let app = app.clone();
             std::thread::spawn(move || {
                 let debut = std::time::Instant::now();
-                while en_reunion(&app) && debut.elapsed() < ATTENTE_COMPTE_RENDU {
+                while reunion_ouverte(&app) && debut.elapsed() < ATTENTE_COMPTE_RENDU {
                     std::thread::sleep(std::time::Duration::from_millis(200));
                 }
                 tracing::info!(
                     ms = debut.elapsed().as_millis() as u64,
-                    compte_rendu = !en_reunion(&app),
+                    compte_rendu = !reunion_ouverte(&app),
                     "quitter"
                 );
                 app.exit(0);
@@ -511,6 +525,37 @@ mod tests {
             etat(h).etat,
             "veille",
             "la réunion est arrêtée avant de quitter"
+        );
+    }
+
+    /// KOB-226 : avec le chef, REC s'éteint dès la fin demandée (KOB-166),
+    /// mais la réunion reste ouverte le temps du compte rendu : quitter
+    /// l'attend au lieu de fermer tout de suite.
+    #[test]
+    fn quitter_attend_le_compte_rendu_du_chef() {
+        let app = app();
+        let h = app.handle();
+        let dir = tempfile::tempdir().unwrap();
+        app.manage(crate::stockage::StockagePartage::new(
+            Some(kobi_session::stockage::Stockage::new(dir.path())),
+            None,
+        ));
+        // Claude ne répond jamais : le compte rendu reste en cours d'écriture.
+        let fabrique: crate::cerveau::Fabrique = Arc::new(|_role| Box::pin(std::future::pending()));
+        crate::chef::installer(h, fabrique, 3);
+        appliquer_entree(h, Entree::Enregistrer).unwrap();
+        assert!(reunion_ouverte(h));
+        assert_eq!(appliquer_entree(h, Entree::Quitter), Ok(Effet::Confirmer));
+        assert_eq!(
+            appliquer_entree(h, Entree::QuitterConfirme),
+            Ok(Effet::FermerApresCompteRendu)
+        );
+        assert!(!en_reunion(h), "REC éteint dès la fin demandée");
+        // Compte rendu toujours en cours : quitter redemande, puis attend.
+        assert_eq!(appliquer_entree(h, Entree::Quitter), Ok(Effet::Confirmer));
+        assert_eq!(
+            appliquer_entree(h, Entree::QuitterConfirme),
+            Ok(Effet::FermerApresCompteRendu)
         );
     }
 
