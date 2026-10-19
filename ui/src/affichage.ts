@@ -12,6 +12,8 @@ export type Auto = 'jamais' | 'longues' | 'toujours';
 export type Taille = 'petite' | 'moyenne' | 'grande';
 export type Position = 'a-cote' | 'centre' | 'moitie-droite';
 export type Texte = 'petit' | 'moyen' | 'grand';
+/** Mot d'état sous Kobi (KOB-204) : affiché quand il informe, ou jamais. */
+export type Etat = 'texte' | 'aucun';
 
 export interface Affichage {
   mode: Mode;
@@ -21,11 +23,13 @@ export interface Affichage {
   texte: Texte;
   /** Secondes avant que la vue se range une fois la réponse finie ; 0 : jamais seule. */
   delai: number;
+  /** « Afficher l'état en texte » (KOB-204). */
+  etat: Etat;
 }
 
 export const CLE_AFFICHAGE = 'kobi.affichage';
 
-export const PAR_DEFAUT: Affichage = { mode: 'simple', auto: 'jamais', taille: 'moyenne', position: 'a-cote', texte: 'moyen', delai: 30 };
+export const PAR_DEFAUT: Affichage = { mode: 'simple', auto: 'jamais', taille: 'moyenne', position: 'a-cote', texte: 'moyen', delai: 30, etat: 'texte' };
 
 /** Valeurs permises de chaque réglage, dans l'ordre des choix. */
 export const VALEURS = {
@@ -35,6 +39,7 @@ export const VALEURS = {
   position: ['a-cote', 'centre', 'moitie-droite'],
   texte: ['petit', 'moyen', 'grand'],
   delai: [10, 30, 60, 0],
+  etat: ['texte', 'aucun'],
 } as const;
 
 /** Taille du panneau (px logiques) et du texte (px). */

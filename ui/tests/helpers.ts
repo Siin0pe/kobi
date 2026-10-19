@@ -18,24 +18,21 @@ export async function expectNoErrors(errors: string[]): Promise<void> {
 }
 
 /**
- * Repos économe : le mot ondule encore (il n'est jamais figé), mais
- * lentement, et ses boucles (les deux couches de graisse, KOB-200) sont
- * tenues par le métronome de la scène (econome.ts) au lieu de produire leurs
- * propres images.
+ * Repos économe : Kobi vit encore (il n'est jamais figé), mais ses boucles
+ * (respiration, griffonnage…) sont tenues par le métronome de la scène
+ * (econome.ts) au lieu de produire leurs propres images. Au repos, plus de
+ * mot sous la tête (KOB-204) : c'est la pilule qui vit.
  */
-export async function expectEconomicalFont(page: Page): Promise<void> {
-  const fonts = await page.evaluate(() =>
+export async function expectEconomicalLoops(page: Page): Promise<void> {
+  const loops = await page.evaluate(() =>
     document
-      .getAnimations()
-      .filter((a) => a instanceof CSSAnimation && (a.animationName === 'kobi-fin' || a.animationName === 'kobi-gras'))
-      .filter((a) => a.playState !== 'finished' && a.playState !== 'idle')
-      .map((a) => ({ state: a.playState, duration: Number((a.effect as KeyframeEffect).getTiming().duration) })),
+      .querySelector('.kobi')!
+      .getAnimations({ subtree: true })
+      .filter((a) => a instanceof CSSAnimation && a.effect?.getTiming().iterations === Infinity)
+      .map((a) => ({ name: (a as CSSAnimation).animationName, state: a.playState })),
   );
-  expect(fonts.length).toBeGreaterThan(0);
-  for (const f of fonts) {
-    expect(f.duration).toBeGreaterThanOrEqual(4000);
-    expect(f.state).toBe('paused');
-  }
+  expect(loops.length).toBeGreaterThan(0);
+  for (const l of loops) expect(l.state, l.name).toBe('paused');
 }
 
 /** Commandes reçues par la coque simulée : `[nom, arguments]`. */

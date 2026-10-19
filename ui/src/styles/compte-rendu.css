@@ -1,5 +1,5 @@
 /* Compte rendu de fin de réunion (KOB-74) : carte « Compte rendu prêt »,
-   repliée en pastille au-dessus du champ. Aux couleurs de Kobi.
+   repliée en badge sur la tête de Kobi (KOB-204). Aux couleurs de Kobi.
    Toujours animé, jamais l'élément cliquable lui-même. */
 
 .card-rapport {
@@ -21,19 +21,19 @@
   animation: deal 0.35s cubic-bezier(0.3, 1.4, 0.5, 1) both;
 }
 .card-rapport[hidden],
-.rapport-pastille[hidden] {
+.rapport-badge[hidden] {
   display: none;
 }
 /* Sobriété (règle du propriétaire) : en plus de Kobi et de sa bulle, une
    seule chose à la fois. La carte passe devant : bulles et notifications
-   attendent. La pastille repliée s'efface tant qu'une notification ou
+   attendent. Le badge replié s’efface tant qu’une notification ou
    l'historique est à l'écran. */
 .rapport-open .bubbles .card,
 .rapport-open .notifs {
   visibility: hidden;
 }
-.stage:has(.notifs .notif:not(.leaving)) .rapport-pastille,
-.history-open .rapport-pastille {
+.stage:has(.notifs .notif:not(.leaving)) .rapport-badge,
+.history-open .rapport-badge {
   display: none;
 }
 .card-rapport .kicker {
@@ -104,7 +104,7 @@
   color: var(--accent);
 }
 .card-rapport .btn:focus-visible,
-.rapport-pastille:focus-visible {
+.rapport-badge:focus-visible {
   outline: 3px solid var(--accent);
   outline-offset: 2px;
 }
@@ -126,44 +126,58 @@
   animation: btn-halo 2.4s ease-out infinite;
 }
 
-/* Repliée : une pastille au-dessus du champ, qui ouvre le compte rendu. */
-.rapport-pastille {
+/* Repliée (KOB-204) : un badge accroché en haut à droite de la tête de Kobi,
+   comme celui d'une notification d'appli (il bouge avec lui). Une feuille
+   sur une pastille vert acide ; au survol ou au clavier, il se déploie en
+   « Compte rendu prêt · ouvrir ». */
+.rapport-badge {
   position: absolute;
-  left: 40px;
-  top: 428px;
-  z-index: 7;
+  right: -10px;
+  top: -14px;
+  z-index: 4;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 14px 6px 6px;
+  gap: 0;
+  height: 40px;
+  padding: 0 9px;
   border-radius: 999px;
-  border: 2.5px solid var(--ink);
-  background: var(--ink);
-  color: var(--paper);
-  box-shadow: 4px 4px 0 var(--accent);
-  font: 750 14px var(--font);
-  cursor: pointer;
-  animation: notif-in 0.4s cubic-bezier(0.3, 1.4, 0.5, 1) both;
-}
-.rapport-icone {
-  display: inline-flex;
-  justify-content: center;
-  align-items: center;
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
+  border: 3px solid var(--ink);
   background: var(--accent);
   color: var(--ink);
-  font-size: 14px;
-  font-variation-settings: 'MONO' 1, 'wght' 900;
-  animation: notif-pop 2.2s ease-in-out infinite;
+  box-shadow: 3px 3px 0 var(--ink);
+  font: 800 15px var(--font);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: gap 0.2s ease-out;
+}
+/* Une feuille : un rectangle blanc cerné, deux lignes de texte. */
+.rapport-badge-icone {
+  flex: none;
+  width: 14px;
+  height: 18px;
+  border: 2.5px solid var(--ink);
+  border-radius: 2px;
+  background: linear-gradient(var(--ink) 0 0) 3px 5px / 6px 2px no-repeat, linear-gradient(var(--ink) 0 0) 3px 10px / 6px 2px no-repeat, #fff;
+}
+.rapport-badge-texte {
+  max-width: 0;
+  overflow: hidden;
+  transition: max-width 0.25s ease-out;
+}
+.rapport-badge:hover,
+.rapport-badge:focus-visible {
+  gap: 8px;
+}
+.rapport-badge:hover .rapport-badge-texte,
+.rapport-badge:focus-visible .rapport-badge-texte {
+  max-width: 240px;
 }
 
 /* Réduire les animations : tout est posé. */
 .reduced-motion .card-rapport,
 .reduced-motion .card-rapport *,
 .reduced-motion .card-rapport *::after,
-.reduced-motion .rapport-pastille,
-.reduced-motion .rapport-pastille * {
+.reduced-motion .rapport-badge,
+.reduced-motion .rapport-badge * {
   animation: none !important;
 }

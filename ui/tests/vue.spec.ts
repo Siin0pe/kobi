@@ -218,8 +218,10 @@ test('panneau « Affichage » de la section Réglages de l’app : chaque choix 
   await groupe('Place de la vue').getByRole('radio', { name: /Moitié droite/ }).click();
   await groupe('Taille du texte').getByRole('radio', { name: /Petit/ }).click();
   await groupe('Ranger la vue').getByRole('radio', { name: /Jamais/ }).click();
+  await expect(groupe('Afficher l’état en texte').getByRole('radio', { name: /Oui/ })).toHaveAttribute('aria-checked', 'true');
+  await groupe('Afficher l’état en texte').getByRole('radio', { name: /Non/ }).click();
   const r = await page.evaluate(() => JSON.parse(localStorage.getItem('kobi.affichage') ?? '{}'));
-  expect(r).toEqual({ v: 2, mode: 'detaille', auto: 'toujours', taille: 'grande', position: 'moitie-droite', texte: 'petit', delai: 0 });
+  expect(r).toEqual({ v: 2, mode: 'detaille', auto: 'toujours', taille: 'grande', position: 'moitie-droite', texte: 'petit', delai: 0, etat: 'aucun' });
   await page.screenshot({ path: test.info().outputPath('reglages-affichage.png') });
 });
 

@@ -32,7 +32,7 @@ async function images(page: Page, ms: number): Promise<number> {
     w.suivie = document
       .querySelector('.stage')!
       .getAnimations({ subtree: true })
-      .find((a) => a instanceof CSSAnimation && a.animationName === 'kobi-bob');
+      .find((a) => a instanceof CSSAnimation && a.animationName === 'kobi-breathe');
   });
   const releve = () => page.evaluate(() => [Number((window as unknown as { suivie: Animation }).suivie.currentTime), performance.now()]);
   let [avant, debut] = await releve();
@@ -65,18 +65,20 @@ test('par défaut, 60 images/s : rien n’est tenu, même au sommeil profond', a
   // Plus de repos économe par défaut : le navigateur anime tout lui-même.
   await expect(stage).not.toHaveClass(/econome/);
   await expect(stage).toHaveAttribute('data-fps', '0');
+  // (Plus de mot au repos, KOB-204 : la respiration et l'œil vivent.)
   const etats = await boucles(page);
-  expect(etats.length).toBeGreaterThan(5);
+  expect(etats.length).toBeGreaterThan(1);
   expect(etats.filter((s) => s === 'paused')).toEqual([]);
   await expectNoErrors(errors);
 });
 
-test('au repos, le mot ondule sans aucune graisse animée (ni mise en page par image)', async ({ page }) => {
-  const errors = await openUi(page, '');
+test('quand il s’affiche, le mot ondule sans aucune graisse animée (ni mise en page par image)', async ({ page }) => {
+  const errors = await openUi(page, 'state=think');
   await page.waitForTimeout(1_000);
   const graisses = await page.evaluate(() =>
     document
-      .getAnimations()
+      .querySelector('.kobi .word')!
+      .getAnimations({ subtree: true })
       .filter((a) => a.playState === 'running')
       .filter((a) => (a.effect as KeyframeEffect).getKeyframes().some((k) => 'fontVariationSettings' in k || 'fontWeight' in k))
       .map((a) => (a as CSSAnimation).animationName ?? 'WAAPI'),
