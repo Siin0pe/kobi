@@ -39,7 +39,7 @@ const THREADS_STT: i32 = 2;
 /// de mots 10 % → 4 %).
 const BLANK_PENALTY: f32 = 2.0;
 /// Modèle des interpellations (KOB-30, KOB-123 : ~1 s au premier mot).
-const MODELE_CLAUDE: &str = "haiku";
+pub(crate) const MODELE_CLAUDE: &str = "haiku";
 
 #[derive(Debug, Clone, Serialize)]
 struct ErreurUi {

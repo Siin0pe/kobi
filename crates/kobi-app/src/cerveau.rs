@@ -781,11 +781,17 @@ async fn finir_relance(
     finir(turn, String::new(), reprise, sortie, cartes).await;
 }
 
-/// Chaque outil appelé est journalisé : seuls Read, Grep, Glob (KOB-138)
-/// et les outils MCP (KOB-155) doivent apparaître.
+/// Chaque outil appelé est journalisé : seuls Read, Grep, Glob (KOB-138),
+/// le pilotage de la réunion (KOB-165) et les outils MCP (KOB-155) doivent
+/// apparaître.
 fn journaliser_outil(outil: &str) {
     if crate::lecture::permis(outil) {
         tracing::info!(%outil, "outil de lecture");
+    } else if kobi_ctl::mcp::outils_de_reunion(crate::mcp_config::SERVEUR_KOBI)
+        .iter()
+        .any(|o| o == outil)
+    {
+        tracing::info!(%outil, "pilotage de la réunion par Claude");
     } else if outil.starts_with("mcp__") {
         tracing::info!(%outil, "outil MCP");
     } else if !OUTILS_INTERNES.contains(&outil) {

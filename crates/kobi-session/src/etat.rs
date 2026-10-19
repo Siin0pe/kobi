@@ -216,6 +216,9 @@ impl Etat {
             (Pause, E::TerminerReunion) => Some(Fin),
 
             (Fin, E::CompteRenduEcrit) => Some(Veille),
+            // « Reprends » juste après un arrêt à la voix (KOB-165) : la
+            // même réunion continue.
+            (Fin, E::Reprendre) => Some(Reunion(A::Calme)),
 
             _ => None,
         };
@@ -329,6 +332,7 @@ mod tests {
             (Pause, E::Reprendre, Reunion(A::Calme)),
             (Pause, E::TerminerReunion, Fin),
             (Fin, E::CompteRenduEcrit, Veille),
+            (Fin, E::Reprendre, Reunion(A::Calme)),
             (Veille, E::Interpellation, Assistant(A::Ecoute)),
             (Veille, E::TacheLongue, Assistant(A::Occupe)),
             (Reunion(A::Calme), E::Interpellation, Reunion(A::Ecoute)),

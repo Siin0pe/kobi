@@ -293,6 +293,16 @@ impl PartialEq for Commande {
     }
 }
 
+/// Commandes de réunion que l'agent de Kobi lance sans validation (KOB-165,
+/// exception à KOB-156) : c'est lui qui démarre et arrête l'enregistrement
+/// d'après ce qu'il entend ; Kobi l'annonce et un arrêt s'annule 30 s.
+pub const PILOTAGE_REUNION: &[&str] = &[
+    "meeting.start",
+    "meeting.stop",
+    "meeting.pause",
+    "meeting.resume",
+];
+
 pub fn trouver(nom: &str) -> Option<&'static Commande> {
     COMMANDES.iter().find(|c| c.nom == nom)
 }
@@ -303,6 +313,11 @@ pub fn par_outil(outil: &str) -> Option<&'static Commande> {
 }
 
 impl Commande {
+    /// L'agent de Kobi la lance-t-il sans validation ([`PILOTAGE_REUNION`]) ?
+    pub fn pilote_la_reunion(&self) -> bool {
+        PILOTAGE_REUNION.contains(&self.nom)
+    }
+
     /// Mots de la CLI (`meeting start`).
     pub fn mots(&self) -> String {
         self.nom.replace('.', " ")

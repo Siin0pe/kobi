@@ -18,6 +18,8 @@ mod depots;
 mod diag;
 mod ecoute;
 mod ecrivain;
+#[cfg(test)]
+mod essai_pilotage;
 mod intentions;
 mod interpellation;
 mod lecture;

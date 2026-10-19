@@ -85,15 +85,6 @@ pub fn gestionnaire<R: Runtime>(app: AppHandle<R>) -> kobi_ctl::serveur::Gestion
     })
 }
 
-/// Commandes de réunion que l'agent lance sans carte : Kobi annonce l'action
-/// et l'utilisateur peut l'annuler (décision du propriétaire, KOB-165).
-const REUNION_SANS_CARTE: &[&str] = &[
-    "meeting.start",
-    "meeting.stop",
-    "meeting.pause",
-    "meeting.resume",
-];
-
 /// Peut-on exécuter ? La CLI et un MCP branché par l'utilisateur passent
 /// toujours. L'agent de Kobi passe seul pour lire, afficher et mener la
 /// réunion ; ce qui écrit attend un « oui » de l'utilisateur (KOB-156).
@@ -107,7 +98,9 @@ fn autoriser<R: Runtime>(
         (Origine::Cli | Origine::Mcp, _) | (Origine::Agent, Effet::Lecture | Effet::Affichage) => {
             return Ok(())
         }
-        _ if REUNION_SANS_CARTE.contains(&commande.nom) => return Ok(()),
+        // La réunion, sans carte : Kobi annonce l'action et l'utilisateur peut
+        // l'annuler (décision du propriétaire, KOB-165).
+        _ if commande.pilote_la_reunion() => return Ok(()),
         _ => {}
     }
     let reglage = commande.nom.starts_with("config.");
@@ -263,10 +256,10 @@ pub fn executer<R: Runtime>(
                 .ok_or_else(|| erreur(Code::Conflict, "aucun changement de réglage à annuler"))?;
             regler(app, &cle, avant).map(|(_, r)| r)
         }
-        "meeting.start" => reunion(app, Intention::DemarrerReunion),
-        "meeting.stop" => reunion(app, Intention::TerminerReunion),
-        "meeting.pause" => reunion(app, Intention::Pause),
-        "meeting.resume" => reunion(app, Intention::Reprendre),
+        "meeting.start" => reunion(app, Intention::DemarrerReunion, origine),
+        "meeting.stop" => reunion(app, Intention::TerminerReunion, origine),
+        "meeting.pause" => reunion(app, Intention::Pause, origine),
+        "meeting.resume" => reunion(app, Intention::Reprendre, origine),
         "meeting.status" => en_json(etat_reunion(app)),
         "meetings.list" => {
             let mut l = stockage(app)?.reunions().map_err(io)?;
@@ -526,9 +519,23 @@ fn ouvrir_section<R: Runtime>(
 
 // ----- Réunion -----
 
-fn reunion<R: Runtime>(app: &AppHandle<R>, intention: Intention) -> Result<Value, Erreur> {
+/// Ordre de réunion. Venant de l'agent de Kobi (Claude, KOB-165), c'est un
+/// pilotage : un arrêt s'annule pendant 30 s, et Claude l'annonce lui-même.
+fn reunion<R: Runtime>(
+    app: &AppHandle<R>,
+    intention: Intention,
+    origine: Origine,
+) -> Result<Value, Erreur> {
+    let chef = app.try_state::<ChefPartage<R>>();
+    let annulable = chef.as_ref().is_some_and(|c| {
+        c.0.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .fin_annulable()
+    });
     let e = enregistrement(app);
     let refus = match intention {
+        // « Reprends » juste après un arrêt : la même réunion continue.
+        Intention::Reprendre if annulable => None,
         Intention::DemarrerReunion if e.actif => Some("J'enregistre déjà la réunion."),
         Intention::TerminerReunion | Intention::Pause | Intention::Reprendre if !e.actif => {
             Some("Aucune réunion en cours.")
@@ -540,12 +547,14 @@ fn reunion<R: Runtime>(app: &AppHandle<R>, intention: Intention) -> Result<Value
     if let Some(r) = refus {
         return Err(erreur(Code::Conflict, r));
     }
-    let message = match app.try_state::<ChefPartage<R>>() {
-        Some(chef) => chef
-            .0
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .commande(intention),
+    let message = match chef {
+        Some(chef) => {
+            let mut chef = chef.0.lock().unwrap_or_else(|e| e.into_inner());
+            match origine {
+                Origine::Agent => chef.piloter(intention, false),
+                _ => chef.commande(intention),
+            }
+        }
         None => {
             let evenements: &[Evenement] = match intention {
                 Intention::DemarrerReunion => &[Evenement::DemarrerReunion],
@@ -1090,6 +1099,23 @@ mod tests {
         assert_eq!(
             cli(&e, "status", json!({})).unwrap()["fenetre"]["discret"],
             true
+        );
+    }
+
+    /// KOB-165 : l'agent de Kobi pilote la réunion sans validation.
+    #[test]
+    fn l_agent_pilote_la_reunion() {
+        let e = essai();
+        let agent = |nom| lancer(&e, nom, json!({}), Origine::Agent);
+        assert_eq!(agent("meeting.start").unwrap()["reunion"]["actif"], true);
+        agent("meeting.pause").unwrap();
+        assert_eq!(cli(&e, "status", json!({})).unwrap()["etat"], "pause");
+        agent("meeting.resume").unwrap();
+        agent("meeting.stop").unwrap();
+        assert_eq!(
+            agent("meeting.stop").unwrap_err().code,
+            Code::Conflict,
+            "plus de réunion à arrêter"
         );
     }
 
