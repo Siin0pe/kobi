@@ -175,8 +175,10 @@ test('Kobi se présente, puis le parcours complet mène à « C’est parti »',
   expect(await appels(page)).toContainEqual(['set_codebases', { dossiers: ['/home/neuf/code/kobi'] }]);
   expect(await appels(page)).toContainEqual(['choisir_dossier', { titre: 'Dossier de code à lire' }]);
   await page.getByRole('button', { name: 'Suivant' }).click();
-  // 5. Outils MCP (facultatif) : import depuis Claude Code en un clic.
+  // 5. Outils MCP (facultatif) : rien de coché d'office (KOB-239), on choisit linear.
   await expect(etape(page, 'outils')).toHaveAttribute('data-statut', 'attente');
+  await expect(page.getByRole('button', { name: 'Importer', exact: true })).toBeDisabled();
+  await page.locator('.mcp-candidat input[data-nom="linear"]').check();
   await page.getByRole('button', { name: 'Importer 1 serveur' }).click();
   expect(await appels(page)).toContainEqual(['mcp_importer', { noms: ['linear'] }]);
   await expect(etape(page, 'outils')).toHaveAttribute('data-statut', 'ok');

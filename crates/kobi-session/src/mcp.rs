@@ -125,6 +125,14 @@ impl Serveur {
 pub struct McpConfig {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub serveurs: BTreeMap<String, Serveur>,
+    /// Serveurs importés de Claude Code revus (KOB-239) : ceux importés
+    /// avant, tous cochés d'office, ont été désactivés une fois pour toutes.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub import_revu: bool,
+    /// Des serveurs ont été désactivés par cette revue : l'app propose une
+    /// fois, discrètement, de choisir ceux à garder.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub choix_a_proposer: bool,
     #[serde(flatten)]
     pub extra: toml::Table,
 }

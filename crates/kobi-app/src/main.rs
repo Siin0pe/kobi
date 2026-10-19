@@ -203,6 +203,11 @@ fn main() {
                 rediriger_sortie_erreur(&dir);
             }
             let config_path = kobi_session::config::default_path();
+            // Serveurs MCP importés sans choix (KOB-239) : désactivés une fois,
+            // avant toute session.
+            if let Some(path) = &config_path {
+                mcp::revoir_import_au_demarrage(path);
+            }
             let config = match &config_path {
                 Some(path) => kobi_session::config::load_or_create(path),
                 None => kobi_session::config::Loaded {

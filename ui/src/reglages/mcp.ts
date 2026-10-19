@@ -140,7 +140,9 @@ function blocImport(ctx: Contexte, apres: (serveurs: ServeurMcp[]) => void): HTM
       zone.replaceChildren(etat('attention', 'Aucun serveur MCP dans Claude Code.', h('p', { class: 'aide' }, 'Ajoute-les ici à la main, ou dans Claude Code avec ', h('code', {}, 'claude mcp add'), '.')));
       return;
     }
-    const coches = new Set(nouveaux.map((c) => c.nom));
+    // Rien n'est coché d'office (KOB-239) : Kobi n'utilise que les serveurs
+    // choisis un à un, et chaque serveur alourdit ses sessions.
+    const coches = new Set<string>();
     const importer = bouton('Importer', 'importer', () => void lancer(), 'plein');
     const majBouton = () => {
       importer.disabled = coches.size === 0;
@@ -172,7 +174,7 @@ function blocImport(ctx: Contexte, apres: (serveurs: ServeurMcp[]) => void): HTM
           const case_ = h('input', {
             type: 'checkbox',
             'data-nom': c.nom,
-            checked: !c.deja,
+            checked: false,
             disabled: c.deja,
             onchange: () => {
               if (case_.checked) coches.add(c.nom);
@@ -411,7 +413,7 @@ export const MCP: Panneau = {
     el.replaceChildren(
       h('p', { class: 'intro' }, 'Kobi utilise ces serveurs pour lire et agir dans tes outils. Il lit sans demander ; ce qui modifie ou envoie quelque chose passe par une carte de confirmation, sauf si tu choisis « Faire sans demander ». Une suppression est toujours demandée.'),
       h('div', { class: 'reglage', 'data-reglage': 'serveurs' }, h('div', { class: 'reglage-titre' }, 'Serveurs connectés'), liste),
-      h('div', { class: 'reglage', 'data-reglage': 'import' }, h('div', { class: 'reglage-titre' }, 'Importer depuis Claude Code'), h('p', { class: 'aide' }, 'Les serveurs que tu as déjà dans Claude Code, en un clic. Ceux qui se connectent par ton compte (Linear…) gardent la connexion de Claude Code.'), blocImport(ctx, recharger)),
+      h('div', { class: 'reglage', 'data-reglage': 'import' }, h('div', { class: 'reglage-titre' }, 'Importer depuis Claude Code'), h('p', { class: 'aide' }, 'Coche ceux que Kobi doit utiliser : aucun n’est activé sans ton choix. Ceux qui se connectent par ton compte (Linear…) gardent la connexion de Claude Code.'), blocImport(ctx, recharger)),
       h('div', { class: 'reglage', 'data-reglage': 'ajout' }, formulaireAjout(ctx, recharger)),
     );
     liste.replaceChildren(h('li', { class: 'chargement' }, 'Lecture des serveurs…'));

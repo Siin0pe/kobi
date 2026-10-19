@@ -524,6 +524,51 @@ fn candidats_du_poste(kobi: &config::Config) -> Vec<Candidat> {
     candidats(&claude, &projets, &kobi.mcp)
 }
 
+/// Revue des serveurs importés de Claude Code (KOB-239), une fois : l'import
+/// de KOB-155 les cochait tous d'office, et chaque session les chargeait
+/// tous sans que l'utilisateur les ait choisis. Ceux qui sont actifs sont
+/// désactivés ; les serveurs ajoutés dans Kobi ne bougent pas. Renvoie le
+/// nombre de serveurs désactivés.
+pub fn revoir_import(config: &mut McpConfig) -> usize {
+    if config.import_revu {
+        return 0;
+    }
+    config.import_revu = true;
+    let mut desactives = 0;
+    for s in config.serveurs.values_mut() {
+        let importe = s
+            .origine
+            .as_deref()
+            .is_some_and(|o| o.starts_with("Claude Code"));
+        if importe && s.actif {
+            s.actif = false;
+            desactives += 1;
+        }
+    }
+    if desactives > 0 {
+        config.choix_a_proposer = true;
+    }
+    desactives
+}
+
+/// Au démarrage, avant toute session : la revue de [`revoir_import`].
+pub fn revoir_import_au_demarrage(path: &Path) {
+    let lu = config::load_or_create(path);
+    if lu.problem.is_some() || lu.config.mcp.import_revu {
+        return;
+    }
+    let mut c = lu.config;
+    let n = revoir_import(&mut c.mcp);
+    match config::save(&c, path) {
+        Ok(()) if n > 0 => tracing::info!(
+            desactives = n,
+            "serveurs MCP importés de Claude Code désactivés : à choisir dans Réglages → Outils MCP"
+        ),
+        Ok(()) => {}
+        Err(e) => tracing::warn!(erreur = %e, "revue des serveurs MCP importés non enregistrée"),
+    }
+}
+
 /// Ajoute `candidat` à `config`, secrets dans `coffre`.
 fn importer(
     config: &mut McpConfig,
@@ -1125,6 +1170,19 @@ pub fn mcp_candidats() -> Result<Vec<Candidat>, String> {
     ))
 }
 
+/// L'app doit-elle proposer, une fois, de choisir les serveurs MCP
+/// désactivés par la revue de KOB-239 ? La question n'est posée qu'une fois :
+/// le drapeau tombe à la lecture, que la notification ait pu s'afficher ou non.
+#[tauri::command]
+pub fn mcp_choix_a_proposer() -> Result<bool, String> {
+    let path = config_path()?;
+    modifier_config(&path, |c| {
+        let proposer = c.mcp.choix_a_proposer;
+        c.mcp.choix_a_proposer = false;
+        Ok(proposer)
+    })
+}
+
 /// Importe les serveurs choisis, puis les teste. Renvoie la liste à jour.
 #[tauri::command]
 pub async fn mcp_importer(noms: Vec<String>) -> Result<Vec<ServeurUi>, String> {
@@ -1139,6 +1197,8 @@ pub async fn mcp_importer(noms: Vec<String>) -> Result<Vec<ServeurUi>, String> {
                 .ok_or_else(|| format!("{nom} : introuvable dans Claude Code"))?;
             importer(&mut c.mcp, candidat, &coffre)?;
         }
+        // Serveurs cochés un à un : c'est le choix de l'utilisateur.
+        c.mcp.import_revu = true;
         Ok(())
     })?;
     tracing::info!(?noms, "MCP importés depuis Claude Code");
@@ -1228,6 +1288,58 @@ mod tests {
         assert!(
             !affiche.contains("s3cr3t") && !affiche.contains("\"cle\""),
             "{affiche}"
+        );
+    }
+
+    /// KOB-239 : les serveurs importés d'office avant sont désactivés une
+    /// fois ; ceux ajoutés dans Kobi ne bougent pas.
+    #[test]
+    fn revue_des_serveurs_importes() {
+        let mut c = McpConfig::default();
+        let mut importe = Serveur::stdio("npx", vec![]);
+        importe.origine = Some("Claude Code (utilisateur)".into());
+        c.serveurs.insert("linear".into(), importe.clone());
+        let mut deja_coupe = importe.clone();
+        deja_coupe.actif = false;
+        c.serveurs.insert("treg".into(), deja_coupe);
+        let mut ajoute = Serveur::stdio("node", vec![]);
+        ajoute.origine = Some("ajouté dans Kobi".into());
+        c.serveurs.insert("notes".into(), ajoute);
+        assert_eq!(revoir_import(&mut c), 1);
+        assert!(!c.serveurs["linear"].actif);
+        assert!(!c.serveurs["treg"].actif);
+        assert!(c.serveurs["notes"].actif);
+        assert!(c.import_revu && c.choix_a_proposer);
+        // Une seule fois : un serveur réactivé ensuite reste actif.
+        c.serveurs.get_mut("linear").unwrap().actif = true;
+        assert_eq!(revoir_import(&mut c), 0);
+        assert!(c.serveurs["linear"].actif);
+        // Rien à revoir : rien à proposer.
+        let mut vide = McpConfig::default();
+        assert_eq!(revoir_import(&mut vide), 0);
+        assert!(vide.import_revu && !vide.choix_a_proposer);
+    }
+
+    /// Au démarrage : écrite une fois ; une config illisible n'est pas touchée.
+    #[test]
+    fn revue_au_demarrage() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut cfg = config::Config::default();
+        let mut importe = Serveur::stdio("npx", vec![]);
+        importe.origine = Some("Claude Code (utilisateur)".into());
+        cfg.mcp.serveurs.insert("linear".into(), importe);
+        config::save(&cfg, &path).unwrap();
+        revoir_import_au_demarrage(&path);
+        let lu = config::load_or_create(&path).config;
+        assert!(!lu.mcp.serveurs["linear"].actif);
+        assert!(lu.mcp.import_revu && lu.mcp.choix_a_proposer);
+        let illisible = dir.path().join("illisible.toml");
+        std::fs::write(&illisible, "mcp = [ pas du toml").unwrap();
+        revoir_import_au_demarrage(&illisible);
+        assert_eq!(
+            std::fs::read_to_string(&illisible).unwrap(),
+            "mcp = [ pas du toml"
         );
     }
 
