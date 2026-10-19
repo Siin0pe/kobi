@@ -72,7 +72,8 @@ test('widget simple par défaut : une question courte reste dans la bulle, rien 
 });
 
 test('réponse longue : la bulle en montre le début (3 lignes), la vue agrandie s’ouvre seule à côté de Kobi, qui ne bouge pas', async ({ page }) => {
-  const errors = await kobi(page);
+  // L'ouverture seule est un réglage (KOB-215 : par défaut, à la demande).
+  const errors = await kobi(page, { auto: 'longues' });
   await page.waitForTimeout(300);
   const avant = await pill(page);
   await repond(page, 'explique le mutex', `${RICHE}\n\n${longue(20)}`);
@@ -270,3 +271,15 @@ for (const [cas, avecQuestion, fin] of [
     await expectNoErrors(errors);
   });
 }
+
+test('par défaut, rien ne s’ouvre seul : la réponse longue reste dans la bulle, « Lire en grand » l’ouvre (KOB-215)', async ({ page }) => {
+  const errors = await kobi(page);
+  await repond(page, 'explique le mutex', `${RICHE}\n\n${longue(20)}`);
+  await expect(carte(page).getByText('Lire en grand')).toBeVisible();
+  await page.waitForTimeout(800);
+  await expect(vue(page)).toBeHidden();
+  expect((await calls(page)).filter(([c]) => c === 'agrandir_kobi')).toEqual([]);
+  await carte(page).getByText('Lire en grand').click();
+  await expect(vue(page)).toBeVisible();
+  await expectNoErrors(errors);
+});

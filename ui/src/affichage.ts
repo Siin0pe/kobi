@@ -25,7 +25,7 @@ export interface Affichage {
 
 export const CLE_AFFICHAGE = 'kobi.affichage';
 
-export const PAR_DEFAUT: Affichage = { mode: 'simple', auto: 'longues', taille: 'moyenne', position: 'a-cote', texte: 'moyen', delai: 30 };
+export const PAR_DEFAUT: Affichage = { mode: 'simple', auto: 'jamais', taille: 'moyenne', position: 'a-cote', texte: 'moyen', delai: 30 };
 
 /** Valeurs permises de chaque réglage, dans l'ordre des choix. */
 export const VALEURS = {
