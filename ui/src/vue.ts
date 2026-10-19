@@ -404,12 +404,18 @@ export class Vue {
     }
   }
 
+  /**
+   * Pose le panneau dans la place donnée, rentré de son débord (anneau
+   * acide tout autour, ombre en bas à droite, vue.css) : la coque agrandit la
+   * fenêtre au ras du panneau, et un contour qui en sortait était coupé au
+   * bord de la fenêtre transparente, coins compris (KOB-246).
+   */
   private poser(p: Boite): void {
     const s = this.root.style;
-    s.left = `${p.x}px`;
-    s.top = `${p.y}px`;
-    s.width = `${p.largeur}px`;
-    s.height = `${p.hauteur}px`;
+    s.left = `${p.x + DEBORD.anneau}px`;
+    s.top = `${p.y + DEBORD.anneau}px`;
+    s.width = `${Math.max(0, p.largeur - 2 * DEBORD.anneau - DEBORD.ombre)}px`;
+    s.height = `${Math.max(0, p.hauteur - 2 * DEBORD.anneau - DEBORD.ombre)}px`;
   }
 
   /** Arrivée et départ : il grandit un peu depuis Kobi ; « réduire les animations » : fondu court. */
@@ -433,6 +439,9 @@ export class Vue {
 }
 
 /** Attend que la largeur de la fenêtre vérifie `ok` (au plus 3 s). */
+/** Débord du contour du panneau hors de sa boîte (vue.css : `.lecture`). */
+const DEBORD = { anneau: 3, ombre: 10 };
+
 function tailleAtteinte(ok: (largeur: number) => boolean): Promise<void> {
   return new Promise((resolve) => {
     const debut = performance.now();
