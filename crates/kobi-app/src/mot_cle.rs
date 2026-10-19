@@ -133,13 +133,15 @@ fn nettoyer(morceau: &str) -> &str {
 
 /// Ce qui suit « Kobi » dans le texte, ou `None` s'il n'y est pas.
 pub fn reperer(texte: &str) -> Option<&str> {
-    trouver(texte).map(|(_, fin)| nettoyer(&texte[fin..]))
+    trouver(texte)
+        .or_else(|| trouver_variante(texte))
+        .map(|(_, fin)| nettoyer(&texte[fin..]))
 }
 
 /// Question d'une phrase dite après l'interpellation : un « Kobi » répété en
 /// tête est retiré.
 fn question(texte: &str) -> &str {
-    match trouver(texte) {
+    match trouver(texte).or_else(|| trouver_variante(texte)) {
         Some((debut, fin)) if nettoyer(&texte[..debut]).is_empty() => nettoyer(&texte[fin..]),
         _ => nettoyer(texte),
     }
@@ -162,7 +164,7 @@ const INTERJECTIONS: &[&str] = &[
     "okay", "dis", "dites", "moi", "allo", "salut", "bonjour", "bonsoir", "coucou", "tiens",
     "ecoute", "pardon", "hm", "hmm", "mais", "et", "donc",
     // KOB-179 : « dis » écrit « di », et d'autres débuts d'appel.
-    "di", "dit", "voila", "allez", "bref", "attends",
+    "di", "dit", "oke", "okei", "okey", "voila", "allez", "bref", "attends",
 ];
 
 /// Mots qui, juste avant le nom, en font une citation : « à Kobi », « que Kobi ».
@@ -1044,6 +1046,7 @@ mod tests {
                 "Hockeykobi lance la prise de notes",
                 "lance la prise de notes",
             ),
+            ("Oke Kobi lance la prise de note", "lance la prise de note"),
         ];
         for (texte, question) in appels {
             assert_eq!(
@@ -1069,6 +1072,12 @@ mod tests {
         ] {
             assert_eq!(interpellation(texte).map(|(a, _)| a), Some(Cite), "{texte}");
         }
+        // En conversation, le nom collé en tête sort aussi de la question.
+        assert_eq!(question("Etkobi ouvre et réclage"), "ouvre et réclage");
+        assert_eq!(
+            reperer("Wicoby, met ça dans les décisions"),
+            Some("met ça dans les décisions")
+        );
         // « à Kobi » sans virgule reste une citation.
         assert_eq!(
             interpellation("on le dit à Kobi").map(|(a, _)| a),
