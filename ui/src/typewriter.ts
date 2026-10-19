@@ -86,6 +86,11 @@ export class Typewriter {
     return this.shown >= this.target.length;
   }
 
+  /** Texte source visé (markdown compris), tel qu'il est tapé. */
+  get text(): string {
+    return this.target.join('');
+  }
+
   /** Interruption (Échap) : le texte s'arrête là où en est la frappe. */
   freeze(): void {
     this.target = this.target.slice(0, this.shown);

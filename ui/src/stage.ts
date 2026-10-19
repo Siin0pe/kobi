@@ -356,8 +356,10 @@ export class Stage {
     if (this.state !== 'answer') return;
     this.interrupted = true;
     this.bubbles.interrupt();
-    // Le texte affiché devient la réponse : un nouveau rendu ne relance pas la frappe.
-    this.data = { ...this.data, answer: this.root.querySelector('[data-card=answer] .text')?.textContent ?? '' };
+    // Le texte déjà tapé devient la réponse : un nouveau rendu ne relance pas
+    // la frappe. Sa source, pas le texte affiché, aplati sans sa mise en
+    // forme (KOB-230).
+    this.data = { ...this.data, answer: this.bubbles.frozenText() ?? '' };
     this.kobi.setData(this.data);
   }
 
