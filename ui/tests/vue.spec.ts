@@ -235,3 +235,38 @@ test('réduire les animations : la vue apparaît et disparaît en fondu court', 
   await expect(vue(page)).toBeHidden();
   await expectNoErrors(errors);
 });
+
+// KOB-177 : la réponse ne s'affiche qu'une fois dans la vue, en flux puis
+// finie, même quand la coque publie la réponse finie rognée ou que la
+// question n'est pas arrivée avant le flux.
+for (const [cas, avecQuestion, fin] of [
+  ['même texte', true, ''],
+  ['réponse finie rognée par la coque', true, '\n\n'],
+  ['flux sans question', false, ''],
+] as const) {
+  test(`une réponse n’apparaît qu’une fois dans la vue (${cas})`, async ({ page }) => {
+    const errors = await kobi(page, { auto: 'toujours' });
+    const question = 'explique le mutex';
+    const reponse = longue(30);
+    const flux = reponse + fin;
+    await emit(page, 'state', { etat: 'assistant', activite: 'repond', mascotte: 'answer', transcrit: false });
+    if (avecQuestion) await emit(page, 'question', question);
+    for (let i = 200; i < flux.length; i += 400) await emit(page, 'answer', flux.slice(0, i));
+    await emit(page, 'answer', flux);
+    await expect(vue(page)).toBeVisible();
+    await expect(vue(page).locator('.vex')).toHaveCount(1);
+    // La coque publie l'historique (réponse finie), puis Kobi revient au calme.
+    await emit(page, 'conversation', [{ tour: 1, question, reponse, statut: 'fini', clavier: false, etapes: [] }]);
+    await emit(page, 'state', { etat: 'veille', activite: null, mascotte: 'idle', transcrit: false });
+    await expect(vue(page).locator('.vex')).toHaveCount(1);
+    await expect(vue(page).locator('.vex .vex-q')).toHaveText(question);
+    // Une deuxième question : deux échanges, chacun une fois.
+    await repond(page, 'et le sémaphore ?', 'Un sémaphore compte les places libres.');
+    await emit(page, 'conversation', [
+      { tour: 1, question, reponse, statut: 'fini', clavier: false, etapes: [] },
+      { tour: 2, question: 'et le sémaphore ?', reponse: 'Un sémaphore compte les places libres.', statut: 'fini', clavier: false, etapes: [] },
+    ]);
+    await expect(vue(page).locator('.vex')).toHaveCount(2);
+    await expectNoErrors(errors);
+  });
+}
