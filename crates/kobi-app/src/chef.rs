@@ -58,7 +58,7 @@ const TITRE_ESSAIS: u8 = 3;
 
 /// Titre automatique réglé (`meetings.titre_auto`, à chaud).
 fn titre_auto_actif() -> bool {
-    kobi_session::config::default_path().map_or(true, |p| {
+    kobi_session::config::default_path().is_none_or(|p| {
         kobi_session::config::load_or_create(&p)
             .config
             .meetings
