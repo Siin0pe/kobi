@@ -451,9 +451,13 @@ impl<R: Runtime> Chef<R> {
     }
 
     /// État de l'enregistrement.
+    /// Dès la fin demandée, l'enregistrement est annoncé arrêté (REC
+    /// s'éteint tout de suite, KOB-166), même si la réunion reste ouverte le
+    /// temps d'écrire le compte rendu.
     pub fn enregistrement(&self) -> Enregistrement {
         match &self.reunion {
             None => Enregistrement::default(),
+            Some(r) if r.fin_demandee => Enregistrement::default(),
             Some(r) => Enregistrement {
                 actif: true,
                 pause: r.pause,
@@ -765,8 +769,12 @@ impl<R: Runtime> Chef<R> {
     }
 
     fn demarrer(&mut self) -> String {
-        if self.reunion.is_some() {
-            return "J'enregistre déjà la réunion.".into();
+        if let Some(r) = &self.reunion {
+            return if r.fin_demandee {
+                "J'écris encore le compte rendu de la réunion : un instant.".into()
+            } else {
+                "J'enregistre déjà la réunion.".into()
+            };
         }
         let Some(stockage) = crate::stockage::actuel(&self.app) else {
             return "Dossier personnel introuvable : impossible d'enregistrer.".into();
@@ -809,6 +817,7 @@ impl<R: Runtime> Chef<R> {
         let transcript = std::mem::take(&mut r.a_noter);
         let notes = r.notes.clone();
         self.transition(&[Evenement::TerminerReunion]);
+        self.emettre_enregistrement();
         self.cerveau
             .demander(Demande::CompteRendu { transcript, notes });
         "Réunion terminée : j'écris le compte rendu.".into()

@@ -6,9 +6,11 @@
 
 /**
  * Les états de la mascotte : les 8 du document « mascotte et skins », puis
- * « je m'en occupe » (KOB-152), tant que Claude travaille avec ses outils.
+ * « je m'en occupe » (KOB-152), tant que Claude travaille avec ses outils, et
+ * `compose`, la rédaction du compte rendu après une réunion (KOB-166),
+ * distincte de la prise de notes (`write`, seulement pendant l'enregistrement).
  */
-export const STATES = ['idle', 'listen', 'think', 'write', 'answer', 'suggest', 'done', 'error', 'work'] as const;
+export const STATES = ['idle', 'listen', 'think', 'write', 'answer', 'suggest', 'done', 'error', 'work', 'compose'] as const;
 
 export type MascotState = (typeof STATES)[number];
 
@@ -27,6 +29,7 @@ export const STATE_LABELS: Record<MascotState, string> = {
   done: 'Fait',
   error: 'Oups',
   work: 'Je m’en occupe',
+  compose: 'Rédige',
 };
 
 /** Phrase lue par les lecteurs d'écran à chaque changement d'état. */
@@ -40,6 +43,7 @@ export const STATE_SPOKEN: Record<MascotState, string> = {
   done: 'Action faite.',
   error: 'Kobi a rencontré un problème.',
   work: 'Kobi s’en occupe et montre chaque étape.',
+  compose: 'Réunion terminée. Kobi rédige le compte rendu.',
 };
 
 /** Une source consultée pendant la réflexion (codebase, MCP, web…). */
@@ -130,4 +134,5 @@ export const DOT_COLORS: Record<MascotState, string> = {
   done: '#16A34A',
   error: '#EF4444',
   work: '#6366F1',
+  compose: '#64748B',
 };

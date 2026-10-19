@@ -369,7 +369,7 @@ mod tests {
             ("reunion", "idle"),
             ("pause", "idle"),
             ("reunion", "idle"),
-            ("fin", "write"),
+            ("fin", "compose"),
             ("veille", "idle"),
         ];
         assert_eq!(

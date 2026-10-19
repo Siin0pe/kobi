@@ -92,8 +92,9 @@
   color: var(--accent);
 }
 
-/* Fiche de notes (Note). */
-.card-notes {
+/* Fiche de notes (Note), et rédaction du compte rendu (KOB-166). */
+.card-notes,
+.card-compose {
   --r: -2.5deg;
   width: 340px;
   padding: 20px 22px;
@@ -102,10 +103,12 @@
   border: 2.5px solid var(--ink);
   box-shadow: 8px 8px 0 var(--ink);
 }
-.card-notes .kicker {
+.card-notes .kicker,
+.card-compose .kicker {
   margin-bottom: 10px;
 }
-.card-notes .body {
+.card-notes .body,
+.card-compose .body {
   font-size: 17px;
   line-height: 1.55;
   white-space: pre-line;

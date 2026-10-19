@@ -58,6 +58,9 @@ export class RecIndicator {
   private info: MeetingInfo | null = null;
   private timer = 0;
   private paused = false;
+  /** Sortie en cours (« réunion terminée · 7 min ») après la fin (KOB-166). */
+  private ending = 0;
+  private endAnim: Animation | null = null;
 
   constructor() {
     this.root = el('div', 'rec');
@@ -81,7 +84,13 @@ export class RecIndicator {
 
   set(info: MeetingInfo | null): void {
     const before = this.info?.notes ?? 0;
+    const ended = this.info !== null && info === null ? this.info : null;
     this.info = info;
+    this.stopEnding();
+    if (ended) {
+      this.end(ended);
+      return;
+    }
     this.root.hidden = info === null;
     this.root.classList.toggle('is-paused', Boolean(info?.paused));
     if (info) {
@@ -94,6 +103,60 @@ export class RecIndicator {
       if (n > before && !this.reduced && !this.paused) this.bump(n - before);
     }
     this.tick();
+  }
+
+  /**
+   * Fin de la réunion (KOB-166) : l'enregistrement est fini à l'instant. Le
+   * point s'éteint, l'étiquette devient grise « réunion terminée · 7 min »,
+   * puis elle s'efface. Rien n'y ressemble plus à un enregistrement en cours.
+   */
+  private end(info: MeetingInfo): void {
+    window.clearTimeout(this.timer);
+    this.timer = 0;
+    const minutes = Math.round((Date.now() - info.startedAt) / 60_000);
+    this.root.classList.remove('is-paused');
+    this.root.classList.add('is-ended');
+    this.root.setAttribute('aria-label', 'Réunion terminée');
+    this.label.textContent = 'réunion terminée';
+    this.time.textContent = minutes < 1 ? 'moins d’une minute' : `${minutes} min`;
+    this.notes.hidden = true;
+    this.root.hidden = false;
+    const hide = (): void => {
+      this.ending = 0;
+      this.endAnim = null;
+      this.root.hidden = true;
+      this.root.classList.remove('is-ended');
+    };
+    if (this.reduced || this.paused) {
+      this.ending = window.setTimeout(hide, 1600);
+      return;
+    }
+    this.root.querySelector('.rec-dot')!.animate(
+      [
+        { transform: 'scale(1)', opacity: 1 },
+        { transform: 'scale(1.6)', opacity: 1, offset: 0.35 },
+        { transform: 'scale(.6)', opacity: 0.6 },
+      ],
+      { duration: 420, easing: 'cubic-bezier(.2,.8,.3,1)', fill: 'forwards' },
+    );
+    this.endAnim = this.root.animate(
+      [
+        { opacity: 1, translate: '0 0', scale: '1' },
+        { opacity: 1, translate: '0 0', scale: '1', offset: 0.8 },
+        { opacity: 0, translate: '0 -10px', scale: '.85' },
+      ],
+      { duration: 2000, easing: 'ease-in' },
+    );
+    this.endAnim.onfinish = hide;
+  }
+
+  private stopEnding(): void {
+    window.clearTimeout(this.ending);
+    this.ending = 0;
+    this.endAnim?.cancel();
+    this.endAnim = null;
+    for (const a of this.root.querySelector('.rec-dot')?.getAnimations() ?? []) if (!(a instanceof CSSAnimation)) a.cancel();
+    this.root.classList.remove('is-ended');
   }
 
   /** Note ajoutée : le compteur rebondit et un « +1 » s'envole. */
@@ -166,6 +229,7 @@ export class RecIndicator {
 
   destroy(): void {
     window.clearTimeout(this.timer);
+    this.stopEnding();
   }
 
   private tick(): void {

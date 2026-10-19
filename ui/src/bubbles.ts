@@ -14,10 +14,13 @@ export interface ActionDecision {
   decision: 'confirm' | 'dismiss';
 }
 
-type Kind = 'question' | 'sources' | 'notes' | 'answer' | 'action' | 'error';
+type Kind = 'question' | 'sources' | 'notes' | 'answer' | 'action' | 'error' | 'compose';
 
 /** Vitesses de frappe du prototype, en caractères par seconde. */
-const TYPING_CPS: Partial<Record<Kind, number>> = { question: 18, notes: 22, answer: 25 };
+const TYPING_CPS: Partial<Record<Kind, number>> = { question: 18, notes: 22, answer: 25, compose: 22 };
+
+/** Bulle de la rédaction du compte rendu (KOB-166). */
+export const COMPOSE_TEXT = 'Je rédige le compte rendu…';
 
 
 /** Réponse très longue (KOB-163) : la bulle propose de tout lire dans l'app. */
@@ -39,6 +42,8 @@ export function cardKind(state: MascotState, data: MascotData): Kind | null {
       return data.action ? 'action' : null;
     case 'error':
       return data.error ? 'error' : null;
+    case 'compose':
+      return 'compose';
     default:
       return null;
   }
@@ -162,6 +167,10 @@ export class Bubbles {
       case 'error':
         card.append(el('div', 'kicker'), el('div', 'message'));
         break;
+      case 'compose':
+        card.append(el('div', 'kicker', 'Réunion terminée'), el('div', 'body'));
+        card.querySelector('.body')!.append(el('span', 'text'), el('span', 'caret'));
+        break;
     }
     return card;
   }
@@ -179,6 +188,9 @@ export class Bubbles {
         this.typed(card, kind, notes);
         break;
       }
+      case 'compose':
+        this.typed(card, kind, COMPOSE_TEXT);
+        break;
       case 'answer': {
         this.typed(card, kind, data.answer ?? '');
         const long = (data.answer ?? '').length >= LONG_ANSWER;
