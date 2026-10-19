@@ -368,6 +368,10 @@ export const DOSSIERS: Panneau = {
 interface Raccourcis {
   parler: string;
   reunion: string;
+  /** Écrire à Kobi (KOB-147) ; absent d'un Kobi plus ancien. */
+  ecrire?: string;
+  /** Conversation en grand (KOB-169) ; absent d'un Kobi plus ancien. */
+  agrandir?: string;
 }
 
 export const RACCOURCIS: Panneau = {
@@ -378,16 +382,18 @@ export const RACCOURCIS: Panneau = {
     el.replaceChildren(etat('cours', 'Un instant…'));
     invoke<Raccourcis>('raccourcis').then(
       (r) => {
+        // Tous les raccourcis globaux de Kobi (KOB-183), lus dans ses réglages.
+        const lignes: Array<[string | undefined, string, string]> = [
+          [r.parler, 'Parler à Kobi', 'quand dire « Kobi » n’est pas pratique.'],
+          [r.ecrire, 'Écrire à Kobi', 'une question tapée au clavier, dans sa bulle.'],
+          [r.reunion, 'Enregistrer une réunion', 'le même raccourci l’arrête. Jamais d’enregistrement sans toi.'],
+          [r.agrandir, 'Conversation en grand', 'pour lire une longue réponse ; le même raccourci la range.'],
+        ];
+        const presents = lignes.filter((l): l is [string, string, string] => Boolean(l[0]));
+        const nombre = ['', 'Un raccourci marche', 'Deux raccourcis marchent', 'Trois raccourcis marchent', 'Quatre raccourcis marchent'][presents.length] ?? 'Ces raccourcis marchent';
         el.replaceChildren(
-          h('p', { class: 'intro' }, 'Deux raccourcis marchent partout, même quand une autre fenêtre est devant.'),
-          h(
-            'dl',
-            { class: 'raccourcis' },
-            h('dt', {}, clavier(r.parler)),
-            h('dd', {}, h('strong', {}, 'Parler à Kobi'), h('br'), 'quand dire « Kobi » n’est pas pratique.'),
-            h('dt', {}, clavier(r.reunion)),
-            h('dd', {}, h('strong', {}, 'Enregistrer une réunion'), h('br'), 'le même raccourci l’arrête. Jamais d’enregistrement sans toi.'),
-          ),
+          h('p', { class: 'intro' }, `${nombre} partout, même quand une autre fenêtre est devant.`),
+          h('dl', { class: 'raccourcis' }, ...presents.flatMap(([touches, titre, aide]) => [h('dt', {}, clavier(touches)), h('dd', {}, h('strong', {}, titre), h('br'), aide)])),
           h('p', { class: 'aide' }, 'Clic droit sur Kobi : son menu (Carnet, réglages, pause, quitter).'),
         );
         ctx.signaler?.('ok', touches(r.parler).join('+'));

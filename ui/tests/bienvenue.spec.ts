@@ -101,7 +101,7 @@ function fakeTauri(o: Options): void {
             mcp = [{ nom: 'linear', transport: 'http', resume: 'https://mcp.linear.app/mcp', actif: true, ecriture: 'demander', origine: 'Claude Code (utilisateur)', commande: '', args: [], url: 'https://mcp.linear.app/mcp', env: {}, entetes: {}, secrets: [], outils: [], teste_ms: null }];
             return mcp;
           case 'raccourcis':
-            return { parler: 'Ctrl+Shift+Space', reunion: 'Ctrl+Shift+R' };
+            return { parler: 'Ctrl+Shift+Space', reunion: 'Ctrl+Shift+R', ecrire: 'Ctrl+Alt+K', agrandir: 'Ctrl+Alt+G' };
           case 'terminer_bienvenue':
           case 'ouvrir_bienvenue':
             return null;
@@ -194,7 +194,10 @@ test('Kobi se présente, puis le parcours complet mène à « C’est parti »',
   await expect(etape(page, 'essai')).toHaveAttribute('data-statut', 'ok');
   await page.getByRole('button', { name: 'Suivant' }).click();
   // 8. Raccourcis.
-  await expect(page.locator('.raccourcis kbd')).toHaveText(['Ctrl', 'Maj', 'Espace', 'Ctrl', 'Maj', 'R']);
+  // Les quatre raccourcis globaux (KOB-183), dans l'ordre : parler, écrire, réunion, conversation en grand.
+  await expect(page.locator('.raccourcis kbd')).toHaveText(['Ctrl', 'Maj', 'Espace', 'Ctrl', 'Alt', 'K', 'Ctrl', 'Maj', 'R', 'Ctrl', 'Alt', 'G']);
+  await expect(page.locator('.raccourcis dd strong')).toHaveText(['Parler à Kobi', 'Écrire à Kobi', 'Enregistrer une réunion', 'Conversation en grand']);
+  await expect(page.locator('.intro').last()).toContainText('Quatre raccourcis');
   await page.getByRole('button', { name: 'Terminer' }).click();
   // Fin.
   await expect(page.locator('.titre')).toHaveText('À toi de jouer !');
