@@ -242,6 +242,18 @@ function cacherAccueil(): void {
 // ----- Ouverture -----
 
 ecouter<string>('app://section', (adresse) => aller(adresse));
+
+// La liste du Carnet suit la réunion (KOB-187) : son début, sa fin et le
+// compte rendu changent l'entrée (badge REC, durée) sans attendre un retour
+// sur la fenêtre.
+let enregistre: boolean | null = null;
+ecouter<{ actif?: boolean } | null>('enregistrement', (r) => {
+  const actif = Boolean(r?.actif);
+  if (actif === enregistre) return;
+  enregistre = actif;
+  void carnet?.rafraichir();
+});
+ecouter('compte_rendu', () => void carnet?.rafraichir());
 window.addEventListener('hashchange', () => aller(location.hash));
 
 /** Accès pour les tests. */
