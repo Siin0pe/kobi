@@ -46,10 +46,32 @@ pub enum Passage {
 /// a une. Seule l'absence de réponse (`NotRunning`) laisse démarrer Kobi.
 pub fn passer(point: &kobi_ctl::Point, args: &[String]) -> Passage {
     let (commande, params) = demande(args);
+    #[cfg(windows)]
+    ceder_premier_plan();
     match kobi_ctl::client::appeler(point, commande, params, kobi_ctl::Origine::Cli) {
         Ok(_) => Passage::Prise,
         Err(e) if e.code == kobi_ctl::Code::NotRunning => Passage::Absente,
         Err(e) => Passage::Refusee(e),
+    }
+}
+
+/// Windows ne laisse passer au premier plan que le processus lancé par
+/// l'action de l'utilisateur (raccourci « App Kobi », double clic) : c'est ce
+/// second lancement, pas l'instance qui tourne, et il s'arrête aussitôt. Sans
+/// ce droit cédé, l'app s'ouvrait derrière la fenêtre active (KOB-201). Le
+/// pid de l'instance n'est pas connu ici : tout processus peut le prendre,
+/// jusqu'à la prochaine action de l'utilisateur.
+#[cfg(windows)]
+fn ceder_premier_plan() {
+    #[link(name = "user32")]
+    extern "system" {
+        fn AllowSetForegroundWindow(pid: u32) -> i32;
+    }
+    const ASFW_ANY: u32 = u32::MAX;
+    // Refusé si ce lancement n'a pas lui-même le droit (lancé en arrière-plan) :
+    // rien à faire de plus, l'app s'ouvre comme avant.
+    if unsafe { AllowSetForegroundWindow(ASFW_ANY) } == 0 {
+        tracing::debug!("premier plan non cédé à l'instance en cours");
     }
 }
 
