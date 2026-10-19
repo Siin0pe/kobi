@@ -183,9 +183,8 @@ pub fn interpellation(texte: &str) -> Option<(Adresse, String)> {
             .iter()
             .map(String::as_str)
             .eq(["est", "ce", "que"]);
-    let cite_avant = !virgule_avant
-        && !est_ce_que
-        && precedent.is_some_and(|m| AVANT_CITATION.contains(&m));
+    let cite_avant =
+        !virgule_avant && !est_ce_que && precedent.is_some_and(|m| AVANT_CITATION.contains(&m));
 
     let adresse = if en_tete {
         if sujet && !toi {
