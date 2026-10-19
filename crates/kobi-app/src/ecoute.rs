@@ -687,6 +687,47 @@ mod tests {
         }
     }
 
+    /// Les transcriptions déjà faites par [`corpus`] (`*.txt`), rejouées
+    /// comme phrases finales : mesure d'une règle de repérage sans Nemotron
+    /// (KOB-179). `KOBI_ECOUTE_CORPUS=<dossier> cargo test -p kobi-app --
+    /// --ignored corpus_texte --nocapture`.
+    #[test]
+    #[ignore = "demande KOBI_ECOUTE_CORPUS (transcriptions de corpus)"]
+    fn corpus_texte() {
+        let dir =
+            PathBuf::from(std::env::var_os("KOBI_ECOUTE_CORPUS").expect("KOBI_ECOUTE_CORPUS"));
+        let mut fichiers: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|e| e == "txt"))
+            .collect();
+        fichiers.sort();
+        let (mut pos, mut pos_ok, mut fausses) = (0, 0, 0);
+        for f in &fichiers {
+            let nom = f.file_name().unwrap().to_string_lossy().into_owned();
+            let mut ecouteur = Ecouteur::default();
+            let actions: Vec<Action> = std::fs::read_to_string(f)
+                .unwrap()
+                .lines()
+                .enumerate()
+                .flat_map(|(i, l)| ecouteur.segment(l, true, i as f64 * 5.0))
+                .collect();
+            let envoyee = actions.iter().any(|a| matches!(a, Action::Envoyer(_)));
+            if nom.starts_with("pos") {
+                pos += 1;
+                pos_ok += usize::from(envoyee);
+                if !envoyee {
+                    println!("MANQUÉ {nom}");
+                }
+            } else if actions.contains(&Action::Interpeller) {
+                fausses += 1;
+                println!("FAUSSE {nom}");
+            }
+        }
+        println!("BILAN texte : positifs {pos_ok}/{pos}, fausses interpellations {fausses}");
+    }
+
     /// Un corpus : `pos*.wav` doivent envoyer une question, `neg*.wav` ne
     /// rien déclencher. `KOBI_ECOUTE_CORPUS=<dossier> cargo test -p kobi-app
     /// --release -- --ignored corpus --nocapture`.
@@ -704,9 +745,18 @@ mod tests {
             .collect();
         fichiers.sort();
         let (mut pos, mut pos_ok, mut fausses) = (0, 0, 0);
+        // Temps de calcul et durée d'audio : le coût d'un réglage (KOB-179).
+        let (mut calcul, mut audio) = (std::time::Duration::ZERO, 0.0);
+        let mut manques = Vec::new();
         for wav in &fichiers {
             let nom = wav.file_name().unwrap().to_string_lossy().into_owned();
+            audio += kobi_stt::wav::read_wav_16k_mono(wav).unwrap().len() as f64
+                / kobi_stt::SAMPLE_RATE as f64;
+            let debut = std::time::Instant::now();
             let (actions, finals) = rejouer(&mut stt, &mut Some(Diag::memoire()), wav);
+            calcul += debut.elapsed();
+            // Transcription complète, pour juger de sa qualité.
+            std::fs::write(wav.with_extension("txt"), finals.join("\n")).unwrap();
             let envoyees: Vec<_> = actions
                 .iter()
                 .filter_map(|a| match a {
@@ -721,11 +771,12 @@ mod tests {
             if nom.starts_with("pos") {
                 pos += 1;
                 pos_ok += usize::from(!envoyees.is_empty());
+                if envoyees.is_empty() {
+                    manques.push(format!("{nom}: {finals:?}"));
+                }
                 println!("{nom}: {finals:?} -> {envoyees:?}");
             } else {
                 fausses += interpellations;
-                // Transcription complète, pour juger de sa qualité.
-                std::fs::write(wav.with_extension("txt"), finals.join("\n")).unwrap();
                 for f in finals
                     .iter()
                     .filter(|f| crate::mot_cle::reperer(f).is_some())
@@ -738,6 +789,14 @@ mod tests {
                 );
             }
         }
-        println!("BILAN positifs {pos_ok}/{pos}, fausses interpellations {fausses}");
+        for m in &manques {
+            println!("MANQUÉ {m}");
+        }
+        println!(
+            "BILAN positifs {pos_ok}/{pos}, fausses interpellations {fausses}, \
+             calcul {:.1} s pour {audio:.1} s d'audio (×{:.2} temps réel)",
+            calcul.as_secs_f64(),
+            calcul.as_secs_f64() / audio
+        );
     }
 }

@@ -11,7 +11,7 @@
 //! micro, pour se tester sur des transcriptions écrites.
 
 /// Fins du nom produites par la reconnaissance (après « kob », « cob »…).
-const FINS: [&str; 6] = ["i", "y", "ie", "e", "ey", "is"];
+const FINS: [&str; 7] = ["i", "y", "ie", "e", "ey", "is", "ye"];
 
 /// Sans aucun mot après l'interpellation, l'écoute s'arrête.
 pub const SANS_PAROLE: f64 = 6.0;
@@ -79,6 +79,53 @@ fn trouver(texte: &str) -> Option<(usize, usize)> {
     None
 }
 
+/// Autres graphies de « Kobi » sorties par Nemotron (KOB-179) : des mots
+/// qui existent par ailleurs (« Kirby », « Cody »). Comptées seulement en
+/// position d'appel ([`trouver_variante`]).
+const ENTENDUS: &[&str] = &["kirby", "kirbi", "cody", "codi", "cogi"];
+
+/// Petits mots que Nemotron colle devant le nom (« Etkobi », « Okeikobi »,
+/// « Wicoby » pour « oui Kobi », « Makobi »).
+const COLLES: &[&str] = &[
+    "et", "ok", "oke", "okei", "okey", "okay", "hockey", "oui", "wi", "ma", "eh", "he", "hey", "e",
+    "ve",
+];
+
+/// Graphie douteuse de « Kobi » (KOB-179) en position d'appel : un mot de
+/// [`ENTENDUS`], ou un nom collé à un mot de [`COLLES`], en tête de phrase
+/// (après des [`INTERJECTIONS`]) ; un mot de [`ENTENDUS`] aussi en fin de
+/// phrase après une virgule. Ailleurs (« Kirby est un jeu », « mon collègue
+/// Cody »), rien.
+fn trouver_variante(texte: &str) -> Option<(usize, usize)> {
+    let mut avant_seulement_interjections = true;
+    let mut debut = None;
+    let mut spans = Vec::new();
+    for (i, c) in texte.char_indices().chain([(texte.len(), ' ')]) {
+        if c.is_alphanumeric() {
+            debut.get_or_insert(i);
+        } else if let Some(d) = debut.take() {
+            spans.push((d, i));
+        }
+    }
+    let dernier = spans.len().checked_sub(1)?;
+    for (k, &(d, f)) in spans.iter().enumerate() {
+        let n = normaliser(&texte[d..f]);
+        let entendu = ENTENDUS.contains(&n.as_str());
+        let colle = COLLES.iter().any(|p| {
+            n.strip_prefix(p)
+                .is_some_and(|reste| reste.chars().count() >= 4 && est_kobi(reste))
+        });
+        if avant_seulement_interjections && (entendu || colle) {
+            return Some((d, f));
+        }
+        if entendu && k == dernier && texte[..d].trim_end().ends_with(',') {
+            return Some((d, f));
+        }
+        avant_seulement_interjections &= INTERJECTIONS.contains(&n.as_str());
+    }
+    None
+}
+
 /// Retire la ponctuation et les espaces qui entourent un morceau de phrase.
 fn nettoyer(morceau: &str) -> &str {
     morceau.trim_matches(|c: char| c.is_whitespace() || matches!(c, ',' | '.' | '!' | ';' | ':'))
@@ -86,13 +133,15 @@ fn nettoyer(morceau: &str) -> &str {
 
 /// Ce qui suit « Kobi » dans le texte, ou `None` s'il n'y est pas.
 pub fn reperer(texte: &str) -> Option<&str> {
-    trouver(texte).map(|(_, fin)| nettoyer(&texte[fin..]))
+    trouver(texte)
+        .or_else(|| trouver_variante(texte))
+        .map(|(_, fin)| nettoyer(&texte[fin..]))
 }
 
 /// Question d'une phrase dite après l'interpellation : un « Kobi » répété en
 /// tête est retiré.
 fn question(texte: &str) -> &str {
-    match trouver(texte) {
+    match trouver(texte).or_else(|| trouver_variante(texte)) {
         Some((debut, fin)) if nettoyer(&texte[..debut]).is_empty() => nettoyer(&texte[fin..]),
         _ => nettoyer(texte),
     }
@@ -114,6 +163,8 @@ const INTERJECTIONS: &[&str] = &[
     "euh", "eh", "he", "hey", "ho", "oh", "ah", "bah", "ben", "bon", "alors", "oui", "non", "ok",
     "okay", "dis", "dites", "moi", "allo", "salut", "bonjour", "bonsoir", "coucou", "tiens",
     "ecoute", "pardon", "hm", "hmm", "mais", "et", "donc",
+    // KOB-179 : « dis » écrit « di », et d'autres débuts d'appel.
+    "di", "dit", "oke", "okei", "okey", "voila", "allez", "bref", "attends",
 ];
 
 /// Mots qui, juste avant le nom, en font une citation : « à Kobi », « que Kobi ».
@@ -153,7 +204,7 @@ fn mots(morceau: &str) -> Vec<String> {
 /// virgules d'apostrophe (« Tu en penses quoi, Kobi ? » → « Tu en penses
 /// quoi ? »). `None` sans le nom.
 pub fn interpellation(texte: &str) -> Option<(Adresse, String)> {
-    let (debut, fin) = trouver(texte)?;
+    let (debut, fin) = trouver(texte).or_else(|| trouver_variante(texte))?;
     let avant = &texte[..debut];
     let apres = &texte[fin..];
     let mots_avant = mots(avant);
@@ -172,9 +223,11 @@ pub fn interpellation(texte: &str) -> Option<(Adresse, String)> {
         .chain(&mots_apres)
         .any(|m| TOI.contains(&m.as_str()));
     let sujet = !ponctuation_apres && suivant.is_some_and(|m| APRES_CITATION.contains(&m));
+    // « A Kobe, c'était quoi… » : le « hé » transcrit « a », suivi d'une
+    // virgule d'apostrophe (KOB-179).
     let en_tete = mots_avant
         .iter()
-        .all(|m| INTERJECTIONS.contains(&m.as_str()));
+        .all(|m| INTERJECTIONS.contains(&m.as_str()) || (virgule_apres && m == "a"));
     let en_fin = mots_apres.is_empty();
     // « Est-ce que Kobi… » : le « que » de la question n'est pas celui de
     // « ce que Kobi dit ».
@@ -942,6 +995,94 @@ mod tests {
         assert!(e.tick(10.0).is_empty());
         assert!(fin_de_conversation("C'est bon, merci."));
         assert!(!fin_de_conversation("merci de résumer le budget"));
+    }
+
+    /// Graphies de Nemotron relevées sur le corpus de KOB-179 : retrouvées en
+    /// position d'appel, jamais ailleurs.
+    #[test]
+    fn variantes_de_nemotron_en_appel() {
+        use Adresse::*;
+        let appels: &[(&str, &str)] = &[
+            ("Kirby, tu peux répéter", "tu peux répéter"),
+            (
+                "Cogi explique moi, cette erreur",
+                "explique moi, cette erreur",
+            ),
+            (
+                "Voilà Cody,, tu peux arrêter la réunion",
+                "tu peux arrêter la réunion",
+            ),
+            ("Etkobi ouvre et réclage", "ouvre et réclage"),
+            (
+                "Okeikobi lance la prise de notes",
+                "lance la prise de notes",
+            ),
+            (
+                "Wicoby met ça dans les décisions",
+                "met ça dans les décisions",
+            ),
+            ("Makobi, résume la réunion", "résume la réunion"),
+            (
+                "Di Koby, combien on a de tickets ouverts",
+                "combien on a de tickets ouverts",
+            ),
+            (
+                "A Kobe, c'était quoi le nom du client",
+                "c'était quoi le nom du client",
+            ),
+            (
+                "C'est quoi le prochain point, Kirby ?",
+                "C'est quoi le prochain point ?",
+            ),
+            (
+                "Qu'est-ce que t'en penses, Kobye?",
+                "Qu'est-ce que t'en penses ?",
+            ),
+            (
+                "Dit Koby,, combien on a de tickets ouverts?",
+                "combien on a de tickets ouverts?",
+            ),
+            (
+                "Hockeykobi lance la prise de notes",
+                "lance la prise de notes",
+            ),
+            ("Oke Kobi lance la prise de note", "lance la prise de note"),
+        ];
+        for (texte, question) in appels {
+            assert_eq!(
+                interpellation(texte),
+                Some((Appel, question.to_string())),
+                "{texte}"
+            );
+        }
+        // Ailleurs qu'en appel : rien, ou une citation (KOB-168 inchangé).
+        for texte in [
+            "Mon collègue Cody est en congé.",
+            "On parle de Kirby ou de Mario ?",
+            "Fais une copie du devis pour le client.",
+            "Le cobra est le serpent le plus long d'Asie.",
+            "J'ai acheté un combi pour les vacances.",
+            "On a pris un coca et un Kirby en peluche.",
+        ] {
+            assert_eq!(interpellation(texte), None, "{texte}");
+        }
+        for texte in [
+            "Kirby est un personnage de jeu vidéo.",
+            "Cody a envoyé le rapport ce matin.",
+        ] {
+            assert_eq!(interpellation(texte).map(|(a, _)| a), Some(Cite), "{texte}");
+        }
+        // En conversation, le nom collé en tête sort aussi de la question.
+        assert_eq!(question("Etkobi ouvre et réclage"), "ouvre et réclage");
+        assert_eq!(
+            reperer("Wicoby, met ça dans les décisions"),
+            Some("met ça dans les décisions")
+        );
+        // « à Kobi » sans virgule reste une citation.
+        assert_eq!(
+            interpellation("on le dit à Kobi").map(|(a, _)| a),
+            Some(Cite)
+        );
     }
 
     /// Plus de 40 phrases (KOB-168) : nom au début, au milieu, à la fin,
