@@ -297,14 +297,15 @@ pub const COMMANDES: &[Commande] = &[
         ..c(
             "validation.ask",
             Affichage,
-            "Demande à l'utilisateur de valider une action qui écrit (carte, oui ou non, refus au bout de 60 s) ; répond accepte: true ou false.",
+            "Demande à l'utilisateur de valider un appel d'outil qui écrit (carte, oui ou non, refus au bout de 60 s) ; répond accepte: true ou false.",
             &[
                 requis(choix(
                     p("kind", Texte, "Genre de l'action."),
                     &["fichier", "commande", "suppression", "mcp", "reglage"],
                 )),
-                requis(p("summary", Texte, "Résumé en une phrase.")),
-                p("detail", Json, "Détail montré sur la carte (diff, commande, dossier)."),
+                requis(p("tool", Texte, "Outil appelé (Write, Edit, Bash…).")),
+                requis(p("input", Json, "Entrée de l'outil, telle que l'agent l'a envoyée.")),
+                p("summary", Texte, "Résumé en une phrase, à la place de celui de Kobi."),
             ],
         )
     },

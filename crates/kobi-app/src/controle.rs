@@ -405,17 +405,22 @@ pub fn executer<R: Runtime>(
             Ok(json!({ "dit": texte_dit }))
         }
         "validation.ask" => {
+            use crate::validation::{CarteValidation, Genre, ECHEANCE};
             // Le genre vient d'une liste fermée (`choix`, vérifiée avant).
             let genre = match texte(&params, "kind").unwrap_or_default() {
-                "fichier" => "fichier",
-                "suppression" => "suppression",
-                "mcp" => "mcp",
-                "reglage" => "reglage",
-                _ => "commande",
+                "fichier" => Genre::Fichier,
+                "suppression" => Genre::Suppression,
+                "mcp" => Genre::Mcp,
+                "reglage" => Genre::Reglage,
+                _ => Genre::Commande,
             };
-            let resume = texte(&params, "summary").unwrap_or_default().to_owned();
-            let detail = params.get("detail").cloned().unwrap_or(Value::Null);
-            let r = crate::validation::demander(app, genre, resume, detail);
+            let outil = texte(&params, "tool").unwrap_or_default();
+            let entree = params.get("input").cloned().unwrap_or(Value::Null);
+            let mut carte = CarteValidation::depuis_appel(0, genre, outil, &entree, ECHEANCE);
+            if let Some(resume) = texte(&params, "summary").filter(|r| !r.trim().is_empty()) {
+                carte.resume = resume.to_owned();
+            }
+            let r = crate::validation::demander(app, carte);
             Ok(json!({ "accepte": r.acceptee(), "decision": r.decision() }))
         }
         autre => Err(erreur(
@@ -1052,7 +1057,8 @@ mod tests {
 
     #[test]
     fn validation_demandee_par_le_hook() {
-        let demande = json!({"kind": "commande", "summary": "Lancer cargo fmt", "detail": {"commande": "cargo fmt"}});
+        let demande =
+            json!({"kind": "commande", "tool": "Bash", "input": {"command": "cargo fmt"}});
         let essai_avec = |reponse: Option<bool>| {
             let e = essai();
             e.app

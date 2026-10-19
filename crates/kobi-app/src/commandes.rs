@@ -33,8 +33,6 @@ pub const OUTILS_COMMANDE: [&str; 2] = ["Bash", "PowerShell"];
 pub const OUTILS_FICHIER: [&str; 3] = ["Write", "Edit", "MultiEdit"];
 /// Le hook attend la réponse à la carte (60 s) : un peu plus que ça.
 const ATTENTE_HOOK_S: u32 = 75;
-/// Avant / après d'un fichier montrés sur la carte (caractères).
-const EXTRAIT_MAX: usize = 1500;
 
 fn outils_du_hook() -> impl Iterator<Item = &'static str> {
     OUTILS_COMMANDE.into_iter().chain(OUTILS_FICHIER)
@@ -145,11 +143,17 @@ pub fn hook() -> i32 {
     0
 }
 
-/// Demande la carte de validation à l'app en cours et attend la réponse :
-/// `accepte`, `refuse` ou `delai` ; `None` si l'app ne répond pas.
-fn demander_a_l_app(genre: &'static str, resume: String, detail: Value) -> Option<String> {
+/// Demande la carte de validation de `appel` (`{tool, input}`) à l'app en
+/// cours et attend la réponse : `accepte`, `refuse` ou `delai` ; `None` si
+/// l'app ne répond pas. L'app présente l'appel (diff d'un fichier, commande).
+fn demander_a_l_app(genre: &'static str, resume: String, appel: Value) -> Option<String> {
     let point = kobi_ctl::Point::defaut()?;
-    let params = json!({ "kind": genre, "summary": resume, "detail": detail });
+    let params = json!({
+        "kind": genre,
+        "summary": resume,
+        "tool": appel["tool"],
+        "input": appel["input"],
+    });
     match kobi_ctl::client::appeler(&point, "validation.ask", params, kobi_ctl::Origine::Cli) {
         Ok(v) => v["decision"].as_str().map(str::to_owned),
         Err(_) => None,
@@ -216,8 +220,13 @@ pub fn decider_avec(
     if regle == Politique::SansDemander {
         return reponse(true, "autorisé sans demander (réglage [permissions])");
     }
-    let (resume, detail) = carte(&action, &ctx);
-    match demander(genre, resume, detail).as_deref() {
+    let mut entree = params.clone();
+    if let (Some(o), Some(cwd)) = (entree.as_object_mut(), &ctx.cwd) {
+        o.entry("cwd")
+            .or_insert_with(|| json!(cwd.display().to_string()));
+    }
+    let resume = resume(&action, &ctx);
+    match demander(genre, resume, json!({ "tool": outil, "input": entree })).as_deref() {
         Some("accepte") => reponse(true, "validé par l'utilisateur sur la carte de Kobi"),
         Some("delai") => reponse(
             false,
@@ -239,46 +248,22 @@ pub fn decider_avec(
     }
 }
 
-/// Résumé et détail de la carte de validation d'une écriture.
-fn carte(action: &Action, ctx: &Contexte) -> (String, Value) {
-    let cwd = ctx.cwd.as_ref().map(|d| d.display().to_string());
+/// Résumé de la carte d'un fichier : seul le hook sait s'il le crée ou le
+/// réécrit. Pour une commande, l'app résume elle-même (description donnée
+/// par l'agent, « Supprimer : … »), comme le détail (diff, commande, dossier).
+fn resume(action: &Action, ctx: &Contexte) -> String {
     match action {
-        Action::Commande { ligne, .. } => (
-            format!("Lancer : {}", extrait(ligne, 120)),
-            json!({ "commande": ligne, "dossier": cwd }),
-        ),
-        Action::EcrireFichier {
-            chemin,
-            avant,
-            apres,
-        } => {
+        Action::EcrireFichier { chemin, avant, .. } => {
             let relatif = kobi_perms::action::relatif(chemin, &ctx.dossiers);
             let verbe = match avant {
                 Some(_) => "Modifier",
                 None if chemin.exists() => "Réécrire",
                 None => "Créer",
             };
-            (
-                format!("{verbe} {relatif}"),
-                json!({
-                    "chemin": relatif,
-                    "avant": avant.as_deref().map(|a| extrait(a, EXTRAIT_MAX)),
-                    "apres": extrait(apres, EXTRAIT_MAX),
-                }),
-            )
+            format!("{verbe} {relatif}")
         }
-        autre => (format!("{autre:?}"), Value::Null),
+        _ => String::new(),
     }
-}
-
-/// Coupe un texte au-delà de `max` caractères.
-fn extrait(texte: &str, max: usize) -> String {
-    if texte.chars().count() <= max {
-        return texte.to_owned();
-    }
-    let mut s: String = texte.chars().take(max - 1).collect();
-    s.push('…');
-    s
 }
 
 fn reponse(autorise: bool, raison: &str) -> Value {
@@ -350,7 +335,10 @@ mod tests {
         let d = [kobi()];
         let demandes: RefCell<Vec<(String, String)>> = RefCell::default();
         let avec = |reponse: Option<&'static str>, politique: &PermissionsConfig, entree: &str| {
-            let demander = |genre: &'static str, resume: String, _: Value| {
+            let demander = |genre: &'static str, resume: String, appel: Value| {
+                // L'app reçoit l'appel d'origine, dossier de travail compris.
+                assert!(appel["tool"].is_string(), "{appel}");
+                assert_eq!(appel["input"]["cwd"], json!(kobi().display().to_string()));
                 demandes.borrow_mut().push((genre.to_owned(), resume));
                 reponse.map(str::to_owned)
             };
@@ -361,10 +349,7 @@ mod tests {
         assert_eq!(decision(&avec(Some("accepte"), &defaut, &rm)), "allow");
         assert_eq!(
             demandes.borrow().last().unwrap(),
-            &(
-                "suppression".to_owned(),
-                "Lancer : rm -rf target".to_owned()
-            )
+            &("suppression".to_owned(), String::new())
         );
         assert_eq!(decision(&avec(Some("refuse"), &defaut, &rm)), "deny");
         let v = avec(Some("delai"), &defaut, &rm);
