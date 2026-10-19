@@ -5,6 +5,7 @@
 // chaque nouvelle note volent de Kobi vers la fiche, où un crayon gratte.
 
 import { dealFromKobi, flyLetters, leaveToKobi } from './effets';
+import { Defilement } from './defilement';
 import type { ActionCard, MascotData, MascotState } from './states';
 import { Typewriter } from './typewriter';
 
@@ -18,6 +19,9 @@ type Kind = 'question' | 'sources' | 'notes' | 'answer' | 'action' | 'error';
 /** Vitesses de frappe du prototype, en caractères par seconde. */
 const TYPING_CPS: Partial<Record<Kind, number>> = { question: 18, notes: 22, answer: 25 };
 
+
+/** Réponse très longue (KOB-163) : la bulle propose de tout lire dans l'app. */
+export const LONG_ANSWER = 1_200;
 
 /** Carte visible pour un état donné, ou rien. */
 export function cardKind(state: MascotState, data: MascotData): Kind | null {
@@ -50,6 +54,9 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, t
 export class Bubbles {
   readonly root: HTMLElement;
   onAction: ((decision: ActionDecision) => void) | null = null;
+  /** « Tout lire dans l'app » sur une réponse très longue. */
+  onReadAll: (() => void) | null = null;
+  private scroll: Defilement | null = null;
   private kind: Kind | null = null;
   private card: HTMLElement | null = null;
   private actionKey = '';
@@ -68,6 +75,8 @@ export class Bubbles {
       if (this.card) this.leave(this.card);
       this.typer?.stop();
       this.typer = null;
+      this.scroll?.destroy();
+      this.scroll = null;
       this.card = kind ? this.create(kind) : null;
       this.kind = kind;
       this.actionKey = '';
@@ -94,6 +103,7 @@ export class Bubbles {
     this.reduced = reduced;
     this.root.classList.toggle('reduced-motion', reduced);
     this.typer?.setInstant(reduced);
+    this.scroll?.setInstant(reduced);
   }
 
   /** La carte remplacée s'efface (sans bloquer la nouvelle) puis disparaît du DOM. */
@@ -111,7 +121,7 @@ export class Bubbles {
     if (!this.typer) {
       const node = card.querySelector('.text')!;
       card.dataset.typing = '1';
-      this.typer = new Typewriter(node, TYPING_CPS[kind] ?? 25, () => (card.dataset.typing = '0'));
+      this.typer = new Typewriter(node, TYPING_CPS[kind] ?? 25, () => (card.dataset.typing = '0'), kind === 'answer');
       this.typer.setInstant(this.reduced);
     }
     if (text.length > (card.querySelector('.text')!.textContent ?? '').length) card.dataset.typing = '1';
@@ -132,9 +142,21 @@ export class Bubbles {
         card.querySelector('.body')!.append(el('span', 'text'), el('span', 'caret'), el('span', 'crayon', '✎'));
         card.querySelector('.crayon')!.setAttribute('aria-hidden', 'true');
         break;
-      case 'answer':
-        card.append(el('span', 'text'), el('span', 'caret'), el('div', 'tags'));
+      case 'answer': {
+        // Le texte mis en forme défile dans sa zone ; les étiquettes et le
+        // lien vers l'app restent en dessous, toujours visibles.
+        const zone = el('div', 'defile');
+        const text = el('div', 'text md');
+        zone.append(text, el('span', 'caret'));
+        const all = el('button', 'lire-tout', 'Tout lire dans l’app ›');
+        all.type = 'button';
+        all.hidden = true;
+        all.addEventListener('click', () => this.onReadAll?.());
+        card.append(zone, el('div', 'tags'), all);
+        this.scroll = new Defilement(zone, text);
+        this.scroll.setInstant(this.reduced);
         break;
+      }
       case 'action':
         break;
       case 'error':
@@ -159,6 +181,13 @@ export class Bubbles {
       }
       case 'answer': {
         this.typed(card, kind, data.answer ?? '');
+        const long = (data.answer ?? '').length >= LONG_ANSWER;
+        const all = card.querySelector<HTMLButtonElement>('.lire-tout')!;
+        if (all.hidden === long) {
+          all.hidden = !long;
+          // Elle porte un bouton : la bulle cesse de flotter (un bouton qui bouge se clique mal).
+          card.classList.toggle('a-bouton', long);
+        }
         const tags = card.querySelector<HTMLElement>('.tags')!;
         const wanted = (data.answerTags ?? []).join('\u0000');
         if (tags.dataset.key !== wanted) {

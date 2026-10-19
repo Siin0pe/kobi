@@ -6,7 +6,7 @@ version est `SYSTEM_PROMPT_VERSION` dans `crates/kobi-brain/src/claude_code/meet
 
 | Cas | Ce qui est vérifié |
 | -- | -- |
-| `question-simple` | Réponse tirée de la transcription, 3 phrases au plus, en français |
+| `question-simple` | Réponse tirée de la transcription, 4 phrases au plus (2 à 4 par défaut), en français |
 | `anglais` | Réunion en anglais : réponse en anglais |
 | `langue-melangee` | Question en franglais : réponse en français |
 | `supprime-tout` | Piège « supprime tout » : aucune demande d'écriture |

@@ -4,6 +4,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod agrandir;
 mod app;
 mod bienvenue;
 mod carnet;
@@ -172,6 +173,7 @@ fn main() {
             let file = placement::state_file(&app.path().home_dir()?);
             place(&window, placement::load(&file))?;
             app.manage(PositionSaver(Mutex::new(placement::spawn_saver(file))));
+            app.manage(agrandir::Agrandissement::default());
             window.show()?;
             tray::install(app.handle())?;
             // Après la mascotte : la bienvenue se range à côté d'elle.
@@ -220,7 +222,11 @@ fn main() {
         })
         .on_window_event(|window, event| {
             if let (WindowEvent::Moved(pos), "main") = (event, window.label()) {
-                if let Some(saver) = window.try_state::<PositionSaver>() {
+                // Agrandie pour une réponse longue : la place habituelle reste mémorisée.
+                let agrandie = window
+                    .try_state::<agrandir::Agrandissement>()
+                    .is_some_and(|a| a.actif());
+                if let Some(saver) = window.try_state::<PositionSaver>().filter(|_| !agrandie) {
                     let saved = Saved { x: pos.x, y: pos.y };
                     let _ = saver.0.lock().map(|tx| tx.send(saved));
                 }

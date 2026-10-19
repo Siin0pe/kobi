@@ -39,6 +39,18 @@ export interface StageOptions {
   announce?: boolean;
 }
 
+/** Fenêtre agrandie vers la gauche ou la droite, vers le haut ou le bas. */
+export interface Agrandie {
+  gauche: boolean;
+  haut: boolean;
+}
+
+/** Bulle de réponse dans la scène agrandie : bas (vers le haut) ou haut (vers le bas), en unités de scène. */
+const ANSWER_BOTTOM = 424;
+const ANSWER_TOP = 150;
+/** Marge au bord de la fenêtre, en px réels. */
+const EDGE = 16;
+
 export class Stage {
   readonly root: HTMLElement;
   private readonly scene: HTMLElement;
@@ -67,6 +79,10 @@ export class Stage {
   private readonly forcedMotion: boolean | undefined;
   private readonly inFrame: boolean;
   private readonly cleanups: Array<() => void> = [];
+  /** Échelle de la scène hors agrandissement. */
+  private fitted = 0;
+  /** Échelle gardée pendant que la fenêtre change de taille. */
+  private scaleFrozen = false;
   /** Animations arrêtées par la mise en pause, à relancer au retour. */
   private frozen: Animation[] = [];
   private readonly metronome: Metronome;
@@ -74,6 +90,10 @@ export class Stage {
   private interrupted = false;
   /** Appelé à chaque état affiché (l'historique se referme, par exemple). */
   onStateChange: ((state: MascotState) => void) | null = null;
+  /** Appelé à chaque rendu des bulles (état ou données) : réponse longue, KOB-163. */
+  onRender: ((state: MascotState, data: Readonly<MascotData>) => void) | null = null;
+  /** Fenêtre agrandie pour une réponse longue, et vers où (KOB-163). */
+  private grown: Agrandie | null = null;
   /** État ignoré quelque temps (voir `ignore`). */
   private ignored: { state: MascotState; until: number } | null = null;
 
@@ -190,6 +210,7 @@ export class Stage {
     this.kobi.setState(state, this.data);
     this.bubbles.render(state, this.data);
     this.onStateChange?.(state);
+    this.onRender?.(state, this.data);
     if (state !== this.spoken) {
       this.spoken = state;
       this.live.textContent = STATE_SPOKEN[state];
@@ -307,6 +328,7 @@ export class Stage {
     this.data = { ...this.data, ...data };
     this.kobi.setData(this.data);
     this.bubbles.render(this.state, this.data);
+    this.onRender?.(this.state, this.data);
   }
 
   /**
@@ -320,6 +342,38 @@ export class Stage {
     // Le texte affiché devient la réponse : un nouveau rendu ne relance pas la frappe.
     this.data = { ...this.data, answer: this.root.querySelector('[data-card=answer] .text')?.textContent ?? '' };
     this.kobi.setData(this.data);
+  }
+
+  /** « Tout lire dans l'app » sur une réponse très longue. */
+  onReadAll(handler: () => void): void {
+    this.bubbles.onReadAll = handler;
+  }
+
+  get agrandie(): Agrandie | null {
+    return this.grown;
+  }
+
+  /**
+   * Fenêtre agrandie (réponse longue, KOB-163) : la scène garde son échelle
+   * et reste dans son coin, Kobi ne bouge pas ; la bulle de réponse déborde
+   * dans la place gagnée, avec un texte à sa vraie taille. `null` : retour à
+   * la taille habituelle.
+   */
+  setAgrandie(sens: Agrandie | null): void {
+    this.grown = sens;
+    const c = this.root.classList;
+    c.toggle('agrandie', sens !== null);
+    c.toggle('vers-gauche', sens?.gauche === true);
+    c.toggle('vers-droite', sens?.gauche === false);
+    c.toggle('vers-haut', sens?.haut === true);
+    c.toggle('vers-bas', sens?.haut === false);
+    this.fit();
+  }
+
+  /** Garde l'échelle pendant que la fenêtre change de taille (agrandissement). */
+  freezeScale(frozen: boolean): void {
+    this.scaleFrozen = frozen;
+    if (!frozen) this.fit();
   }
 
   /** Ajoute un élément à la scène (champ de saisie, historique, notifications). */
@@ -396,7 +450,20 @@ export class Stage {
 
   private fit(): void {
     const box = this.inFrame ? this.root.parentElement!.getBoundingClientRect() : { width: window.innerWidth, height: window.innerHeight };
-    const scale = Math.min(box.width / SCENE_WIDTH, box.height / SCENE_HEIGHT);
+    // Agrandie : l'échelle d'avant reste, la place gagnée sert à la réponse.
+    const keep = (this.grown || this.scaleFrozen) && this.fitted;
+    const scale = keep ? this.fitted : Math.min(box.width / SCENE_WIDTH, box.height / SCENE_HEIGHT);
+    if (!keep) this.fitted = scale;
     this.root.style.setProperty('--scale', String(scale));
+    // Bulle de réponse à taille réelle (zoom inverse de l'échelle), et la
+    // hauteur qu'elle peut prendre dans la fenêtre, en px réels.
+    this.root.style.setProperty('--zoom', String(1 / scale));
+    const sceneTop = this.grown?.haut === false ? 0 : box.height - SCENE_HEIGHT * scale;
+    const room = this.grown
+      ? this.grown.haut
+        ? sceneTop + ANSWER_BOTTOM * scale - EDGE
+        : box.height - EDGE - (sceneTop + ANSWER_TOP * scale)
+      : 0;
+    this.root.style.setProperty('--lecture', `${Math.max(120, Math.round(room))}px`);
   }
 }

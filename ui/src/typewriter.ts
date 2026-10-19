@@ -14,6 +14,7 @@
 // que la frappe s'arrête.
 
 import { NOISE } from './mascotte/glyphs';
+import { Markdown } from './markdown';
 import { onFrame } from './ticker';
 
 /** Retard (en caractères) au-delà duquel la vitesse augmente. */
@@ -41,16 +42,20 @@ export class Typewriter {
   /** Mot en cours de frappe, et son texte exact (la tête peut être brouillée). */
   private word: HTMLElement | null = null;
   private wordText = '';
+  /** Réponse mise en forme (paragraphes, listes, code, KOB-163). */
+  private md: Markdown | null = null;
 
   /**
    * @param node élément dont le texte est tapé
    * @param cps vitesse de base en caractères par seconde
    * @param onDone appelé quand tout le texte cible est affiché
+   * @param markdown met en forme le texte (paragraphes, listes, code)
    */
   constructor(
     private readonly node: Element,
     private readonly cps: number,
     private readonly onDone?: () => void,
+    private readonly markdown = false,
   ) {}
 
   /** Change le texte cible. Si l'ancien texte en est le début, la frappe continue. */
@@ -127,6 +132,14 @@ export class Typewriter {
 
   private paint(): void {
     const text = this.target.slice(0, this.shown).join('');
+    if (this.markdown) {
+      if (!this.md || !text.startsWith(this.md.rendered)) {
+        this.node.replaceChildren();
+        this.md = new Markdown(this.node, () => !this.instant);
+      }
+      this.md.feed(text, this.done);
+      return;
+    }
     if (text === this.rendered) return;
     if (!text.startsWith(this.rendered)) {
       this.node.replaceChildren();

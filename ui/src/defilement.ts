@@ -1,0 +1,116 @@
+// Défilement d'une réponse longue (KOB-163) : la bulle grandit jusqu'à sa
+// hauteur maximale, puis son texte défile en douceur et suit la frappe tant
+// que l'utilisateur ne remonte pas (molette, glisser, clavier). Revenu en bas,
+// le suivi reprend. Un dégradé en haut et en bas signale la suite.
+
+import { onFrame } from './ticker';
+
+/** Écart (px) sous lequel on est « en bas ». */
+const BOTTOM = 4;
+/** Part de l'écart rattrapée à chaque image : un glissement doux, pas un saut. */
+const EASE = 0.18;
+
+export class Defilement {
+  /** Suit le flux (en bas), tant que l'utilisateur ne remonte pas. */
+  private follow = true;
+  private stopTick: (() => void) | null = null;
+  /** Dernière position posée par le suivi : un autre écart vient de l'utilisateur. */
+  private ours = -1;
+  private drag: { y: number; top: number } | null = null;
+  private readonly observer: ResizeObserver;
+  private readonly mutations: MutationObserver;
+  private instant = false;
+
+  constructor(
+    private readonly zone: HTMLElement,
+    content: HTMLElement,
+  ) {
+    // La zone grandit jusqu'à sa hauteur maximale (taille), puis c'est le
+    // contenu qui s'allonge (mots ajoutés par la frappe).
+    this.observer = new ResizeObserver(() => this.poke());
+    this.observer.observe(zone);
+    this.mutations = new MutationObserver(() => this.poke());
+    this.mutations.observe(content, { childList: true, subtree: true, characterData: true });
+    zone.addEventListener('scroll', () => this.onScroll(), { passive: true });
+    zone.addEventListener('wheel', (e) => {
+      if (e.deltaY < 0 && zone.scrollTop > 0) this.follow = false;
+    }, { passive: true });
+    zone.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0 || zone.scrollHeight <= zone.clientHeight) return;
+      this.drag = { y: e.clientY, top: zone.scrollTop };
+      zone.setPointerCapture(e.pointerId);
+    });
+    zone.addEventListener('pointermove', (e) => {
+      if (!this.drag) return;
+      const scale = zone.getBoundingClientRect().height / Math.max(1, zone.offsetHeight);
+      const top = this.drag.top - (e.clientY - this.drag.y) / (scale || 1);
+      if (top < zone.scrollTop) this.follow = false;
+      zone.scrollTop = top;
+    });
+    const release = (): void => {
+      this.drag = null;
+    };
+    zone.addEventListener('pointerup', release);
+    zone.addEventListener('pointercancel', release);
+    this.paintFades();
+  }
+
+  /** Réduire les animations : le suivi saute en bas sans glisser. */
+  setInstant(instant: boolean): void {
+    this.instant = instant;
+  }
+
+  /** Remonté par l'utilisateur ? (tests) */
+  get following(): boolean {
+    return this.follow;
+  }
+
+  destroy(): void {
+    this.observer.disconnect();
+    this.mutations.disconnect();
+    this.stopTick?.();
+    this.stopTick = null;
+  }
+
+  /** Le contenu a changé de taille : on glisse vers le bas si on suit. */
+  private poke(): void {
+    this.paintFades();
+    if (!this.follow || this.stopTick) return;
+    if (this.instant) {
+      this.zone.scrollTop = this.zone.scrollHeight;
+      this.ours = this.zone.scrollTop;
+      return;
+    }
+    this.stopTick = onFrame(() => this.glide());
+  }
+
+  private glide(): boolean {
+    const z = this.zone;
+    const target = z.scrollHeight - z.clientHeight;
+    const gap = target - z.scrollTop;
+    if (!this.follow || gap <= 1) {
+      this.stopTick = null;
+      return false;
+    }
+    z.scrollTop += Math.max(1, gap * EASE);
+    this.ours = z.scrollTop;
+    return true;
+  }
+
+  private onScroll(): void {
+    const z = this.zone;
+    const atBottom = z.scrollTop + z.clientHeight >= z.scrollHeight - BOTTOM;
+    // Remonté à la main (barre, clavier) : on cesse de suivre ; revenu en bas : on reprend.
+    if (Math.abs(z.scrollTop - this.ours) > 2 && !atBottom && z.scrollTop < this.ours) this.follow = false;
+    if (atBottom) this.follow = true;
+    this.paintFades();
+  }
+
+  private paintFades(): void {
+    const z = this.zone;
+    const up = z.scrollTop > 2;
+    const down = z.scrollTop + z.clientHeight < z.scrollHeight - BOTTOM;
+    z.classList.toggle('peut-monter', up);
+    z.classList.toggle('peut-descendre', down);
+  }
+}

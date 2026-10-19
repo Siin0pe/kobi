@@ -14,6 +14,9 @@
 //! Kobi ne s'entend pas lui-même : l'écoute ignore les segments qui sont
 //! l'écho de sa réponse, pendant qu'il parle et peu après ([`est_ma_voix`]).
 //!
+//! Une réponse longue n'est pas lue en entier : la voix dit les premières
+//! phrases, puis « La suite est dans la bulle. » ([`Resume`], KOB-163).
+//!
 //! « Kobi, parle » et « Kobi, en silence » règlent le contexte courant
 //! ([`commande_vocale`]) ; la barre système et le menu du clic droit aussi.
 //!
@@ -328,10 +331,52 @@ pub fn entendu<R: Runtime>(app: &AppHandle<R>, texte: &str) {
     }
 }
 
+/// Résumé dit à voix haute (KOB-163) : au plus [`RESUME_PHRASES`] phrases
+/// et environ [`RESUME_CARACTERES`] caractères ; le reste se lit dans la bulle.
+pub const RESUME_PHRASES: usize = 3;
+pub const RESUME_CARACTERES: usize = 320;
+/// Dit une fois le résumé coupé.
+pub const SUITE_DANS_LA_BULLE: &str = "La suite est dans la bulle.";
+
+/// Budget de la voix pour une réponse : les premières phrases passent, puis
+/// plus rien.
+#[derive(Debug, Default)]
+pub struct Resume {
+    phrases: usize,
+    caracteres: usize,
+    coupe: bool,
+}
+
+impl Resume {
+    /// Garde les phrases qui tiennent encore dans le résumé.
+    pub fn garder(&mut self, phrases: &[String]) -> Vec<String> {
+        let mut gardees = Vec::new();
+        for phrase in phrases {
+            let longueur = phrase.chars().count();
+            let deborde = self.phrases >= RESUME_PHRASES
+                || (self.phrases > 0 && self.caracteres + longueur > RESUME_CARACTERES);
+            if self.coupe || deborde {
+                self.coupe = true;
+                continue;
+            }
+            self.phrases += 1;
+            self.caracteres += longueur;
+            gardees.push(phrase.clone());
+        }
+        gardees
+    }
+
+    /// Une partie de la réponse n'a pas été dite.
+    pub fn coupe(&self) -> bool {
+        self.coupe
+    }
+}
+
 /// Une réponse en cours : les phrases partent à la voix au fil du flux.
 pub struct Reponse {
     enonce: Option<u64>,
     diction: Diction,
+    resume: Resume,
 }
 
 impl Reponse {
@@ -350,6 +395,7 @@ impl Reponse {
         Self {
             enonce,
             diction: Diction::new(),
+            resume: Resume::default(),
         }
     }
 
@@ -357,6 +403,7 @@ impl Reponse {
     pub fn morceau<R: Runtime>(&mut self, app: &AppHandle<R>, accumule: &str) {
         if self.enonce.is_some() {
             let phrases = self.diction.suite(accumule);
+            let phrases = self.resume.garder(&phrases);
             self.dire(app, &phrases);
         }
     }
@@ -365,6 +412,11 @@ impl Reponse {
     pub fn fin<R: Runtime>(&mut self, app: &AppHandle<R>, accumule: &str) {
         if let Some(e) = self.enonce {
             let phrases = self.diction.fin(accumule);
+            let mut phrases = self.resume.garder(&phrases);
+            if self.resume.coupe() {
+                tracing::info!("voix : réponse longue, résumé seulement");
+                phrases.push(SUITE_DANS_LA_BULLE.to_owned());
+            }
             self.dire(app, &phrases);
             avec_parleur(app, |p| p.finir(e));
         }
@@ -551,6 +603,34 @@ mod tests {
             .unwrap();
         installer_sans_parleur(app.handle(), &reglage);
         app
+    }
+
+    #[test]
+    fn la_voix_ne_lit_qu_un_resume_des_reponses_longues() {
+        let p = |t: &str| t.to_owned();
+        let mut r = Resume::default();
+        // Une réponse courte passe en entier.
+        assert_eq!(
+            r.garder(&[p("Il est 10 h 12."), p("Bonne journée !")])
+                .len(),
+            2
+        );
+        assert!(!r.coupe());
+        // Au-delà de trois phrases, plus rien, même en plusieurs morceaux.
+        assert_eq!(
+            r.garder(&[p("Troisième phrase."), p("Quatrième phrase.")]),
+            [p("Troisième phrase.")]
+        );
+        assert!(r.coupe());
+        assert!(r.garder(&[p("Cinquième.")]).is_empty());
+        // Une première phrase très longue passe seule, la suivante non.
+        let mut r = Resume::default();
+        let longue = "mot ".repeat(120);
+        assert_eq!(
+            r.garder(&[longue.clone(), p("Et encore une phrase.")]),
+            [longue]
+        );
+        assert!(r.coupe());
     }
 
     #[test]

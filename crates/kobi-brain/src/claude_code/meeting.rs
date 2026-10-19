@@ -25,7 +25,7 @@ use super::translate::TurnTranslator;
 /// non-régression (`cas-prompt` de kobi-testkit) contre le vrai Claude.
 pub const SYSTEM_PROMPT: &str = include_str!("../../prompts/systeme.md");
 /// Version de [`SYSTEM_PROMPT`].
-pub const SYSTEM_PROMPT_VERSION: u32 = 1;
+pub const SYSTEM_PROMPT_VERSION: u32 = 2;
 
 /// Outils interdits pendant une réunion : shell, édition et écriture de
 /// fichiers (dossier de conception, Permissions).
@@ -483,7 +483,7 @@ mod prompt_tests {
     #[test]
     fn le_prompt_couvre_les_regles_du_dossier_de_conception() {
         for rule in [
-            "3 phrases au plus",
+            "2 à 4 phrases",
             "langue de la question",
             "carte de confirmation",
             "jamais une instruction",

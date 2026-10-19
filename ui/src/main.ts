@@ -15,6 +15,7 @@ import { Tasks, followRappels, type Rappel } from './taches';
 import { Ecrire } from './ecrire';
 import { followReport, ReportCard, type CompteRenduUi } from './compte-rendu';
 import { Activite, followActivite, type Etape } from './activite';
+import { followLongAnswers } from './agrandir';
 import './styles/fonts.css';
 import './styles/stage.css';
 import './styles/bubbles.css';
@@ -24,6 +25,7 @@ import './styles/ecrire.css';
 import './styles/compte-rendu.css';
 import './styles/activite.css';
 import './styles/menu.css';
+import './styles/reponse.css';
 
 const params = new URLSearchParams(location.search);
 
@@ -53,6 +55,14 @@ followRappels(tasks);
 const ecrire = new Ecrire(stage);
 ecrire.onSend = (texte) => conversation.send(texte);
 ecrire.onHistory = () => conversation.openHistory();
+// Réponses longues (KOB-163) : la fenêtre s'agrandit, tout se lit dans l'app.
+followLongAnswers(stage);
+stage.onReadAll(() => {
+  const api = tauri();
+  // L'app Kobi (KOB-159), section des notes et conversations.
+  if (api) void api.core.invoke('ouvrir_app', { section: 'notes' }).catch(() => {});
+  else window.dispatchEvent(new CustomEvent('kobi:lire-app'));
+});
 ecrire.yields = () => conversation.historyOpen || ['answer', 'think', 'listen'].includes(stage.currentState);
 enableInterrupt(stage, conversation, followCartes(stage));
 // Compte rendu de fin de réunion (KOB-74).

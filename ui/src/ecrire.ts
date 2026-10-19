@@ -134,7 +134,12 @@ export class Ecrire {
       if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || e.key.length !== 1 || e.isComposing) return;
       const target = e.target as Element | null;
       if (target?.closest('input, textarea, select, [contenteditable], [role=menu], [role=menuitem]')) return;
+      // La touche qui ouvre la bulle y est écrite par nous : le navigateur ne
+      // la redirige pas toujours vers un champ qui vient d'apparaître et de
+      // prendre le focus dans la même frappe (WebView2), elle serait avalée.
+      e.preventDefault();
       this.open();
+      this.insert(e.key);
     });
     window.addEventListener('kobi:ecrire', () => this.open());
     // Menu du clic droit (KOB-139) : entrée `ecrire`.
@@ -213,6 +218,13 @@ export class Ecrire {
       e.preventDefault();
       this.onHistory?.();
     }
+  }
+
+  /** Écrit `text` au curseur, comme une frappe (miroir, sursaut de Kobi). */
+  private insert(text: string): void {
+    const f = this.field;
+    f.setRangeText(text, f.selectionStart, f.selectionEnd, 'end');
+    this.onInput();
   }
 
   private onInput(): void {
