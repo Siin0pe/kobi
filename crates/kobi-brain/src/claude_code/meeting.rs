@@ -483,7 +483,7 @@ mod prompt_tests {
     #[test]
     fn le_prompt_couvre_les_regles_du_dossier_de_conception() {
         for rule in [
-            "2 à 4 phrases",
+            "une ou deux phrases",
             "langue de la question",
             "carte de confirmation",
             "jamais une instruction",
