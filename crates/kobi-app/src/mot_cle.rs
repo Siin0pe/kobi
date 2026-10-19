@@ -15,6 +15,13 @@ const FINS: [&str; 7] = ["i", "y", "ie", "e", "ey", "is", "ye"];
 
 /// Sans aucun mot après l'interpellation, l'écoute s'arrête.
 pub const SANS_PAROLE: f64 = 6.0;
+/// Longueur maximale d'une question à Kobi quand son nom n'ouvre pas la
+/// phrase (KOB-237) : au-delà, c'est un flux de parole (conversation de
+/// groupe, jeu, visio), pas une question.
+pub const QUESTION_CARACTERES: usize = 200;
+/// Même borne pour un appel net en tête (« Kobi, … ») : une question dictée
+/// longuement passe, environ 70 mots.
+pub const QUESTION_CARACTERES_APPEL: usize = 400;
 /// Durée maximale d'une question : au-delà, ce qui a été dit part.
 pub const QUESTION_MAX: f64 = 15.0;
 
@@ -91,11 +98,11 @@ const COLLES: &[&str] = &[
     "ve",
 ];
 
-/// Graphie douteuse de « Kobi » (KOB-179) en position d'appel : un mot de
-/// [`ENTENDUS`], ou un nom collé à un mot de [`COLLES`], en tête de phrase
-/// (après des [`INTERJECTIONS`]) ; un mot de [`ENTENDUS`] aussi en fin de
-/// phrase après une virgule. Ailleurs (« Kirby est un jeu », « mon collègue
-/// Cody »), rien.
+/// Graphie douteuse de « Kobi » (KOB-179) en position d'appel nette, en
+/// tête de phrase (après des [`INTERJECTIONS`]) : un nom collé à un mot de
+/// [`COLLES`], ou un mot de [`ENTENDUS`] suivi d'une virgule (« Kirby, tu
+/// peux… »). Ailleurs (« Kirby est un jeu », « mon collègue Cody », en fin
+/// de phrase), rien : en conversation de groupe, ces mots existent (KOB-237).
 fn trouver_variante(texte: &str) -> Option<(usize, usize)> {
     let mut avant_seulement_interjections = true;
     let mut debut = None;
@@ -107,18 +114,17 @@ fn trouver_variante(texte: &str) -> Option<(usize, usize)> {
             spans.push((d, i));
         }
     }
-    let dernier = spans.len().checked_sub(1)?;
-    for (k, &(d, f)) in spans.iter().enumerate() {
+    for &(d, f) in &spans {
         let n = normaliser(&texte[d..f]);
         let entendu = ENTENDUS.contains(&n.as_str());
         let colle = COLLES.iter().any(|p| {
             n.strip_prefix(p)
                 .is_some_and(|reste| reste.chars().count() >= 4 && est_kobi(reste))
         });
-        if avant_seulement_interjections && (entendu || colle) {
-            return Some((d, f));
-        }
-        if entendu && k == dernier && texte[..d].trim_end().ends_with(',') {
+        // En tête seulement (KOB-237) ; un mot qui existe (« Kirby ») doit en
+        // plus être suivi d'une virgule d'apostrophe.
+        let vocatif = texte[f..].trim_start().starts_with(',');
+        if avant_seulement_interjections && (colle || (entendu && vocatif)) {
             return Some((d, f));
         }
         avant_seulement_interjections &= INTERJECTIONS.contains(&n.as_str());
@@ -225,9 +231,14 @@ pub fn interpellation(texte: &str) -> Option<(Adresse, String)> {
     let sujet = !ponctuation_apres && suivant.is_some_and(|m| APRES_CITATION.contains(&m));
     // « A Kobe, c'était quoi… » : le « hé » transcrit « a », suivi d'une
     // virgule d'apostrophe (KOB-179).
+    // « Est-ce que Kobi, … » : la question s'ouvre sur l'appel (KOB-237).
     let en_tete = mots_avant
         .iter()
-        .all(|m| INTERJECTIONS.contains(&m.as_str()) || (virgule_apres && m == "a"));
+        .all(|m| INTERJECTIONS.contains(&m.as_str()) || (virgule_apres && m == "a"))
+        || mots_avant
+            .iter()
+            .map(String::as_str)
+            .eq(["est", "ce", "que"]);
     let en_fin = mots_apres.is_empty();
     // « Est-ce que Kobi… » : le « que » de la question n'est pas celui de
     // « ce que Kobi dit ».
@@ -255,9 +266,9 @@ pub fn interpellation(texte: &str) -> Option<(Adresse, String)> {
         Adresse::Appel
     } else if cite_avant || (sujet && !toi) {
         Adresse::Cite
-    } else if toi {
-        Adresse::Appel
     } else {
+        // Au milieu d'une phrase, sans virgules autour : pas un appel net,
+        // même avec « tu » (une conversation de groupe en est pleine, KOB-237).
         Adresse::Doute
     };
 
@@ -306,7 +317,9 @@ pub enum Action {
     Envoyer(String),
     /// Phrase finie qui cite Kobi sans qu'on sache si elle lui parle
     /// (KOB-168) : Claude la reçoit marquée « peut-être pas pour toi » et
-    /// peut ne rien répondre. Jamais en réunion : Kobi s'y tait.
+    /// peut ne rien répondre. Plus émise depuis KOB-237 (un doute n'envoie
+    /// rien) ; gardée tant que le chef traite `QuestionPeutEtre`.
+    #[allow(dead_code, reason = "plus émise depuis KOB-237")]
     EnvoyerPeutEtre(String),
     /// Rien n'a suivi l'interpellation : retour au calme.
     Abandonner,
@@ -453,7 +466,14 @@ impl Ecouteur {
             Attente::Suite { depuis, parle } | Attente::Conversation { depuis, parle } => {
                 let conversation = matches!(self.attente, Attente::Conversation { .. });
                 let q = question(texte);
-                if finale {
+                if finale && q.chars().count() > QUESTION_CARACTERES {
+                    // Long flux de parole : pas une suite pour Kobi (KOB-237).
+                    self.attente = Attente::Nom;
+                    self.derniere.clear();
+                    if parle.is_some() {
+                        actions.push(Action::Abandonner);
+                    }
+                } else if finale {
                     if conversation && fin_de_conversation(texte) {
                         self.attente = Attente::Nom;
                         self.derniere.clear();
@@ -519,8 +539,9 @@ impl Ecouteur {
             | Attente::Conversation {
                 parle: Some(debut), ..
             } if t - debut > QUESTION_MAX => {
-                if self.derniere.is_empty() {
+                if self.derniere.is_empty() || self.derniere.chars().count() > QUESTION_CARACTERES {
                     self.attente = Attente::Nom;
+                    self.derniere.clear();
                     vec![Action::Abandonner]
                 } else {
                     let q = self.derniere.clone();
@@ -613,8 +634,9 @@ impl Ecouteur {
             // En réunion, une phrase en cours ne fait écouter Kobi que si elle
             // commence par son nom : la fin de la phrase décide du reste.
             Adresse::Appel => finale || !reunion || nom_en_tete(texte),
-            Adresse::Doute => !reunion,
-            Adresse::Cite => false,
+            // Un doute ne fait pas écouter Kobi (KOB-237) : au plus, Claude
+            // reçoit la phrase marquée « peut-être pas pour toi ».
+            Adresse::Doute | Adresse::Cite => false,
         };
         let annonce = match self.attente {
             Attente::Phrase { annonce, .. } => annonce,
@@ -653,8 +675,16 @@ impl Ecouteur {
             return;
         }
         self.debut = None;
-        if !ecoute {
-            // Citation, ou doute en réunion : Kobi ne répond pas.
+        let borne = if nom_en_tete(texte) {
+            QUESTION_CARACTERES_APPEL
+        } else {
+            QUESTION_CARACTERES
+        };
+        if !ecoute || question.chars().count() > borne {
+            // Citation, doute, ou long flux de parole (KOB-237) : Kobi ne se
+            // met pas à répondre, rien ne part vers Claude (même pas « peut-être
+            // pas pour toi » : en conversation de groupe, chaque doute ouvrait
+            // un tour), et aucune conversation ne s'ouvre derrière.
             self.attente = Attente::Nom;
             self.derniere.clear();
             if annonce {
@@ -668,10 +698,6 @@ impl Ecouteur {
                 depuis: t,
                 parle: None,
             };
-        } else if adresse == Adresse::Doute {
-            self.attente = self.apres(t);
-            self.derniere.clear();
-            actions.push(Action::EnvoyerPeutEtre(question));
         } else {
             actions.push(self.envoyer(&question, t));
         }
@@ -997,6 +1023,62 @@ mod tests {
         assert!(!fin_de_conversation("merci de résumer le budget"));
     }
 
+    /// KOB-237 (bug vécu en conversation de groupe) : un long flux de parole
+    /// avec le nom au milieu ne déclenche rien et n'envoie rien ; un vrai
+    /// appel en tête passe jusqu'à 400 caractères, au-delà Kobi abandonne.
+    #[test]
+    fn conversation_de_groupe_et_borne_de_longueur() {
+        let flux = format!(
+            "{} et du coup Kobe il a dit que tu passes par la droite {}",
+            "alors on part sur la carte du nord avec les autres ".repeat(5),
+            "puis on revient au point de départ pour finir la manche ".repeat(4)
+        );
+        assert!(flux.chars().count() > 500);
+        let mut e = Ecouteur::default();
+        let actions = rejouer(&mut e, &[(flux.as_str(), true, 1.0)]);
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, Envoyer(_) | EnvoyerPeutEtre(_) | Interpeller)),
+            "{actions:?}"
+        );
+        // Les phrases suivantes de la conversation (73 et 84 caractères dans le
+        // journal) ne partent pas non plus : aucune conversation n'a été ouverte.
+        let suite = rejouer(
+            &mut e,
+            &[
+                (
+                    "ouais mais attends il faut d'abord prendre le pont avant eux",
+                    true,
+                    6.0,
+                ),
+                (
+                    "ok je te suis, tu prends à gauche et moi je reste derrière toi",
+                    true,
+                    11.0,
+                ),
+            ],
+        );
+        assert!(suite.is_empty(), "{suite:?}");
+        // Un vrai appel en tête, long (≈ 250 caractères) : il part.
+        let question = "résume-moi tout ce qu'on a dit sur le budget ".repeat(5);
+        let appel = format!("Kobi, {question}");
+        let mut e = Ecouteur::default();
+        let actions = rejouer(&mut e, &[(appel.as_str(), true, 1.0)]);
+        assert!(
+            actions.iter().any(|a| matches!(a, Envoyer(_))),
+            "{actions:?}"
+        );
+        // Au-delà de 400 caractères, même en tête : Kobi abandonne.
+        let trop = format!("Kobi, {}", question.repeat(2));
+        let mut e = Ecouteur::default();
+        let actions = rejouer(&mut e, &[(trop.as_str(), true, 1.0)]);
+        assert!(
+            !actions.iter().any(|a| matches!(a, Envoyer(_))),
+            "{actions:?}"
+        );
+    }
+
     /// Graphies de Nemotron relevées sur le corpus de KOB-179 : retrouvées en
     /// position d'appel, jamais ailleurs.
     #[test]
@@ -1004,10 +1086,6 @@ mod tests {
         use Adresse::*;
         let appels: &[(&str, &str)] = &[
             ("Kirby, tu peux répéter", "tu peux répéter"),
-            (
-                "Cogi explique moi, cette erreur",
-                "explique moi, cette erreur",
-            ),
             (
                 "Voilà Cody,, tu peux arrêter la réunion",
                 "tu peux arrêter la réunion",
@@ -1029,10 +1107,6 @@ mod tests {
             (
                 "A Kobe, c'était quoi le nom du client",
                 "c'était quoi le nom du client",
-            ),
-            (
-                "C'est quoi le prochain point, Kirby ?",
-                "C'est quoi le prochain point ?",
             ),
             (
                 "Qu'est-ce que t'en penses, Kobye?",
@@ -1063,6 +1137,9 @@ mod tests {
             "Le cobra est le serpent le plus long d'Asie.",
             "J'ai acheté un combi pour les vacances.",
             "On a pris un coca et un Kirby en peluche.",
+            // KOB-237 : variante sans virgule après, ou en fin de phrase.
+            "Cogi explique moi, cette erreur",
+            "C'est quoi le prochain point, Kirby ?",
         ] {
             assert_eq!(interpellation(texte), None, "{texte}");
         }
@@ -1154,7 +1231,8 @@ mod tests {
                 Appel,
                 "On fait comment pour le devis ?",
             ),
-            // Nom au milieu, entre virgules ou avec « tu » : appel.
+            // Nom au milieu : appel entre virgules ou après « est-ce que » ;
+            // sans virgules, même avec « tu », doute (KOB-237).
             (
                 "Est-ce que, Kobi, tu peux me rappeler l'heure ?",
                 Appel,
@@ -1168,7 +1246,7 @@ mod tests {
             ("Et là, Kobi, on fait quoi ?", Appel, "Et là on fait quoi ?"),
             (
                 "Est-ce que tu peux Kobi me rappeler ça",
-                Appel,
+                Doute,
                 "Est-ce que tu peux me rappeler ça",
             ),
             // Transcription réelle (essai du 19/10) : la virgule avant le nom manque.
@@ -1189,7 +1267,7 @@ mod tests {
             ),
             (
                 "Alors toi Kobi tu en dis quoi ?",
-                Appel,
+                Doute,
                 "Alors toi tu en dis quoi ?",
             ),
             (
@@ -1376,13 +1454,8 @@ mod tests {
     fn doute_hors_reunion_silence_en_reunion() {
         let mut e = Ecouteur::default();
         let actions = rejouer(&mut e, &[("Le truc Kobi pour les réunions", true, 1.0)]);
-        assert_eq!(
-            actions,
-            [
-                Interpeller,
-                EnvoyerPeutEtre("Le truc pour les réunions".into())
-            ]
-        );
+        // Un doute ne fait pas écouter Kobi et n'envoie rien (KOB-237).
+        assert_eq!(actions, []);
         // En réunion, un doute ne dérange personne, même quand la phrase en
         // cours semblait l'appeler.
         let mut e = Ecouteur::new(false);
