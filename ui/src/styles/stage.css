@@ -9,9 +9,10 @@ body {
   background: transparent;
 }
 
-.stage {
-  --scale: 1;
-  /* Couleurs de Kobi, reprises par les bulles et les cartes. */
+/* Couleurs et police de Kobi, reprises par les bulles, les cartes et la
+   fenêtre du menu du clic droit (KOB-202). */
+.stage,
+.kmenu-page {
   --backdrop: #d7ff3a;
   --ink: #0b0b0b;
   --paper: #f7ffe0;
@@ -19,6 +20,10 @@ body {
   --muted: #3a4200;
   --danger: #ff4d2e;
   --font: 'Recursive', system-ui, sans-serif;
+}
+
+.stage {
+  --scale: 1;
   position: fixed;
   inset: 0;
   font-family: var(--font);

@@ -27,6 +27,7 @@ mod lecture;
 mod mcp;
 mod mcp_config;
 mod menu;
+mod menu_souris;
 mod mot_cle;
 mod notes;
 mod pannes;
@@ -241,6 +242,10 @@ fn main() {
             app.manage(agrandir::Agrandissement::default());
             window.show()?;
             tray::install(app.handle())?;
+            // Menu du clic droit sous la souris (KOB-202) : sa fenêtre, cachée.
+            if let Err(e) = menu_souris::installer(app.handle()) {
+                tracing::warn!(erreur = %e, "fenêtre du menu indisponible : menu dans la fenêtre de Kobi");
+            }
             // Après la mascotte : la bienvenue se range à côté d'elle.
             bienvenue::installer(app.handle());
             // `kobi --app` / `--carnet` / `--reglages` / `--bienvenue` : ouvre

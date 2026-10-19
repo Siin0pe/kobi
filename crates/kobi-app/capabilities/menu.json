@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "menu",
+  "description": "Fenêtre du menu du clic droit (KOB-202) : ouverture, choix, fermeture.",
+  "windows": ["menu"],
+  "permissions": ["core:default"]
+}

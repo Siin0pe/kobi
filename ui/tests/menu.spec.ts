@@ -263,7 +263,8 @@ test('dans l’application : chaque entrée passe par la coque, un refus est dit
   await expect(page.getByText('micro coupé')).toBeHidden(); // masqué en mode discret
   await expect(page.locator('.dot')).toBeVisible();
   // L'app Kobi (Kobi, Carnet, Réglages) est ouverte par la coque, pas par l'interface.
-  const cmds = (await calls()).filter((c) => c.cmd === 'menu_kobi' || c.cmd.startsWith('ouvrir_'));
+  // (`ouvrir_menu` : la fenêtre du menu, KOB-202, refusée par cette coque simulée.)
+  const cmds = (await calls()).filter((c) => c.cmd === 'menu_kobi' || (c.cmd.startsWith('ouvrir_') && c.cmd !== 'ouvrir_menu'));
   expect(cmds).toEqual([
     { cmd: 'menu_kobi', args: { entree: 'app' } },
     { cmd: 'menu_kobi', args: { entree: 'carnet' } },

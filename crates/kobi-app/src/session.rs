@@ -293,6 +293,9 @@ pub fn installer<R: Runtime>(builder: Builder<R>) -> Builder<R> {
             crate::notes::notes_en_cours,
             crate::notes::basculer_notes,
             crate::menu::menu_kobi,
+            crate::menu_souris::ouvrir_menu,
+            crate::menu_souris::montrer_menu,
+            crate::menu_souris::menu_choisi,
             crate::menu::etat_ecoute,
             // Réponse longue : la fenêtre s'agrandit (KOB-163).
             crate::agrandir::agrandir_kobi,

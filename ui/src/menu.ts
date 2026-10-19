@@ -106,6 +106,94 @@ export function entries(c: MenuContext): Array<Entry | null> {
   ];
 }
 
+/**
+ * En-tête et entrées du menu pour l'état `c` ; renvoie les boutons, dans
+ * l'ordre. Partagé par la mascotte et la fenêtre du menu (KOB-202).
+ */
+export function remplirMenu(heading: HTMLElement, list: HTMLElement, c: MenuContext, choisir: (id: MenuId) => void): HTMLButtonElement[] {
+  heading.replaceChildren(el('span', 'kmenu-brand', 'kobi'), el('span', 'kmenu-state', c.recording ? (c.paused ? 'réunion en pause' : '● réunion en cours') : c.paused ? 'écoute en pause' : 'à ton écoute'));
+  heading.classList.toggle('recording', c.recording && !c.paused);
+  list.replaceChildren();
+  const items: HTMLButtonElement[] = [];
+  let index = 0;
+  for (const entry of entries(c)) {
+    if (!entry) {
+      const sep = el('div', 'kmenu-sep');
+      sep.setAttribute('role', 'separator');
+      list.append(sep);
+      continue;
+    }
+    const b = el('button', 'kmenu-item');
+    b.type = 'button';
+    b.setAttribute('role', 'menuitem');
+    b.tabIndex = -1;
+    b.dataset.id = entry.id;
+    b.classList.toggle('danger', Boolean(entry.danger));
+    b.style.setProperty('--i', String(index++));
+    b.append(icon(entry.icon), el('span', 'kmenu-label', entry.label));
+    if (entry.hint) {
+      const hint = el('kbd', 'kmenu-hint', entry.hint);
+      hint.setAttribute('aria-hidden', 'true');
+      b.append(hint);
+      b.setAttribute('aria-keyshortcuts', entry.hint.replace('Maj', 'Shift').replace('Espace', 'Space').replace(/ /g, '+'));
+    }
+    b.addEventListener('click', () => choisir(entry.id));
+    b.addEventListener('pointermove', () => {
+      if (document.activeElement !== b) b.focus({ preventScroll: true });
+    });
+    items.push(b);
+    list.append(b);
+  }
+  return items;
+}
+
+/**
+ * Clavier dans le menu ouvert : flèches, Origine/Fin, première lettre,
+ * Entrée ou Espace pour choisir, Échap, Tab ou touche Menu pour fermer.
+ */
+export function clavierMenu(e: KeyboardEvent, items: HTMLButtonElement[], choisir: (id: MenuId) => void, fermer: () => void): void {
+  const i = items.indexOf(document.activeElement as HTMLButtonElement);
+  const n = items.length;
+  const go = (j: number): void => {
+    e.preventDefault();
+    items[(j + n) % n]?.focus({ preventScroll: true });
+  };
+  switch (e.key) {
+    case 'ArrowDown':
+      return go(i + 1);
+    case 'ArrowUp':
+      return go(i < 0 ? n - 1 : i - 1);
+    case 'Home':
+      return go(0);
+    case 'End':
+      return go(n - 1);
+    case 'Escape':
+      // Fermer le menu n'interrompt pas la réponse en cours (Échap, KOB-133).
+      e.preventDefault();
+      e.stopPropagation();
+      return fermer();
+    case 'Tab':
+    case 'ContextMenu':
+      e.preventDefault();
+      return fermer();
+    case 'Enter':
+    case ' ':
+      if (i >= 0) {
+        e.preventDefault();
+        choisir(items[i]?.dataset.id as MenuId);
+      }
+      return;
+  }
+  // Première lettre : l'entrée suivante qui commence par elle.
+  if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    const key = e.key.toLocaleLowerCase('fr');
+    for (let k = 1; k <= n; k++) {
+      const b = items[(i + k) % n];
+      if (b?.textContent?.trim().toLocaleLowerCase('fr').startsWith(key)) return go((i + k) % n);
+    }
+  }
+}
+
 /** Zones où le navigateur garde sa sélection et son menu (champ de saisie). */
 function editable(target: EventTarget | null): boolean {
   return target instanceof Element && target.closest('input, textarea, [contenteditable="true"]') !== null;
@@ -164,7 +252,7 @@ export class KobiMenu {
       // Touche Menu : pas de position de souris, le menu s'ouvre sur Kobi.
       const fromKeyboard = e.button !== 2 || (e.clientX === 0 && e.clientY === 0);
       if (fromKeyboard) this.openAtKobi();
-      else this.open(e.clientX, e.clientY);
+      else void this.openUnderPointer(e.clientX, e.clientY);
     });
     on('selectstart', (e) => {
       if (!editable(e.target)) e.preventDefault();
@@ -238,8 +326,36 @@ export class KobiMenu {
     this.items[0]?.focus({ preventScroll: true });
   }
 
+  /**
+   * Dans l'application, le menu s'ouvre dans sa propre fenêtre, sous le
+   * pointeur, n'importe où sur l'écran (KOB-202) : la coque le pose et le
+   * retourne s'il déborde. Sans elle (navigateur, tests, fenêtre du menu
+   * indisponible), il s'ouvre dans la fenêtre de Kobi.
+   */
+  private async openNative(clavier: boolean): Promise<boolean> {
+    const api = tauri();
+    if (!api) return false;
+    try {
+      await api.core.invoke('ouvrir_menu', { contexte: this.context(), clavier });
+      this.stage.root.classList.add('menu-open');
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async openUnderPointer(x: number, y: number): Promise<void> {
+    if (!(await this.openNative(false))) this.open(x, y);
+  }
+
   /** Ouvre le menu sur la mascotte (clavier). */
   openAtKobi(): void {
+    void this.openNative(true).then((native) => {
+      if (!native) this.openAtKobiInPage();
+    });
+  }
+
+  private openAtKobiInPage(): void {
     const target = this.stage.isCompact ? this.stage.root.querySelector('.dot') : this.stage.kobi.root;
     const box = target?.getBoundingClientRect();
     if (!box || box.width === 0) this.open(window.innerWidth / 2, window.innerHeight / 3);
@@ -293,85 +409,16 @@ export class KobiMenu {
   }
 
   private render(): void {
-    const c = this.context();
-    this.heading.replaceChildren(el('span', 'kmenu-brand', 'kobi'), el('span', 'kmenu-state', c.recording ? (c.paused ? 'réunion en pause' : '● réunion en cours') : c.paused ? 'écoute en pause' : 'à ton écoute'));
-    this.heading.classList.toggle('recording', c.recording && !c.paused);
-    this.list.replaceChildren();
-    this.items = [];
-    let index = 0;
-    for (const entry of entries(c)) {
-      if (!entry) {
-        const sep = el('div', 'kmenu-sep');
-        sep.setAttribute('role', 'separator');
-        this.list.append(sep);
-        continue;
-      }
-      const b = el('button', 'kmenu-item');
-      b.type = 'button';
-      b.setAttribute('role', 'menuitem');
-      b.tabIndex = -1;
-      b.dataset.id = entry.id;
-      b.classList.toggle('danger', Boolean(entry.danger));
-      b.style.setProperty('--i', String(index++));
-      b.append(icon(entry.icon), el('span', 'kmenu-label', entry.label));
-      if (entry.hint) {
-        const hint = el('kbd', 'kmenu-hint', entry.hint);
-        hint.setAttribute('aria-hidden', 'true');
-        b.append(hint);
-        b.setAttribute('aria-keyshortcuts', entry.hint.replace('Maj', 'Shift').replace('Espace', 'Space').replace(/ /g, '+'));
-      }
-      b.addEventListener('click', () => void this.choose(entry.id));
-      b.addEventListener('pointermove', () => {
-        if (document.activeElement !== b) b.focus({ preventScroll: true });
-      });
-      this.items.push(b);
-      this.list.append(b);
-    }
+    this.items = remplirMenu(this.heading, this.list, this.context(), (id) => void this.choose(id));
   }
 
   private onKey(e: KeyboardEvent): void {
-    const i = this.items.indexOf(document.activeElement as HTMLButtonElement);
-    const n = this.items.length;
-    const go = (j: number): void => {
-      e.preventDefault();
-      this.items[(j + n) % n]?.focus({ preventScroll: true });
-    };
-    switch (e.key) {
-      case 'ArrowDown':
-        return go(i + 1);
-      case 'ArrowUp':
-        return go(i < 0 ? n - 1 : i - 1);
-      case 'Home':
-        return go(0);
-      case 'End':
-        return go(n - 1);
-      case 'Escape':
-        // Fermer le menu n'interrompt pas la réponse en cours (Échap, KOB-133).
-        e.preventDefault();
-        e.stopPropagation();
-        return this.close();
-      case 'Tab':
-        e.preventDefault();
-        return this.close();
-      case 'ContextMenu':
-        e.preventDefault();
-        return this.close();
-      case 'Enter':
-      case ' ':
-        if (i >= 0) {
-          e.preventDefault();
-          void this.choose(this.items[i]?.dataset.id as MenuId);
-        }
-        return;
-    }
-    // Première lettre : l'entrée suivante qui commence par elle.
-    if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-      const key = e.key.toLocaleLowerCase('fr');
-      for (let k = 1; k <= n; k++) {
-        const b = this.items[(i + k) % n];
-        if (b?.textContent?.trim().toLocaleLowerCase('fr').startsWith(key)) return go((i + k) % n);
-      }
-    }
+    clavierMenu(
+      e,
+      this.items,
+      (id) => void this.choose(id),
+      () => this.close(),
+    );
   }
 
   /** Événements de la coque : entrées venues de la barre système ou du clic droit. */
@@ -379,6 +426,9 @@ export class KobiMenu {
     const api = tauri();
     if (!api) return;
     void api.event.listen<string>('kobi://menu', (e) => this.afterShell(e.payload as MenuId | 'quitter-confirme'));
+    // Fenêtre du menu (KOB-202) : l'entrée choisie revient ici, comme un clic.
+    void api.event.listen<string>('menu://choix', (e) => void this.choose(e.payload as MenuId));
+    void api.event.listen<null>('menu://ferme', () => this.stage.root.classList.remove('menu-open'));
     void api.event.listen<boolean>('ecoute', (e) => this.setListeningPaused(Boolean(e.payload)));
     api.core.invoke<boolean>('etat_ecoute').then(
       (p) => this.setListeningPaused(Boolean(p)),
