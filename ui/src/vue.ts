@@ -40,6 +40,19 @@ interface Echange {
   texte: string;
 }
 
+/**
+ * La réponse en flux et celle de l'historique sont-elles la même ? La coque
+ * publie la réponse finie rognée (espaces de fin) et la question n'arrive pas
+ * toujours avant le flux (KOB-177) : même question, ou à défaut l'une prolonge
+ * l'autre.
+ */
+function memeEchange(d: { question: string; reponse: string }, b: { question: string; reponse: string }): boolean {
+  if (d.question !== '') return b.question === d.question;
+  const x = d.reponse.trim();
+  const y = b.reponse.trim();
+  return x !== '' && y !== '' && (x.startsWith(y) || y.startsWith(x));
+}
+
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -135,7 +148,9 @@ export class Vue {
   /** Historique publié par la coque. */
   setBulles(bulles: readonly Bulle[]): void {
     this.bulles = [...bulles];
-    if (this.direct && bulles.some((b) => b.question === this.direct!.question && b.reponse.length >= this.direct!.reponse.length)) this.direct = null;
+    // L'historique a rattrapé le flux (tour fini, ou au moins aussi long) : il fait foi.
+    const d = this.direct;
+    if (d && bulles.some((b) => memeEchange(d, b) && (b.statut === 'fini' || b.statut === 'erreur' || b.reponse.trim().length >= d.reponse.trim().length))) this.direct = null;
     if (this.ouverte) this.rendre();
   }
 
@@ -247,9 +262,12 @@ export class Vue {
     }));
     const d = this.direct;
     if (d) {
-      const meme = items.find((i) => i.question === d.question && !i.fini);
-      if (meme) meme.reponse = d.reponse.length > meme.reponse.length ? d.reponse : meme.reponse;
-      else if (!items.some((i) => i.question === d.question && i.reponse === d.reponse)) items.push({ cle: 'direct', question: d.question, reponse: d.reponse, etapes: [], fini: false });
+      // Un seul échange par tour : le flux complète celui de l'historique
+      // (jamais un second, KOB-177).
+      const meme = items.find((i) => memeEchange(d, i));
+      if (meme) {
+        if (!meme.fini && d.reponse.length > meme.reponse.length) meme.reponse = d.reponse;
+      } else items.push({ cle: 'direct', question: d.question, reponse: d.reponse, etapes: [], fini: false });
     }
     const vus = new Set<string>();
     for (const it of items) {
