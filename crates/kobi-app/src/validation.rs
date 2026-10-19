@@ -521,6 +521,17 @@ pub fn demander<R: Runtime>(app: &AppHandle<R>, mut carte: CarteValidation) -> R
     reponse
 }
 
+/// Une carte de Kobi attend sa réponse : le cerveau ne laisse pas tomber
+/// le tour qui l'a demandée (KOB-191).
+pub fn attend<R: Runtime>(app: &AppHandle<R>) -> bool {
+    app.try_state::<Validations>().is_some_and(|v| {
+        !v.attente
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_empty()
+    })
+}
+
 /// Réponse de l'utilisateur à la carte `id` de Kobi ; `false` si ce n'en
 /// est pas une qui attend (carte du serveur de permission, ou déjà fermée).
 pub fn decider<R: Runtime>(app: &AppHandle<R>, id: &str, accepte: bool) -> bool {

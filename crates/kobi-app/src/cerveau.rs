@@ -167,7 +167,41 @@ pub enum Retour {
 /// Destination des retours.
 pub type Sortie = Arc<dyn Fn(Retour) + Send + Sync>;
 
-type Cartes = Arc<Mutex<HashMap<u64, ApprovalRequest>>>;
+/// Une carte de Kobi lui-même attend sa réponse (KOB-156, hook de ses
+/// commandes et fichiers) : Claude attend alors sans rien émettre.
+pub type Attente = Arc<dyn Fn() -> bool + Send + Sync>;
+
+/// Cartes en attente de réponse : celles du serveur de permission (MCP), et
+/// celles de Kobi lui-même par `externe`.
+#[derive(Clone)]
+struct Cartes {
+    mcp: Arc<Mutex<HashMap<u64, ApprovalRequest>>>,
+    externe: Attente,
+}
+
+impl Cartes {
+    fn new(externe: Attente) -> Self {
+        Self {
+            mcp: Arc::default(),
+            externe,
+        }
+    }
+
+    fn lock(
+        &self,
+    ) -> std::sync::LockResult<std::sync::MutexGuard<'_, HashMap<u64, ApprovalRequest>>> {
+        self.mcp.lock()
+    }
+
+    /// Une carte attend sa réponse : le tour ne s'abandonne pas (KOB-191).
+    /// Chaque carte a sa propre échéance, après quoi Claude reprend.
+    fn attend(&self) -> bool {
+        let mut mcp = self.lock().unwrap_or_else(|e| e.into_inner());
+        // Une demande échue (refusée seule à l'échéance) n'attend plus rien.
+        mcp.retain(|_, demande| !demande.is_abandoned());
+        !mcp.is_empty() || (self.externe)()
+    }
+}
 /// Tâches longues en arrière-plan, par tour.
 type Taches = Arc<Mutex<HashMap<u64, tokio::task::AbortHandle>>>;
 
@@ -183,9 +217,17 @@ pub struct Cerveau {
 }
 
 impl Cerveau {
-    /// Lance les deux sessions sur le runtime courant.
+    /// Lance les deux sessions sur le runtime courant, sans carte de Kobi
+    /// (tests).
+    #[cfg(test)]
     pub fn lancer(fabrique: Fabrique, sortie: Sortie) -> Self {
-        let cartes: Cartes = Arc::default();
+        Self::lancer_avec(fabrique, sortie, Arc::new(|| false))
+    }
+
+    /// Lance les deux sessions sur le runtime courant, en sachant quand une
+    /// carte de Kobi lui-même attend sa réponse (`attente`).
+    pub fn lancer_avec(fabrique: Fabrique, sortie: Sortie, attente: Attente) -> Self {
+        let cartes = Cartes::new(attente);
         let taches: Taches = Arc::default();
         let (questions, rx_q) = mpsc::unbounded_channel();
         let (notes, rx_n) = mpsc::unbounded_channel();
@@ -658,6 +700,10 @@ async fn suivre(
                 return Suivi::Detache(turn, texte);
             }
             () = &mut inactif => {
+                if cartes.attend() {
+                    inactif.as_mut().reset(tokio::time::Instant::now() + ABANDON);
+                    continue;
+                }
                 tracing::warn!(tour, "tour sans activité : abandon");
                 return Suivi::Erreur(BrainError::Timeout(ABANDON));
             }
@@ -691,6 +737,10 @@ async fn finir(
                 continue;
             }
             () = &mut inactif => {
+                if cartes.attend() {
+                    inactif.as_mut().reset(tokio::time::Instant::now() + ABANDON);
+                    continue;
+                }
                 tracing::warn!(tour, "tâche sans activité : abandon");
                 sortie(Retour::Erreur { tour, message: BrainError::Timeout(ABANDON).to_string() });
                 return;
@@ -1104,6 +1154,22 @@ mod tests {
                 < rang(&recus, |r| matches!(r, Retour::Erreur { .. }))
         );
         assert!(!recu(&recus, |r| matches!(r, Retour::Resultat { .. })));
+    }
+
+    /// KOB-191 : une carte de Kobi attend sa réponse (Claude bloqué dans le
+    /// hook, rien n'arrive) : le tour passe les 45 s sans être abandonné, et
+    /// la suite arrive une fois la carte tranchée.
+    #[tokio::test(start_paused = true)]
+    async fn carte_en_attente_le_tour_n_est_pas_abandonne() {
+        let (s, recus) = sortie();
+        let carte = vec![vec![
+            Step::Wait(Duration::from_secs(55)),
+            Step::Text("Fichier créé.".into()),
+        ]];
+        let c = Cerveau::lancer_avec(fabrique(vec![carte]), s, Arc::new(|| true));
+        c.demander(question(1, "crée salut.txt"));
+        attendre(&recus, |r| matches!(r, Retour::Resultat { tour: 1, .. })).await;
+        assert!(!recu(&recus, |r| matches!(r, Retour::Erreur { .. })));
     }
 
     /// Limite d'usage : erreur expliquée, la session reste utilisable.
