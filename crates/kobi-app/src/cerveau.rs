@@ -16,7 +16,7 @@
 //! [`Retour`] vers le chef d'orchestre, qui seul touche à l'état et à
 //! l'interface.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -29,6 +29,8 @@ use kobi_brain::{
 use kobi_session::stockage::maintenant_ms;
 use tokio::sync::mpsc;
 
+use crate::pannes::{classer, Panne};
+
 /// Sans texte après ce délai (ou dès un appel d'outil), le tour est annoncé
 /// comme tâche longue.
 pub const ANNONCE: Duration = Duration::from_secs(4);
@@ -36,6 +38,14 @@ pub const ANNONCE: Duration = Duration::from_secs(4);
 const NOTES_MAX: Duration = Duration::from_secs(180);
 /// Message affiché à l'annonce d'une tâche longue.
 pub const MESSAGE_ANNONCE: &str = "Je m'en occupe, je te donne le résultat dès qu'il est prêt.";
+/// Tour détaché toujours sans texte après ce délai : « je cherche encore »
+/// (KOB-68).
+pub const PATIENCE: Duration = Duration::from_secs(8);
+/// Un tour sans aucune activité (texte, outil) pendant ce délai est
+/// abandonné et sa session fermée (KOB-68).
+pub const ABANDON: Duration = Duration::from_secs(45);
+/// Hors ligne, la première question en attente est reposée à ce rythme.
+pub const REESSAI_RESEAU: Duration = Duration::from_secs(20);
 /// Outils internes de Claude Code, qui ne font pas d'un tour une tâche.
 const OUTILS_INTERNES: &[&str] = &["ToolSearch", "TodoWrite"];
 
@@ -117,6 +127,20 @@ pub enum Retour {
     Erreur {
         tour: u64,
         message: String,
+    },
+    /// Claude a planté pendant le tour : session relancée, question renvoyée.
+    Relance {
+        tour: u64,
+    },
+    /// Le tour tarde : « je cherche encore ».
+    Patience {
+        tour: u64,
+    },
+    /// Pas d'Internet : la question attend le retour du réseau.
+    EnAttente {
+        tour: u64,
+        /// Questions en attente, celle-ci comprise.
+        nombre: usize,
     },
     /// Carte de confirmation à afficher.
     Carte {
@@ -252,6 +276,73 @@ fn reserve(fabrique: &Fabrique) -> Reserve {
     tokio::spawn(fabrique(Role::Conversation))
 }
 
+/// Une question, telle qu'on peut la reposer (plantage, réseau).
+#[derive(Debug, Clone)]
+struct Question {
+    tour: u64,
+    ask: Ask,
+    /// Déjà relancée après un plantage : un second plantage est une erreur.
+    relancee: bool,
+    /// Relancée : résumé des derniers échanges, que la session neuve n'a pas vus.
+    resume: Option<String>,
+}
+
+/// Échanges gardés pour le résumé d'une relance.
+const ECHANGES: usize = 5;
+/// Longueur gardée de chaque question et réponse dans ce résumé.
+const ECHANGE_MAX: usize = 300;
+
+fn couper(texte: &str) -> String {
+    let t: String = texte.split_whitespace().collect::<Vec<_>>().join(" ");
+    if t.chars().count() > ECHANGE_MAX {
+        format!("{}…", t.chars().take(ECHANGE_MAX).collect::<String>())
+    } else {
+        t
+    }
+}
+
+/// La question à reposer sur une session neuve après un plantage, avec le
+/// résumé des derniers échanges (KOB-68).
+fn relancee(q: Question, echanges: &[(String, String)]) -> Question {
+    let resume = (!echanges.is_empty()).then(|| {
+        let lignes: Vec<String> = echanges
+            .iter()
+            .map(|(question, reponse)| {
+                format!("- Question : {}\n  Réponse : {}", couper(question), couper(reponse))
+            })
+            .collect();
+        format!(
+            "[Claude a été relancé après un arrêt. Derniers échanges de cette conversation, pour le contexte :\n{}]",
+            lignes.join("\n")
+        )
+    });
+    Question {
+        relancee: true,
+        resume,
+        ..q
+    }
+}
+
+/// Retient un échange fini pour une éventuelle relance.
+fn retenir(echanges: &mut VecDeque<(String, String)>, question: &str, reponse: String) {
+    echanges.push_back((question.to_owned(), reponse));
+    while echanges.len() > ECHANGES {
+        echanges.pop_front();
+    }
+}
+
+/// Contexte d'un tour détaché, pour le reposer s'il plante ou s'il perd le
+/// réseau.
+#[derive(Clone)]
+struct Reprise {
+    fabrique: Fabrique,
+    question: Question,
+    /// Vers la file d'attente hors ligne de la conversation.
+    attente: mpsc::UnboundedSender<Question>,
+    /// Derniers échanges, pour le résumé d'une relance.
+    echanges: Vec<(String, String)>,
+}
+
 async fn conversation(
     fabrique: Fabrique,
     mut rx: mpsc::UnboundedReceiver<Demande>,
@@ -262,23 +353,63 @@ async fn conversation(
 ) {
     let mut session: Option<Session> = None;
     let mut suivante = reserve(&fabrique);
-    while let Some(demande) = rx.recv().await {
-        if demande == Demande::Renouveler {
-            session = None;
-            suivante.abort();
-            suivante = reserve(&fabrique);
-            tracing::info!("sessions Claude renouvelées");
-            continue;
-        }
-        let Demande::Question {
-            tour,
-            question,
-            transcript,
-            notes,
-        } = demande
-        else {
-            continue;
+    // Hors ligne (KOB-68) : questions gardées dans l'ordre, la première est
+    // reposée toutes les `REESSAI_RESEAU` ; dès qu'elle passe, les suivantes
+    // partent aussitôt.
+    let mut en_attente: VecDeque<Question> = VecDeque::new();
+    let (attente_tx, mut attente_rx) = mpsc::unbounded_channel::<Question>();
+    let mut reessai =
+        tokio::time::interval_at(tokio::time::Instant::now() + REESSAI_RESEAU, REESSAI_RESEAU);
+    reessai.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // Question à traiter tout de suite (relance après un plantage, suite de
+    // la file d'attente).
+    let mut prochaine: Option<Question> = None;
+    let mut echanges: VecDeque<(String, String)> = VecDeque::new();
+    loop {
+        let q = if let Some(q) = prochaine.take() {
+            q
+        } else {
+            tokio::select! {
+                demande = rx.recv() => match demande {
+                    Some(Demande::Question { tour, question, transcript, notes }) => {
+                        let q = Question {
+                            tour,
+                            ask: Ask { question, transcript, notes },
+                            relancee: false,
+                            resume: None,
+                        };
+                        if en_attente.is_empty() {
+                            q
+                        } else {
+                            // Le réseau manque encore : elle prend son tour.
+                            mettre_en_attente(&mut en_attente, q, false, &sortie);
+                            reessai_depuis(&mut reessai, &en_attente);
+                            continue;
+                        }
+                    }
+                    Some(Demande::Renouveler) => {
+                        // Dossiers de code changés (KOB-153) : sessions neuves.
+                        session = None;
+                        suivante.abort();
+                        suivante = reserve(&fabrique);
+                        tracing::info!("sessions Claude renouvelées");
+                        continue;
+                    }
+                    Some(_) => continue,
+                    None => break,
+                },
+                Some(q) = attente_rx.recv() => {
+                    mettre_en_attente(&mut en_attente, q, true, &sortie);
+                    reessai_depuis(&mut reessai, &en_attente);
+                    continue;
+                }
+                _ = reessai.tick(), if !en_attente.is_empty() => {
+                    tracing::info!(attente = en_attente.len(), "réseau : question reposée");
+                    en_attente.pop_front().expect("file non vide")
+                }
+            }
         };
+        let tour = q.tour;
         // Le délai d'annonce court dès la question, ouverture de session comprise.
         let annonce = tokio::time::Instant::now() + ANNONCE;
         if session.is_none() {
@@ -295,24 +426,25 @@ async fn conversation(
                     tour,
                     annonce: true,
                 });
+                let reprise = Reprise {
+                    fabrique: fabrique.clone(),
+                    question: q.clone(),
+                    attente: attente_tx.clone(),
+                    echanges: echanges.iter().cloned().collect(),
+                };
                 let (sortie, cartes) = (sortie.clone(), cartes.clone());
                 detacher(&taches, tour, async move {
                     match prete
                         .await
                         .unwrap_or_else(|e| Err(BrainError::Crashed(e.to_string())))
                     {
-                        Ok(mut s) => {
-                            let turn = s.ask(Ask {
-                                question,
-                                transcript,
-                                notes,
-                            });
-                            finir(tour, turn, String::new(), &sortie, &cartes).await;
+                        Ok(s) => {
+                            // La session vit jusqu'à la fin du tour.
+                            let mut s = Some(s);
+                            let turn = poser(&mut s, &reprise.question);
+                            finir(turn, String::new(), reprise, &sortie, &cartes).await;
                         }
-                        Err(e) => sortie(Retour::Erreur {
-                            tour,
-                            message: e.to_string(),
-                        }),
+                        Err(e) => echec_d_ouverture(e, reprise.question, &reprise.attente, &sortie),
                     }
                 });
                 continue;
@@ -320,25 +452,44 @@ async fn conversation(
             match ouverte.unwrap_or_else(|e| Err(BrainError::Crashed(e.to_string()))) {
                 Ok(s) => session = Some(s),
                 Err(e) => {
-                    sortie(Retour::Erreur {
-                        tour,
-                        message: e.to_string(),
-                    });
+                    echec_d_ouverture(e, q, &attente_tx, &sortie);
                     continue;
                 }
             }
         }
-        let s = session.as_mut().expect("session ouverte");
-        let turn = s.ask(Ask {
-            question,
-            transcript,
-            notes,
-        });
+        let turn = poser(&mut session, &q);
         // Les arrêts reçus entre deux tours visaient un tour déjà fini.
         while arrets.try_recv().is_ok() {}
         match suivre(tour, turn, annonce, &sortie, &cartes, &mut arrets).await {
-            Suivi::Fini => {}
-            Suivi::Casse => session = None,
+            Suivi::Fini(reponse) => {
+                if let Some(reponse) = reponse {
+                    retenir(&mut echanges, &q.ask.question, reponse);
+                }
+                // Le réseau est revenu : les questions en attente partent.
+                prochaine = en_attente.pop_front();
+            }
+            Suivi::Erreur(e) => {
+                let casse = !matches!(e, BrainError::Api(_));
+                if casse {
+                    session = None;
+                }
+                match classer(&e) {
+                    Panne::Plantage if !q.relancee => {
+                        tracing::warn!(tour, erreur = %e, "Claude a planté : session relancée, question renvoyée");
+                        sortie(Retour::Relance { tour });
+                        let echanges: Vec<_> = echanges.iter().cloned().collect();
+                        prochaine = Some(relancee(q, &echanges));
+                    }
+                    Panne::HorsLigne => {
+                        mettre_en_attente(&mut en_attente, q, true, &sortie);
+                        reessai_depuis(&mut reessai, &en_attente);
+                    }
+                    _ => sortie(Retour::Erreur {
+                        tour,
+                        message: e.to_string(),
+                    }),
+                }
+            }
             Suivi::Interrompu(turn) => {
                 // La session est fermée avec son tour (le process `claude`
                 // s'arrête) ; la conversation continue sur la réserve.
@@ -349,10 +500,16 @@ async fn conversation(
                 // Le tour garde sa session jusqu'au bout ; la conversation
                 // continue sur la réserve.
                 let detachee = session.take();
+                let reprise = Reprise {
+                    fabrique: fabrique.clone(),
+                    question: q,
+                    attente: attente_tx.clone(),
+                    echanges: echanges.iter().cloned().collect(),
+                };
                 let (sortie, cartes) = (sortie.clone(), cartes.clone());
                 detacher(&taches, tour, async move {
                     let _session = detachee;
-                    finir(tour, turn, texte, &sortie, &cartes).await;
+                    finir(turn, texte, reprise, &sortie, &cartes).await;
                 });
             }
         }
@@ -374,10 +531,71 @@ fn detacher(taches: &Taches, tour: u64, tache: impl Future<Output = ()> + Send +
     taches.insert(tour, poignee.abort_handle());
 }
 
+/// Pose la question sur la session (ouverte), précédée du résumé si elle
+/// est relancée.
+fn poser(session: &mut Option<Session>, q: &Question) -> Turn {
+    let mut ask = q.ask.clone();
+    if let Some(resume) = &q.resume {
+        ask.question = format!("{resume}\n\n{}", ask.question);
+    }
+    session.as_mut().expect("session ouverte").ask(ask)
+}
+
+/// La file d'attente vient de se remplir : le prochain essai est dans
+/// `REESSAI_RESEAU`, pas tout de suite (le minuteur a pu prendre de l'avance).
+fn reessai_depuis(reessai: &mut tokio::time::Interval, en_attente: &VecDeque<Question>) {
+    if en_attente.len() == 1 {
+        reessai.reset();
+    }
+}
+
+/// Hors ligne : la question attend, et l'interface le sait.
+fn mettre_en_attente(
+    en_attente: &mut VecDeque<Question>,
+    q: Question,
+    en_tete: bool,
+    sortie: &Sortie,
+) {
+    let tour = q.tour;
+    if en_tete {
+        en_attente.push_front(q);
+    } else {
+        en_attente.push_back(q);
+    }
+    tracing::warn!(
+        tour,
+        attente = en_attente.len(),
+        "pas d'Internet : question en attente"
+    );
+    sortie(Retour::EnAttente {
+        tour,
+        nombre: en_attente.len(),
+    });
+}
+
+/// La session n'a pas pu s'ouvrir : hors ligne, la question attend ; sinon
+/// l'erreur part vers l'interface (Claude absent, déconnecté…).
+fn echec_d_ouverture(
+    e: BrainError,
+    q: Question,
+    attente: &mpsc::UnboundedSender<Question>,
+    sortie: &Sortie,
+) {
+    if classer(&e) == Panne::HorsLigne {
+        let _ = attente.send(q);
+    } else {
+        sortie(Retour::Erreur {
+            tour: q.tour,
+            message: e.to_string(),
+        });
+    }
+}
+
 enum Suivi {
-    Fini,
-    /// Le tour a échoué et la session est à rouvrir.
-    Casse,
+    /// Fini, avec la réponse s'il y en a une.
+    Fini(Option<String>),
+    /// Le tour a échoué ; l'appelant décide (relance, attente, erreur).
+    Erreur(BrainError),
     /// Tâche longue ou carte : le reste du tour et le texte déjà reçu.
     Detache(Turn, String),
     /// Abandonné par l'utilisateur : le reste du tour, à ignorer.
@@ -396,36 +614,38 @@ async fn suivre(
     let mut texte = String::new();
     let delai = tokio::time::sleep_until(annonce);
     tokio::pin!(delai);
+    // Sans aucune activité pendant `ABANDON`, le tour est abandonné.
+    let inactif = tokio::time::sleep(ABANDON);
+    tokio::pin!(inactif);
     loop {
         tokio::select! {
-            evenement = turn.next() => match evenement {
-                Some(BrainEvent::Text(t)) => {
-                    texte.push_str(&t);
-                    sortie(Retour::Texte { tour, texte: texte.clone() });
+            evenement = turn.next() => {
+                inactif.as_mut().reset(tokio::time::Instant::now() + ABANDON);
+                match evenement {
+                    Some(BrainEvent::Text(t)) => {
+                        texte.push_str(&t);
+                        sortie(Retour::Texte { tour, texte: texte.clone() });
+                    }
+                    Some(BrainEvent::ToolCall { id, name, action, .. }) if !interne(&action) => {
+                        journaliser_outil(&name);
+                        activite(tour, id, action, sortie);
+                        sortie(Retour::Detache { tour, annonce: true });
+                        return Suivi::Detache(turn, texte);
+                    }
+                    Some(BrainEvent::ToolCall { .. }) => {}
+                    Some(BrainEvent::Permission(demande)) => {
+                        carte(tour, demande, sortie, cartes);
+                        sortie(Retour::Detache { tour, annonce: false });
+                        return Suivi::Detache(turn, texte);
+                    }
+                    Some(BrainEvent::Done(fin)) => {
+                        let texte = if fin.text.is_empty() { texte } else { fin.text };
+                        sortie(Retour::Fin { tour, texte: texte.clone() });
+                        return Suivi::Fini(Some(texte));
+                    }
+                    Some(BrainEvent::Error(e)) => return Suivi::Erreur(e),
+                    None => return Suivi::Fini(None),
                 }
-                Some(BrainEvent::ToolCall { id, name, action, .. }) if !interne(&action) => {
-                    journaliser_outil(&name);
-                    activite(tour, id, action, sortie);
-                    sortie(Retour::Detache { tour, annonce: true });
-                    return Suivi::Detache(turn, texte);
-                }
-                Some(BrainEvent::ToolCall { .. }) => {}
-                Some(BrainEvent::Permission(demande)) => {
-                    carte(tour, demande, sortie, cartes);
-                    sortie(Retour::Detache { tour, annonce: false });
-                    return Suivi::Detache(turn, texte);
-                }
-                Some(BrainEvent::Done(fin)) => {
-                    let texte = if fin.text.is_empty() { texte } else { fin.text };
-                    sortie(Retour::Fin { tour, texte });
-                    return Suivi::Fini;
-                }
-                Some(BrainEvent::Error(e)) => {
-                    let casse = !matches!(e, BrainError::Api(_));
-                    sortie(Retour::Erreur { tour, message: e.to_string() });
-                    return if casse { Suivi::Casse } else { Suivi::Fini };
-                }
-                None => return Suivi::Fini,
             },
             Some(arret) = arrets.recv() => {
                 if arret == tour {
@@ -437,15 +657,54 @@ async fn suivre(
                 sortie(Retour::Detache { tour, annonce: true });
                 return Suivi::Detache(turn, texte);
             }
+            () = &mut inactif => {
+                tracing::warn!(tour, "tour sans activité : abandon");
+                return Suivi::Erreur(BrainError::Timeout(ABANDON));
+            }
         }
     }
 }
 
 /// Termine un tour détaché : ses cartes s'affichent, son résultat est livré.
-async fn finir(tour: u64, mut turn: Turn, mut texte: String, sortie: &Sortie, cartes: &Cartes) {
-    while let Some(evenement) = turn.next().await {
+/// Toujours sans texte après `PATIENCE` : « je cherche encore » ; sans
+/// aucune activité pendant `ABANDON` : abandon. S'il plante, la question est
+/// reposée une fois sur une session neuve ; hors ligne, elle part en attente.
+async fn finir(
+    mut turn: Turn,
+    mut texte: String,
+    reprise: Reprise,
+    sortie: &Sortie,
+    cartes: &Cartes,
+) {
+    let tour = reprise.question.tour;
+    let patience = tokio::time::sleep(PATIENCE.saturating_sub(ANNONCE));
+    tokio::pin!(patience);
+    let mut patient = !texte.is_empty();
+    let inactif = tokio::time::sleep(ABANDON);
+    tokio::pin!(inactif);
+    loop {
+        let evenement = tokio::select! {
+            e = turn.next() => e,
+            () = &mut patience, if !patient => {
+                patient = true;
+                sortie(Retour::Patience { tour });
+                continue;
+            }
+            () = &mut inactif => {
+                tracing::warn!(tour, "tâche sans activité : abandon");
+                sortie(Retour::Erreur { tour, message: BrainError::Timeout(ABANDON).to_string() });
+                return;
+            }
+        };
+        inactif
+            .as_mut()
+            .reset(tokio::time::Instant::now() + ABANDON);
+        let Some(evenement) = evenement else { return };
         match evenement {
-            BrainEvent::Text(t) => texte.push_str(&t),
+            BrainEvent::Text(t) => {
+                patient = true;
+                texte.push_str(&t);
+            }
             BrainEvent::Permission(demande) => carte(tour, demande, sortie, cartes),
             BrainEvent::ToolCall {
                 id, name, action, ..
@@ -460,13 +719,39 @@ async fn finir(tour: u64, mut turn: Turn, mut texte: String, sortie: &Sortie, ca
                 sortie(Retour::Resultat { tour, texte });
                 return;
             }
-            BrainEvent::Error(e) => {
-                sortie(Retour::Erreur {
-                    tour,
-                    message: e.to_string(),
-                });
-                return;
-            }
+            BrainEvent::Error(e) => match classer(&e) {
+                Panne::Plantage if !reprise.question.relancee => {
+                    tracing::warn!(tour, erreur = %e, "tâche : Claude a planté, question renvoyée");
+                    sortie(Retour::Relance { tour });
+                    match (reprise.fabrique)(Role::Conversation).await {
+                        Ok(s) => {
+                            let mut s = Some(s);
+                            let mut reprise = reprise;
+                            reprise.question = relancee(reprise.question, &reprise.echanges);
+                            let turn = poser(&mut s, &reprise.question);
+                            return Box::pin(finir_relance(turn, reprise, sortie, cartes, s)).await;
+                        }
+                        Err(e) => {
+                            sortie(Retour::Erreur {
+                                tour,
+                                message: e.to_string(),
+                            });
+                            return;
+                        }
+                    }
+                }
+                Panne::HorsLigne => {
+                    let _ = reprise.attente.send(reprise.question.clone());
+                    return;
+                }
+                _ => {
+                    sortie(Retour::Erreur {
+                        tour,
+                        message: e.to_string(),
+                    });
+                    return;
+                }
+            },
         }
     }
 }
@@ -482,6 +767,18 @@ fn activite(tour: u64, id: String, action: Action, sortie: &Sortie) {
         demande: Box::new(DemandeOutil { id, tour, action }),
         at_ms: maintenant_ms(),
     });
+}
+
+/// Suite d'un tour détaché relancé : même suivi, la session neuve vit
+/// jusqu'au bout.
+async fn finir_relance(
+    turn: Turn,
+    reprise: Reprise,
+    sortie: &Sortie,
+    cartes: &Cartes,
+    _session: Option<Session>,
+) {
+    finir(turn, String::new(), reprise, sortie, cartes).await;
 }
 
 /// Chaque outil appelé est journalisé : seuls Read, Grep, Glob (KOB-138)
@@ -629,6 +926,266 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
         panic!("attendu, reçu : {:?}", recus.lock().unwrap());
+    }
+
+    /// Fabrique dont l'ouverture échoue (Claude absent, déconnecté).
+    fn fabrique_en_echec(e: BrainError) -> Fabrique {
+        Arc::new(move |_role| {
+            let e = e.clone();
+            Box::pin(async move { Err(e) })
+        })
+    }
+
+    fn recu(recus: &Recus, ok: impl Fn(&Retour) -> bool) -> bool {
+        recus.lock().unwrap().iter().any(|(_, r)| ok(r))
+    }
+
+    /// Ordre des retours, pour vérifier les enchaînements.
+    fn rang(recus: &Recus, ok: impl Fn(&Retour) -> bool) -> usize {
+        recus
+            .lock()
+            .unwrap()
+            .iter()
+            .position(|(_, r)| ok(r))
+            .expect("retour attendu")
+    }
+
+    // ----- KOB-68 : un test par panne -----
+
+    /// Plantage : la session est relancée et la question renvoyée.
+    #[tokio::test]
+    async fn plantage_session_relancee_et_question_renvoyee() {
+        let (s, recus) = sortie();
+        let plante = vec![vec![Step::Fail(BrainError::Crashed(
+            "exit status 3".into(),
+        ))]];
+        let c = Cerveau::lancer(fabrique(vec![plante]), s);
+        c.demander(question(1, "un"));
+        attendre(&recus, |r| matches!(r, Retour::Fin { tour: 1, .. })).await;
+        assert!(recu(&recus, |r| *r == Retour::Relance { tour: 1 }));
+        assert!(recu(&recus, |r| *r
+            == Retour::Fin {
+                tour: 1,
+                texte: "reçu : un".into()
+            }));
+        assert!(!recu(&recus, |r| matches!(r, Retour::Erreur { .. })));
+    }
+
+    /// Plantage après un premier échange : la session neuve reçoit le résumé
+    /// des échanges précédents avec la question.
+    #[tokio::test]
+    async fn plantage_relance_avec_le_resume() {
+        let (s, recus) = sortie();
+        let premiere = vec![
+            vec![Step::Text("Dans api/auth.rs, ligne 88.".into())],
+            vec![Step::Fail(BrainError::Crashed("exit status 3".into()))],
+        ];
+        let c = Cerveau::lancer(fabrique(vec![premiere]), s);
+        c.demander(question(1, "où est géré le refresh token ?"));
+        attendre(&recus, |r| matches!(r, Retour::Fin { tour: 1, .. })).await;
+        c.demander(question(2, "et côté mobile ?"));
+        attendre(&recus, |r| matches!(r, Retour::Fin { tour: 2, .. })).await;
+        assert!(recu(&recus, |r| *r == Retour::Relance { tour: 2 }));
+        let texte = recus
+            .lock()
+            .unwrap()
+            .iter()
+            .find_map(|(_, r)| match r {
+                Retour::Fin { tour: 2, texte } => Some(texte.clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(
+            texte,
+            "reçu : [Claude a été relancé après un arrêt. Derniers échanges de cette conversation, pour le contexte :\n\
+             - Question : où est géré le refresh token ?\n  Réponse : Dans api/auth.rs, ligne 88.]\n\n\
+             et côté mobile ?"
+        );
+    }
+
+    /// Deux plantages de suite : erreur, et la question suivante passe.
+    #[tokio::test]
+    async fn deux_plantages_erreur_puis_kobi_repond_encore() {
+        let (s, recus) = sortie();
+        let plante = || {
+            vec![vec![Step::Fail(BrainError::Crashed(
+                "exit status 3".into(),
+            ))]]
+        };
+        let c = Cerveau::lancer(fabrique(vec![plante(), plante()]), s);
+        c.demander(question(1, "un"));
+        attendre(&recus, |r| matches!(r, Retour::Erreur { tour: 1, .. })).await;
+        c.demander(question(2, "deux"));
+        attendre(&recus, |r| matches!(r, Retour::Fin { tour: 2, .. })).await;
+        let message = recus
+            .lock()
+            .unwrap()
+            .iter()
+            .find_map(|(_, r)| match r {
+                Retour::Erreur { message, .. } => Some(message.clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(
+            crate::pannes::pour_l_utilisateur(&message).0,
+            "Claude s'est arrêté"
+        );
+    }
+
+    /// Lenteur : annonce, puis « je cherche encore » à 8 s, puis le résultat.
+    #[tokio::test(start_paused = true)]
+    async fn lenteur_je_cherche_encore_a_8_s() {
+        let (s, recus) = sortie();
+        let debut = tokio::time::Instant::now();
+        let quand = Arc::new(Mutex::new(Vec::new()));
+        let q = quand.clone();
+        let sortie: Sortie = Arc::new(move |r: Retour| {
+            q.lock().unwrap().push((debut.elapsed(), r.clone()));
+            s(r)
+        });
+        let lent = vec![vec![
+            Step::Wait(Duration::from_secs(20)),
+            Step::Text("trouvé".into()),
+        ]];
+        let c = Cerveau::lancer(fabrique(vec![lent]), sortie);
+        c.demander(question(1, "longue"));
+        attendre(&recus, |r| matches!(r, Retour::Resultat { tour: 1, .. })).await;
+        let quand = quand.lock().unwrap();
+        let a = |ok: &dyn Fn(&Retour) -> bool| quand.iter().find(|(_, r)| ok(r)).unwrap().0;
+        let annonce = a(&|r| matches!(r, Retour::Detache { annonce: true, .. }));
+        let patience = a(&|r| *r == Retour::Patience { tour: 1 });
+        assert!(annonce >= ANNONCE && annonce < PATIENCE, "{annonce:?}");
+        assert!(
+            patience >= PATIENCE && patience < PATIENCE + Duration::from_secs(1),
+            "{patience:?}"
+        );
+        assert!(recu(&recus, |r| *r
+            == Retour::Resultat {
+                tour: 1,
+                texte: "trouvé".into()
+            }));
+    }
+
+    /// Lenteur : rien pendant 45 s, la question est abandonnée.
+    #[tokio::test(start_paused = true)]
+    async fn lenteur_abandon_a_45_s_sans_activite() {
+        let (s, recus) = sortie();
+        let muet = vec![vec![
+            Step::Wait(Duration::from_secs(600)),
+            Step::Text("trop tard".into()),
+        ]];
+        let c = Cerveau::lancer(fabrique(vec![muet]), s);
+        c.demander(question(1, "longue"));
+        attendre(&recus, |r| matches!(r, Retour::Erreur { tour: 1, .. })).await;
+        let message = recus
+            .lock()
+            .unwrap()
+            .iter()
+            .find_map(|(_, r)| match r {
+                Retour::Erreur { message, .. } => Some(message.clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(
+            crate::pannes::pour_l_utilisateur(&message).0,
+            "Claude ne répond pas"
+        );
+        assert!(
+            rang(&recus, |r| matches!(r, Retour::Patience { .. }))
+                < rang(&recus, |r| matches!(r, Retour::Erreur { .. }))
+        );
+        assert!(!recu(&recus, |r| matches!(r, Retour::Resultat { .. })));
+    }
+
+    /// Limite d'usage : erreur expliquée, la session reste utilisable.
+    #[tokio::test]
+    async fn limite_d_usage_expliquee() {
+        let (s, recus) = sortie();
+        let limite = vec![vec![Step::Fail(BrainError::Api(
+            "Claude AI usage limit reached|1792339200".into(),
+        ))]];
+        let c = Cerveau::lancer(fabrique(vec![limite]), s);
+        c.demander(question(1, "un"));
+        attendre(&recus, |r| matches!(r, Retour::Erreur { tour: 1, .. })).await;
+        let message = recus
+            .lock()
+            .unwrap()
+            .iter()
+            .find_map(|(_, r)| match r {
+                Retour::Erreur { message, .. } => Some(message.clone()),
+                _ => None,
+            })
+            .unwrap();
+        let (titre, explication) = crate::pannes::pour_l_utilisateur(&message);
+        assert_eq!(titre, "Limite d'usage atteinte");
+        assert!(explication.contains("L'écoute et l'enregistrement continuent."));
+        assert!(!recu(&recus, |r| matches!(
+            r,
+            Retour::Relance { .. } | Retour::EnAttente { .. }
+        )));
+        c.demander(question(2, "deux"));
+        attendre(&recus, |r| matches!(r, Retour::Fin { tour: 2, .. })).await;
+    }
+
+    /// Claude déconnecté : la cause et la marche à suivre.
+    #[tokio::test]
+    async fn claude_deconnecte_explique() {
+        let (s, recus) = sortie();
+        let c = Cerveau::lancer(
+            fabrique_en_echec(BrainError::Unavailable(
+                "Claude Code n'est pas connecté : lancer « claude auth login »".into(),
+            )),
+            s,
+        );
+        c.demander(question(1, "un"));
+        attendre(&recus, |r| matches!(r, Retour::Erreur { tour: 1, .. })).await;
+        let message = recus
+            .lock()
+            .unwrap()
+            .iter()
+            .find_map(|(_, r)| match r {
+                Retour::Erreur { message, .. } => Some(message.clone()),
+                _ => None,
+            })
+            .unwrap();
+        let (titre, explication) = crate::pannes::pour_l_utilisateur(&message);
+        assert_eq!(titre, "Claude Code n'est pas connecté");
+        assert!(explication.contains("claude auth login"));
+    }
+
+    /// Pas d'Internet : les questions attendent, dans l'ordre, et partent au
+    /// retour du réseau.
+    #[tokio::test(start_paused = true)]
+    async fn hors_ligne_questions_en_attente_puis_posees() {
+        let (s, recus) = sortie();
+        let coupure = || {
+            vec![Step::Fail(BrainError::Api(
+                "API Error: Connection error.".into(),
+            ))]
+        };
+        // Deux échecs réseau, puis le réseau revient (réponses par défaut).
+        let c = Cerveau::lancer(fabrique(vec![vec![coupure(), coupure()]]), s);
+        c.demander(question(1, "un"));
+        attendre(&recus, |r| {
+            matches!(r, Retour::EnAttente { tour: 1, nombre: 1 })
+        })
+        .await;
+        c.demander(question(2, "deux"));
+        attendre(&recus, |r| {
+            matches!(r, Retour::EnAttente { tour: 2, nombre: 2 })
+        })
+        .await;
+        attendre(&recus, |r| matches!(r, Retour::Fin { tour: 2, .. })).await;
+        assert!(
+            rang(&recus, |r| matches!(r, Retour::Fin { tour: 1, .. }))
+                < rang(&recus, |r| matches!(r, Retour::Fin { tour: 2, .. }))
+        );
+        assert!(recu(&recus, |r| *r
+            == Retour::Fin {
+                tour: 1,
+                texte: "reçu : un".into()
+            }));
+        assert!(!recu(&recus, |r| matches!(r, Retour::Erreur { .. })));
     }
 
     #[tokio::test]

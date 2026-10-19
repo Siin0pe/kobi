@@ -958,7 +958,10 @@ impl<R: Runtime> Chef<R> {
             | Retour::Fin { tour, .. }
             | Retour::Detache { tour, .. }
             | Retour::Resultat { tour, .. }
-            | Retour::Erreur { tour, .. } => Some(*tour),
+            | Retour::Erreur { tour, .. }
+            | Retour::Relance { tour }
+            | Retour::Patience { tour }
+            | Retour::EnAttente { tour, .. } => Some(*tour),
             _ => None,
         };
         if tour_du_retour.is_some_and(|t| self.interrompus.contains(&t)) {
@@ -1068,13 +1071,34 @@ impl<R: Runtime> Chef<R> {
                     self.voix = None;
                 }
                 self.taches.remove(&tour);
+                // La cause en une phrase et la marche à suivre (KOB-68).
+                let (titre, explication) = crate::pannes::pour_l_utilisateur(&message);
                 if let Some(b) = self.bulle(tour) {
-                    b.reponse.clone_from(&message);
+                    b.reponse.clone_from(&explication);
                     b.statut = "erreur";
                 }
                 self.emettre_historique();
                 if tour == self.dernier {
-                    self.erreur("Claude n'a pas répondu", &message);
+                    self.erreur(titre, &explication);
+                }
+            }
+            Retour::Relance { tour } => self.patienter(tour, crate::pannes::RELANCE),
+            Retour::Patience { tour } => self.patienter(tour, crate::pannes::PATIENCE),
+            Retour::EnAttente { tour, nombre } => {
+                let (titre, explication) =
+                    crate::pannes::expliquer(&crate::pannes::Panne::HorsLigne, "");
+                if let Some(b) = self.bulle(tour) {
+                    b.reponse = format!(
+                        "En attente du réseau ({nombre} question{}).",
+                        if nombre > 1 { "s" } else { "" }
+                    );
+                    // Pas « tache » : l'Oups dit déjà qu'elle attend, sans
+                    // notification en double (sobriété).
+                    b.statut = "attente";
+                }
+                self.emettre_historique();
+                if tour == self.dernier {
+                    self.erreur(titre, &explication);
                 }
             }
             Retour::Carte {
@@ -1264,6 +1288,22 @@ impl<R: Runtime> Chef<R> {
         ));
         let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::Suite);
         self.suite_apres_voix = true;
+    }
+
+    /// Tour qui tarde ou relancé : la bulle le dit, et Kobi aussi si c'est
+    /// la question en cours (KOB-68).
+    fn patienter(&mut self, tour: u64, phrase: &str) {
+        tracing::info!(tour, phrase, "tour : patience");
+        if let Some(b) = self.bulle(tour) {
+            if b.reponse.is_empty() || b.reponse == MESSAGE_ANNONCE || b.statut == "tache" {
+                b.reponse = phrase.into();
+            }
+        }
+        self.emettre_historique();
+        if tour == self.dernier {
+            let _ = self.app.emit(EVENEMENT_REPONSE, phrase);
+            crate::voix::dire(&self.app, phrase);
+        }
     }
 
     fn erreur(&mut self, titre: &str, message: &str) {
