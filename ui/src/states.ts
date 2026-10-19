@@ -86,6 +86,11 @@ export interface MeetingInfo {
   startedAt: number;
   /** Transcription en pause (« Kobi, pause » ou un clic). */
   paused?: boolean;
+  /**
+   * Arrêt annulable (KOB-165, KOB-174) : l'enregistrement est arrêté, mais
+   * « reprends » le relance pendant 30 s ; rien n'est encore rédigé.
+   */
+  stopping?: boolean;
   /** Nombre de notes prises depuis le début de la réunion. */
   notes?: number;
   /** Texte de la dernière note prise, tapé dans la fiche pendant l'enregistrement. */
