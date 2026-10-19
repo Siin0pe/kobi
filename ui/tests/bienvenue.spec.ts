@@ -148,7 +148,7 @@ test('Kobi se présente, puis le parcours complet mène à « C’est parti »',
 
   await page.getByRole('button', { name: 'On y va' }).click();
   // 1. Claude Code.
-  await expect(page.locator('.surtitre')).toHaveText('Étape 1 sur 8');
+  await expect(page.locator('.surtitre')).toHaveText('Étape 1 sur 9');
   await expect(page.locator('.etat[data-statut="ok"]')).toContainText('Claude Code 2.1.302 est installé et connecté.');
   await page.getByRole('button', { name: 'Suivant' }).click();
   // 2. Micro.
@@ -228,7 +228,7 @@ test('une commande absente : l’étape le dit et ne bloque pas le parcours', as
   await page.getByRole('button', { name: 'Suivant' }).click();
   await expect(page.getByRole('switch')).toHaveAttribute('aria-checked', 'true');
   // La fin ne liste que ce qui est à revoir : « en attente » n'en fait pas partie.
-  await page.evaluate(() => window.bienvenue.aller(9));
+  await page.evaluate(() => window.bienvenue.aller(10));
   await expect(page.locator('.panneau')).toContainText('Tout est en ordre.');
   await expectNoErrors(errors);
 });
@@ -275,14 +275,14 @@ test('la section Réglages montre l’état sans rien activer d’office', async
 test('essai sans rien entendu : Kobi le dit et propose le raccourci', async ({ page }) => {
   await page.clock.install();
   const errors = await ouvrir(page, { dependances: true, modele: true });
-  await page.evaluate(() => window.bienvenue.aller(7));
+  await page.evaluate(() => window.bienvenue.aller(8));
   await expect(page.locator('.essai-etat')).toContainText('J’écoute…');
   await page.clock.runFor(21_000);
   await expect(page.locator('.essai-etat')).toContainText('Je n’ai rien entendu.');
   await expect(page.locator('.essai-etat .touches')).toHaveAttribute('aria-label', 'Ctrl + Maj + Espace');
   await expect(etape(page, 'essai')).toHaveAttribute('data-statut', 'attention');
   // À la fin, l'essai est listé à revoir.
-  await page.evaluate(() => window.bienvenue.aller(9));
+  await page.evaluate(() => window.bienvenue.aller(10));
   await expect(page.locator('.a-revoir')).toContainText('Essai');
   await expectNoErrors(errors);
 });

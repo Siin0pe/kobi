@@ -63,9 +63,10 @@ export function followRecording(stage: Stage): void {
     sonOrdi = e.payload;
     marquer();
   });
-  api.core.invoke<{ capte: boolean }>('son_ordi').then(
+  api.core.invoke<{ capte: boolean } | null>('son_ordi').then(
     (s) => {
-      sonOrdi = s.capte;
+      // Coque d'une autre version (ou de test) : pas de réponse, rien de capté.
+      sonOrdi = Boolean(s?.capte);
       marquer();
     },
     () => {},
