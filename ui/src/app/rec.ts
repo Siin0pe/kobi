@@ -2,7 +2,7 @@
 // de toutes les sections, avec la durée et le titre ; un clic mène aux notes
 // en direct. Suit `etat_enregistrement` puis l'événement `enregistrement`.
 
-import { h } from '../dom';
+import { animationsReduites, h } from '../dom';
 import { ecouter, invoke } from '../ipc';
 import type { RecordingState } from '../recording';
 
@@ -42,8 +42,17 @@ export function monterBandeauRec(ouvrir: () => void, change: (r: RecordingState 
 
   let r: RecordingState | null = null;
   let minuterie = 0;
+  // Compteur aux chiffres qui roulent : seul le chiffre qui change bouge.
   const tic = () => {
-    if (r) duree.textContent = chrono(r.debut_ms);
+    if (!r) return;
+    const texte = chrono(r.debut_ms);
+    if (duree.textContent === texte) return;
+    const avant = Array.from(duree.children).map((c) => c.textContent);
+    const chiffres = Array.from(texte).map((c, i) =>
+      h('span', { class: avant.length === texte.length && avant[i] !== c ? 'chiffre roule' : 'chiffre' }, c),
+    );
+    duree.replaceChildren(...chiffres);
+    duree.setAttribute('aria-label', texte);
   };
   const suivre = () => {
     window.clearInterval(minuterie);
@@ -53,7 +62,20 @@ export function monterBandeauRec(ouvrir: () => void, change: (r: RecordingState 
   function poser(nouveau: RecordingState | null | undefined): void {
     const avant = r !== null;
     r = nouveau?.actif ? nouveau : null;
-    element.hidden = !r;
+    // Fin de réunion : le bandeau remonte avant de disparaître.
+    if (!r && avant && !animationsReduites()) {
+      element.classList.add('part');
+      const fin = (e: AnimationEvent) => {
+        if (e.target !== element) return;
+        element.removeEventListener('animationend', fin);
+        element.classList.remove('part');
+        if (!r) element.hidden = true;
+      };
+      element.addEventListener('animationend', fin);
+    } else {
+      element.classList.remove('part');
+      element.hidden = !r;
+    }
     element.dataset.pause = String(!!r?.pause);
     if (r) {
       titre.textContent = r.titre ?? 'Réunion';

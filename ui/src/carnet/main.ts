@@ -7,7 +7,7 @@
 import './carnet.css';
 import { animationsReduites, h, normaliser, surligner } from '../dom';
 import { disponible, message } from '../ipc';
-import { Blinker } from '../mascotte/glyphs';
+import { reagir } from '../app/mini-kobi';
 import { creerNotifieur } from '../notif';
 import { STOCKAGE } from '../reglages/stockage';
 import { poserTitre } from '../titre';
@@ -50,7 +50,6 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
 
   // ----- Squelette -----
 
-  const yeux = [h('span', { class: 'oeil' }, '*'), h('span', { class: 'oeil' }, '*')];
   const recherche = h('input', {
     type: 'search',
     class: 'champ',
@@ -70,7 +69,7 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
     h(
       'aside',
       { class: 'index' },
-      h('header', { class: 'marque' }, h('span', { class: 'mini-kobi', 'aria-hidden': 'true' }, ...yeux), h('h1', { class: 'marque-mot' }, 'carnet')),
+      h('header', { class: 'marque' }, h('h1', { class: 'marque-mot', 'aria-label': 'carnet' }, 'carnet')),
       h('div', { class: 'recherche' }, h('span', { class: 'loupe', 'aria-hidden': 'true' }, '?'), recherche),
       filtres,
       h('div', { class: 'defile' }, rappels, liste),
@@ -86,9 +85,6 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
   hote.append(app);
   const notifier = creerNotifieur(document.body);
 
-  const blinker = new Blinker((ferme) => yeux.forEach((o) => (o.textContent = ferme ? '–' : '*')));
-  blinker.run(!animationsReduites() && !document.hidden);
-  document.addEventListener('visibilitychange', () => blinker.run(!animationsReduites() && !document.hidden));
 
   for (const [valeur, libelle] of [
     ['tout', 'Tout'],
@@ -263,6 +259,7 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
                 await carnet.rappelFait(r.id);
                 ligne.classList.add('fait');
                 notifier('Rappel fait.');
+                reagir('fait');
                 window.setTimeout(() => void rafraichir(), animationsReduites() ? 0 : 450);
               } catch (err) {
                 notifier(message(err), 'erreur');
@@ -380,6 +377,8 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
     }
   }
   recherche.addEventListener('input', () => {
+    // Le petit Kobi de l'app réfléchit avec toi (pas à un simple rafraîchissement).
+    if (recherche.value.trim()) reagir('cherche');
     window.clearTimeout(minuterieRecherche);
     minuterieRecherche = window.setTimeout(() => void chercher(), 160);
   });
@@ -417,23 +416,16 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
 
   /** La page vide montrée dit-elle « rien encore » ? `null` : pas de page vide. */
   let pageVideRien: boolean | null = null;
-  /** Clignements du grand Kobi de la page vide. */
-  let grandsYeux: Blinker | null = null;
 
   function pageVide(): void {
     etat.selection = null;
     marquerSelection();
     const vide = (etat.index?.reunions.length ?? 0) + (etat.index?.conversations.length ?? 0) === 0;
     const grand = h('h2', { class: 'vide-titre' });
-    const yeuxVides = [h('span', {}, '^'), h('span', {}, '^')];
-    grandsYeux?.run(false);
-    grandsYeux = new Blinker((ferme) => yeuxVides.forEach((o) => (o.textContent = ferme ? '–' : '^')));
-    grandsYeux.run(!animationsReduites());
     page.replaceChildren(
       h(
         'div',
         { class: 'feuille vide-page' },
-        h('div', { class: 'grand-kobi', 'aria-hidden': 'true' }, ...yeuxVides),
         grand,
         h('p', { class: 'vide-aide' }, vide ? 'Les réunions enregistrées et les conversations avec Kobi apparaîtront ici.' : 'Choisis une réunion ou une conversation à gauche, ou cherche un mot.'),
       ),
@@ -445,7 +437,6 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
   async function ouvrir(genre: Genre, id: string, cible: Cible = {}): Promise<void> {
     const n = ++numeroOuverture;
     pageVideRien = null;
-    grandsYeux?.run(false);
     const meme = estSelectionne(genre, id);
     etat.selection = { genre, id };
     if (cible.onglet) etat.onglet = cible.onglet;
@@ -546,6 +537,7 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
                 try {
                   await carnet.supprimer(genre, id);
                   notifier(genre === 'reunion' ? 'Réunion supprimée.' : 'Conversation supprimée.');
+                  reagir('supprime');
                   pageVide();
                   await rafraichir();
                 } catch (e) {
@@ -766,7 +758,6 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
     if (options.reglages) return options.reglages('stockage');
     numeroOuverture++;
     pageVideRien = null;
-    grandsYeux?.run(false);
     etat.selection = { panneau: 'stockage' };
     marquerSelection();
     const corps = h('div', { class: 'panneau', 'data-panneau': STOCKAGE.id });

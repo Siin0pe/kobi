@@ -11,6 +11,7 @@ import { absente, ecouter, invoke, message } from '../ipc';
 import type { Ton } from '../reglages/panneau';
 import { poserTitre } from '../titre';
 import { blocValidations } from './validations';
+import { reagir } from './mini-kobi';
 
 type Notifier = (texte: string, ton?: Ton) => void;
 
@@ -54,6 +55,7 @@ export function monterRappels(racine: HTMLElement, notifier: Notifier): VueRappe
             await carnet.rappelFait(r.id);
             el.classList.add('fait');
             notifier('Rappel fait.');
+            reagir('fait');
             window.setTimeout(() => void rafraichir(), animationsReduites() ? 0 : 450);
           } catch (err) {
             notifier(message(err), 'erreur');

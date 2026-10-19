@@ -239,6 +239,6 @@ test('la feuille de styles de l’app est lue jusqu’au bout (aucune accolade p
     [...document.styleSheets].flatMap((f) => [...f.cssRules].filter((r) => r instanceof CSSKeyframesRule).map((r) => (r as CSSKeyframesRule).name)),
   );
   // Les dernières de app.css : une accolade perdue plus haut les ferait disparaître.
-  expect(animations).toEqual(expect.arrayContaining(['app-pulse-rec', 'app-ecoute', 'app-bandeau', 'app-nouvelle']));
+  expect(animations).toEqual(expect.arrayContaining(['app-pulse-rec', 'app-ecoute', 'app-bandeau', 'app-nouvelle', 'app-roule', 'app-bandeau-part']));
   await expectNoErrors(errors);
 });

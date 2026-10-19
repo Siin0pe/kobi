@@ -47,7 +47,7 @@
   height: 8px;
   border-radius: 50%;
   background: var(--danger);
-  animation: direct-pulse-rec 1.2s ease-in-out infinite;
+  animation: direct-pulse-rec 1.2s steps(2) infinite;
 }
 @keyframes direct-pulse-rec {
   50% { opacity: 0.3; transform: scale(0.7); }

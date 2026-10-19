@@ -3,8 +3,7 @@
 // (ui/src/reglages/panneaux.ts) : un nouvel écran s'y ajoute sans toucher
 // à l'app (voir `ajouterPanneau`).
 
-import { animationsReduites, h } from '../dom';
-import { Blinker } from '../mascotte/glyphs';
+import { h } from '../dom';
 import type { Ton } from './panneau';
 import { PANNEAUX, panneau } from './panneaux';
 import { poserTitre } from '../titre';
@@ -20,7 +19,6 @@ export function monterReglages(racine: HTMLElement, notifier: (texte: string, to
   const titre = h('h1', { class: 'titre' });
   const sousTitre = h('p', { class: 'surtitre' });
   const corps = h('div', { class: 'panneau' });
-  const yeux = [h('span', { class: 'oeil' }, 'o'), h('span', { class: 'oeil' }, 'o')];
 
   racine.append(
     h(
@@ -29,15 +27,13 @@ export function monterReglages(racine: HTMLElement, notifier: (texte: string, to
       h(
         'aside',
         { class: 'cote' },
-        h('header', { class: 'marque' }, h('span', { class: 'mini-kobi', 'aria-hidden': 'true' }, ...yeux), h('span', { class: 'marque-mot' }, 'réglages')),
+        h('header', { class: 'marque' }, h('span', { class: 'marque-mot', 'aria-label': 'réglages' }, 'réglages')),
         nav,
       ),
       h('div', { class: 'page' }, h('article', { class: 'feuille' }, h('header', { class: 'entete' }, sousTitre, titre), corps)),
     ),
   );
 
-  const blinker = new Blinker((ferme) => yeux.forEach((o) => (o.textContent = ferme ? '–' : 'o')));
-  blinker.run(!animationsReduites());
 
   let demonter: void | (() => void);
   let courant: string | null = null;
