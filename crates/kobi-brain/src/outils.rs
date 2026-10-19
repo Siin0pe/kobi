@@ -345,19 +345,25 @@ mod tests {
             ),
             "crates/kobi-app/src/chef.rs"
         );
-        assert_eq!(
-            relatif(Path::new(r"C:\Users\moi\Desktop\kobi\README.md"), &d),
-            "README.md"
-        );
+        // Les antislashs ne séparent les éléments d'un chemin que sous Windows.
+        if cfg!(windows) {
+            assert_eq!(
+                relatif(Path::new(r"C:\Users\moi\Desktop\kobi\README.md"), &d),
+                "README.md"
+            );
+        }
         assert_eq!(
             relatif(Path::new("c:/users/moi/desktop/site/index.html"), &d),
             "site/index.html"
         );
         assert_eq!(relatif(Path::new("C:/Users/moi/Desktop/kobi"), &d), "kobi");
-        assert_eq!(
-            relatif(Path::new("D:/autre/projet/src/main.rs"), &d),
-            "…/src/main.rs"
-        );
+        // Un chemin absolu hors des dossiers de code (« D:/… » n'est absolu que sous Windows).
+        let ailleurs = if cfg!(windows) {
+            "D:/autre/projet/src/main.rs"
+        } else {
+            "/autre/projet/src/main.rs"
+        };
+        assert_eq!(relatif(Path::new(ailleurs), &d), "…/src/main.rs");
         assert_eq!(relatif(Path::new("src/lib.rs"), &d), "src/lib.rs");
     }
 
