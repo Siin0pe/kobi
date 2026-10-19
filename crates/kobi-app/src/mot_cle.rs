@@ -1034,7 +1034,7 @@ mod tests {
             ),
             (
                 "Qu'est-ce que t'en penses, Kobye?",
-                "Qu'est-ce que t'en penses?",
+                "Qu'est-ce que t'en penses ?",
             ),
             (
                 "Dit Koby,, combien on a de tickets ouverts?",
