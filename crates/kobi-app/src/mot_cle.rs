@@ -1084,7 +1084,11 @@ mod tests {
         let actions = rejouer(
             &mut e,
             &[
-                ("alors on part sur la carte du nord et du coup Kobe", false, 1.0),
+                (
+                    "alors on part sur la carte du nord et du coup Kobe",
+                    false,
+                    1.0,
+                ),
                 (
                     "alors on part sur la carte du nord et du coup Kobe il a dit",
                     false,
