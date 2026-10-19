@@ -1280,8 +1280,15 @@ impl<R: Runtime> Chef<R> {
     fn demander_compte_rendu(&mut self) {
         let Some(r) = &mut self.reunion else { return };
         r.compte_rendu_demande = true;
-        let transcript = std::mem::take(&mut r.a_noter);
-        r.pour_compte_rendu = transcript.clone();
+        let reste = std::mem::take(&mut r.a_noter);
+        // Rendu à la réunion si la fin est annulée (KOB-245) ; le bloc parti à
+        // la prise de notes y revient de lui-même s'il échoue.
+        r.pour_compte_rendu = reste.clone();
+        // Le bloc parti à la prise de notes (sans réponse encore) précède ce
+        // qui reste à noter : sans lui, sa transcription manquerait au compte
+        // rendu (KOB-228).
+        let mut transcript = r.envoye.clone().unwrap_or_default();
+        transcript.push_str(&reste);
         let notes = r.notes.clone();
         self.cerveau
             .demander(Demande::CompteRendu { transcript, notes });
