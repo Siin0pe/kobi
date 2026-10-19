@@ -8,6 +8,7 @@ import { suivreCadence } from './cadence';
 import { Metronome } from './econome';
 import { Kobi } from './mascotte/kobi';
 import { ConsentCard, RecIndicator, type ConsentEvent } from './meeting';
+import { suivrePlacementBulles } from './placement-bulles';
 import {
   DOT_COLORS,
   type ConsentLang,
@@ -125,6 +126,8 @@ export class Stage {
 
     this.kobi = new Kobi(this.reducedMotion);
     this.scene.append(this.kobi.root, this.bubbles.root, this.rec.root);
+    // Les bulles se tiennent à côté de Kobi, la pointe vers sa bouche (KOB-216).
+    this.cleanups.push(suivrePlacementBulles(this.scene));
     // Images par seconde réglées (KOB-200) : toute la fenêtre (Kobi, bulles,
     // REC, champ, vue agrandie) avance au rythme d'un seul métronome (econome.ts).
     this.metronome = new Metronome(this.root, (fps) => (this.root.dataset.fps = String(fps)));
