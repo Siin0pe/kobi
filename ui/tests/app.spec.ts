@@ -32,6 +32,13 @@ function fakeTauri(): void {
               publication_reunions: { etat: 'aucune' },
               publication_conversations: { etat: 'aucune' },
             };
+          case 'permissions':
+            return (w.__permissions ??= { fichier: false, commande: false, reglage: false });
+          case 'regler_permission': {
+            const p = ((w.__permissions ??= { fichier: false, commande: false, reglage: false }) as Record<string, boolean>);
+            p[args.genre as string] = args.sansDemander as boolean;
+            return { ...p };
+          }
           case 'a_propos':
             return { version: '0.1.0', dossier: '/home/test/Kobi' };
           case 'app_section_demandee':
@@ -255,5 +262,20 @@ test('la feuille de styles de l’app est lue jusqu’au bout (aucune accolade p
   );
   // Les dernières de app.css : une accolade perdue plus haut les ferait disparaître.
   expect(animations).toEqual(expect.arrayContaining(['app-pulse-rec', 'app-ecoute', 'app-bandeau', 'app-nouvelle', 'app-roule', 'app-bandeau-part']));
+  await expectNoErrors(errors);
+});
+
+test('Réglages › Permissions : ce que Kobi fait sans demander, révocable (KOB-215)', async ({ page }) => {
+  const errors = await ouvrirApp(page, '#reglages/permissions');
+  await expect(page.locator('.vue-reglages .titre')).toHaveText('Permissions');
+  const commandes = page.getByRole('switch', { name: 'Lancer des commandes sans demander' });
+  await expect(commandes).toHaveAttribute('aria-checked', 'false');
+  await commandes.click();
+  await expect(page.getByRole('switch', { name: 'Lancer des commandes sans demander' })).toHaveAttribute('aria-checked', 'true');
+  await page.getByRole('switch', { name: 'Lancer des commandes sans demander' }).click();
+  await expect(page.getByRole('switch', { name: 'Lancer des commandes sans demander' })).toHaveAttribute('aria-checked', 'false');
+  await expect(page.locator('.vue-reglages')).toContainText('Une suppression est toujours demandée.');
+  const appels = await page.evaluate(() => ((window as unknown as { __appels: Array<[string, unknown]> }).__appels).filter(([c]) => c === 'regler_permission').map(([, a]) => a));
+  expect(appels).toEqual([{ genre: 'commande', sansDemander: true }, { genre: 'commande', sansDemander: false }]);
   await expectNoErrors(errors);
 });

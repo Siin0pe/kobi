@@ -284,6 +284,8 @@ pub fn installer<R: Runtime>(builder: Builder<R>) -> Builder<R> {
             // Son de l'ordinateur en réunion (KOB-164).
             crate::son_ordi::son_ordi,
             crate::son_ordi::regler_son_ordi,
+            crate::permissions::permissions,
+            crate::permissions::regler_permission,
             crate::bienvenue::raccourcis,
             crate::bienvenue::etat_modele,
             crate::bienvenue::telecharger_modele,

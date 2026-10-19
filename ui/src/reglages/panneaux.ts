@@ -12,10 +12,11 @@ import { DEMARRAGE } from './demarrage';
 import { CLAUDE, DOSSIERS, ESSAI, MICRO, MODELE, PARCOURS, RACCOURCIS } from './etapes';
 import { MCP, OUTILS } from './mcp';
 import type { Panneau } from './panneau';
+import { PERMISSIONS } from './permissions';
 import { SON_ORDI } from './son-ordi';
 import { STOCKAGE } from './stockage';
 
-const liste: Panneau[] = [STOCKAGE, DOSSIERS, MCP, MICRO, SON_ORDI, MODELE, CLAUDE, DEMARRAGE, ANIMATIONS, AFFICHAGE, RACCOURCIS, PARCOURS];
+const liste: Panneau[] = [STOCKAGE, DOSSIERS, MCP, PERMISSIONS, MICRO, SON_ORDI, MODELE, CLAUDE, DEMARRAGE, ANIMATIONS, AFFICHAGE, RACCOURCIS, PARCOURS];
 
 /** Panneaux de la section Réglages, dans l'ordre du menu. */
 export const PANNEAUX: readonly Panneau[] = liste;
