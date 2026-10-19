@@ -672,11 +672,14 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
         return;
       }
       remettre(titre);
+      const ouverte = estSelectionne(genre, id);
       try {
         const nouveau = await carnet.renommer(genre, id, titre);
         notifier('Titre enregistré.');
+        // Le dossier a pu changer de nom : la vue ouverte le suit.
+        if (ouverte) etat.selection = { genre, id: nouveau };
         await rafraichir();
-        if (estSelectionne(genre, id) || estSelectionne(genre, nouveau)) await ouvrir(genre, nouveau);
+        if (ouverte) await ouvrir(genre, nouveau);
       } catch (e) {
         remettre();
         notifier(message(e), 'erreur');
@@ -922,6 +925,7 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
   ecouter<{ ancien: string | null; reunion: string; titre: string | null }>('reunion-nommee', (n) => {
     const s = etat.selection;
     const ouverte = s && 'genre' in s && s.genre === 'reunion' && (s.id === n.ancien || s.id === n.reunion);
+    if (ouverte) etat.selection = { genre: 'reunion', id: n.reunion };
     void rafraichir().then(() => (ouverte ? ouvrir('reunion', n.reunion) : undefined));
   });
 
