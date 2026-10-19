@@ -231,10 +231,12 @@ pub fn interpellation(texte: &str) -> Option<(Adresse, String)> {
     let sujet = !ponctuation_apres && suivant.is_some_and(|m| APRES_CITATION.contains(&m));
     // « A Kobe, c'était quoi… » : le « hé » transcrit « a », suivi d'une
     // virgule d'apostrophe (KOB-179).
-    // « Est-ce que Kobi, … » : la question s'ouvre sur l'appel (KOB-237).
     let en_tete = mots_avant
         .iter()
-        .all(|m| INTERJECTIONS.contains(&m.as_str()) || (virgule_apres && m == "a"))
+        .all(|m| INTERJECTIONS.contains(&m.as_str()) || (virgule_apres && m == "a"));
+    // « Est-ce que Kobi, … » : la question s'ouvre sur l'appel (KOB-237), et
+    // la garde entière.
+    let appel_en_tete = en_tete
         || mots_avant
             .iter()
             .map(String::as_str)
@@ -250,7 +252,7 @@ pub fn interpellation(texte: &str) -> Option<(Adresse, String)> {
     let cite_avant =
         !virgule_avant && !est_ce_que && precedent.is_some_and(|m| AVANT_CITATION.contains(&m));
 
-    let adresse = if en_tete {
+    let adresse = if appel_en_tete {
         if sujet && !toi {
             Adresse::Cite
         } else {
@@ -466,7 +468,7 @@ impl Ecouteur {
             Attente::Suite { depuis, parle } | Attente::Conversation { depuis, parle } => {
                 let conversation = matches!(self.attente, Attente::Conversation { .. });
                 let q = question(texte);
-                if finale && q.chars().count() > QUESTION_CARACTERES {
+                if finale && q.chars().count() > self.borne() {
                     // Long flux de parole : pas une suite pour Kobi (KOB-237).
                     self.attente = Attente::Nom;
                     self.derniere.clear();
@@ -504,6 +506,17 @@ impl Ecouteur {
         actions
     }
 
+    /// Longueur maximale de la question en cours (KOB-237) : après un appel
+    /// net (« Kobi. » seul, raccourci, nom entendu), celle d'un appel en
+    /// tête ; en conversation, sans redire le nom, la borne stricte.
+    fn borne(&self) -> usize {
+        if matches!(self.attente, Attente::Conversation { .. }) {
+            QUESTION_CARACTERES
+        } else {
+            QUESTION_CARACTERES_APPEL
+        }
+    }
+
     /// Le temps passe (appelé à chaque trame audio) : délais de l'écoute.
     pub fn tick(&mut self, t: f64) -> Vec<Action> {
         match self.attente {
@@ -539,7 +552,7 @@ impl Ecouteur {
             | Attente::Conversation {
                 parle: Some(debut), ..
             } if t - debut > QUESTION_MAX => {
-                if self.derniere.is_empty() || self.derniere.chars().count() > QUESTION_CARACTERES {
+                if self.derniere.is_empty() || self.derniere.chars().count() > self.borne() {
                     self.attente = Attente::Nom;
                     self.derniere.clear();
                     vec![Action::Abandonner]
@@ -1077,6 +1090,18 @@ mod tests {
             !actions.iter().any(|a| matches!(a, Envoyer(_))),
             "{actions:?}"
         );
+        // Après le raccourci (appel net), la même question longue part ; en
+        // conversation, sans redire le nom, elle ne part pas.
+        let mut e = Ecouteur::default();
+        e.raccourci(0.0);
+        let actions = rejouer(&mut e, &[(question.as_str(), true, 1.0)]);
+        assert!(
+            actions.iter().any(|a| matches!(a, Envoyer(_))),
+            "{actions:?}"
+        );
+        e.suite(2.0);
+        let actions = rejouer(&mut e, &[(question.as_str(), true, 3.0)]);
+        assert!(actions.is_empty(), "{actions:?}");
     }
 
     /// Graphies de Nemotron relevées sur le corpus de KOB-179 : retrouvées en
@@ -1140,14 +1165,11 @@ mod tests {
             // KOB-237 : variante sans virgule après, ou en fin de phrase.
             "Cogi explique moi, cette erreur",
             "C'est quoi le prochain point, Kirby ?",
-        ] {
-            assert_eq!(interpellation(texte), None, "{texte}");
-        }
-        for texte in [
+            // Sans virgule après, plus une variante : rien (avant, citation).
             "Kirby est un personnage de jeu vidéo.",
             "Cody a envoyé le rapport ce matin.",
         ] {
-            assert_eq!(interpellation(texte).map(|(a, _)| a), Some(Cite), "{texte}");
+            assert_eq!(interpellation(texte), None, "{texte}");
         }
         // En conversation, le nom collé en tête sort aussi de la question.
         assert_eq!(question("Etkobi ouvre et réclage"), "ouvre et réclage");
