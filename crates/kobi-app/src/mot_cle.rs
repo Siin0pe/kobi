@@ -642,29 +642,23 @@ impl Ecouteur {
         t: f64,
         actions: &mut Vec<Action>,
     ) {
-        let reunion = !self.conversation;
         let ecoute = match adresse {
-            // En réunion, une phrase en cours ne fait écouter Kobi que si elle
-            // commence par son nom : la fin de la phrase décide du reste.
-            Adresse::Appel => finale || !reunion || nom_en_tete(texte),
-            // Un doute ne fait pas écouter Kobi (KOB-237) : au plus, Claude
-            // reçoit la phrase marquée « peut-être pas pour toi ».
+            // Une phrase en cours ne fait écouter Kobi que si elle commence par
+            // son nom : la fin de la phrase décide du reste. Hors réunion aussi
+            // (KOB-237) : une transcription partielle s'arrête souvent juste
+            // après le nom (« … et du coup Kobe »), qui semble alors en fin.
+            Adresse::Appel => finale || nom_en_tete(texte),
+            // Un doute ne fait pas écouter Kobi, et rien ne part vers Claude
+            // (KOB-237).
             Adresse::Doute | Adresse::Cite => false,
         };
         let annonce = match self.attente {
             Attente::Phrase { annonce, .. } => annonce,
             _ => false,
         };
-        if ecoute && !annonce {
-            actions.push(Action::Interpeller);
-        }
         let debut = match self.attente {
             Attente::Phrase { t, .. } => t,
             _ => t,
-        };
-        self.attente = Attente::Phrase {
-            t: debut,
-            annonce: annonce || ecoute,
         };
         // La phrase précédente, toute proche, en fait partie quand le nom vient
         // seul, ou quand elle s'arrêtait en plein milieu.
@@ -679,6 +673,21 @@ impl Ecouteur {
             (Some(p), false) => format!("{p} {q}"),
             (None, _) => q.to_string(),
         };
+        let borne = if nom_en_tete(texte) {
+            QUESTION_CARACTERES_APPEL
+        } else {
+            QUESTION_CARACTERES
+        };
+        // Long flux de parole (KOB-237) : même un nom entre virgules n'en fait
+        // pas une question à Kobi, qui ne se met pas à écouter.
+        let ecoute = ecoute && question.chars().count() <= borne;
+        if ecoute && !annonce {
+            actions.push(Action::Interpeller);
+        }
+        self.attente = Attente::Phrase {
+            t: debut,
+            annonce: annonce || ecoute,
+        };
         if !finale {
             if ecoute {
                 self.afficher(&question, actions);
@@ -688,12 +697,7 @@ impl Ecouteur {
             return;
         }
         self.debut = None;
-        let borne = if nom_en_tete(texte) {
-            QUESTION_CARACTERES_APPEL
-        } else {
-            QUESTION_CARACTERES
-        };
-        if !ecoute || question.chars().count() > borne {
+        if !ecoute {
             // Citation, doute, ou long flux de parole (KOB-237) : Kobi ne se
             // met pas à répondre, rien ne part vers Claude (même pas « peut-être
             // pas pour toi » : en conversation de groupe, chaque doute ouvrait
@@ -1073,6 +1077,34 @@ mod tests {
             ],
         );
         assert!(suite.is_empty(), "{suite:?}");
+        // Rejeu du WAV façon journal : un segment partiel s'arrête juste après
+        // le nom, qui semble en fin de phrase ; la phrase finie l'a perdu.
+        // Kobi ne se met pas à écouter.
+        let mut e = Ecouteur::default();
+        let actions = rejouer(
+            &mut e,
+            &[
+                ("alors on part sur la carte du nord et du coup Kobe", false, 1.0),
+                (
+                    "alors on part sur la carte du nord et du coup Kobe il a dit",
+                    false,
+                    1.5,
+                ),
+                (
+                    "alors on part sur la carte du nord et du coup il a dit",
+                    true,
+                    2.0,
+                ),
+            ],
+        );
+        assert!(actions.is_empty(), "{actions:?}");
+        // La phrase finie du même WAV : la ponctuation mise par Nemotron place
+        // le nom entre virgules (« du coup, Kobe, il a dit »). Trop long pour
+        // une question : Kobi ne s'allume pas.
+        let ponctue = flux.replace("du coup Kobe il", "du coup, Kobe, il");
+        let mut e = Ecouteur::default();
+        let actions = rejouer(&mut e, &[(ponctue.as_str(), true, 1.0)]);
+        assert!(actions.is_empty(), "{actions:?}");
         // Un vrai appel en tête, long (≈ 250 caractères) : il part.
         let question = "résume-moi tout ce qu'on a dit sur le budget ".repeat(5);
         let appel = format!("Kobi, {question}");
@@ -1378,13 +1410,11 @@ mod tests {
                 ("Tu en penses quoi, Kobi ?", true, 2.5),
             ],
         );
+        // Le nom en fin de phrase en cours ne fait pas écouter Kobi : la
+        // phrase finie décide (KOB-237).
         assert_eq!(
             actions,
-            [
-                Interpeller,
-                Question("tu en penses quoi".into()),
-                Envoyer("Tu en penses quoi ?".into()),
-            ]
+            [Interpeller, Envoyer("Tu en penses quoi ?".into())]
         );
     }
 
@@ -1457,7 +1487,8 @@ mod tests {
             ],
         );
         assert!(actions.is_empty(), "{actions:?}");
-        // Une phrase d'abord ambiguë, qui se révèle une citation : Kobi se tait.
+        // Une phrase d'abord ambiguë, qui se révèle une citation : Kobi ne
+        // s'est même pas mis à écouter (KOB-237).
         let mut e = Ecouteur::default();
         let actions = rejouer(
             &mut e,
@@ -1466,10 +1497,7 @@ mod tests {
                 ("Normalement Kobi a tout noté.", true, 2.0),
             ],
         );
-        assert_eq!(
-            actions,
-            [Interpeller, Question("normalement".into()), Abandonner]
-        );
+        assert!(actions.is_empty(), "{actions:?}");
     }
 
     #[test]
