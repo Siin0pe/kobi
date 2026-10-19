@@ -742,7 +742,7 @@ impl<R: Runtime> Chef<R> {
         }
         self.cerveau.demander(Demande::Question {
             tour: self.tour,
-            question: self.avec_etat_de_la_reunion(consigne.unwrap_or_else(|| texte.clone())),
+            question: self.avec_contexte(consigne.unwrap_or_else(|| texte.clone())),
             transcript: std::mem::take(&mut self.pour_conversation),
             notes,
         });
@@ -1499,14 +1499,16 @@ impl<R: Runtime> Chef<R> {
 
     /// En réunion, la question dit à Claude où en est l'enregistrement : il
     /// pilote la réunion (KOB-165).
-    fn avec_etat_de_la_reunion(&self, question: String) -> String {
+    /// La question, précédée du moment présent et de l'état de la réunion.
+    fn avec_contexte(&self, question: String) -> String {
+        let maintenant = moment(&jiff::Zoned::now());
         let etat = match &self.reunion {
-            None => return question,
+            None => return format!("{maintenant}\n{question}"),
             Some(r) if r.fin_demandee => "arrêté, compte rendu à venir",
             Some(r) if r.pause => "en pause",
             Some(_) => "en cours",
         };
-        format!("(Réunion : enregistrement {etat}.)\n{question}")
+        format!("{maintenant}\n(Réunion : enregistrement {etat}.)\n{question}")
     }
 
     fn fermer_conversation(&mut self) {
@@ -1702,9 +1704,61 @@ pub fn fabrique_claude(
     })
 }
 
+/// Date et heure locales, données à Claude avec chaque question (KOB-182) :
+/// sans dossier de code, il ne peut lancer aucune commande, pas même `date`,
+/// et ne savait plus dire l'heure.
+fn moment(m: &jiff::Zoned) -> String {
+    const JOURS: [&str; 7] = [
+        "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche",
+    ];
+    const MOIS: [&str; 12] = [
+        "janvier",
+        "février",
+        "mars",
+        "avril",
+        "mai",
+        "juin",
+        "juillet",
+        "août",
+        "septembre",
+        "octobre",
+        "novembre",
+        "décembre",
+    ];
+    format!(
+        "(Maintenant : {} {} {} {}, {} h {:02}.)",
+        JOURS[m.weekday().to_monday_zero_offset() as usize],
+        m.day(),
+        MOIS[m.month() as usize - 1],
+        m.year(),
+        m.hour(),
+        m.minute()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// KOB-182 : Claude reçoit la date et l'heure locales avec chaque
+    /// question, même sans dossier de code (pas de commande `date`).
+    #[test]
+    fn moment_en_francais() {
+        let tz = jiff::tz::TimeZone::fixed(jiff::tz::Offset::constant(2));
+        let m = jiff::civil::date(2026, 10, 19)
+            .at(9, 5, 0, 0)
+            .to_zoned(tz.clone())
+            .unwrap();
+        assert_eq!(moment(&m), "(Maintenant : lundi 19 octobre 2026, 9 h 05.)");
+        let m = jiff::civil::date(2026, 2, 1)
+            .at(23, 59, 0, 0)
+            .to_zoned(tz)
+            .unwrap();
+        assert_eq!(
+            moment(&m),
+            "(Maintenant : dimanche 1 février 2026, 23 h 59.)"
+        );
+    }
 
     /// Phrase qui ne s'adressait peut-être pas à Kobi (KOB-168) : « — » ou
     /// rien en réponse le laisse silencieux ; une vraie réponse s'affiche.
