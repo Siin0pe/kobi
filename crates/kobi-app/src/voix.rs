@@ -548,6 +548,12 @@ fn reglage_de_la_voix(q: &str) -> Option<CommandeVoix> {
         " avec ta voix ",
         " active la voix ",
         " remets la voix ",
+        // La reconnaissance écrit souvent « remet » (essai Xvfb, KOB-192).
+        " remet la voix ",
+        " remets ta voix ",
+        " remet ta voix ",
+        " remettre la voix ",
+        " reactive ta voix ",
         " reactive la voix ",
         " a l oral ",
     ];
@@ -712,6 +718,7 @@ mod tests {
             ("Kobi, plus de voix s'il te plaît", Some(Silence)),
             ("désactive la voix", Some(Silence)),
             ("Kobi, remets la voix", Some(Parle)),
+            ("remet la voix", Some(Parle)),
             ("réponds-moi avec ta voix", Some(Parle)),
             ("Comment couper la voix sur Teams ?", None),
             ("résume ce texte en anglais", None),
