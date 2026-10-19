@@ -54,6 +54,9 @@ pub enum Commande {
     /// La réunion vient d'être arrêtée à la voix ou par Claude : « reprends »
     /// s'entend sans redire « Kobi » pendant l'annulation (KOB-165).
     Annulable,
+    /// Kobi pose une question et attend la réponse ce temps-là (carte de
+    /// validation, KOB-197).
+    ReponseAttendue(Duration),
 }
 
 /// Canal vers le fil d'écoute.
@@ -170,11 +173,81 @@ fn jouer(samples: Vec<f32>) -> Receiver<AudioFrame> {
 /// moteur repart de zéro à chaque question).
 /// `entendu` reçoit chaque segment (partiel ou final) et dit s'il faut
 /// l'ignorer : c'est la voix de Kobi qui revient dans le micro (KOB-142).
+/// Prise de parole en cours, pour rattraper un mot court resté sans texte
+/// (KOB-197) : l'audio transmis depuis l'ouverture de la porte, et si le
+/// moteur a déjà sorti du texte.
+#[derive(Default)]
+struct Rattrapage {
+    audio: Vec<f32>,
+    texte: bool,
+}
+
+/// Au plus 3 s gardées : au-delà, ce n'est plus un mot court.
+const RATTRAPAGE_MAX: usize = 3 * kobi_stt::SAMPLE_RATE as usize;
+/// Partie voisée d'un mot court, en secondes.
+const MOT_COURT: (f64, f64) = (0.1, 1.5);
+
+/// Partie voisée d'un audio (au-dessus d'un seuil d'amplitude), si elle a
+/// la durée d'un mot court.
+fn mot_court(audio: &[f32]) -> Option<&[f32]> {
+    let fort = |x: &f32| x.abs() > 0.02;
+    let debut = audio.iter().position(fort)?;
+    let fin = audio.iter().rposition(fort)? + 1;
+    let duree = (fin - debut) as f64 / kobi_stt::SAMPLE_RATE as f64;
+    (MOT_COURT.0..=MOT_COURT.1)
+        .contains(&duree)
+        .then(|| &audio[debut..fin])
+}
+
+/// « Oui, oui » → « Oui » : le mot redoublé pour le moteur revient seul.
+fn sans_repetition(texte: &str) -> String {
+    let mut mots: Vec<&str> = Vec::new();
+    for mot in texte.split_whitespace() {
+        let nu = |m: &str| {
+            m.trim_matches(|c: char| !c.is_alphanumeric())
+                .to_lowercase()
+        };
+        if mots.last().is_none_or(|d| nu(d) != nu(mot)) {
+            mots.push(mot);
+        }
+    }
+    mots.join(" ")
+        .trim_end_matches(|c: char| !c.is_alphanumeric())
+        .to_string()
+}
+
+/// Le mot répété pour le moteur, lu comme « Oui » ou « Non » quand ses
+/// graphies s'en approchent (« Uui, uii, ui », « No, no ») : seulement pour
+/// un mot court rattrapé pendant que Kobi attend une réponse.
+fn oui_ou_non(texte: &str) -> Option<&'static str> {
+    const OUI: &[&str] = &[
+        "oui", "ui", "uui", "uii", "ouii", "wi", "ouais", "ouai", "wee", "we",
+    ];
+    const NON: &[&str] = &["non", "no", "nom", "nan", "noon", "nono"];
+    let mots: Vec<String> = texte
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|m| !m.is_empty())
+        .map(str::to_lowercase)
+        .collect();
+    let compte = |liste: &[&str]| mots.iter().filter(|m| liste.contains(&m.as_str())).count();
+    let (oui, non) = (compte(OUI), compte(NON));
+    // La majorité des mots, et pas un mélange des deux.
+    if oui * 2 > mots.len() && non == 0 {
+        Some("Oui")
+    } else if non * 2 > mots.len() && oui == 0 {
+        Some("Non")
+    } else {
+        None
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn transcrire(
     stt: &mut impl SttEngine,
     porte: &mut Porte,
     ecouteur: &mut Ecouteur,
     diag: &mut Option<Diag>,
+    rattrapage: &mut Rattrapage,
     frame: kobi_stt::AudioFrame,
     t: f64,
     entendu: &dyn Fn(&str) -> bool,
@@ -190,6 +263,7 @@ fn transcrire(
     // phrase précédente est conclue (KOB-190).
     if porte.ouverte() && !etait_ouverte {
         stt.nouvel_enonce(kobi_stt::Source::Moi);
+        *rattrapage = Rattrapage::default();
     }
     if let (Some(d), true) = (diag.as_mut(), porte.ouverte() != etait_ouverte) {
         d.note(if porte.ouverte() {
@@ -199,6 +273,9 @@ fn transcrire(
         });
     }
     for (debut, samples) in sorties {
+        if rattrapage.audio.len() < RATTRAPAGE_MAX {
+            rattrapage.audio.extend_from_slice(&samples);
+        }
         let frame = kobi_stt::AudioFrame {
             source: kobi_stt::Source::Moi,
             samples,
@@ -207,6 +284,7 @@ fn transcrire(
         match stt.push(&frame) {
             Ok(segments) => {
                 for s in segments {
+                    rattrapage.texte |= !s.text.trim().is_empty();
                     if entendu(&s.text) {
                         if let Some(d) = diag {
                             d.note(&format!("écho de Kobi ignoré : « {} »", s.text));
@@ -226,6 +304,26 @@ fn transcrire(
             Err(e) => tracing::warn!(erreur = %e, "écoute continue : transcription"),
         }
     }
+    // La porte se ferme sur une prise de parole restée sans texte, alors que
+    // Kobi attend une réponse : un « oui » ou un « non » seul (KOB-197).
+    if etait_ouverte && !porte.ouverte() && !rattrapage.texte && ecouteur.attend_reponse() {
+        let audio = std::mem::take(&mut rattrapage.audio);
+        if let Some(texte) = mot_court(&audio).and_then(|m| stt.transcrire_court(m)) {
+            let texte = oui_ou_non(&texte)
+                .map(str::to_owned)
+                .unwrap_or_else(|| sans_repetition(&texte));
+            if !texte.is_empty() && !entendu(&texte) {
+                if let Some(d) = diag {
+                    d.note(&format!("mot court rattrapé : « {texte} »"));
+                }
+                let suite = ecouteur.segment(&texte, true, t);
+                if let Some(d) = diag {
+                    d.segment(&texte, true, &suite);
+                }
+                actions.extend(suite);
+            }
+        }
+    }
     (actions, finals)
 }
 
@@ -236,6 +334,7 @@ struct Fil<R: Runtime> {
     diag: Option<Diag>,
     porte: Porte,
     ecouteur: Ecouteur,
+    rattrapage: Rattrapage,
     en_pause: bool,
     /// Fin de l'audio reçu, en secondes depuis l'ouverture du micro.
     t: f64,
@@ -259,6 +358,7 @@ impl<R: Runtime> Fil<R> {
             diag: Diag::ouvrir(),
             porte: Porte::new(kobi_stt::SAMPLE_RATE),
             ecouteur: Ecouteur::default(),
+            rattrapage: Rattrapage::default(),
             en_pause: false,
             t: 0.0,
             audio: 0.0,
@@ -364,6 +464,9 @@ impl<R: Runtime> Fil<R> {
     fn executer_commande(&mut self, commande: Commande) {
         match commande {
             Commande::Suite => self.ecouteur.suite(self.t),
+            Commande::ReponseAttendue(duree) => {
+                self.ecouteur.reponse_attendue(self.t, duree.as_secs_f64())
+            }
             Commande::Annulable => self
                 .ecouteur
                 .annulable(self.t, crate::chef::ANNULATION.as_secs_f64()),
@@ -452,6 +555,7 @@ impl<R: Runtime> Fil<R> {
             &mut self.porte,
             &mut self.ecouteur,
             &mut self.diag,
+            &mut self.rattrapage,
             frame,
             t,
             &entendu,
@@ -588,6 +692,7 @@ mod tests {
         stt.reset();
         let mut ecouteur = Ecouteur::default();
         let mut porte = Porte::new(kobi_stt::SAMPLE_RATE);
+        let mut rattrapage = Rattrapage::default();
         let (mut actions, mut finals) = (Vec::new(), Vec::new());
         let silence = vec![0.0; 48_000];
         // Trames de 10 ms ; `KOBI_TRAME` (échantillons) pour celles du micro.
@@ -602,13 +707,108 @@ mod tests {
                 t: (i * n) as f64 / kobi_stt::SAMPLE_RATE as f64,
             };
             let t = frame.end();
-            let (suite, _) = transcrire(stt, &mut porte, &mut ecouteur, diag, frame, t, &|_| false);
+            let (suite, _) = transcrire(
+                stt,
+                &mut porte,
+                &mut ecouteur,
+                diag,
+                &mut rattrapage,
+                frame,
+                t,
+                &|_| false,
+            );
             if let Some(d) = diag {
                 finals.extend(d.finals());
             }
             actions.extend(suite);
         }
         (actions, finals)
+    }
+
+    /// KOB-197 : « oui » ou « non » seul ne sort pas du flux ; quand Kobi
+    /// attend une réponse, la prise de parole courte est rattrapée à part.
+    #[test]
+    fn oui_seul_rattrape_quand_kobi_attend() {
+        #[derive(Default)]
+        struct Muet {
+            appels: usize,
+        }
+        impl SttEngine for Muet {
+            fn name(&self) -> &str {
+                "muet"
+            }
+            fn push(
+                &mut self,
+                _frame: &kobi_stt::AudioFrame,
+            ) -> kobi_stt::Result<Vec<kobi_stt::Segment>> {
+                Ok(Vec::new())
+            }
+            fn finish(&mut self) -> kobi_stt::Result<Vec<kobi_stt::Segment>> {
+                Ok(Vec::new())
+            }
+            fn transcrire_court(&mut self, _samples: &[f32]) -> Option<String> {
+                self.appels += 1;
+                Some("Oui, oui.".into())
+            }
+        }
+        // 1 s de silence, `parole` trames de 100 ms de voix, 4 s de silence.
+        let jouer = |ecouteur: &mut Ecouteur, parole: usize| {
+            let mut stt = Muet::default();
+            let mut porte = Porte::new(kobi_stt::SAMPLE_RATE);
+            let mut rattrapage = Rattrapage::default();
+            let voix: Vec<f32> = (0..1600).map(|i| 0.2 * (i as f32 * 0.3).sin()).collect();
+            let (mut t, mut actions) = (0.0, Vec::new());
+            for (n, fort) in [(10, false), (parole, true), (40, false)] {
+                for _ in 0..n {
+                    let frame = kobi_stt::AudioFrame {
+                        source: kobi_stt::Source::Moi,
+                        samples: if fort { voix.clone() } else { vec![0.0; 1600] },
+                        t,
+                    };
+                    t += 0.1;
+                    let (a, _) = transcrire(
+                        &mut stt,
+                        &mut porte,
+                        ecouteur,
+                        &mut None,
+                        &mut rattrapage,
+                        frame,
+                        t,
+                        &|_| false,
+                    );
+                    actions.extend(a);
+                }
+            }
+            (stt.appels, actions)
+        };
+        // Carte ouverte : le « oui » rattrapé part comme réponse, une fois.
+        let mut e = Ecouteur::default();
+        e.reponse_attendue(0.0, 60.0);
+        let (appels, actions) = jouer(&mut e, 4);
+        assert_eq!(appels, 1);
+        assert!(
+            actions.contains(&Action::Envoyer("Oui".into())),
+            "{actions:?}"
+        );
+        // Personne n'attend de réponse : rien n'est rattrapé.
+        let (appels, actions) = jouer(&mut Ecouteur::default(), 4);
+        assert_eq!((appels, actions.len()), (0, 0), "{actions:?}");
+        // Une longue prise de parole n'est pas un « oui ».
+        let mut e = Ecouteur::default();
+        e.reponse_attendue(0.0, 60.0);
+        assert_eq!(jouer(&mut e, 25).0, 0);
+    }
+
+    #[test]
+    fn mot_redouble_ramene_a_un_seul() {
+        assert_eq!(sans_repetition("Oui, oui."), "Oui");
+        assert_eq!(sans_repetition("Non, non, non"), "Non");
+        assert_eq!(sans_repetition("Oui, vas-y"), "Oui, vas-y");
+        // Graphies proches relevées sur les essais de KOB-197.
+        assert_eq!(oui_ou_non("Uui, uii, ui"), Some("Oui"));
+        assert_eq!(oui_ou_non("No, no"), Some("Non"));
+        assert_eq!(oui_ou_non("Oui, non"), None);
+        assert_eq!(oui_ou_non("D'accord"), None);
     }
 
     /// KOB-190 : chaque parole qui suit un silence (porte rouverte) repart
@@ -664,6 +864,7 @@ mod tests {
                     &mut porte,
                     &mut ecouteur,
                     &mut None,
+                    &mut Rattrapage::default(),
                     frame,
                     t,
                     &|_| false,

@@ -289,6 +289,42 @@ impl SttEngine for NemotronEngine {
         track.utterance_start = track.pos;
     }
 
+    /// KOB-197 : un mot d'une syllabe dit seul (« oui », « non ») ne sort
+    /// jamais du modèle, même sur un flux neuf, avec ou sans langue imposée ;
+    /// redoublé (« oui… oui »), il sort (« Oui, oui »). Flux à part, mot
+    /// répété deux fois (trois si rien ne sort), silence autour ; le flux de
+    /// l'écoute n'est pas touché.
+    fn transcrire_court(&mut self, samples: &[f32]) -> Option<String> {
+        let silence = |s: f64| vec![0.0f32; (s * SAMPLE_RATE as f64) as usize];
+        // Redoublé d'abord ; triplé si rien ne sort (certaines voix).
+        for fois in [2, 3] {
+            let stream = self.recognizer.create_stream();
+            stream.set_option(
+                "language",
+                self.config.language.as_deref().unwrap_or("auto"),
+            );
+            stream.accept_waveform(SAMPLE_RATE as i32, &silence(0.3));
+            for _ in 0..fois {
+                stream.accept_waveform(SAMPLE_RATE as i32, samples);
+                stream.accept_waveform(SAMPLE_RATE as i32, &silence(0.2));
+            }
+            stream.accept_waveform(SAMPLE_RATE as i32, &silence(1.5));
+            stream.input_finished();
+            while self.recognizer.is_ready(&stream) {
+                self.recognizer.decode(&stream);
+            }
+            let text = self
+                .recognizer
+                .get_result(&stream)
+                .map(|r| clean_text(&r.text))
+                .unwrap_or_default();
+            if !text.is_empty() {
+                return Some(text);
+            }
+        }
+        None
+    }
+
     fn finish(&mut self) -> Result<Vec<Segment>> {
         let mut sources: Vec<Source> = self.tracks.keys().copied().collect();
         sources.sort_by_key(|s| *s as u8);

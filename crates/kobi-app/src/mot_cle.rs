@@ -605,6 +605,34 @@ impl Ecouteur {
         }
     }
 
+    /// Kobi attend une réponse à sa question pendant `duree` secondes (carte
+    /// de validation, KOB-197) : « oui » ou « non » s'entend sans le nom tout
+    /// ce temps, pas seulement les [`CONVERSATION`] secondes habituelles.
+    pub fn reponse_attendue(&mut self, t: f64, duree: f64) {
+        if !self.conversation {
+            return;
+        }
+        if matches!(
+            self.attente,
+            Attente::Nom
+                | Attente::Conversation { parle: None, .. }
+                | Attente::Suite { parle: None, .. }
+        ) {
+            self.attente = Attente::Conversation {
+                depuis: t + (duree - CONVERSATION).max(0.0),
+                parle: None,
+            };
+        }
+    }
+
+    /// Une phrase sans le nom compte-t-elle en ce moment (suite, conversation) ?
+    pub fn attend_reponse(&self) -> bool {
+        matches!(
+            self.attente,
+            Attente::Suite { .. } | Attente::Conversation { .. }
+        )
+    }
+
     /// La réunion vient d'être arrêtée : pendant `duree` secondes,
     /// « reprends » suffit, sans le nom.
     pub fn annulable(&mut self, t: f64, duree: f64) {
@@ -1171,6 +1199,27 @@ mod tests {
         e.suite(2.0);
         let actions = rejouer(&mut e, &[(question.as_str(), true, 3.0)]);
         assert!(actions.is_empty(), "{actions:?}");
+    }
+
+    /// KOB-197 : pendant qu'une carte attend (60 s), une réponse sans le nom
+    /// compte tout ce temps ; ensuite, retour à l'écoute du nom.
+    #[test]
+    fn reponse_attendue_le_temps_de_la_carte() {
+        let mut e = Ecouteur::default();
+        e.reponse_attendue(10.0, 60.0);
+        assert!(e.tick(50.0).is_empty());
+        assert!(e.attend_reponse());
+        e.tick(71.0);
+        assert!(!e.attend_reponse());
+        // Une réponse dans la fenêtre part sans le nom.
+        let mut e = Ecouteur::default();
+        e.reponse_attendue(0.0, 60.0);
+        e.tick(45.0);
+        let actions = e.segment("Non", true, 45.0);
+        assert!(
+            actions.contains(&Action::Envoyer("Non".into())),
+            "{actions:?}"
+        );
     }
 
     /// Graphies de Nemotron relevées sur le corpus de KOB-179 : retrouvées en
