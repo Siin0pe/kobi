@@ -73,6 +73,20 @@
     },
     {
       "fichiers": [
+        "src/vue.ts",
+        "src/styles/vue.css",
+        "src/affichage.ts"
+      ],
+      "tests": [
+        "vue",
+        "reponses-longues",
+        "bulles",
+        "activite",
+        "sobriete"
+      ]
+    },
+    {
+      "fichiers": [
         "src/agrandir.ts",
         "src/defilement.ts",
         "src/markdown.ts",
