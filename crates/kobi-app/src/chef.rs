@@ -121,6 +121,9 @@ pub struct Enregistrement {
     pub titre: Option<String>,
     /// Dernière note ajoutée, pour la fiche de prise de notes.
     pub derniere_note: Option<String>,
+    /// Arrêt encore annulable par « reprends » (KOB-165, KOB-174) : REC en
+    /// pause, rien n'est rédigé avant la confirmation.
+    pub annulable: bool,
 }
 
 /// Charge de [`EVENEMENT_NOTES`] : de quoi relire `notes.md` sur le disque.
@@ -499,14 +502,15 @@ impl<R: Runtime> Chef<R> {
     pub fn enregistrement(&self) -> Enregistrement {
         match &self.reunion {
             None => Enregistrement::default(),
-            Some(r) if r.fin_demandee => Enregistrement::default(),
+            Some(r) if r.fin_demandee && r.fin_differee.is_none() => Enregistrement::default(),
             Some(r) => Enregistrement {
                 actif: true,
-                pause: r.pause,
+                pause: r.pause || r.fin_differee.is_some(),
                 debut_ms: r.debut_ms,
                 notes: compter_notes(&r.notes),
                 titre: None,
                 derniere_note: r.derniere_note.clone(),
+                annulable: r.fin_differee.is_some(),
             },
         }
     }
@@ -932,8 +936,8 @@ impl<R: Runtime> Chef<R> {
         };
         if r.fin_demandee {
             // Arrêt annulable en cours : le raccourci ou le menu le confirment.
-            if r.fin_differee.take().is_some() {
-                self.demander_compte_rendu();
+            if r.fin_differee.is_some() {
+                self.confirmer_fin();
                 return "Réunion terminée : j'écris le compte rendu.".into();
             }
             return "J'écris déjà le compte rendu.".into();
@@ -957,11 +961,24 @@ impl<R: Runtime> Chef<R> {
         }
         r.fin_demandee = true;
         r.fin_differee = Some(Instant::now() + ANNULATION);
-        self.transition(&[Evenement::TerminerReunion]);
+        // Pendant l'annulation, la session reste en réunion (KOB-174) : le
+        // micro reste ouvert pour entendre « reprends » (en pause, il est
+        // coupé), et rien n'est rédigé. Les segments ne sont plus notés, et
+        // l'enregistrement est annoncé arrêté et annulable.
         // « Reprends » s'entend sans redire « Kobi » pendant l'annulation.
         let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::Annulable);
         tracing::info!("réunion arrêtée, annulable");
         "J'ai arrêté l'enregistrement. Dis « reprends » si c'était une erreur.".into()
+    }
+
+    /// Fin confirmée après un arrêt annulable (délai écoulé, raccourci ou
+    /// menu) : la réunion passe en fin, et le compte rendu part.
+    fn confirmer_fin(&mut self) {
+        let Some(r) = &mut self.reunion else { return };
+        r.fin_differee = None;
+        self.transition(&[Evenement::TerminerReunion]);
+        self.emettre_enregistrement();
+        self.demander_compte_rendu();
     }
 
     /// « Reprends » pendant l'annulation : la réunion continue, rien n'est
@@ -972,7 +989,8 @@ impl<R: Runtime> Chef<R> {
         };
         r.fin_demandee = false;
         r.fin_differee = None;
-        self.transition(&[Evenement::Reprendre]);
+        // La session n'a pas quitté la réunion (ni sa pause) : rien à changer
+        // côté état.
         tracing::info!("arrêt de la réunion annulé");
         "J'enregistre de nouveau : la réunion continue.".into()
     }
@@ -1576,9 +1594,8 @@ impl<R: Runtime> Chef<R> {
         let Some(r) = &mut self.reunion else { return };
         // Arrêt annulable : sans « reprends » à temps, le compte rendu part.
         if r.fin_differee.is_some_and(|quand| Instant::now() >= quand) {
-            r.fin_differee = None;
             tracing::info!("arrêt confirmé : compte rendu demandé");
-            self.demander_compte_rendu();
+            self.confirmer_fin();
             return;
         }
         if r.pause || r.fin_demandee || r.envoye.is_some() || Instant::now() < r.prochain_bloc {

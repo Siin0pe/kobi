@@ -97,11 +97,19 @@ export class RecIndicator {
       return;
     }
     this.root.hidden = info === null;
-    this.root.classList.toggle('is-paused', Boolean(info?.paused));
-    if (info) {
+    this.root.classList.toggle('is-paused', Boolean(info?.paused || info?.stopping));
+    this.root.classList.toggle('is-stopping', Boolean(info?.stopping));
+    if (info?.stopping) {
+      // Arrêt annulable (KOB-174) : rien n'est rédigé tant que « reprends »
+      // peut tout relancer.
+      this.label.textContent = 'arrêté · dis « reprends »';
+      this.root.setAttribute('aria-label', 'Enregistrement arrêté : dis « reprends » pour continuer');
+    } else if (info) {
       const word = info.paused ? 'PAUSE' : 'REC';
       this.label.textContent = info.title ? `${word} · ${info.title}` : word;
       this.root.setAttribute('aria-label', info.paused ? 'Transcription en pause' : 'Réunion transcrite en local');
+    }
+    if (info) {
       const n = info.notes ?? 0;
       this.notes.hidden = n === 0;
       this.digits(this.notes, String(n), ` note${n > 1 ? 's' : ''}`);

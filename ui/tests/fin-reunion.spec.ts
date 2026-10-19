@@ -77,3 +77,61 @@ test('fin de réunion avec « réduire les animations » : mêmes étapes, sans 
   expect(await page.evaluate(() => document.querySelector('.kobi')!.getAnimations({ subtree: true }).filter((a) => a.playState === 'running').length)).toBe(0);
   await expectNoErrors(errors);
 });
+
+/**
+ * Arrêt à la voix ou par Claude (KOB-165) : annulable 30 s. La session reste
+ * en réunion (micro ouvert pour « reprends ») ; seul l'enregistrement est
+ * annoncé arrêté et annulable.
+ */
+async function reunionPuisArretAnnulable(page: Page, debut: number): Promise<void> {
+  await emit(page, 'state', { etat: 'reunion', activite: 'calme', mascotte: 'idle', transcrit: true });
+  await emit(page, 'enregistrement', { actif: true, pause: false, debut_ms: debut, notes: 3, titre: null, derniere_note: 'Budget validé' });
+  await expect(page.locator('.stage')).toHaveAttribute('data-state', 'write');
+  await suivreEtats(page);
+  await emit(page, 'enregistrement', { actif: true, pause: true, debut_ms: debut, notes: 3, titre: null, derniere_note: 'Budget validé', annulable: true });
+}
+
+test('arrêt annulable puis « reprends » : pas de rédaction, REC continue la durée (KOB-174)', async ({ page }) => {
+  await mockTauri(page);
+  const errors = await openUi(page, '');
+  const debut = Date.now() - 7 * 60_000;
+  await reunionPuisArretAnnulable(page, debut);
+
+  // Pendant les 30 s : REC arrêté, « dis « reprends » », Kobi au calme, rien n'est rédigé.
+  const rec = page.locator('.rec');
+  await expect(rec).toHaveClass(/is-stopping/);
+  await expect(rec.locator('.rec-label')).toHaveText('arrêté · dis « reprends »');
+  await expect(rec).not.toHaveClass(/is-ended/);
+  await expect(page.locator('.stage')).toHaveAttribute('data-state', 'idle');
+  await expect(page.locator('[data-card=compose]')).toHaveCount(0);
+  await expect(page.locator('.kobi .sheets span').first()).toBeHidden();
+  await expect(rec.locator('.rec-time')).toHaveText(/^7:0\d$/);
+
+  // « Reprends » : la même réunion continue, le compteur ne repart pas de zéro.
+  await emit(page, 'enregistrement', { actif: true, pause: false, debut_ms: debut, notes: 3, titre: null, derniere_note: 'Budget validé', annulable: false });
+  await expect(rec.locator('.rec-label')).toHaveText('REC');
+  await expect(rec).not.toHaveClass(/is-stopping|is-paused/);
+  await expect(page.locator('.stage')).toHaveAttribute('data-state', 'write');
+  await expect(rec.locator('.rec-time')).toHaveText(/^7:0\d$/);
+
+  const etats = await page.evaluate(() => (window as unknown as { etats: string[] }).etats);
+  expect(etats).not.toContain('compose');
+  await expectNoErrors(errors);
+});
+
+test('arrêt annulable puis 30 s sans « reprends » : la rédaction commence à la confirmation (KOB-174)', async ({ page }) => {
+  await mockTauri(page);
+  const errors = await openUi(page, '');
+  await reunionPuisArretAnnulable(page, Date.now() - 7 * 60_000);
+  await expect(page.locator('.rec')).toHaveClass(/is-stopping/);
+  await expect(page.locator('[data-card=compose]')).toHaveCount(0);
+
+  // Confirmation par la coque : fin de la réunion, puis la rédaction.
+  await emit(page, 'state', { etat: 'fin', activite: null, mascotte: 'compose', transcrit: false });
+  await emit(page, 'enregistrement', ARRET);
+  await expect(page.locator('.rec')).toContainText('réunion terminée');
+  await expect(page.locator('.stage')).toHaveAttribute('data-state', 'compose');
+  await expect(page.locator('[data-card=compose] .text')).toHaveText('Je rédige le compte rendu…');
+  await expect(page.locator('.bubbles .card')).toHaveCount(1);
+  await expectNoErrors(errors);
+});

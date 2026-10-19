@@ -191,7 +191,7 @@ export class Stage {
    * tels quels, puis Kobi retourne à ses notes.
    */
   private show(): void {
-    const taking = this.requested === 'idle' && this.meeting !== null && !this.meeting.paused;
+    const taking = this.requested === 'idle' && this.meeting !== null && !this.meeting.paused && !this.meeting.stopping;
     const state: MascotState = taking ? 'write' : this.requested;
     const data = taking ? { notes: this.meeting?.lastNote ?? NOTES_PLACEHOLDER } : this.requestedData;
     if (state === this.state && taking) {
@@ -258,10 +258,13 @@ export class Stage {
   updateMeeting(patch: Partial<MeetingInfo>): void {
     if (!this.meeting) return;
     const wasPaused = Boolean(this.meeting.paused);
+    const wasStopping = Boolean(this.meeting.stopping);
     const notes = this.meeting.notes ?? 0;
     this.setMeeting({ ...this.meeting, ...patch });
     if ((this.meeting.notes ?? 0) > notes && !this.isPaused()) this.kobi.noteAdded();
-    if (Boolean(this.meeting.paused) !== wasPaused) this.say(this.meeting.paused ? 'Transcription en pause.' : 'Transcription reprise.');
+    const stopping = Boolean(this.meeting.stopping);
+    if (stopping !== wasStopping) this.say(stopping ? 'Enregistrement arrêté. Dis « reprends » pour continuer.' : 'Transcription reprise.');
+    else if (Boolean(this.meeting.paused) !== wasPaused) this.say(this.meeting.paused ? 'Transcription en pause.' : 'Transcription reprise.');
   }
 
   endMeeting(): void {
