@@ -54,9 +54,10 @@ pub const OUTILS_REFUSES: &[&str] = &[
 pub const PROMPT_CONVERSATION: &str = "\
 ## Au quotidien comme en réunion
 
-On te parle aussi en dehors de toute réunion, sur le bureau. Une question posée pendant une \
-réunion commence par « (Réunion : enregistrement …) » ; sans cette mention, aucune réunion \
-n'est en cours : n'en parle pas, réponds simplement, comme dans une conversation.
+On te parle aussi en dehors de toute réunion, sur le bureau. Chaque question donne \
+l'état de la réunion : « (Réunion : enregistrement …) » pendant une réunion, « (Aucune réunion \
+en cours.) » sinon. Hors réunion, ne parle jamais de réunion et ne suppose pas qu'il y en a \
+une : réponds simplement, comme dans une conversation.
 
 Tutoie toujours l'utilisateur.";
 
