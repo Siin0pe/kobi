@@ -190,7 +190,10 @@ impl AudioConfig {
 
     /// Sortie choisie ; `None` : la sortie par défaut.
     pub fn sortie_choisie(&self) -> Option<&str> {
-        self.sortie.as_deref().map(str::trim).filter(|s| !s.is_empty())
+        self.sortie
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
     }
 }
 
@@ -562,24 +565,35 @@ mod tests {
     #[test]
     fn son_de_l_ordinateur_desactive_par_defaut() {
         let path = Path::new("config.toml");
-        let ancien = Config::parse("[audio]
+        let ancien = Config::parse(
+            "[audio]
 sources = \"both\"
-", path).unwrap();
+",
+            path,
+        )
+        .unwrap();
         assert_eq!(ancien.audio.sources, AudioSources::Mic);
         let ecrit = toml::to_string(&ancien).unwrap();
         assert!(ecrit.contains("sortie = \"\""), "{ecrit}");
-        let choisi =
-            Config::parse("[audio]
+        let choisi = Config::parse(
+            "[audio]
 sources = \"both\"
 sortie = \"Casque\"
-", path).unwrap();
+",
+            path,
+        )
+        .unwrap();
         assert_eq!(choisi.audio.sources, AudioSources::Both);
         assert!(choisi.audio.sources.son_ordi());
         assert_eq!(choisi.audio.sortie_choisie(), Some("Casque"));
-        let defaut = Config::parse("[audio]
+        let defaut = Config::parse(
+            "[audio]
 sources = \"both\"
 sortie = \" \"
-", path).unwrap();
+",
+            path,
+        )
+        .unwrap();
         assert_eq!(defaut.audio.sortie_choisie(), None);
     }
 

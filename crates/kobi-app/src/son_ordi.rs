@@ -248,7 +248,11 @@ impl<R: Runtime> Fil<R> {
 
     fn trame(&mut self) {
         let Some(piste) = &mut self.piste else { return };
-        let frame = match piste.capture.frames().recv_timeout(Duration::from_millis(200)) {
+        let frame = match piste
+            .capture
+            .frames()
+            .recv_timeout(Duration::from_millis(200))
+        {
             Ok(frame) => frame,
             // Rien ne joue : WASAPI n'envoie rien en loopback.
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => return,
@@ -422,9 +426,6 @@ mod tests {
                 sortie: None
             }
         );
-        assert_eq!(
-            Reglage::depuis(&config::load_or_create(&chemin).config),
-            r
-        );
+        assert_eq!(Reglage::depuis(&config::load_or_create(&chemin).config), r);
     }
 }
