@@ -274,6 +274,7 @@ pub fn installer<R: Runtime>(builder: Builder<R>) -> Builder<R> {
             crate::carnet::carnet_markdown,
             crate::carnet::carnet_exporter,
             crate::carnet::carnet_ouvrir_dossier,
+            crate::carnet::carnet_ouvrir_export,
             crate::carnet::carnet_supprimer,
             crate::carnet::carnet_renommer,
             crate::carnet::carnet_rappel_fait,

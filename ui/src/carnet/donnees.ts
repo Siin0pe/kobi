@@ -101,6 +101,8 @@ export const carnet = {
   chercher: (requete: string) => invoke<Trouve[]>('carnet_chercher', { requete }),
   markdown: (genre: Genre, id: string) => invoke<string>('carnet_markdown', { genre, id }),
   exporter: (genre: Genre, id: string) => invoke<string | null>('carnet_exporter', { genre, id }),
+  /** Ouvre le dernier fichier exporté (la coque le garde, KOB-224). */
+  ouvrirExport: () => invoke<void>('carnet_ouvrir_export'),
   ouvrirDossier: (genre?: Genre, id?: string) => invoke<void>('carnet_ouvrir_dossier', genre && id ? { genre, id } : {}),
   supprimer: (genre: Genre, id: string) => invoke<void>('carnet_supprimer', { genre, id }),
   /** Titre édité sur place (KOB-223) ; rend l'identifiant à jour. */

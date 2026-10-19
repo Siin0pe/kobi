@@ -106,6 +106,7 @@ function fakeTauri(): void {
           case 'carnet_exporter':
             return `/home/test/Documents/${String(args.id).replace('/', '-')}.md`;
           case 'carnet_ouvrir_dossier':
+          case 'carnet_ouvrir_export':
             return null;
           case 'carnet_supprimer':
             if (args.genre === 'reunion') reunions.splice(0, 1);
@@ -272,6 +273,10 @@ test('copier, exporter, ouvrir le dossier', async ({ page }) => {
   // Un seul message à la fois : « Exporté » remplace « Copié » (KOB-215).
   await expect(page.locator('.notif:not(.sort)')).toHaveCount(1);
   await expect(page.locator('.notif', { hasText: 'Réunion copiée' })).toHaveCount(0);
+  // « Ouvrir » ouvre le fichier exporté ; la coque sait lequel, la fenêtre ne donne aucun chemin (KOB-224).
+  await page.locator('.notif:not(.sort)').getByRole('button', { name: 'Ouvrir' }).click();
+  expect(await appels(page)).toContainEqual(['carnet_ouvrir_export', {}]);
+  await expect(page.locator('.notif:not(.sort)')).toHaveCount(0);
   await page.getByRole('button', { name: 'Ouvrir le dossier' }).click();
   expect(await appels(page)).toContainEqual(['carnet_ouvrir_dossier', { genre: 'reunion', id: '2026-10-18_point-budget' }]);
   await expectNoErrors(errors);
