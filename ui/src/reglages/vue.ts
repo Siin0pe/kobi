@@ -49,7 +49,12 @@ export function monterReglages(racine: HTMLElement, notifier: (texte: string, to
     sousTitre.textContent = p.sousTitre;
     poserTitre(titre, p.titre);
     corps.dataset.panneau = p.id;
-    demonter = p.monter(corps, { notifier });
+    // Un hôte neuf par panneau : un panneau lent (micros, stockage…) qui
+    // répond après qu'on l'a quitté écrit dans un nœud détaché, pas dans le
+    // suivant (KOB-232).
+    const hote = h('div', { class: 'panneau-hote' });
+    corps.replaceChildren(hote);
+    demonter = p.monter(hote, { notifier });
   }
 
   function dessinerListe(): void {

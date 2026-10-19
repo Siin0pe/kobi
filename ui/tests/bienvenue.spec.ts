@@ -12,6 +12,8 @@ interface Options {
   choix?: string;
   /** `lister_depots` présente (KOB-153). */
   depots?: boolean;
+  /** `micros` répond après 1 s (énumération audio lente, KOB-232). */
+  microsLent?: boolean;
 }
 
 function fakeTauri(o: Options): void {
@@ -45,6 +47,7 @@ function fakeTauri(o: Options): void {
             if (o.claude === 'non-connecte') return { etat: 'non-connecte', version: '2.1.302 (Claude Code)', programme: '/usr/bin/claude' };
             return { etat: 'pret', version: '2.1.302 (Claude Code)', programme: '/usr/bin/claude' };
           case 'micros':
+            if (o.microsLent) await new Promise((r) => setTimeout(r, 1000));
             return { micros: [{ nom: 'Micro intégré', defaut: true }, { nom: 'Casque USB', defaut: false }], choisi: null, erreur: null };
           case 'choisir_micro':
             return null;
@@ -336,5 +339,23 @@ test('dossier de projets : Kobi liste ses dépôts, on coche ceux qu’il lit (K
   await page.getByRole('button', { name: 'Ajouter un dossier…' }).click();
   await page.getByRole('button', { name: 'Tout le dossier' }).click();
   await expect(page.locator('.dossier-code code')).toHaveText(['/home/neuf/code/kobi', '/home/neuf/code/site', '/home/neuf/code']);
+  await expectNoErrors(errors);
+});
+
+test('étape lente quittée avant sa réponse : elle n’écrit pas dans l’étape suivante (KOB-232)', async ({ page }) => {
+  const errors = await ouvrir(page, { dependances: true, microsLent: true });
+  await page.getByRole('button', { name: 'On y va' }).click();
+  await expect(page.locator('.surtitre')).toHaveText('Étape 1 sur 9');
+  await page.getByRole('button', { name: 'Suivant' }).click();
+  await expect(page.locator('.surtitre')).toHaveText('Étape 2 sur 9');
+  // « Suivant » avant que les micros soient listés.
+  await page.getByRole('button', { name: 'Suivant' }).click();
+  await expect(page.locator('.surtitre')).toHaveText('Étape 3 sur 9');
+  const sonOrdi = page.getByRole('switch', { name: 'Écouter aussi le son de l’ordinateur' });
+  await expect(sonOrdi).toBeVisible();
+  // La réponse de `micros` arrive : l'étape 3 garde son contenu.
+  await page.waitForTimeout(1500);
+  await expect(sonOrdi).toBeVisible();
+  await expect(page.getByRole('radio', { name: /Casque USB/ })).toHaveCount(0);
   await expectNoErrors(errors);
 });

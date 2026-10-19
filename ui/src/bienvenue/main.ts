@@ -121,7 +121,11 @@ export function monterAccueil(
     suivant.textContent = n === ETAPES.length ? 'Terminer' : 'Suivant';
     suivant.dataset.action = 'suivant';
     corps.dataset.panneau = p.id;
-    demonter = p.monter(corps, { notifier, signaler: (s, r) => signaler(p.id, s, r), parcours: true });
+    // Un hôte neuf par étape : une étape lente (micros, raccourcis…) qui
+    // répond après « Suivant » écrit dans un nœud détaché (KOB-232).
+    const hote = h('div', { class: 'panneau-hote' });
+    corps.replaceChildren(hote);
+    demonter = p.monter(hote, { notifier, signaler: (s, r) => signaler(p.id, s, r), parcours: true });
   }
 
   function presentation(): void {
