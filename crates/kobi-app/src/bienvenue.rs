@@ -275,6 +275,10 @@ pub struct Raccourcis {
     pub parler: String,
     /// Enregistrer une réunion.
     pub reunion: String,
+    /// Écrire à Kobi (`hotkey_write`, KOB-147).
+    pub ecrire: String,
+    /// Conversation en grand (`hotkey_view`, KOB-169).
+    pub agrandir: String,
 }
 
 #[tauri::command]
@@ -295,6 +299,8 @@ pub fn raccourcis() -> Raccourcis {
             &config.hotkey_record,
             &defaut.hotkey_record,
         ),
+        ecrire: valide("hotkey_write", &config.hotkey_write, &defaut.hotkey_write),
+        agrandir: valide("hotkey_view", &config.hotkey_view, &defaut.hotkey_view),
     }
 }
 
@@ -647,6 +653,9 @@ mod tests {
         let r = appeler(&w, "raccourcis", json!({})).unwrap();
         assert!(r["reunion"].as_str().is_some_and(|p| !p.is_empty()));
         assert!(r["parler"].as_str().is_some_and(|p| !p.is_empty()));
+        // Les quatre raccourcis globaux (KOB-183).
+        assert!(r["ecrire"].as_str().is_some_and(|p| !p.is_empty()));
+        assert!(r["agrandir"].as_str().is_some_and(|p| !p.is_empty()));
 
         let m = appeler(&w, "etat_modele", json!({})).unwrap();
         // Ce qui reste à télécharger dépend de la machine (modèles déjà là).
