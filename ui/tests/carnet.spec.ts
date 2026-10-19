@@ -248,6 +248,9 @@ test('copier, exporter, ouvrir le dossier', async ({ page }) => {
   expect(await page.evaluate(() => (window as unknown as { __copie: string }).__copie)).toBe('# 2026-10-18_point-budget\n');
   await page.getByRole('button', { name: 'Exporter' }).click();
   await expect(page.locator('.notif').last()).toContainText('Exporté : /home/test/Documents/');
+  // Un seul message à la fois : « Exporté » remplace « Copié » (KOB-215).
+  await expect(page.locator('.notif:not(.sort)')).toHaveCount(1);
+  await expect(page.locator('.notif', { hasText: 'Copié en markdown.' })).toHaveCount(0);
   await page.getByRole('button', { name: 'Ouvrir le dossier' }).click();
   expect(await appels(page)).toContainEqual(['carnet_ouvrir_dossier', { genre: 'reunion', id: '2026-10-18_point-budget' }]);
   await expectNoErrors(errors);
