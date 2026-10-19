@@ -46,6 +46,19 @@ const TOUJOURS: Partial<Record<CarteValidation['genre'], string>> = {
   reglage: 'Ne plus demander pour les réglages',
 };
 
+/**
+ * On est en train d'écrire : un champ qui contient du texte. La bulle
+ * d'écriture reste ouverte, vide, après l'envoi d'une question : la carte qui
+ * arrive prend alors le focus, pour qu'Entrée / Échap lui répondent (KOB-215).
+ */
+function ecrit(n: Element | null | undefined): boolean {
+  const champ = n?.closest<HTMLElement>('input, textarea, [contenteditable="true"]');
+  if (!champ) return false;
+  if (champ instanceof HTMLInputElement && (champ.type === 'checkbox' || champ.type === 'radio')) return true;
+  const texte = champ instanceof HTMLInputElement || champ instanceof HTMLTextAreaElement ? champ.value : (champ.textContent ?? '');
+  return texte.trim() !== '';
+}
+
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -197,7 +210,7 @@ export class Validations {
     this.tick(o);
     // Le focus vient sur la carte, sauf si l'on est en train d'écrire.
     const actif = document.activeElement;
-    if (!actif?.closest('input, textarea, [contenteditable="true"]')) root.focus({ preventScroll: true });
+    if (!ecrit(actif)) root.focus({ preventScroll: true });
   }
 
   /** Compte à rebours : une mise à jour par seconde, calée sur l'échéance. */

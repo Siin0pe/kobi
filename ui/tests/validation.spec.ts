@@ -290,3 +290,24 @@ test('« Ne plus demander » : pour fichiers, commandes et réglages seulement ;
   expect(await page.evaluate(() => (window as unknown as { __calls: Appel[] }).__calls.find((c) => c.cmd === 'regler_permission')!.args)).toEqual({ genre: 'commande', sansDemander: true });
   await expectNoErrors(errors);
 });
+
+test('question envoyée depuis la bulle d’écriture, puis carte : elle prend le focus, Entrée la valide (KOB-215)', async ({ page }) => {
+  await fakeShell(page);
+  const errors = await openUi(page, '');
+  await page.evaluate(() => window.kobi.ecrire());
+  const champ = page.getByRole('textbox', { name: 'Écrire à Kobi' });
+  await champ.fill('crée bonjour.txt');
+  await champ.press('Enter');
+  // La bulle reste ouverte, vide : la carte qui arrive prend le focus.
+  await expect(champ).toHaveValue('');
+  await carte(page, FICHIER);
+  await expect(dialog(page)).toBeFocused();
+  await page.keyboard.press('Enter');
+  expect(await decisions(page)).toEqual([{ cmd: 'decider_carte', args: { id: '1', accepte: true } }]);
+  // En revanche, en pleine frappe, la carte ne vole pas le focus.
+  await page.evaluate(() => window.kobi.ecrire());
+  await champ.fill('une autre');
+  await carte(page, COMMANDE);
+  await expect(champ).toBeFocused();
+  await expectNoErrors(errors);
+});
