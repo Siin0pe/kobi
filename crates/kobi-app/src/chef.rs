@@ -1505,9 +1505,7 @@ impl<R: Runtime> Chef<R> {
         let etat = match &self.reunion {
             // Dit aussi hors réunion : sans cela, Claude en suppose une
             // (« comment se passe ta réunion ? », KOB-181).
-            None => return format!("{maintenant}
-(Aucune réunion en cours.)
-{question}"),
+            None => return format!("{maintenant}\n(Aucune réunion en cours.)\n{question}"),
             Some(r) if r.fin_demandee => "arrêté, compte rendu à venir",
             Some(r) if r.pause => "en pause",
             Some(_) => "en cours",
