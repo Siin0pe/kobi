@@ -1056,7 +1056,9 @@ mod tests {
         let essai_avec = |reponse: Option<bool>| {
             let e = essai();
             e.app
-                .manage(crate::validation::Validations::new(Duration::from_millis(300)));
+                .manage(crate::validation::Validations::new(Duration::from_millis(
+                    300,
+                )));
             repondre_aux_cartes(&e, reponse);
             e
         };

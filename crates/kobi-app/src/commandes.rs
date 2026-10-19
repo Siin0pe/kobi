@@ -159,7 +159,12 @@ fn demander_a_l_app(genre: &'static str, resume: String, detail: Value) -> Optio
 /// Décision du hook pour un appel (JSON de Claude Code) et des dossiers,
 /// sans app pour valider : une écriture est refusée, avec le texte à copier.
 pub fn decider(entree: &str, dossiers: &[PathBuf]) -> Value {
-    decider_avec(entree, dossiers, &PermissionsConfig::default(), &|_, _, _| None)
+    decider_avec(
+        entree,
+        dossiers,
+        &PermissionsConfig::default(),
+        &|_, _, _| None,
+    )
 }
 
 /// Décision du hook. `demander` ouvre la carte de validation et rend la
@@ -196,7 +201,7 @@ pub fn decider_avec(
                 false,
                 &format!(
                     "Kobi n'agit que dans les dossiers de code déclarés : {raison}. \
-                     Donne la commande ou le contenu à l'utilisateur, prêt à copier."
+                     Donne à l'utilisateur la commande ou le contenu, prêts à copier."
                 ),
             )
         }
@@ -228,7 +233,7 @@ pub fn decider_avec(
             false,
             &format!(
                 "Kobi ne peut pas demander l'accord de l'utilisateur (l'app ne répond pas) : {raison}. \
-                 Donne la commande ou le contenu à l'utilisateur, prêt à copier, pour qu'il le fasse lui-même."
+                 Donne à l'utilisateur la commande ou le contenu, prêts à copier, pour qu'il le fasse lui-même."
             ),
         ),
     }
@@ -321,7 +326,7 @@ mod tests {
             .as_str()
             .unwrap();
         assert!(
-            raison.contains("supprime") && raison.contains("prête à copier"),
+            raison.contains("supprime") && raison.contains("à copier"),
             "{raison}"
         );
         let v = decider(&appel("PowerShell", "Get-ChildItem src", &kobi()), &d);
@@ -356,7 +361,10 @@ mod tests {
         assert_eq!(decision(&avec(Some("accepte"), &defaut, &rm)), "allow");
         assert_eq!(
             demandes.borrow().last().unwrap(),
-            &("suppression".to_owned(), "Lancer : rm -rf target".to_owned())
+            &(
+                "suppression".to_owned(),
+                "Lancer : rm -rf target".to_owned()
+            )
         );
         assert_eq!(decision(&avec(Some("refuse"), &defaut, &rm)), "deny");
         let v = avec(Some("delai"), &defaut, &rm);
@@ -370,7 +378,7 @@ mod tests {
         assert!(v["hookSpecificOutput"]["permissionDecisionReason"]
             .as_str()
             .unwrap()
-            .contains("prête à copier"));
+            .contains("à copier"));
         // Lecture : pas de carte.
         let n = demandes.borrow().len();
         let log = appel("Bash", "git log -3", &kobi());
@@ -396,21 +404,30 @@ mod tests {
             .to_string()
         };
         let neuf = kobi().join("pas-encore-la.md");
-        assert_eq!(decision(&avec(Some("accepte"), &defaut, &ecrire(&neuf))), "allow");
+        assert_eq!(
+            decision(&avec(Some("accepte"), &defaut, &ecrire(&neuf))),
+            "allow"
+        );
         assert_eq!(
             demandes.borrow().last().unwrap(),
             &("fichier".to_owned(), "Créer pas-encore-la.md".to_owned())
         );
         let ailleurs = std::env::temp_dir().join("kobi-ailleurs.md");
         let n = demandes.borrow().len();
-        assert_eq!(decision(&avec(Some("accepte"), &defaut, &ecrire(&ailleurs))), "deny");
+        assert_eq!(
+            decision(&avec(Some("accepte"), &defaut, &ecrire(&ailleurs))),
+            "deny"
+        );
         assert_eq!(demandes.borrow().len(), n);
         let modifier = json!({
             "tool_name": "Edit",
             "tool_input": { "file_path": kobi().join("Cargo.toml").display().to_string(), "old_string": "a", "new_string": "b" },
             "cwd": kobi(),
         });
-        assert_eq!(decision(&avec(Some("refuse"), &defaut, &modifier.to_string())), "deny");
+        assert_eq!(
+            decision(&avec(Some("refuse"), &defaut, &modifier.to_string())),
+            "deny"
+        );
         assert_eq!(demandes.borrow().last().unwrap().1, "Modifier Cargo.toml");
     }
 
@@ -443,7 +460,9 @@ mod tests {
         );
         assert_eq!(valeur("--settings"), "C:/Kobi/mcp/reglages-claude.json");
         let prompt = valeur("--append-system-prompt");
-        assert!(prompt.starts_with("Tu es Kobi.") && prompt.contains("Commandes et fichiers de code"));
+        assert!(
+            prompt.starts_with("Tu es Kobi.") && prompt.contains("Commandes et fichiers de code")
+        );
     }
 
     /// Essai contre le vrai Claude Code (KOB-154) : le hook est l'exécutable
