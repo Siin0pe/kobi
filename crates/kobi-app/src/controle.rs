@@ -94,6 +94,14 @@ fn autoriser<R: Runtime>(
     params: &Map<String, Value>,
     origine: Origine,
 ) -> Result<(), Erreur> {
+    // Commande interne (le hook des commandes de Claude, KOB-156) : un MCP
+    // ne doit pas pouvoir ouvrir de carte en se faisant passer pour Kobi.
+    if commande.interne && origine != Origine::Cli {
+        return Err(erreur(
+            Code::Unauthorized,
+            format!("{} est réservée à Kobi", commande.nom),
+        ));
+    }
     match (origine, commande.effet) {
         (Origine::Cli | Origine::Mcp, _) | (Origine::Agent, Effet::Lecture | Effet::Affichage) => {
             return Ok(())
@@ -395,6 +403,20 @@ pub fn executer<R: Runtime>(
             }
             crate::voix::dire(app, texte_dit);
             Ok(json!({ "dit": texte_dit }))
+        }
+        "validation.ask" => {
+            // Le genre vient d'une liste fermée (`choix`, vérifiée avant).
+            let genre = match texte(&params, "kind").unwrap_or_default() {
+                "fichier" => "fichier",
+                "suppression" => "suppression",
+                "mcp" => "mcp",
+                "reglage" => "reglage",
+                _ => "commande",
+            };
+            let resume = texte(&params, "summary").unwrap_or_default().to_owned();
+            let detail = params.get("detail").cloned().unwrap_or(Value::Null);
+            let r = crate::validation::demander(app, genre, resume, detail);
+            Ok(json!({ "accepte": r.acceptee(), "decision": r.decision() }))
         }
         autre => Err(erreur(
             Code::UnknownCommand,
@@ -1026,6 +1048,38 @@ mod tests {
                 std::thread::spawn(move || crate::validation::decider(&h, &id, oui));
             }
         });
+    }
+
+    #[test]
+    fn validation_demandee_par_le_hook() {
+        let demande = json!({"kind": "commande", "summary": "Lancer cargo fmt", "detail": {"commande": "cargo fmt"}});
+        let essai_avec = |reponse: Option<bool>| {
+            let e = essai();
+            e.app
+                .manage(crate::validation::Validations::new(Duration::from_millis(300)));
+            repondre_aux_cartes(&e, reponse);
+            e
+        };
+        let e = essai_avec(Some(true));
+        // Réservée à Kobi : ni l'agent ni un MCP externe n'ouvrent de carte.
+        for origine in [Origine::Agent, Origine::Mcp] {
+            let err = lancer(&e, "validation.ask", demande.clone(), origine).unwrap_err();
+            assert_eq!(err.code, Code::Unauthorized);
+        }
+        assert_eq!(
+            cli(&e, "validation.ask", demande.clone()).unwrap(),
+            json!({"accepte": true, "decision": "accepte"})
+        );
+        let e = essai_avec(Some(false));
+        assert_eq!(
+            cli(&e, "validation.ask", demande.clone()).unwrap()["decision"],
+            "refuse"
+        );
+        let e = essai_avec(None);
+        assert_eq!(
+            cli(&e, "validation.ask", demande).unwrap(),
+            json!({"accepte": false, "decision": "delai"})
+        );
     }
 
     #[test]

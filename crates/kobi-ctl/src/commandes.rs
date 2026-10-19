@@ -94,6 +94,8 @@ pub struct Commande {
     pub params: &'static [Param],
     /// Effet difficile à annuler (`app.quit`).
     pub destructive: bool,
+    /// Réservée à Kobi lui-même (le hook de ses commandes) : absente des MCP.
+    pub interne: bool,
 }
 
 const fn c(
@@ -108,6 +110,7 @@ const fn c(
         description,
         params,
         destructive: false,
+        interne: false,
     }
 }
 
@@ -287,6 +290,24 @@ pub const COMMANDES: &[Commande] = &[
         "Kobi dit un texte à voix haute.",
         &[requis(positionnel(p("text", Texte, "Texte à dire.")))],
     ),
+    // KOB-156 : le hook des commandes de Claude (processus à part) demande à
+    // l'app la carte de validation d'une écriture et attend la réponse.
+    Commande {
+        interne: true,
+        ..c(
+            "validation.ask",
+            Affichage,
+            "Demande à l'utilisateur de valider une action qui écrit (carte, oui ou non, refus au bout de 60 s) ; répond accepte: true ou false.",
+            &[
+                requis(choix(
+                    p("kind", Texte, "Genre de l'action."),
+                    &["fichier", "commande", "suppression", "mcp", "reglage"],
+                )),
+                requis(p("summary", Texte, "Résumé en une phrase.")),
+                p("detail", Json, "Détail montré sur la carte (diff, commande, dossier)."),
+            ],
+        )
+    },
 ];
 
 /// Une commande se désigne par son nom.
@@ -492,6 +513,8 @@ mod tests {
         }
         assert!(trouver("app.quit").unwrap().destructive);
         assert!(COMMANDES.iter().filter(|c| c.destructive).count() == 1);
+        assert!(trouver("validation.ask").unwrap().interne);
+        assert!(COMMANDES.iter().filter(|c| c.interne).count() == 1);
     }
 
     #[test]
