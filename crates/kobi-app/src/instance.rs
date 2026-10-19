@@ -10,46 +10,69 @@
 
 use serde_json::{json, Value};
 
+/// Section de l'app ouverte par `--app` : la commande `app.open` du point
+/// d'accès exige une section (KOB-186).
+const SECTION_APP: &str = "notes";
+
 /// Commande de contrôle qui rend, dans l'instance qui tourne, ce que le
 /// second lancement demandait par ses arguments : l'app (ou une de ses
 /// sections), sinon Kobi lui-même, remis à l'écran.
 pub fn demande(args: &[String]) -> (&'static str, Value) {
     for arg in args {
         let section = match arg.as_str() {
-            "--app" => None,
-            "--carnet" => Some("notes"),
-            "--reglages" => Some("reglages"),
-            "--bienvenue" => Some("accueil"),
+            "--app" | "--carnet" => SECTION_APP,
+            "--reglages" => "reglages",
+            "--bienvenue" => "accueil",
             _ => continue,
         };
-        return match section {
-            Some(s) => ("app.open", json!({ "section": s })),
-            None => ("app.open", json!({})),
-        };
+        return ("app.open", json!({ "section": section }));
     }
     ("mascot.show", json!({}))
 }
 
-/// Passe la demande de ce lancement à l'instance qui tourne déjà. `Ok` :
-/// elle l'a prise, ce lancement doit s'arrêter ; `Err` : aucune instance ne
-/// répond (Kobi ne tourne pas), ce lancement démarre Kobi.
-pub fn transmettre(point: &kobi_ctl::Point, args: &[String]) -> Result<Value, kobi_ctl::Erreur> {
-    let (commande, params) = demande(args);
-    kobi_ctl::client::appeler(point, commande, params, kobi_ctl::Origine::Cli)
+/// Ce que l'instance qui tourne a fait de la demande de ce lancement.
+#[derive(Debug)]
+pub enum Passage {
+    /// Aucune instance ne répond : ce lancement démarre Kobi.
+    Absente,
+    /// L'instance a pris la demande : ce lancement s'arrête.
+    Prise,
+    /// L'instance répond mais refuse la demande. Ce lancement s'arrête
+    /// quand même : un second Kobi ne doit jamais démarrer (KOB-186).
+    Refusee(kobi_ctl::Erreur),
 }
 
-/// Note dans le journal de Kobi que ce lancement a passé la main (le
-/// journal de l'instance qui tourne, qu'on ouvre en ajout).
-pub fn noter_passage(args: &[String]) {
+/// Passe la demande de ce lancement à l'instance qui tourne déjà, s'il y en
+/// a une. Seule l'absence de réponse (`NotRunning`) laisse démarrer Kobi.
+pub fn passer(point: &kobi_ctl::Point, args: &[String]) -> Passage {
+    let (commande, params) = demande(args);
+    match kobi_ctl::client::appeler(point, commande, params, kobi_ctl::Origine::Cli) {
+        Ok(_) => Passage::Prise,
+        Err(e) if e.code == kobi_ctl::Code::NotRunning => Passage::Absente,
+        Err(e) => Passage::Refusee(e),
+    }
+}
+
+/// Note dans le journal de Kobi (celui de l'instance qui tourne, ouvert en
+/// ajout) que ce lancement a passé la main, ou que sa demande a été refusée.
+pub fn noter_passage(args: &[String], passage: &Passage) {
     if let Some(dir) = kobi_session::logs::default_dir() {
         let _ = kobi_session::logs::init(&dir);
     }
     let (commande, _) = demande(args);
-    tracing::info!(
-        commande,
-        args = ?args,
-        "Kobi tourne déjà : demande passée à l'instance en cours, ce second lancement s'arrête"
-    );
+    match passage {
+        Passage::Refusee(e) => tracing::warn!(
+            commande,
+            args = ?args,
+            erreur = %e.message,
+            "Kobi tourne déjà mais a refusé la demande de ce second lancement, qui s'arrête"
+        ),
+        _ => tracing::info!(
+            commande,
+            args = ?args,
+            "Kobi tourne déjà : demande passée à l'instance en cours, ce second lancement s'arrête"
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -62,40 +85,30 @@ mod tests {
 
     #[test]
     fn arguments_du_lancement_traduits_en_commande() {
-        assert_eq!(demande(&args(&["--app"])), ("app.open", json!({})));
-        assert_eq!(
-            demande(&args(&["--reglages"])),
-            ("app.open", json!({ "section": "reglages" }))
-        );
-        assert_eq!(
-            demande(&args(&["--carnet"])),
-            ("app.open", json!({ "section": "notes" }))
-        );
-        assert_eq!(
-            demande(&args(&["--bienvenue"])),
-            ("app.open", json!({ "section": "accueil" }))
-        );
+        let section = |s: &str| ("app.open", json!({ "section": s }));
+        assert_eq!(demande(&args(&["--app"])), section("notes"));
+        assert_eq!(demande(&args(&["--carnet"])), section("notes"));
+        assert_eq!(demande(&args(&["--reglages"])), section("reglages"));
+        assert_eq!(demande(&args(&["--bienvenue"])), section("accueil"));
         // Sans argument (ou des inconnus) : Kobi revient à l'écran.
         assert_eq!(demande(&[]), ("mascot.show", json!({})));
         assert_eq!(demande(&args(&["--inconnu"])), ("mascot.show", json!({})));
         // Le premier argument reconnu compte.
         assert_eq!(
             demande(&args(&["--inconnu", "--reglages", "--app"])),
-            ("app.open", json!({ "section": "reglages" }))
+            section("reglages")
         );
     }
 
-    /// Une instance qui tourne reçoit la demande du second lancement ;
-    /// sans instance, rien ne répond et Kobi démarre.
-    #[test]
-    fn second_lancement_passe_la_main() {
-        use std::sync::{Arc, Mutex};
+    /// Commandes reçues par le serveur d'essai : nom et paramètres.
+    type Recu = std::sync::Arc<std::sync::Mutex<Vec<(String, Value)>>>;
 
-        let dossier = tempfile::tempdir().unwrap();
-        let point = kobi_ctl::Point::dans(dossier.path(), "instance");
-        assert!(transmettre(&point, &args(&["--reglages"])).is_err());
-
-        let recu: Arc<Mutex<Vec<(String, Value)>>> = Arc::default();
+    /// Serveur de contrôle réel (avec la vérification des paramètres de
+    /// kobi-ctl) qui note les commandes reçues ; `refus` : il répond par une
+    /// erreur.
+    fn serveur(point: &kobi_ctl::Point, refus: bool) -> (kobi_ctl::serveur::Serveur, Recu) {
+        use std::sync::Arc;
+        let recu: Recu = Arc::default();
         let r = recu.clone();
         let serveur = kobi_ctl::serveur::demarrer(
             point.clone(),
@@ -104,16 +117,67 @@ mod tests {
                     r.lock()
                         .unwrap()
                         .push((commande.nom.to_owned(), Value::Object(params)));
-                    Ok(json!({ "section": "reglages" }))
+                    if refus {
+                        Err(kobi_ctl::Erreur::new(kobi_ctl::Code::Internal, "refusé"))
+                    } else {
+                        Ok(json!({}))
+                    }
                 },
             ),
         )
         .unwrap();
-        transmettre(&point, &args(&["--reglages"])).unwrap();
+        (serveur, recu)
+    }
+
+    /// Non-régression de KOB-186 : chaque argument du lancement passe la
+    /// vérification des paramètres du point d'accès et arrive à l'instance.
+    #[test]
+    fn chaque_argument_est_pris_par_l_instance_qui_tourne() {
+        let dossier = tempfile::tempdir().unwrap();
+        let point = kobi_ctl::Point::dans(dossier.path(), "instance");
+        assert!(matches!(
+            passer(&point, &args(&["--app"])),
+            Passage::Absente
+        ));
+
+        let (serveur, recu) = serveur(&point, false);
+        for a in [
+            &["--app"][..],
+            &["--reglages"],
+            &["--carnet"],
+            &["--bienvenue"],
+            &[],
+        ] {
+            let passage = passer(&point, &args(a));
+            assert!(matches!(passage, Passage::Prise), "{a:?} : {passage:?}");
+        }
+        let recu = recu.lock().unwrap();
         assert_eq!(
-            recu.lock().unwrap().as_slice(),
-            [("app.open".to_owned(), json!({ "section": "reglages" }))]
+            recu.iter()
+                .map(|(c, p)| (c.as_str(), p.clone()))
+                .collect::<Vec<_>>(),
+            [
+                ("app.open", json!({ "section": "notes" })),
+                ("app.open", json!({ "section": "reglages" })),
+                ("app.open", json!({ "section": "notes" })),
+                ("app.open", json!({ "section": "accueil" })),
+                ("mascot.show", json!({})),
+            ]
         );
+        drop(serveur);
+    }
+
+    /// Une instance qui répond par une erreur tourne bien : le second
+    /// lancement ne doit pas démarrer un deuxième Kobi.
+    #[test]
+    fn instance_qui_refuse_n_est_pas_absente() {
+        let dossier = tempfile::tempdir().unwrap();
+        let point = kobi_ctl::Point::dans(dossier.path(), "refus");
+        let (serveur, _) = serveur(&point, true);
+        assert!(matches!(
+            passer(&point, &args(&["--app"])),
+            Passage::Refusee(_)
+        ));
         drop(serveur);
     }
 }

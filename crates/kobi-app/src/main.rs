@@ -174,9 +174,16 @@ fn main() {
     // Une seule instance (KOB-175) : si Kobi tourne déjà, ce lancement lui
     // passe sa demande (`--app`, `--reglages`…) et s'arrête.
     if let Some(point) = kobi_ctl::Point::defaut() {
-        if instance::transmettre(&point, &args).is_ok() {
-            instance::noter_passage(&args);
-            return;
+        match instance::passer(&point, &args) {
+            instance::Passage::Absente => {}
+            passage => {
+                instance::noter_passage(&args, &passage);
+                if let instance::Passage::Refusee(e) = passage {
+                    eprintln!("Kobi tourne déjà mais a refusé la demande : {}", e.message);
+                    std::process::exit(1);
+                }
+                return;
+            }
         }
     }
     #[cfg(target_os = "linux")]

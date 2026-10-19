@@ -72,11 +72,10 @@ pub fn installer<R: Runtime>(app: &AppHandle<R>, config: Option<PathBuf>) {
             // Deux lancements presque en même temps (KOB-175) : l'autre tient
             // déjà le point d'accès ; on lui passe la demande et on s'arrête.
             let args: Vec<String> = std::env::args().skip(1).collect();
-            if crate::instance::transmettre(&point, &args).is_ok() {
-                tracing::info!(
-                    erreur = %e,
-                    "Kobi tourne déjà : demande passée à l'instance en cours, ce lancement s'arrête"
-                );
+            let passage = crate::instance::passer(&point, &args);
+            if !matches!(passage, crate::instance::Passage::Absente) {
+                crate::instance::noter_passage(&args, &passage);
+                tracing::info!(erreur = %e, "point d'accès tenu par l'instance en cours");
                 app.exit(0);
                 return;
             }
