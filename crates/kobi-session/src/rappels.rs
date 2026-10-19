@@ -321,6 +321,52 @@ const RAPPELLE: &[&str] = &[
     "remind me to",
     "remind me",
 ];
+/// Motifs qui portent déjà l'action à rappeler (« fais-moi penser à
+/// appeler… »).
+const IMPLICITE: &[&str] = &["fais moi penser a", "fais moi penser", "remind me to"];
+/// Mots qui introduisent l'action à rappeler : « de… », « d'… », « qu'il
+/// faut… ».
+const ACTION: &[&str] = &["de", "d", "que", "qu"];
+/// Mots qui font de la suite une question : « rappelle-moi comment… », « ce
+/// qu'on a dit », « de quoi on a parlé ».
+const INTERROGATIFS: &[&str] = &[
+    "comment",
+    "pourquoi",
+    "qui",
+    "quoi",
+    "quel",
+    "quelle",
+    "quels",
+    "quelles",
+    "ou",
+    "combien",
+    "quand",
+    "si",
+    "lequel",
+    "laquelle",
+    "lesquels",
+    "lesquelles",
+    "what",
+    "why",
+    "how",
+    "who",
+    "where",
+    "which",
+    "when",
+    "whether",
+];
+
+/// La suite, à partir du mot `i`, est une question à redire, pas une action.
+fn question(mots: &[Mot], i: usize) -> bool {
+    est(mots, i, INTERROGATIFS)
+        // « ce qu'on a dit », « ce que tu as trouvé », « ce dont on a parlé ».
+        || (est(mots, i, &["ce"]) && est(mots, i + 1, &["que", "qu", "dont"]))
+        // « qu'est-ce qu'on a décidé ».
+        || (est(mots, i, &["qu"]) && est(mots, i + 1, &["est"]))
+        // « de quoi on a parlé », « à qui j'ai écrit ».
+        || (est(mots, i, &["de", "d", "a"]) && est(mots, i + 1, INTERROGATIFS))
+}
+
 const AJOUTE: &[&str] = &["ajoute", "rajoute", "note", "mets", "add"];
 const LISTE: &[&str] = &[
     "a ma liste de taches",
@@ -355,8 +401,28 @@ pub fn comprendre(phrase: &str, maintenant: &Zoned) -> Option<Demande> {
     if mots.len() > 30 {
         return None;
     }
-    if let Some((_, fin)) = cherche(mots, RAPPELLE) {
-        return Some(match moment(mots, fin, maintenant) {
+    if let Some((i, fin)) = cherche(mots, RAPPELLE) {
+        let m = moment(mots, fin, maintenant);
+        // Ce qu'il faut rappeler commence après l'heure quand elle vient
+        // tout de suite (« rappelle-moi dans 10 min de… »).
+        let objet = match &m {
+            Some(m) if m.debut == fin => m.fin,
+            _ => fin,
+        };
+        // « Rappeler » au sens de redire (KOB-173) : « tu peux me rappeler le
+        // nom du projet ? », « rappelle-moi ce qu'on a dit » vont à Claude.
+        // Un rappel a une action à faire (« de… », « fais-moi penser à… ») ou
+        // une heure ; dans le doute, Claude (qui peut créer le rappel par le
+        // MCP de Kobi).
+        if question(mots, objet) {
+            return None;
+        }
+        let action =
+            IMPLICITE.iter().any(|motif| suite(mots, i, motif)) || est(mots, objet, ACTION);
+        if m.is_none() && !action {
+            return None;
+        }
+        return Some(match m {
             Some(m) => {
                 let avant = texte(phrase, mots, fin, m.debut);
                 let apres = texte(phrase, mots, m.fin, mots.len());
@@ -531,6 +597,66 @@ mod tests {
         }
     }
 
+    /// KOB-173 : « rappeler » avec une action ou une heure reste un rappel,
+    /// même en question.
+    #[test]
+    fn rappeler_avec_action_ou_heure() {
+        for (phrase, texte, q) in [
+            (
+                "rappelle-moi d'appeler Paul à 15 h",
+                "appeler Paul",
+                "à 15 h",
+            ),
+            (
+                "rappelle-moi dans 10 minutes de sortir le linge",
+                "sortir le linge",
+                "dans 10 minutes",
+            ),
+            (
+                "tu peux me rappeler d'envoyer le devis demain à 10 h ?",
+                "envoyer le devis",
+                "demain à 10 h",
+            ),
+            (
+                "Kobi, tu peux me rappeler à 15 h d'appeler Paul ?",
+                "appeler Paul",
+                "à 15 h",
+            ),
+            (
+                "rappelle-moi le dentiste demain à 9 h",
+                "le dentiste",
+                "demain à 9 h",
+            ),
+            (
+                "rappelle-moi qu'il faut payer le loyer dans 2 heures",
+                "payer le loyer",
+                "à 12 h",
+            ),
+        ] {
+            assert_eq!(rappel(phrase), (texte.to_owned(), q.to_owned()), "{phrase}");
+        }
+        let m = maintenant();
+        for (phrase, texte) in [
+            (
+                "tu peux me rappeler de rendre le livre ?",
+                "rendre le livre",
+            ),
+            ("fais-moi penser à racheter du café", "racheter du café"),
+            (
+                "peux-tu me rappeler qu'il faut arroser les plantes",
+                "arroser les plantes",
+            ),
+        ] {
+            assert_eq!(
+                comprendre(phrase, &m),
+                Some(Demande::Tache {
+                    texte: texte.into()
+                }),
+                "{phrase}"
+            );
+        }
+    }
+
     #[test]
     fn taches_et_liste() {
         let m = maintenant();
@@ -565,6 +691,22 @@ mod tests {
             "ajoute un test pour la fonction de parsing",
             "rappelle-moi",
             "enregistre la réunion",
+            // « Rappeler » au sens de redire (KOB-173) : pour Claude.
+            "Kobi, tu peux me rappeler le nom du projet ?",
+            "rappelle-moi le nom du projet",
+            "tu peux me rappeler ce qu'on a dit tout à l'heure ?",
+            "peux-tu me rappeler mon mot de passe Wi-Fi ?",
+            "rappelle-moi comment on lance les tests",
+            "rappelle-moi pourquoi on a choisi Rust",
+            "rappelle-moi de quoi on a parlé hier",
+            "rappelle-moi qui s'occupe du budget",
+            "rappelle-moi qu'est-ce qu'on a décidé",
+            "rappelle-moi à quoi sert ce module",
+            "rappelle-moi ce qu'on a dit à 15 h",
+            "tu te rappelles du nom du client ?",
+            "tu te rappelles ce qu'on a dit demain à 10 h ?",
+            "rappelle-moi les décisions de la réunion",
+            "remind me what we decided",
             "",
         ] {
             assert_eq!(comprendre(phrase, &m), None, "{phrase}");
