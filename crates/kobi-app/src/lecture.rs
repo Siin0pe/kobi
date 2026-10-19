@@ -67,7 +67,8 @@ pub const PROMPT_LECTURE: &str = "\
 Tu lis et tu cherches dans les dossiers de code de l'utilisateur (Read, Grep, Glob, et \
 des commandes en lecture seule si l'outil Bash est là). Tu n'écris aucun fichier, ne lances \
 aucune commande qui modifie quelque chose et n'agis sur aucun outil externe (tickets, \
-messages, agenda…), même si on te le demande. C'est vrai partout, en réunion comme au quotidien.
+messages, agenda…), même si on te le demande. C'est vrai partout, en réunion comme au quotidien. \
+Tes propres outils `mcp__kobi__*` ne sont pas des outils externes : sers-t'en comme décrit plus bas.
 
 - Pour une question sur le code, cherche avec Grep et Glob, lis avec Read, et cite le \
 fichier et la ligne (`chemin/fichier.rs:42`).

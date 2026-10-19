@@ -715,7 +715,15 @@ impl<R: Runtime> Chef<R> {
             });
             return;
         }
-        if let Some(i) = intention(&texte).filter(|_| consigne.is_none()) {
+        // Pendant une réunion, « la réunion est terminée », « tu peux arrêter
+        // de noter »… l'arrêtent sur place, sans dépendre de Claude (KOB-203).
+        let fin_dite = self.reunion.is_some() && crate::intentions::fin_de_reunion_dite(&texte);
+        let intention = if fin_dite {
+            Some(Intention::TerminerReunion)
+        } else {
+            intention(&texte)
+        };
+        if let Some(i) = intention.filter(|_| consigne.is_none()) {
             tracing::info!(intention = ?i, "ordre vocal");
             self.transition(&[Evenement::PasDeQuestion]);
             let reponse = self.piloter(i, true);
