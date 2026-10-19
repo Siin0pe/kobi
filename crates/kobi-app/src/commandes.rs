@@ -75,8 +75,11 @@ pub fn brancher(mut args: Vec<String>, reglages: Option<&Path>) -> Vec<String> {
     for i in 0..args.len().saturating_sub(1) {
         match args[i].as_str() {
             "--tools" => {
-                let mut outils: Vec<&str> = args[i + 1].split(',').collect();
-                outils.extend(outils_du_hook());
+                let outils: Vec<String> = args[i + 1]
+                    .split(',')
+                    .map(str::to_owned)
+                    .chain(outils_du_hook().map(str::to_owned))
+                    .collect();
                 args[i + 1] = outils.join(",");
             }
             "--disallowedTools" => {
