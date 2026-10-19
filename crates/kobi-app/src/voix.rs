@@ -521,7 +521,66 @@ pub fn commande_vocale(question: &str) -> Option<CommandeVoix> {
     } else if STOP.contains(&q) {
         Some(CommandeVoix::Stop)
     } else {
-        None
+        reglage_de_la_voix(q)
+    }
+}
+
+/// Phrase courte qui demande le texte seul ou la voix, dite autrement
+/// (« passe tes réponses en texte seulement, sans voix », KOB-192). Sinon
+/// elle partait à Claude, qui confirmait sans rien régler.
+fn reglage_de_la_voix(q: &str) -> Option<CommandeVoix> {
+    const SANS_VOIX: &[&str] = &[
+        " sans voix ",
+        " texte seulement ",
+        " texte seul ",
+        " en texte ",
+        " par ecrit ",
+        " ecrit seulement ",
+        " plus de voix ",
+        " coupe la voix ",
+        " coupe ta voix ",
+        " desactive la voix ",
+        " sans parler ",
+    ];
+    const AVEC_VOIX: &[&str] = &[
+        " a voix haute ",
+        " avec la voix ",
+        " avec ta voix ",
+        " active la voix ",
+        " remets la voix ",
+        // La reconnaissance écrit souvent « remet » (essai Xvfb, KOB-192).
+        " remet la voix ",
+        " remets ta voix ",
+        " remet ta voix ",
+        " remettre la voix ",
+        " reactive ta voix ",
+        " reactive la voix ",
+        " a l oral ",
+    ];
+    /// Une question sur la voix (« comment couper la voix sur Teams ? »)
+    /// va à Claude.
+    const QUESTION: &[&str] = &[
+        " comment ",
+        " pourquoi ",
+        " quand ",
+        " est ce que ",
+        " quel ",
+        " quelle ",
+        " ou ",
+        " combien ",
+        " qui ",
+        " quoi ",
+    ];
+    let q = format!(" {q} ");
+    if q.split_whitespace().count() > 10 || QUESTION.iter().any(|m| q.contains(m)) {
+        return None;
+    }
+    let sans = SANS_VOIX.iter().any(|m| q.contains(m));
+    let avec = AVEC_VOIX.iter().any(|m| q.contains(m));
+    match (sans, avec) {
+        (true, false) => Some(CommandeVoix::Silence),
+        (false, true) => Some(CommandeVoix::Parle),
+        _ => None,
     }
 }
 
@@ -650,6 +709,21 @@ mod tests {
             ("Kobi, parle-moi du refresh token", None),
             ("Kobi, arrête l'enregistrement", None),
             ("Où est géré le silence des notifications ?", None),
+            // Dit autrement (KOB-192).
+            (
+                "Kobi, passe tes réponses en texte seulement, sans voix.",
+                Some(Silence),
+            ),
+            ("réponds en texte seul", Some(Silence)),
+            ("Kobi, plus de voix s'il te plaît", Some(Silence)),
+            ("désactive la voix", Some(Silence)),
+            ("Kobi, remets la voix", Some(Parle)),
+            ("remet la voix", Some(Parle)),
+            ("réponds-moi avec ta voix", Some(Parle)),
+            ("Comment couper la voix sur Teams ?", None),
+            ("résume ce texte en anglais", None),
+            ("quel micro pour enregistrer une voix", None),
+            ("passe en texte ou à voix haute, je ne sais pas", None),
         ] {
             assert_eq!(commande_vocale(q), c, "{q}");
         }

@@ -26,7 +26,9 @@ Sers-t'en pour répondre à « qu'est-ce qu'on a décidé hier ? », « quels so
 comme démarrer, mettre en pause ou arrêter la réunion. Ceux marqués [écriture] (changer un réglage, \
 ajouter un rappel…) demandent d'abord un « oui » à l'utilisateur : Kobi lui montre une carte et attend \
 jusqu'à une minute. Appelle simplement l'outil, sans demander l'accord en texte ; s'il est refusé, \
-dis-le en une phrase et ne réessaie pas. Quand tu prends des notes ou écris un compte rendu, ne les \
+dis-le en une phrase et ne réessaie pas. Ne dis jamais qu'un réglage a changé sans avoir appelé \
+l'outil et reçu sa réponse : répondre à voix haute ou en texte seul, par exemple, c'est le réglage \
+`voice.assistant` (`voice.meeting` pendant une réunion). Quand tu prends des notes ou écris un compte rendu, ne les \
 appelle pas : tout ce qu'il te faut est dans le message, et l'état de la réunion y change encore.";
 
 /// Ajouté au prompt système de la conversation (KOB-165) : c'est Claude qui
