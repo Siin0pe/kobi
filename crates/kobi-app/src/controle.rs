@@ -85,18 +85,96 @@ pub fn gestionnaire<R: Runtime>(app: AppHandle<R>) -> kobi_ctl::serveur::Gestion
     })
 }
 
-/// Peut-on exécuter sans demander ? Point de branchement de la validation
-/// (KOB-156) : l'agent de Kobi ne fait encore que lire.
-fn autoriser(commande: &Commande, origine: Origine) -> Result<(), Erreur> {
+/// Commandes de réunion que l'agent lance sans carte : Kobi annonce l'action
+/// et l'utilisateur peut l'annuler (décision du propriétaire, KOB-165).
+const REUNION_SANS_CARTE: &[&str] = &[
+    "meeting.start",
+    "meeting.stop",
+    "meeting.pause",
+    "meeting.resume",
+];
+
+/// Peut-on exécuter ? La CLI et un MCP branché par l'utilisateur passent
+/// toujours. L'agent de Kobi passe seul pour lire, afficher et mener la
+/// réunion ; ce qui écrit attend un « oui » de l'utilisateur (KOB-156).
+fn autoriser<R: Runtime>(
+    app: &AppHandle<R>,
+    commande: &Commande,
+    params: &Map<String, Value>,
+    origine: Origine,
+) -> Result<(), Erreur> {
     match (origine, commande.effet) {
-        (Origine::Cli | Origine::Mcp, _) | (Origine::Agent, Effet::Lecture) => Ok(()),
-        (Origine::Agent, _) => Err(Erreur::new(
+        (Origine::Cli | Origine::Mcp, _) | (Origine::Agent, Effet::Lecture | Effet::Affichage) => {
+            return Ok(())
+        }
+        _ if REUNION_SANS_CARTE.contains(&commande.nom) => return Ok(()),
+        _ => {}
+    }
+    let reglage = commande.nom.starts_with("config.");
+    if reglage
+        && lire_config(app)
+            .is_ok_and(|(_, c)| c.permissions.reglage == config::Politique::SansDemander)
+    {
+        return Ok(());
+    }
+    match crate::validation::demander(app, carte_de(app, commande, params, reglage)) {
+        crate::validation::Reponse::Accepte => Ok(()),
+        crate::validation::Reponse::Refuse => Err(erreur(
             Code::NeedsValidation,
             format!(
-                "{} demande une validation de l'utilisateur, pas encore possible : Kobi ne fait que lire pour l'instant",
+                "{} : refusé par l'utilisateur, rien n'a été fait",
                 commande.nom
             ),
         )),
+        crate::validation::Reponse::Delai => Err(erreur(
+            Code::NeedsValidation,
+            format!(
+                "{} : pas de réponse en {} s, refusé, rien n'a été fait",
+                commande.nom,
+                crate::validation::ECHEANCE.as_secs()
+            ),
+        )),
+    }
+}
+
+/// Genre, résumé et détail de la carte de validation d'une commande.
+fn carte_de<R: Runtime>(
+    app: &AppHandle<R>,
+    commande: &Commande,
+    params: &Map<String, Value>,
+    reglage: bool,
+) -> crate::validation::CarteValidation {
+    use crate::validation::{CarteValidation, Genre, ECHEANCE};
+    if commande.nom == "config.set" {
+        let cle = texte(params, "key").unwrap_or_default().to_owned();
+        let avant = lire_config(app)
+            .ok()
+            .and_then(|(_, c)| cles::lire(&c, Some(&cle)).ok())
+            .unwrap_or(Value::Null);
+        return CarteValidation::reglage(0, &cle, avant, valeur_de(params), ECHEANCE);
+    }
+    let genre = if reglage { Genre::Reglage } else { Genre::Mcp };
+    let outil = format!("mcp__kobi__{}", commande.outil());
+    let mut carte =
+        CarteValidation::depuis_appel(0, genre, &outil, &Value::Object(params.clone()), ECHEANCE);
+    carte.resume = format!(
+        "{} ({})",
+        commande.description.trim_end_matches('.'),
+        commande.nom
+    );
+    carte
+}
+
+/// Valeur de `config.set`. Un agent envoie parfois une chaîne JSON encore
+/// encodée (`"\"Ctrl+Alt+J\""`) : on la décode.
+fn valeur_de(params: &Map<String, Value>) -> Value {
+    match params.get("value") {
+        Some(Value::String(t)) if t.len() >= 2 && t.starts_with('"') && t.ends_with('"') => {
+            serde_json::from_str::<String>(t)
+                .map_or_else(|_| Value::String(t.clone()), Value::String)
+        }
+        Some(v) => v.clone(),
+        None => Value::Null,
     }
 }
 
@@ -126,7 +204,7 @@ pub fn executer<R: Runtime>(
     params: Map<String, Value>,
     origine: Origine,
 ) -> Result<Value, Erreur> {
-    autoriser(commande, origine)?;
+    autoriser(app, commande, &params, origine)?;
     match commande.nom {
         "status" => Ok(statut(app)),
         "app.open" => ouvrir_section(
@@ -167,8 +245,7 @@ pub fn executer<R: Runtime>(
         "config.list" => en_json(cles::liste(&lire_config(app)?.1)),
         "config.set" => {
             let cle = texte(&params, "key").unwrap_or_default();
-            let valeur = params.get("value").cloned().unwrap_or(Value::Null);
-            let (avant, r) = regler(app, cle, valeur)?;
+            let (avant, r) = regler(app, cle, valeur_de(&params))?;
             let c = controle(app)?;
             let mut h = c.historique.lock().unwrap_or_else(|e| e.into_inner());
             h.push((cle.to_owned(), avant));
@@ -908,26 +985,60 @@ mod tests {
     }
 
     #[test]
-    fn l_agent_ne_fait_que_lire() {
+    fn valeur_encodee_deux_fois() {
+        let p = |v: Value| json!({ "value": v }).as_object().unwrap().clone();
+        assert_eq!(valeur_de(&p(json!("\"Ctrl+Alt+J\""))), json!("Ctrl+Alt+J"));
+        assert_eq!(valeur_de(&p(json!("Ctrl+Alt+J"))), json!("Ctrl+Alt+J"));
+        assert_eq!(valeur_de(&p(json!(true))), json!(true));
+        assert_eq!(valeur_de(&p(json!("\""))), json!("\""));
+        assert_eq!(valeur_de(&Map::new()), Value::Null);
+    }
+
+    /// Répond aux cartes de validation de l'essai : `Some(oui)`, ou rien.
+    fn repondre_aux_cartes(e: &Essai, reponse: Option<bool>) {
+        use tauri::Listener;
+        let h = e.app.handle().clone();
+        e.app.listen(crate::chef::EVENEMENT_CARTE, move |ev| {
+            let carte: Value = serde_json::from_str(ev.payload()).unwrap();
+            // Une carte qui attend n'a pas encore de `statut`.
+            if let (Some(oui), None) = (reponse, carte.get("statut")) {
+                let id = carte["id"].as_str().unwrap().to_owned();
+                let h = h.clone();
+                std::thread::spawn(move || crate::validation::decider(&h, &id, oui));
+            }
+        });
+    }
+
+    #[test]
+    fn l_agent_ecrit_apres_validation() {
         let e = essai();
+        e.app
+            .manage(crate::validation::Validations::new(Duration::from_millis(
+                300,
+            )));
         let agent = |nom, p| lancer(&e, nom, p, Origine::Agent);
+        // Lecture et affichage passent seuls.
         assert!(agent("notes.last", json!({})).is_ok());
         assert!(agent("status", json!({})).is_ok());
-        for (nom, p) in [
-            ("meeting.start", json!({})),
-            (
-                "config.set",
-                json!({"key": "voice.assistant", "value": false}),
-            ),
-            ("app.open", json!({"section": "notes"})),
-            ("mascot.discreet", json!({"on": true})),
-            ("app.quit", json!({})),
+        assert!(agent("mascot.discreet", json!({"on": true})).is_ok());
+        // La réunion passe sans carte (décision du propriétaire) : aucune
+        // demande de validation, quel que soit le résultat ici sans chef.
+        for nom in [
+            "meeting.start",
+            "meeting.pause",
+            "meeting.resume",
+            "meeting.stop",
         ] {
-            assert_eq!(
-                agent(nom, p).unwrap_err().code,
-                Code::NeedsValidation,
-                "{nom}"
-            );
+            if let Err(err) = agent(nom, json!({})) {
+                assert_ne!(err.code, Code::NeedsValidation, "{nom}");
+            }
+        }
+        // Sans réponse : refus à l'échéance, rien n'est écrit.
+        let mettre = json!({"key": "voice.assistant", "value": false});
+        for (nom, p) in [("config.set", mettre.clone()), ("app.quit", json!({}))] {
+            let err = agent(nom, p).unwrap_err();
+            assert_eq!(err.code, Code::NeedsValidation, "{nom}");
+            assert!(err.message.contains("pas de réponse"), "{}", err.message);
         }
         // Rien n'a bougé.
         assert_eq!(cli(&e, "status", json!({})).unwrap()["etat"], "veille");
@@ -935,6 +1046,45 @@ mod tests {
             cli(&e, "config.get", json!({"key": "voice.assistant"})).unwrap(),
             json!(true)
         );
+        // « oui » : appliqué ; « non » : refusé.
+        repondre_aux_cartes(&e, Some(true));
+        assert!(agent("config.set", mettre).is_ok());
+        assert_eq!(
+            cli(&e, "config.get", json!({"key": "voice.assistant"})).unwrap(),
+            json!(false)
+        );
+    }
+
+    #[test]
+    fn refus_de_l_utilisateur_et_reglage_sans_demander() {
+        let e = essai();
+        e.app
+            .manage(crate::validation::Validations::new(Duration::from_secs(5)));
+        repondre_aux_cartes(&e, Some(false));
+        let agent = |nom, p| lancer(&e, nom, p, Origine::Agent);
+        let err = agent(
+            "config.set",
+            json!({"key": "voice.assistant", "value": false}),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, Code::NeedsValidation);
+        assert!(err.message.contains("refusé par l'utilisateur"));
+        assert_eq!(
+            cli(&e, "config.get", json!({"key": "voice.assistant"})).unwrap(),
+            json!(true)
+        );
+        // `permissions.reglage = "sans_demander"` : les réglages passent seuls.
+        cli(
+            &e,
+            "config.set",
+            json!({"key": "permissions.reglage", "value": "sans_demander"}),
+        )
+        .unwrap();
+        assert!(agent(
+            "config.set",
+            json!({"key": "voice.assistant", "value": false})
+        )
+        .is_ok());
         // L'utilisateur et un agent branché par lui passent.
         assert!(lancer(&e, "mascot.discreet", json!({"on": true}), Origine::Mcp).is_ok());
         assert_eq!(
@@ -1073,7 +1223,8 @@ mod tests {
                 .sortie(),
             1
         );
-        // MCP en mode agent : lit les notes, ne démarre rien.
+        // MCP en mode agent : lit les notes ; ce qui écrit attend une
+        // validation, refusée ici (pas de carte possible dans cet essai).
         let mcp = |message: Value| {
             kobi_ctl::mcp::traiter(&message, kobi_ctl::mcp::Mode::Agent, &|c, p, o| {
                 kobi_ctl::client::appeler(&point, c.nom, p, o)
@@ -1088,8 +1239,8 @@ mod tests {
             .unwrap()
             .contains("Point budget"));
         let r = mcp(json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
-            "params": {"name": "meeting_stop", "arguments": {}}}));
-        assert_eq!(r["error"]["code"], -32602);
+            "params": {"name": "config_set", "arguments": {"key": "voice.assistant", "value": false}}}));
+        assert_eq!(r["result"]["isError"], true, "{r}");
         // Même outil en mode externe : passe.
         let r = kobi_ctl::mcp::traiter(
             &json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
@@ -1103,8 +1254,14 @@ mod tests {
             appel("status", json!({}), Origine::Cli).unwrap()["etat"],
             "veille"
         );
-        // Un agent qui contourne le MCP (`origin: agent` à la main) est refusé.
-        let e2 = appel("meeting.start", json!({}), Origine::Agent).unwrap_err();
+        // Un agent qui contourne le MCP (`origin: agent` à la main) passe
+        // aussi par la validation.
+        let e2 = appel(
+            "config.set",
+            json!({"key": "voice.assistant", "value": false}),
+            Origine::Agent,
+        )
+        .unwrap_err();
         assert_eq!(e2.code, Code::NeedsValidation);
     }
 }

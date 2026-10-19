@@ -283,6 +283,30 @@ impl StockageConfig {
     }
 }
 
+/// Que faire d'une action qui écrit (KOB-156, contrat commun des
+/// permissions, section 3).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Politique {
+    /// Carte de validation, à la voix ou d'un clic (défaut).
+    #[default]
+    Demander,
+    /// Fait sans demander (jamais pour une suppression).
+    SansDemander,
+}
+
+/// `[permissions]` : politique par genre d'action qui écrit. La suppression
+/// de fichiers est toujours demandée, sans réglage.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PermissionsConfig {
+    pub fichier: Politique,
+    pub commande: Politique,
+    pub reglage: Politique,
+    #[serde(flatten)]
+    pub extra: toml::Table,
+}
+
 /// Réglages de Kobi (dossier de conception, section « Configuration et
 /// stockage »).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -309,6 +333,8 @@ pub struct Config {
     pub stockage: StockageConfig,
     /// Serveurs MCP connectés (KOB-155).
     pub mcp: crate::mcp::McpConfig,
+    /// Actions qui écrivent : demander ou non (KOB-156).
+    pub permissions: PermissionsConfig,
     /// Clés inconnues, conservées telles quelles à l'écriture.
     #[serde(flatten)]
     pub extra: toml::Table,
@@ -331,6 +357,7 @@ impl Default for Config {
             conversations: ConversationsConfig::default(),
             stockage: StockageConfig::default(),
             mcp: crate::mcp::McpConfig::default(),
+            permissions: PermissionsConfig::default(),
             extra: toml::Table::new(),
         }
     }

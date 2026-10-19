@@ -110,6 +110,21 @@ pub const CLES: &[(&str, Application, &str)] = &[
         AChaud,
         "Où publier les conversations chez ce serveur.",
     ),
+    (
+        "permissions.fichier",
+        AChaud,
+        "Écriture de fichiers : demander (défaut) ou sans_demander.",
+    ),
+    (
+        "permissions.commande",
+        AChaud,
+        "Commandes qui modifient : demander (défaut) ou sans_demander.",
+    ),
+    (
+        "permissions.reglage",
+        AChaud,
+        "Changements de réglages de Kobi : demander (défaut) ou sans_demander.",
+    ),
 ];
 
 /// Sections réglées par d'autres tickets (MCP connectés KOB-155,

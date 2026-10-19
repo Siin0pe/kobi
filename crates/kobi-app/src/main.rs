@@ -195,6 +195,8 @@ fn main() {
             app.manage(menu::EcouteEnPause::default());
             demarrage::installer(app.handle());
             // Interface de contrôle (KOB-161) : `kobi <commande>`, `kobi mcp`.
+            // Cartes de validation des actions qui écrivent (KOB-156).
+            app.manage(validation::Validations::default());
             controle::installer(app.handle(), config_path.clone());
             stockage::installer(app.handle(), &config.config, config_path.clone());
             activite::installer(app.handle());

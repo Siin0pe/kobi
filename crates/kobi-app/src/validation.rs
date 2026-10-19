@@ -16,6 +16,11 @@
 //! [`conclure`] quand elle est tranchée ailleurs (voix, échéance) ; un clic
 //! passe par `decider_carte`, qui appelle [`retirer`].
 //!
+//! Actions de Kobi lui-même (KOB-156 : son MCP, et le hook de ses commandes
+//! et fichiers) : [`demander`] publie la carte, la dit à voix haute (« Je le
+//! fais ? ») et attend la réponse, au clic ou à la voix ([`decider`]) ; sans
+//! réponse dans le délai, c'est non. L'appelant n'agit qu'après un oui.
+//!
 //! Le genre vient du classement de `kobi-perms` (KOB-154) ;
 //! [`Genre::depuis_outil`] n'est qu'un repli pour les appels pas encore
 //! classés. Ce module ne fait que la présentation : résumé en une phrase et
@@ -26,7 +31,9 @@
     allow(dead_code, reason = "cartes publiées par le cerveau avec KOB-156")
 )]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -149,7 +156,7 @@ impl CarteValidation {
         echeance: Duration,
     ) -> Self {
         let (resume, detail) = presenter(genre, outil, entree);
-        Self::nouvelle(id, genre, resume, detail, echeance)
+        Self::nouvelle(id.to_string(), genre, resume, detail, echeance)
     }
 
     /// Carte d'un réglage de Kobi : l'appelant connaît la valeur actuelle.
@@ -164,12 +171,18 @@ impl CarteValidation {
             avant,
             apres,
         };
-        Self::nouvelle(id, Genre::Reglage, resume, detail, echeance)
+        Self::nouvelle(id.to_string(), Genre::Reglage, resume, detail, echeance)
     }
 
-    fn nouvelle(id: u64, genre: Genre, resume: String, detail: Detail, echeance: Duration) -> Self {
+    fn nouvelle(
+        id: String,
+        genre: Genre,
+        resume: String,
+        detail: Detail,
+        echeance: Duration,
+    ) -> Self {
         Self {
-            id: id.to_string(),
+            id,
             type_: "validation",
             genre,
             resume,
@@ -409,6 +422,125 @@ fn diff(outil: &str, chemin: &str, entree: &Value) -> String {
     lignes.join("\n")
 }
 
+/// Délai de réponse à une carte de Kobi avant refus (KOB-156).
+pub const ECHEANCE: Duration = Duration::from_secs(60);
+
+/// Réponse à une carte de Kobi.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reponse {
+    Accepte,
+    Refuse,
+    /// Pas de réponse dans le délai : refusé.
+    Delai,
+}
+
+impl Reponse {
+    pub fn acceptee(self) -> bool {
+        self == Reponse::Accepte
+    }
+
+    /// Pour le fil d'activité (`decision`).
+    pub fn decision(self) -> &'static str {
+        match self {
+            Reponse::Accepte => "accepte",
+            Reponse::Refuse => "refuse",
+            Reponse::Delai => "delai",
+        }
+    }
+
+    fn statut(self) -> Statut {
+        match self {
+            Reponse::Accepte => Statut::Acceptee,
+            Reponse::Refuse => Statut::Refusee,
+            Reponse::Delai => Statut::Expiree,
+        }
+    }
+}
+
+/// Cartes de Kobi ouvertes : chacune attend sa réponse.
+pub struct Validations {
+    attente: Mutex<HashMap<String, Sender<bool>>>,
+    compteur: AtomicU64,
+    echeance: Duration,
+}
+
+impl Validations {
+    pub fn new(echeance: Duration) -> Self {
+        Self {
+            attente: Mutex::default(),
+            compteur: AtomicU64::new(1),
+            echeance,
+        }
+    }
+}
+
+impl Default for Validations {
+    fn default() -> Self {
+        Self::new(ECHEANCE)
+    }
+}
+
+/// Demande la validation d'une action de Kobi et attend la réponse
+/// (bloquant : à appeler hors du fil du chef et du runtime). L'identifiant
+/// et l'échéance de `carte` sont remplacés par ceux du registre.
+pub fn demander<R: Runtime>(app: &AppHandle<R>, mut carte: CarteValidation) -> Reponse {
+    let Some(v) = app.try_state::<Validations>() else {
+        // Sans le registre (tests sans app), on ne fait rien qui écrit.
+        return Reponse::Refuse;
+    };
+    let id = format!("v{}", v.compteur.fetch_add(1, Ordering::SeqCst));
+    let (tx, rx) = mpsc::channel();
+    v.attente
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(id.clone(), tx);
+    carte.id = id.clone();
+    carte.echeance_ms = v.echeance.as_millis() as u64;
+    let resume = carte.resume.clone();
+    tracing::info!(%id, genre = ?carte.genre, %resume, "validation demandée");
+    publier(app, carte);
+    crate::chef::publier(
+        app,
+        crate::chef::Message::ValidationOuverte {
+            id: id.clone(),
+            resume,
+        },
+    );
+    let reponse = match rx.recv_timeout(v.echeance) {
+        Ok(true) => Reponse::Accepte,
+        Ok(false) => Reponse::Refuse,
+        Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => Reponse::Delai,
+    };
+    v.attente
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&id);
+    tracing::info!(%id, decision = reponse.decision(), "validation tranchée");
+    conclure(app, &id, reponse.statut());
+    crate::chef::publier(app, crate::chef::Message::ValidationFermee { id, reponse });
+    reponse
+}
+
+/// Réponse de l'utilisateur à la carte `id` de Kobi ; `false` si ce n'en
+/// est pas une qui attend (carte du serveur de permission, ou déjà fermée).
+pub fn decider<R: Runtime>(app: &AppHandle<R>, id: &str, accepte: bool) -> bool {
+    let Some(v) = app.try_state::<Validations>() else {
+        return false;
+    };
+    let tx = v
+        .attente
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(id);
+    match tx {
+        Some(tx) => {
+            let _ = tx.send(accepte);
+            true
+        }
+        None => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use kobi_perms::{Approver, Cards, PermissionRequest, DEFAULT_TIMEOUT};
@@ -447,6 +579,64 @@ mod tests {
             Duration::from_millis(card.timeout_ms),
         );
         (cards, carte, appel)
+    }
+
+    /// Cartes de Kobi (KOB-156) : oui, non, ou rien avant l'échéance.
+    #[test]
+    fn kobi_demande_et_attend_la_reponse() {
+        use tauri::test::{mock_builder, mock_context, noop_assets, MockRuntime};
+        use tauri::{App, Listener};
+        fn app(echeance: Duration) -> App<MockRuntime> {
+            let app = crate::session::installer(mock_builder())
+                .build(mock_context(noop_assets()))
+                .unwrap();
+            app.manage(Validations::new(echeance));
+            app
+        }
+        /// Répond à la première carte en attente, depuis un autre fil.
+        fn repondre(
+            app: &App<MockRuntime>,
+            accepte: Option<bool>,
+        ) -> std::sync::mpsc::Receiver<Value> {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let h = app.handle().clone();
+            app.listen(EVENEMENT, move |e| {
+                let carte: Value = serde_json::from_str(e.payload()).unwrap();
+                let _ = tx.send(carte.clone());
+                if let (None, Some(a)) = (carte.get("statut"), accepte) {
+                    let id = carte["id"].as_str().unwrap().to_owned();
+                    let h = h.clone();
+                    std::thread::spawn(move || assert!(decider(&h, &id, a)));
+                }
+            });
+            rx
+        }
+        let carte =
+            || CarteValidation::reglage(0, "voice.assistant", json!(false), json!(true), ECHEANCE);
+        let a = app(Duration::from_secs(5));
+        let cartes = repondre(&a, Some(true));
+        assert_eq!(demander(a.handle(), carte()), Reponse::Accepte);
+        let ouverte = cartes.recv().unwrap();
+        assert_eq!(ouverte["type"], "validation");
+        assert_eq!(ouverte["genre"], "reglage");
+        assert_eq!(ouverte["id"], "v1");
+        assert_eq!(ouverte["echeance_ms"], 5000);
+        assert_eq!(ouverte["detail"]["cle"], "voice.assistant");
+        assert_eq!(cartes.recv().unwrap()["statut"], "acceptee");
+
+        let b = app(Duration::from_secs(5));
+        let cartes = repondre(&b, Some(false));
+        assert_eq!(demander(b.handle(), carte()), Reponse::Refuse);
+        cartes.recv().unwrap();
+        assert_eq!(cartes.recv().unwrap()["statut"], "refusee");
+
+        // Personne ne répond : refus à l'échéance, et la carte ne se décide plus.
+        let c = app(Duration::from_millis(200));
+        let cartes = repondre(&c, None);
+        assert_eq!(demander(c.handle(), carte()), Reponse::Delai);
+        cartes.recv().unwrap();
+        assert_eq!(cartes.recv().unwrap()["statut"], "expiree");
+        assert!(!decider(c.handle(), "v1", true));
     }
 
     fn reponse(texte: &str) -> Value {

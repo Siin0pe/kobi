@@ -6,6 +6,17 @@
    clique mal) : l'icône vit ; les notifications restent en place une fois
    arrivées. */
 
+/* Carte à trancher (suggestion, ou carte de validation KOB-156) : seule à
+   côté de Kobi (sobriété), les notifications attendent qu'elle soit tranchée. */
+.stage[data-state='suggest'] .notifs,
+.validation-open .notifs {
+  visibility: hidden;
+}
+.stage[data-state='suggest'] .rapport-pastille,
+.validation-open .rapport-pastille {
+  display: none;
+}
+
 /* Historique : il remplace les bulles et les notifications le temps de la relecture. */
 .history-open .bubbles .card,
 .history-open .notifs {

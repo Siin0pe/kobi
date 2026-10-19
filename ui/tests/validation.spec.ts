@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { expectNoErrors, openUi } from './helpers';
+import { emit, expectNoErrors, mockTauri, openUi } from './helpers';
 
 // Carte de validation (KOB-62) : contrat commun des permissions, section 4.
 
@@ -206,5 +206,20 @@ test('cartes en attente de leur tour : l’échéance court depuis leur arrivée
   await expect(page.locator('.kval-secs')).toHaveText(/^[1-4] s$/);
   await expect(page.locator('.kval')).toHaveClass(/urgent/);
   expect(await decisions(page)).toEqual([{ cmd: 'decider_carte', args: { id: '2', accepte: false } }]);
+  await expectNoErrors(errors);
+});
+
+test('sobriété (KOB-156) : pendant qu’une carte de validation attend, la notification d’une tâche se cache, puis revient', async ({ page }) => {
+  await mockTauri(page);
+  const errors = await openUi(page, '');
+  const bulle = (statut: string) => [{ tour: 1, question: 'passe en réponse vocale', reponse: '', statut, clavier: false, etapes: [] }];
+  await emit(page, 'conversation', bulle('attente'));
+  await emit(page, 'conversation', bulle('tache'));
+  await expect(page.locator('.notif-running')).toBeVisible();
+  await emit(page, 'carte', REGLAGE);
+  await expect(page.getByRole('button', { name: 'Valider' })).toBeVisible();
+  await expect(page.locator('.notif-running')).toBeHidden();
+  await emit(page, 'carte', { ...REGLAGE, statut: 'acceptee' });
+  await expect(page.locator('.notif-running')).toBeVisible();
   await expectNoErrors(errors);
 });

@@ -85,6 +85,16 @@ pub enum Message {
     /// Dossiers de code changés (KOB-153) : les sessions Claude sont
     /// rouvertes avec les nouveaux.
     CodebasesChangees,
+    /// Une carte de validation attend la réponse de l'utilisateur (KOB-156).
+    ValidationOuverte {
+        id: String,
+        resume: String,
+    },
+    /// La carte est tranchée (ou le délai est passé).
+    ValidationFermee {
+        id: String,
+        reponse: crate::validation::Reponse,
+    },
     Cerveau(Retour),
     /// Nouvelle de l'écrivain (fichiers créés, compte rendu rangé, erreur).
     Disque(Nouvelle),
@@ -281,6 +291,8 @@ pub struct Chef<R: Runtime> {
     taches: BTreeMap<u64, (Instant, String)>,
     /// Tours abandonnés : ce qui en revient encore est ignoré.
     interrompus: HashSet<u64>,
+    /// Carte de validation ouverte (KOB-156) : « oui » ou « non » lui répond.
+    validation: Option<String>,
 }
 
 /// Chef partagé (état géré par Tauri).
@@ -451,6 +463,7 @@ impl<R: Runtime> Chef<R> {
             derniere: None,
             taches: BTreeMap::new(),
             interrompus: HashSet::new(),
+            validation: None,
         }
     }
 
@@ -529,6 +542,8 @@ impl<R: Runtime> Chef<R> {
             }
             Message::Interrompre => self.interrompre(),
             Message::CodebasesChangees => self.cerveau.demander(Demande::Renouveler),
+            Message::ValidationOuverte { id, resume } => self.validation_ouverte(id, &resume),
+            Message::ValidationFermee { id, reponse } => self.validation_fermee(&id, reponse),
             Message::Cerveau(r) => self.retour(r),
             Message::Disque(c) => self.disque(c),
             Message::Rappel(r) => {
@@ -551,6 +566,14 @@ impl<R: Runtime> Chef<R> {
             self.transition(&[Evenement::Interpellation]);
         }
         let _ = self.app.emit(EVENEMENT_QUESTION, &texte);
+        // Une carte de validation attend : « oui » ou « non » lui répondent.
+        if let Some(id) = self.validation.clone() {
+            if let Some(accepte) = crate::intentions::reponse_validation(&texte) {
+                tracing::info!(%id, accepte, "réponse à la carte, à la voix ou au clavier");
+                crate::validation::decider(&self.app, &id, accepte);
+                return;
+            }
+        }
         // « Kobi, parle », « en silence », « stop » (KOB-142).
         match crate::voix::commande_vocale(&texte) {
             Some(crate::voix::CommandeVoix::Stop) => {
@@ -949,6 +972,33 @@ impl<R: Runtime> Chef<R> {
                 self.transition(&[Evenement::PasDeQuestion]);
             }
             _ => {}
+        }
+    }
+
+    /// Une action qui écrit attend un « oui » : Kobi passe en proposition,
+    /// relit la demande si la voix est active, et écoute la réponse sans
+    /// qu'on redise « Kobi » (hors réunion).
+    fn validation_ouverte(&mut self, id: String, resume: &str) {
+        self.validation = Some(id);
+        self.calme_a = None;
+        self.transition(&[Evenement::PermissionDemandee]);
+        crate::voix::dire(&self.app, &format!("{resume}. Je le fais ?"));
+        let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::Suite);
+    }
+
+    fn validation_fermee(&mut self, id: &str, reponse: crate::validation::Reponse) {
+        if self.validation.as_deref() == Some(id) {
+            self.validation = None;
+        }
+        self.transition(&[if reponse.acceptee() {
+            Evenement::PermissionAccordee
+        } else {
+            Evenement::PermissionRefusee
+        }]);
+        if reponse == crate::validation::Reponse::Delai {
+            let message = "Pas de réponse : je n'ai rien fait.";
+            let _ = self.app.emit(EVENEMENT_REPONSE, message);
+            crate::voix::dire(&self.app, message);
         }
     }
 
