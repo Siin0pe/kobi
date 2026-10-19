@@ -20,6 +20,7 @@ mod ecoute;
 mod ecrivain;
 #[cfg(test)]
 mod essai_pilotage;
+mod instance;
 mod intentions;
 mod interpellation;
 mod lecture;
@@ -168,6 +169,14 @@ fn main() {
         #[cfg(windows)]
         attacher_console();
         std::process::exit(kobi_ctl::cli::main_avec(&args));
+    }
+    // Une seule instance (KOB-175) : si Kobi tourne déjà, ce lancement lui
+    // passe sa demande (`--app`, `--reglages`…) et s'arrête.
+    if let Some(point) = kobi_ctl::Point::defaut() {
+        if instance::transmettre(&point, &args).is_ok() {
+            instance::noter_passage(&args);
+            return;
+        }
     }
     #[cfg(target_os = "linux")]
     choose_webkit_renderer();

@@ -68,7 +68,20 @@ pub fn installer<R: Runtime>(app: &AppHandle<R>, config: Option<PathBuf>) {
                 *c.serveur.lock().unwrap_or_else(|e| e.into_inner()) = Some(serveur);
             }
         }
-        Err(e) => tracing::warn!(erreur = %e, adresse = %point.adresse, "contrôle indisponible"),
+        Err(e) => {
+            // Deux lancements presque en même temps (KOB-175) : l'autre tient
+            // déjà le point d'accès ; on lui passe la demande et on s'arrête.
+            let args: Vec<String> = std::env::args().skip(1).collect();
+            if crate::instance::transmettre(&point, &args).is_ok() {
+                tracing::info!(
+                    erreur = %e,
+                    "Kobi tourne déjà : demande passée à l'instance en cours, ce lancement s'arrête"
+                );
+                app.exit(0);
+                return;
+            }
+            tracing::warn!(erreur = %e, adresse = %point.adresse, "contrôle indisponible");
+        }
     }
 }
 
