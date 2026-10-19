@@ -228,6 +228,16 @@ export const MODELE: Panneau = {
 
 // ----- Dossiers de code -----
 
+/** Dépôt git trouvé sous un dossier (`lister_depots`, KOB-153). */
+interface Depot {
+  nom: string;
+  chemin: string;
+  branche: string | null;
+  langage: string | null;
+}
+
+const sansBarre = (chemin: string) => chemin.replace(/[\\/]+$/, '');
+
 export const DOSSIERS: Panneau = {
   id: 'dossiers-code',
   titre: 'Dossiers de code',
@@ -266,12 +276,74 @@ export const DOSSIERS: Panneau = {
       }
     };
     const ajouter = async () => {
+      let d: string | null;
       try {
-        const d = await invoke<string | null>('choisir_dossier', { titre: 'Dossier de code à lire' });
-        if (d && !dossiers.includes(d)) await enregistrer([...dossiers, d]);
+        d = await invoke<string | null>('choisir_dossier', { titre: 'Dossier de code à lire' });
       } catch (e) {
         ctx.notifier(message(e), 'erreur');
+        return;
       }
+      if (!d) return;
+      // Plusieurs dépôts dans le dossier choisi : on propose de les cocher un
+      // par un (KOB-153). Le dossier est lui-même un dépôt, n'en contient
+      // qu'un ou Kobi ne sait pas encore les lister : il est ajouté tel quel.
+      let depots: Depot[] = [];
+      try {
+        depots = await invoke<Depot[]>('lister_depots', { dossier: d });
+      } catch (e) {
+        if (!absente(e)) ctx.notifier(message(e), 'erreur');
+      }
+      const dessous = depots.filter((x) => sansBarre(x.chemin) !== sansBarre(d));
+      if (dessous.length < 2 || dessous.length !== depots.length) {
+        if (!dossiers.includes(d)) await enregistrer([...dossiers, d]);
+        return;
+      }
+      proposer(d, dessous);
+    };
+    /** Liste des dépôts trouvés, tous cochés : Kobi lira ceux qu'on garde. */
+    const proposer = (racine: string, depots: Depot[]) => {
+      const cases = depots.map((dep) =>
+        h('input', { type: 'checkbox', checked: !dossiers.includes(dep.chemin), disabled: dossiers.includes(dep.chemin), 'data-chemin': dep.chemin }),
+      );
+      const valider = bouton('', 'ajouter-depots', () => {
+        const choisis = cases.filter((c) => c.checked && !c.disabled).map((c) => c.dataset.chemin!);
+        void enregistrer([...dossiers, ...choisis]);
+      }, true);
+      const compter = () => {
+        const n = cases.filter((c) => c.checked && !c.disabled).length;
+        valider.textContent = n ? `Ajouter ${n} dépôt${n > 1 ? 's' : ''}` : 'Aucun dépôt choisi';
+        valider.disabled = n === 0;
+      };
+      cases.forEach((c) => c.addEventListener('change', compter));
+      compter();
+      zone.replaceChildren(
+        h('p', { class: 'aide' }, `${depots.length} dépôts dans `, h('code', {}, racine), ' : coche ceux que Kobi peut lire.'),
+        h(
+          'ul',
+          { class: 'depots', 'aria-label': 'Dépôts trouvés' },
+          ...depots.map((dep, i) =>
+            h(
+              'li',
+              { class: 'depot', style: `--i:${Math.min(i, 20)}` },
+              h(
+                'label',
+                { title: dep.chemin },
+                cases[i]!,
+                h('span', { class: 'depot-nom' }, dep.nom),
+                h('span', { class: 'depot-infos' }, [dep.branche, dep.langage].filter(Boolean).join(' · ') || 'dépôt git'),
+                dossiers.includes(dep.chemin) ? h('span', { class: 'depot-infos' }, 'déjà lu') : null,
+              ),
+            ),
+          ),
+        ),
+        h(
+          'div',
+          { class: 'boutons' },
+          valider,
+          bouton('Tout le dossier', 'tout-le-dossier', () => void enregistrer(dossiers.includes(racine) ? dossiers : [...dossiers, racine])),
+          bouton('Annuler', 'annuler', dessiner),
+        ),
+      );
     };
     invoke<string[]>('get_codebases').then(
       (d) => {

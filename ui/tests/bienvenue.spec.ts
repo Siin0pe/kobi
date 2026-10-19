@@ -8,6 +8,10 @@ interface Options {
   /** Commandes des dossiers de code présentes (sinon « not found », comme Tauri). */
   dependances?: boolean;
   modele?: boolean;
+  /** Dossier rendu par le sélecteur (par défaut un seul dépôt). */
+  choix?: string;
+  /** `lister_depots` présente (KOB-153). */
+  depots?: boolean;
 }
 
 function fakeTauri(o: Options): void {
@@ -62,7 +66,17 @@ function fakeTauri(o: Options): void {
             codebases = args.dossiers as string[];
             return null;
           case 'choisir_dossier':
-            return '/home/neuf/code/kobi';
+            return o.choix ?? '/home/neuf/code/kobi';
+          case 'lister_depots':
+            if (!o.depots) return absente(cmd);
+            // Un dossier de projets : trois dépôts dessous ; sinon le dossier est le dépôt.
+            if (args.dossier === '/home/neuf/code')
+              return [
+                { nom: 'kobi', chemin: '/home/neuf/code/kobi', branche: 'main', langage: 'Rust' },
+                { nom: 'site', chemin: '/home/neuf/code/site', branche: 'prod', langage: 'TypeScript' },
+                { nom: 'notes', chemin: '/home/neuf/code/notes', branche: null, langage: null },
+              ];
+            return [{ nom: 'kobi', chemin: args.dossier, branche: 'main', langage: 'Rust' }];
           case 'demarrage_systeme':
             return demarrage().actif;
           case 'regler_demarrage_systeme':
@@ -287,5 +301,26 @@ test('animations réduites : Kobi et les titres posés sans brouillage', async (
   expect(await page.locator('.grand-kobi .mot').textContent()).toBe('salut');
   const animees = await page.evaluate(() => document.getAnimations().filter((a) => a.playState === 'running').length);
   expect(animees).toBe(0);
+  await expectNoErrors(errors);
+});
+
+test('dossier de projets : Kobi liste ses dépôts, on coche ceux qu’il lit (KOB-153)', async ({ page }) => {
+  const errors = await ouvrir(page, { dependances: true, modele: true, depots: true, choix: '/home/neuf/code' });
+  await page.locator('.etape[data-etape="dossiers-code"] button').click();
+  await page.getByRole('button', { name: 'Ajouter un dossier…' }).click();
+  const depots = page.getByRole('list', { name: 'Dépôts trouvés' });
+  await expect(depots.locator('.depot-nom')).toHaveText(['kobi', 'site', 'notes']);
+  await expect(depots.locator('.depot-infos')).toHaveText(['main · Rust', 'prod · TypeScript', 'dépôt git']);
+  await expect(page.getByRole('button', { name: 'Ajouter 3 dépôts' })).toBeEnabled();
+  // Le dépôt « notes » ne sera pas lu.
+  await depots.getByRole('checkbox').nth(2).uncheck();
+  await page.getByRole('button', { name: 'Ajouter 2 dépôts' }).click();
+  await expect(page.locator('.dossier-code code')).toHaveText(['/home/neuf/code/kobi', '/home/neuf/code/site']);
+  expect(await appels(page)).toContainEqual(['set_codebases', { dossiers: ['/home/neuf/code/kobi', '/home/neuf/code/site'] }]);
+  expect(await appels(page)).toContainEqual(['lister_depots', { dossier: '/home/neuf/code' }]);
+  // Plus tard, tout le dossier : il s'ajoute tel quel ; un dossier qui est un dépôt aussi.
+  await page.getByRole('button', { name: 'Ajouter un dossier…' }).click();
+  await page.getByRole('button', { name: 'Tout le dossier' }).click();
+  await expect(page.locator('.dossier-code code')).toHaveText(['/home/neuf/code/kobi', '/home/neuf/code/site', '/home/neuf/code']);
   await expectNoErrors(errors);
 });
