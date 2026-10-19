@@ -36,12 +36,6 @@ pub struct NemotronConfig {
     /// mots sautés (les noms propres inconnus du modèle), au prix de
     /// quelques insertions.
     pub blank_penalty: f32,
-    /// Mots à favoriser (fichier de hotwords sherpa-onnx, un par ligne, déjà
-    /// découpés en jetons du modèle) : passe en recherche en faisceau
-    /// (`modified_beam_search`), plus coûteuse. `None` = recherche gloutonne.
-    pub hotwords_file: Option<PathBuf>,
-    /// Bonus des hotwords (sherpa-onnx : 1,5 par défaut).
-    pub hotwords_score: f32,
 }
 
 /// Fournisseur d'exécution onnxruntime.
@@ -83,8 +77,6 @@ impl NemotronConfig {
             endpoint_silence: 0.8,
             provider: Provider::Cpu,
             blank_penalty: 0.0,
-            hotwords_file: None,
-            hotwords_score: 1.5,
         }
     }
 
@@ -146,15 +138,7 @@ impl NemotronEngine {
         rc.model_config.tokens = Some(tokens.to_string_lossy().into_owned());
         rc.model_config.num_threads = config.num_threads;
         rc.model_config.provider = Some(config.provider.as_str().into());
-        match &config.hotwords_file {
-            Some(f) => {
-                rc.decoding_method = Some("modified_beam_search".into());
-                rc.max_active_paths = 4;
-                rc.hotwords_file = Some(f.to_string_lossy().into_owned());
-                rc.hotwords_score = config.hotwords_score;
-            }
-            None => rc.decoding_method = Some("greedy_search".into()),
-        }
+        rc.decoding_method = Some("greedy_search".into());
         rc.blank_penalty = config.blank_penalty;
         rc.enable_endpoint = true;
         // Règle 1 : silence long sans aucun mot ; règle 2 : silence après un
