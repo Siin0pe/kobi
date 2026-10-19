@@ -343,6 +343,74 @@ pub enum Politique {
     SansDemander,
 }
 
+/// Images par seconde des animations (KOB-200) : une valeur fixe, ou la
+/// fréquence de l'écran.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fps {
+    Valeur(u32),
+    Ecran,
+}
+
+impl Fps {
+    /// Valeurs proposées (réglage « Images par seconde »).
+    pub const VALEURS: [u32; 5] = [5, 15, 30, 60, 120];
+}
+
+impl Default for Fps {
+    fn default() -> Self {
+        Fps::Valeur(60)
+    }
+}
+
+impl fmt::Display for Fps {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Fps::Valeur(n) => write!(f, "{n}"),
+            Fps::Ecran => f.write_str("\"ecran\""),
+        }
+    }
+}
+
+impl Serialize for Fps {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Fps::Valeur(n) => s.serialize_u32(*n),
+            Fps::Ecran => s.serialize_str("ecran"),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Fps {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Brut {
+            Nombre(i64),
+            Mot(String),
+        }
+        match Brut::deserialize(d)? {
+            Brut::Nombre(n) => u32::try_from(n)
+                .map(Fps::Valeur)
+                .map_err(|_| serde::de::Error::custom(format!("{n} images par seconde"))),
+            Brut::Mot(m) if m == "ecran" => Ok(Fps::Ecran),
+            Brut::Mot(m) => Err(serde::de::Error::custom(format!(
+                "« {m} » : un nombre d'images par seconde ou \"ecran\""
+            ))),
+        }
+    }
+}
+
+/// `[animations]` (KOB-200) : cadence de tout ce qui bouge, et économie
+/// d'énergie au repos prolongé (l'ancien repos économe de KOB-146).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AnimationsConfig {
+    pub fps: Fps,
+    pub economie: bool,
+    #[serde(flatten)]
+    pub extra: toml::Table,
+}
+
 /// `[permissions]` : politique par genre d'action qui écrit. La suppression
 /// de fichiers est toujours demandée, sans réglage.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -385,6 +453,8 @@ pub struct Config {
     pub mcp: crate::mcp::McpConfig,
     /// Actions qui écrivent : demander ou non (KOB-156).
     pub permissions: PermissionsConfig,
+    /// Images par seconde et économie d'énergie (KOB-200).
+    pub animations: AnimationsConfig,
     /// Clés inconnues, conservées telles quelles à l'écriture.
     #[serde(flatten)]
     pub extra: toml::Table,
@@ -409,6 +479,7 @@ impl Default for Config {
             stockage: StockageConfig::default(),
             mcp: crate::mcp::McpConfig::default(),
             permissions: PermissionsConfig::default(),
+            animations: AnimationsConfig::default(),
             extra: toml::Table::new(),
         }
     }
@@ -439,6 +510,15 @@ impl Config {
                 &self.notes.interval_min,
                 "de 1 à 10",
             ));
+        }
+        if let Fps::Valeur(n) = self.animations.fps {
+            if !Fps::VALEURS.contains(&n) {
+                return Err(invalid(
+                    "animations.fps",
+                    &n,
+                    "5, 15, 30, 60, 120 ou \"ecran\"",
+                ));
+            }
         }
         if self.wake_word.trim().is_empty() {
             return Err(invalid("wake_word", &"\"\"", "un mot non vide"));

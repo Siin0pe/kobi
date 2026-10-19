@@ -734,6 +734,31 @@ fn lire_config<R: Runtime>(app: &AppHandle<R>) -> Result<(PathBuf, Config), Erre
     Ok((chemin, lu.config))
 }
 
+/// Réglage des animations pour les fenêtres (KOB-200) : images par seconde et
+/// économie d'énergie. Lu au chargement de chaque fenêtre ; ensuite, chaque
+/// changement (ici, `kobi config set` ou Claude) arrive par [`EVENEMENT_REGLAGE`].
+#[tauri::command]
+pub fn reglage_animations<R: Runtime>(app: AppHandle<R>) -> Value {
+    let a = lire_config(&app)
+        .map(|(_, c)| c.animations)
+        .unwrap_or_default();
+    json!({ "fps": a.fps, "economie": a.economie })
+}
+
+/// Change `fps` ou `economie` (section Réglages de l'app), comme `config.set`.
+#[tauri::command]
+pub fn regler_animations<R: Runtime>(
+    app: AppHandle<R>,
+    cle: String,
+    valeur: Value,
+) -> Result<Value, String> {
+    if !matches!(cle.as_str(), "fps" | "economie") {
+        return Err(format!("réglage d'animation inconnu : {cle}"));
+    }
+    regler(&app, &format!("animations.{cle}"), valeur).map_err(|e| e.message)?;
+    Ok(reglage_animations(app))
+}
+
 /// Modifie, vérifie, écrit et applique un réglage. Renvoie la valeur d'avant
 /// et le résultat de la commande.
 fn regler<R: Runtime>(

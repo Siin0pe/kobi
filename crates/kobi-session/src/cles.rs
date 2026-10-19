@@ -130,6 +130,17 @@ pub const CLES: &[(&str, Application, &str)] = &[
         AChaud,
         "Commandes qui modifient : demander (défaut) ou sans_demander.",
     ),
+    // Appliqués à chaud par toutes les fenêtres (KOB-200).
+    (
+        "animations.fps",
+        AChaud,
+        "Images par seconde des animations : 5, 15, 30, 60 (défaut), 120 ou \"ecran\" (fréquence de l'écran).",
+    ),
+    (
+        "animations.economie",
+        AChaud,
+        "Économie d'énergie : au repos prolongé, la mascotte ralentit à 3 puis 2 images/s (désactivée par défaut).",
+    ),
     (
         "permissions.reglage",
         AChaud,
@@ -359,6 +370,35 @@ mod tests {
             modifier(&c, "skin", json!("autre")),
             Err(ErreurCle::Inconnue(_))
         ));
+    }
+
+    /// Images par seconde (KOB-200) : 60 par défaut, une des valeurs
+    /// proposées ou « ecran », appliquées à chaud.
+    #[test]
+    fn images_par_seconde() {
+        let c = Config::default();
+        assert_eq!(lire(&c, Some("animations.fps")).unwrap(), json!(60));
+        assert_eq!(lire(&c, Some("animations.economie")).unwrap(), json!(false));
+        for v in [json!(5), json!(15), json!(30), json!(120), json!("ecran")] {
+            let m = modifier(&c, "animations.fps", v.clone()).unwrap();
+            assert_eq!(m.apres, v);
+            assert_eq!(m.application, AChaud);
+        }
+        assert_eq!(
+            modifier(&c, "animations.fps", json!("ecran")).unwrap().config.animations.fps,
+            crate::config::Fps::Ecran
+        );
+        for v in [json!(45), json!(0), json!(-5), json!("vite")] {
+            assert!(
+                matches!(
+                    modifier(&c, "animations.fps", v.clone()),
+                    Err(ErreurCle::Refusee { .. })
+                ),
+                "{v}"
+            );
+        }
+        let m = modifier(&c, "animations.economie", json!(true)).unwrap();
+        assert!(m.config.animations.economie);
     }
 
     #[test]

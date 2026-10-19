@@ -4,6 +4,7 @@
 
 import { animationsReduitesSelonReglage, suivreAnimations } from './animations';
 import { Bubbles, type ActionDecision } from './bubbles';
+import { suivreCadence } from './cadence';
 import { Metronome } from './econome';
 import { Kobi } from './mascotte/kobi';
 import { ConsentCard, RecIndicator, type ConsentEvent } from './meeting';
@@ -124,15 +125,32 @@ export class Stage {
 
     this.kobi = new Kobi(this.reducedMotion);
     this.scene.append(this.kobi.root, this.bubbles.root, this.rec.root);
-    // Repos économe : toute la scène (Kobi, bulles, REC, champ) avance au
-    // rythme d'un seul métronome (econome.ts).
-    this.metronome = new Metronome(this.scene, (fps) => (this.root.dataset.fps = String(fps)));
-    this.kobi.onDeepChange = (deep) => {
-      this.root.classList.toggle('econome', deep);
+    // Images par seconde réglées (KOB-200) : toute la fenêtre (Kobi, bulles,
+    // REC, champ, vue agrandie) avance au rythme d'un seul métronome (econome.ts).
+    this.metronome = new Metronome(this.root, (fps) => (this.root.dataset.fps = String(fps)));
+    this.root.dataset.fps = '0';
+    let deep = false;
+    let economie = false;
+    // Repos économe, seulement avec « Économie d'énergie » (désactivée par défaut).
+    const repos = (): void => {
+      const on = deep && economie;
+      this.root.classList.toggle('econome', on);
       // Après le changement de style : les boucles du repos sont en place.
-      if (deep) requestAnimationFrame(() => this.root.classList.contains('econome') && this.metronome.setActive(true));
+      if (on) requestAnimationFrame(() => this.root.classList.contains('econome') && this.metronome.setActive(true));
       else this.metronome.setActive(false);
     };
+    this.kobi.onDeepChange = (d) => {
+      deep = d;
+      repos();
+    };
+    this.cleanups.push(
+      suivreCadence((cadence, voulue, r) => {
+        this.root.dataset.cadence = String(voulue);
+        this.metronome.setCadence(cadence);
+        economie = r.economie;
+        repos();
+      }),
+    );
     // Scène de la veille ou ballottement pendant le repos : le geste se joue
     // à 60 images/s, les boucles de fond restent au rythme du métronome
     // (KOB-149, KOB-170).
