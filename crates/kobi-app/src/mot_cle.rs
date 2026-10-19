@@ -176,7 +176,16 @@ pub fn interpellation(texte: &str) -> Option<(Adresse, String)> {
         .iter()
         .all(|m| INTERJECTIONS.contains(&m.as_str()));
     let en_fin = mots_apres.is_empty();
-    let cite_avant = !virgule_avant && precedent.is_some_and(|m| AVANT_CITATION.contains(&m));
+    // « Est-ce que Kobi… » : le « que » de la question n'est pas celui de
+    // « ce que Kobi dit ».
+    let est_ce_que = mots_avant.len() >= 3
+        && mots_avant[mots_avant.len() - 3..]
+            .iter()
+            .map(String::as_str)
+            .eq(["est", "ce", "que"]);
+    let cite_avant = !virgule_avant
+        && !est_ce_que
+        && precedent.is_some_and(|m| AVANT_CITATION.contains(&m));
 
     let adresse = if en_tete {
         if sujet && !toi {
@@ -953,6 +962,22 @@ mod tests {
                 "Est-ce que tu peux Kobi me rappeler ça",
                 Appel,
                 "Est-ce que tu peux me rappeler ça",
+            ),
+            // Transcription réelle (essai du 19/10) : la virgule avant le nom manque.
+            (
+                "Est-ce que Kobe, tu peux me rappeler le nom du projet",
+                Appel,
+                "Est-ce que tu peux me rappeler le nom du projet",
+            ),
+            (
+                "Est-ce que Kobi tu as noté le budget ?",
+                Appel,
+                "Est-ce que tu as noté le budget ?",
+            ),
+            (
+                "Je suis d'accord avec Kobi, tu sais",
+                Cite,
+                "Je suis d'accord avec tu sais",
             ),
             (
                 "Alors toi Kobi tu en dis quoi ?",
