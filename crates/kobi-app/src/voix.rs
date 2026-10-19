@@ -15,7 +15,8 @@
 //! l'écho de sa réponse, pendant qu'il parle et peu après ([`est_ma_voix`]).
 //!
 //! Une réponse longue n'est pas lue en entier : la voix dit les premières
-//! phrases, puis « La suite est dans la bulle. » ([`Resume`], KOB-163).
+//! phrases, puis se tait ; la bulle montre « Lire en grand » ([`Resume`],
+//! KOB-163, KOB-215).
 //!
 //! « Kobi, parle » et « Kobi, en silence » règlent le contexte courant
 //! ([`commande_vocale`]) ; la barre système et le menu du clic droit aussi.
@@ -332,11 +333,10 @@ pub fn entendu<R: Runtime>(app: &AppHandle<R>, texte: &str) {
 }
 
 /// Résumé dit à voix haute (KOB-163) : au plus [`RESUME_PHRASES`] phrases
-/// et environ [`RESUME_CARACTERES`] caractères ; le reste se lit dans la bulle.
-pub const RESUME_PHRASES: usize = 3;
-pub const RESUME_CARACTERES: usize = 320;
-/// Dit une fois le résumé coupé.
-pub const SUITE_DANS_LA_BULLE: &str = "La suite est dans la bulle.";
+/// et environ [`RESUME_CARACTERES`] caractères, comme la réponse courte que
+/// demande le prompt ; le reste se lit, sans l'annoncer (KOB-215).
+pub const RESUME_PHRASES: usize = 2;
+pub const RESUME_CARACTERES: usize = 240;
 
 /// Budget de la voix pour une réponse : les premières phrases passent, puis
 /// plus rien.
@@ -412,10 +412,9 @@ impl Reponse {
     pub fn fin<R: Runtime>(&mut self, app: &AppHandle<R>, accumule: &str) {
         if let Some(e) = self.enonce {
             let phrases = self.diction.fin(accumule);
-            let mut phrases = self.resume.garder(&phrases);
+            let phrases = self.resume.garder(&phrases);
             if self.resume.coupe() {
                 tracing::info!("voix : réponse longue, résumé seulement");
-                phrases.push(SUITE_DANS_LA_BULLE.to_owned());
             }
             self.dire(app, &phrases);
             avec_parleur(app, |p| p.finir(e));
@@ -669,16 +668,12 @@ mod tests {
         let p = |t: &str| t.to_owned();
         let mut r = Resume::default();
         // Une réponse courte passe en entier.
-        assert_eq!(
-            r.garder(&[p("Il est 10 h 12."), p("Bonne journée !")])
-                .len(),
-            2
-        );
+        assert_eq!(r.garder(&[p("Il est 10 h 12.")]).len(), 1);
         assert!(!r.coupe());
-        // Au-delà de trois phrases, plus rien, même en plusieurs morceaux.
+        // Au-delà de deux phrases, plus rien, même en plusieurs morceaux.
         assert_eq!(
-            r.garder(&[p("Troisième phrase."), p("Quatrième phrase.")]),
-            [p("Troisième phrase.")]
+            r.garder(&[p("Deuxième phrase."), p("Troisième phrase.")]),
+            [p("Deuxième phrase.")]
         );
         assert!(r.coupe());
         assert!(r.garder(&[p("Cinquième.")]).is_empty());
