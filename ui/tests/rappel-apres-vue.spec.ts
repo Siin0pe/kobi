@@ -10,7 +10,7 @@ async function kobi(page: Page, reglages: Record<string, unknown>): Promise<stri
   await page.setViewportSize({ width: 410, height: 280 });
   await page.exposeFunction('__resize', (w: number, h: number) => page.setViewportSize({ width: w, height: h }));
   await mockTauri(page);
-  await page.addInitScript((r) => localStorage.setItem('kobi.affichage', JSON.stringify(r)), reglages);
+  await page.addInitScript((r) => localStorage.setItem('kobi.affichage', JSON.stringify({ v: 2, ...r })), reglages);
   await page.addInitScript(() => {
     const w = window as unknown as { __TAURI__: { core: { invoke: (c: string, a?: Record<string, number | string | boolean>) => Promise<unknown> } }; __resize(w: number, h: number): Promise<void> };
     const base = w.__TAURI__.core.invoke;

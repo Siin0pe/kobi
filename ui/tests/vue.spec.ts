@@ -19,7 +19,7 @@ async function kobi(page: Page, reglages?: Record<string, unknown>, query = ''):
   await page.setViewportSize({ width: 410, height: 280 });
   await page.exposeFunction('__resize', (w: number, h: number) => page.setViewportSize({ width: w, height: h }));
   await mockTauri(page);
-  if (reglages) await page.addInitScript((r) => localStorage.setItem('kobi.affichage', JSON.stringify(r)), reglages);
+  if (reglages) await page.addInitScript((r) => localStorage.setItem('kobi.affichage', JSON.stringify({ v: 2, ...r })), reglages);
   await page.addInitScript(() => {
     const w = window as unknown as { __TAURI__: { core: { invoke: (c: string, a?: Record<string, number | string | boolean>) => Promise<unknown> } }; __resize(w: number, h: number): Promise<void> };
     const base = w.__TAURI__.core.invoke;
@@ -219,7 +219,7 @@ test('panneau « Affichage » de la section Réglages de l’app : chaque choix 
   await groupe('Taille du texte').getByRole('radio', { name: /Petit/ }).click();
   await groupe('Ranger la vue').getByRole('radio', { name: /Jamais/ }).click();
   const r = await page.evaluate(() => JSON.parse(localStorage.getItem('kobi.affichage') ?? '{}'));
-  expect(r).toEqual({ mode: 'detaille', auto: 'toujours', taille: 'grande', position: 'moitie-droite', texte: 'petit', delai: 0 });
+  expect(r).toEqual({ v: 2, mode: 'detaille', auto: 'toujours', taille: 'grande', position: 'moitie-droite', texte: 'petit', delai: 0 });
   await page.screenshot({ path: test.info().outputPath('reglages-affichage.png') });
 });
 
@@ -282,4 +282,28 @@ test('par défaut, rien ne s’ouvre seul : la réponse longue reste dans la bul
   await carte(page).getByText('Lire en grand').click();
   await expect(vue(page)).toBeVisible();
   await expectNoErrors(errors);
+});
+
+test('ancien format des réglages d’affichage : « réponses longues », l’ancien défaut, retombe sur « À la demande », les autres choix restent (KOB-215)', async ({ page }) => {
+  await mockTauri(page);
+  await page.addInitScript(() =>
+    localStorage.setItem('kobi.affichage', JSON.stringify({ mode: 'detaille', auto: 'longues', taille: 'moyenne', position: 'a-cote', texte: 'grand', delai: 30 })),
+  );
+  await page.setViewportSize({ width: 1180, height: 760 });
+  await page.goto('/app.html#reglages/affichage');
+  const groupe = (nom: string) => page.getByRole('radiogroup', { name: nom });
+  await expect(groupe('Ouvrir la conversation en grand').getByRole('radio', { name: /À la demande/ })).toHaveAttribute('aria-checked', 'true');
+  await expect(groupe('Widget de Kobi').getByRole('radio', { name: /Bulle détaillée/ })).toHaveAttribute('aria-checked', 'true');
+  await expect(groupe('Taille du texte').getByRole('radio', { name: /Grand/ })).toHaveAttribute('aria-checked', 'true');
+  // Un nouveau choix enregistre le format 2, sans les défauts.
+  await groupe('Taille du texte').getByRole('radio', { name: /Petit/ }).click();
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('kobi.affichage') ?? '{}'))).toEqual({ v: 2, mode: 'detaille', taille: 'moyenne', position: 'a-cote', texte: 'petit', delai: 30 });
+});
+
+test('ancien format : « Toujours », choisi exprès, reste', async ({ page }) => {
+  await mockTauri(page);
+  await page.addInitScript(() => localStorage.setItem('kobi.affichage', JSON.stringify({ mode: 'simple', auto: 'toujours' })));
+  await page.setViewportSize({ width: 1180, height: 760 });
+  await page.goto('/app.html#reglages/affichage');
+  await expect(page.getByRole('radiogroup', { name: 'Ouvrir la conversation en grand' }).getByRole('radio', { name: /Toujours/ })).toHaveAttribute('aria-checked', 'true');
 });
