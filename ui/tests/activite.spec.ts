@@ -3,6 +3,12 @@
 import { expect, test, type Page } from '@playwright/test';
 import { calls, emit, expectNoErrors, mockTauri, openUi } from './helpers';
 
+// Le fil d'activité sous Kobi est celui du widget « bulle détaillée » ; en
+// widget simple (défaut, KOB-169), il passe dans la vue agrandie.
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('kobi.affichage', JSON.stringify({ mode: 'detaille', auto: 'jamais' })));
+});
+
 const etape = (id: string, type: string, resume: string, tour = 1, chemin: string | null = null) => ({
   tour,
   id,

@@ -650,6 +650,13 @@ impl<R: Runtime> Chef<R> {
                 self.interrompre();
                 return;
             }
+            // « Montre en grand » (KOB-169) : la conversation s'ouvre en grand,
+            // sans nouvel échange qui la remplacerait.
+            Some(Intention::MontrerEnGrand) => {
+                self.transition(&[Evenement::PasDeQuestion]);
+                crate::agrandir::vue(&self.app, "ouvrir");
+                return;
+            }
             Some(Intention::Repeter) => {
                 let reponse = match &self.derniere {
                     Some((_, r)) => r.clone(),
@@ -875,7 +882,8 @@ impl<R: Runtime> Chef<R> {
             | Intention::Developpe
             | Intention::EnAnglais
             | Intention::OuEnEst
-            | Intention::Annuler => return None,
+            | Intention::Annuler
+            | Intention::MontrerEnGrand => return None,
         })
     }
 

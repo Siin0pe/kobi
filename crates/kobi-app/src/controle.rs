@@ -221,6 +221,16 @@ pub fn executer<R: Runtime>(
             let _ = app.emit(EVENEMENT_DISCRET, on);
             Ok(json!({ "discret": on }))
         }
+        // Vue agrandie de la conversation (KOB-169).
+        "view.open" | "view.close" | "view.toggle" => {
+            let action = match commande.nom {
+                "view.open" => "ouvrir",
+                "view.close" => "fermer",
+                _ => "basculer",
+            };
+            crate::agrandir::vue(app, action);
+            Ok(json!({ "vue": action }))
+        }
         "app.quit" => {
             // Répondre d'abord, quitter ensuite.
             let app = app.clone();

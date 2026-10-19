@@ -1,0 +1,163 @@
+/* Vue agrandie de la conversation (KOB-169) : un grand panneau de la famille
+   des bulles de Kobi (encre, liseré vert), posé dans la fenêtre transparente
+   agrandie ; autour, rien : la fenêtre n'a jamais de fond. Taille du texte
+   réglable (--vue-texte). Le panneau ne flotte pas : on y lit, on y clique. */
+
+.lecture {
+  position: absolute;
+  z-index: 20;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  border-radius: 20px;
+  background: var(--ink);
+  color: var(--paper);
+  box-shadow:
+    0 0 0 3px var(--accent),
+    10px 10px 0 rgba(11, 11, 11, 0.2);
+  font-family: var(--font);
+  font-size: var(--vue-texte, 18px);
+  line-height: 1.55;
+  font-variation-settings: 'CASL' 1, 'wght' 430;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.lecture[hidden] {
+  display: none;
+}
+.lecture-tete {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px 6px 22px;
+}
+.lecture-titre {
+  color: var(--accent);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-variation-settings: 'MONO' 1, 'wght' 700;
+}
+.lecture-fermer {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--paper) 35%, transparent);
+  background: transparent;
+  color: var(--paper);
+  font: 700 20px/1 var(--font);
+  cursor: pointer;
+}
+.lecture-fermer:hover,
+.lecture-fermer:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+  outline: none;
+}
+.lecture-corps {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 4px 22px 18px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--accent) transparent;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fondu-haut), #000 calc(100% - var(--fondu-bas)), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fondu-haut), #000 calc(100% - var(--fondu-bas)), transparent 100%);
+  transition:
+    --fondu-haut 0.35s ease,
+    --fondu-bas 0.35s ease;
+}
+.lecture-corps.peut-monter {
+  --fondu-haut: 30px;
+}
+.lecture-corps.peut-descendre {
+  --fondu-bas: 40px;
+}
+
+/* Un échange : la question en vert, la réponse mise en forme. */
+.vex {
+  padding: 14px 0;
+  border-top: 1px dashed color-mix(in srgb, var(--paper) 25%, transparent);
+}
+.vex:first-child {
+  border-top: 0;
+}
+.vex-q {
+  margin-bottom: 6px;
+  color: var(--accent);
+  font-size: 0.9em;
+  font-variation-settings: 'CASL' 1, 'wght' 750;
+}
+.vex-sans-question .vex-q {
+  display: none;
+}
+.vex-a:empty::before {
+  content: '···';
+  color: var(--accent);
+  animation: caret-alive 1s ease-in-out infinite;
+}
+.vex .md p {
+  margin: 0 0 0.6em;
+}
+.vex .md p:last-child {
+  margin-bottom: 0;
+}
+.vex .md ul,
+.vex .md ol {
+  margin: 0 0 0.6em;
+  padding-left: 1.3em;
+}
+.vex .md li {
+  margin: 0.2em 0;
+}
+.vex .md li::marker {
+  color: var(--accent);
+}
+.vex .md .md-titre {
+  color: var(--accent);
+  font-variation-settings: 'CASL' 1, 'wght' 800;
+}
+.vex .md pre {
+  margin: 0.3em 0 0.7em;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--paper) 9%, transparent);
+  overflow-x: auto;
+  font-size: 0.8em;
+  line-height: 1.5;
+  font-variation-settings: 'MONO' 1, 'wght' 500;
+  white-space: pre;
+}
+.vex .md .md-code {
+  padding: 0 0.25em;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  font-variation-settings: 'MONO' 1, 'wght' 600;
+  overflow-wrap: anywhere;
+}
+.vex .md .w {
+  display: inline;
+  overflow-wrap: anywhere;
+}
+.vex .md .hl {
+  font-variation-settings: 'CASL' 1, 'wght' 750;
+}
+/* Étapes du tour (KOB-152), repliées. */
+.vex-etapes {
+  margin-top: 10px;
+  font-size: 0.8em;
+}
+.vex-etapes summary {
+  color: var(--accent);
+  cursor: pointer;
+  font-variation-settings: 'MONO' 1, 'wght' 600;
+}
+
+.reduced-motion .lecture *,
+.reduced-motion .lecture-corps {
+  animation: none !important;
+  transition: none !important;
+}

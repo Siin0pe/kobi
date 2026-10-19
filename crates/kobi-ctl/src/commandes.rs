@@ -164,6 +164,9 @@ pub const COMMANDES: &[Commande] = &[
         "Mode discret : la mascotte devient une petite pastille, ou revient.",
         &[requis(positionnel(p("on", Booleen, "true : discret ; false : mascotte entière.")))],
     ),
+    c("view.open", Affichage, "Ouvre la conversation en grand à l'écran (vue agrandie).", &[]),
+    c("view.close", Affichage, "Range la vue agrandie de la conversation.", &[]),
+    c("view.toggle", Affichage, "Ouvre ou range la vue agrandie de la conversation.", &[]),
     Commande {
         destructive: true,
         ..c("app.quit", Ecriture, "Quitte Kobi.", &[])
@@ -463,7 +466,15 @@ mod tests {
         ] {
             assert_eq!(effet(n), Lecture, "{n}");
         }
-        for n in ["app.open", "mascot.show", "mascot.hide", "mascot.discreet"] {
+        for n in [
+            "app.open",
+            "mascot.show",
+            "mascot.hide",
+            "mascot.discreet",
+            "view.open",
+            "view.close",
+            "view.toggle",
+        ] {
             assert_eq!(effet(n), Affichage, "{n}");
         }
         for n in [

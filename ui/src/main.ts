@@ -16,7 +16,7 @@ import { Tasks, followRappels, type Rappel } from './taches';
 import { Ecrire } from './ecrire';
 import { followReport, ReportCard, type CompteRenduUi } from './compte-rendu';
 import { Activite, followActivite, type Etape } from './activite';
-import { followLongAnswers } from './agrandir';
+import { Vue } from './vue';
 import './styles/fonts.css';
 import './styles/stage.css';
 import './styles/bubbles.css';
@@ -27,6 +27,7 @@ import './styles/compte-rendu.css';
 import './styles/activite.css';
 import './styles/menu.css';
 import './styles/reponse.css';
+import './styles/vue.css';
 
 const params = new URLSearchParams(location.search);
 
@@ -50,20 +51,19 @@ const tasks = new Tasks(stage);
 // Fil d'activité sous Kobi (KOB-152).
 const activite = new Activite(stage);
 followActivite(activite);
-followConversation(conversation, (bulles) => tasks.update(bulles));
+// Vue agrandie de la conversation (KOB-169).
+const vue = new Vue(stage);
+followConversation(conversation, (bulles) => {
+  tasks.update(bulles);
+  vue.setBulles(bulles);
+});
 followRappels(tasks);
 // Écrire à Kobi (KOB-147) : la bulle qui sort de Kobi.
 const ecrire = new Ecrire(stage);
 ecrire.onSend = (texte) => conversation.send(texte);
 ecrire.onHistory = () => conversation.openHistory();
-// Réponses longues (KOB-163) : la fenêtre s'agrandit, tout se lit dans l'app.
-followLongAnswers(stage);
-stage.onReadAll(() => {
-  const api = tauri();
-  // L'app Kobi (KOB-159), section des notes et conversations.
-  if (api) void api.core.invoke('ouvrir_app', { section: 'notes' }).catch(() => {});
-  else window.dispatchEvent(new CustomEvent('kobi:lire-app'));
-});
+// Un clic sur la bulle de réponse (ou « Lire en grand ») ouvre la vue agrandie.
+stage.onReadAll(() => void vue.ouvrir());
 ecrire.yields = () => conversation.historyOpen || ['answer', 'think', 'listen'].includes(stage.currentState);
 enableInterrupt(stage, conversation, followCartes(stage));
 // Compte rendu de fin de réunion (KOB-74).
@@ -142,6 +142,7 @@ window.kobi = {
   conversation: (bulles) => {
     conversation.setBulles(bulles);
     tasks.update(bulles);
+    vue.setBulles(bulles);
   },
   rappel: (r) => tasks.reminder(r),
   carte: (c) => applyCarte(stage, c),

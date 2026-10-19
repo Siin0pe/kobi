@@ -39,17 +39,13 @@ export interface StageOptions {
   announce?: boolean;
 }
 
-/** Fenêtre agrandie vers la gauche ou la droite, vers le haut ou le bas. */
-export interface Agrandie {
-  gauche: boolean;
-  haut: boolean;
+/** Un rectangle de la fenêtre, en px (vue agrandie, KOB-169). */
+export interface Boite {
+  x: number;
+  y: number;
+  largeur: number;
+  hauteur: number;
 }
-
-/** Bulle de réponse dans la scène agrandie : bas (vers le haut) ou haut (vers le bas), en unités de scène. */
-const ANSWER_BOTTOM = 424;
-const ANSWER_TOP = 150;
-/** Marge au bord de la fenêtre, en px réels. */
-const EDGE = 16;
 
 export class Stage {
   readonly root: HTMLElement;
@@ -92,8 +88,8 @@ export class Stage {
   onStateChange: ((state: MascotState) => void) | null = null;
   /** Appelé à chaque rendu des bulles (état ou données) : réponse longue, KOB-163. */
   onRender: ((state: MascotState, data: Readonly<MascotData>) => void) | null = null;
-  /** Fenêtre agrandie pour une réponse longue, et vers où (KOB-163). */
-  private grown: Agrandie | null = null;
+  /** Fenêtre agrandie (vue de la conversation) : où reste la petite fenêtre de Kobi. */
+  private placement: Boite | null = null;
   /** État ignoré quelque temps (voir `ignore`). */
   private ignored: { state: MascotState; until: number } | null = null;
 
@@ -344,29 +340,27 @@ export class Stage {
     this.kobi.setData(this.data);
   }
 
-  /** « Tout lire dans l'app » sur une réponse très longue. */
+  /** « Lire en grand » sur la bulle de réponse (vue agrandie, KOB-169). */
   onReadAll(handler: () => void): void {
     this.bubbles.onReadAll = handler;
   }
 
-  get agrandie(): Agrandie | null {
-    return this.grown;
+  get agrandie(): Boite | null {
+    return this.placement;
   }
 
   /**
-   * Fenêtre agrandie (réponse longue, KOB-163) : la scène garde son échelle
-   * et reste dans son coin, Kobi ne bouge pas ; la bulle de réponse déborde
-   * dans la place gagnée, avec un texte à sa vraie taille. `null` : retour à
-   * la taille habituelle.
+   * Fenêtre agrandie pour la vue de la conversation (KOB-169) : la scène
+   * reste exactement où était la petite fenêtre (`kobi`), à la même échelle ;
+   * Kobi ne bouge pas à l'écran. `null` : retour à la taille habituelle.
    */
-  setAgrandie(sens: Agrandie | null): void {
-    this.grown = sens;
-    const c = this.root.classList;
-    c.toggle('agrandie', sens !== null);
-    c.toggle('vers-gauche', sens?.gauche === true);
-    c.toggle('vers-droite', sens?.gauche === false);
-    c.toggle('vers-haut', sens?.haut === true);
-    c.toggle('vers-bas', sens?.haut === false);
+  setPlacement(kobi: Boite | null): void {
+    this.placement = kobi;
+    this.root.classList.toggle('agrandie', kobi !== null);
+    if (kobi) {
+      this.root.style.setProperty('--kobi-x', `${kobi.x + kobi.largeur / 2}px`);
+      this.root.style.setProperty('--kobi-y', `${kobi.y + kobi.hauteur / 2}px`);
+    }
     this.fit();
   }
 
@@ -450,20 +444,10 @@ export class Stage {
 
   private fit(): void {
     const box = this.inFrame ? this.root.parentElement!.getBoundingClientRect() : { width: window.innerWidth, height: window.innerHeight };
-    // Agrandie : l'échelle d'avant reste, la place gagnée sert à la réponse.
-    const keep = (this.grown || this.scaleFrozen) && this.fitted;
+    // Agrandie : l'échelle d'avant reste, la place gagnée sert à la vue.
+    const keep = (this.placement || this.scaleFrozen) && this.fitted;
     const scale = keep ? this.fitted : Math.min(box.width / SCENE_WIDTH, box.height / SCENE_HEIGHT);
     if (!keep) this.fitted = scale;
     this.root.style.setProperty('--scale', String(scale));
-    // Bulle de réponse à taille réelle (zoom inverse de l'échelle), et la
-    // hauteur qu'elle peut prendre dans la fenêtre, en px réels.
-    this.root.style.setProperty('--zoom', String(1 / scale));
-    const sceneTop = this.grown?.haut === false ? 0 : box.height - SCENE_HEIGHT * scale;
-    const room = this.grown
-      ? this.grown.haut
-        ? sceneTop + ANSWER_BOTTOM * scale - EDGE
-        : box.height - EDGE - (sceneTop + ANSWER_TOP * scale)
-      : 0;
-    this.root.style.setProperty('--lecture', `${Math.max(120, Math.round(room))}px`);
   }
 }

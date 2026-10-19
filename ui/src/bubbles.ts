@@ -23,8 +23,6 @@ const TYPING_CPS: Partial<Record<Kind, number>> = { question: 18, notes: 22, ans
 export const COMPOSE_TEXT = 'Je rédige le compte rendu…';
 
 
-/** Réponse très longue (KOB-163) : la bulle propose de tout lire dans l'app. */
-export const LONG_ANSWER = 1_200;
 
 /** Carte visible pour un état donné, ou rien. */
 export function cardKind(state: MascotState, data: MascotData): Kind | null {
@@ -59,7 +57,7 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, t
 export class Bubbles {
   readonly root: HTMLElement;
   onAction: ((decision: ActionDecision) => void) | null = null;
-  /** « Tout lire dans l'app » sur une réponse très longue. */
+  /** Lire la réponse en grand (vue agrandie, KOB-169) : clic sur la bulle ou sur « Lire en grand ». */
   onReadAll: (() => void) | null = null;
   private scroll: Defilement | null = null;
   private kind: Kind | null = null;
@@ -153,10 +151,15 @@ export class Bubbles {
         const zone = el('div', 'defile');
         const text = el('div', 'text md');
         zone.append(text, el('span', 'caret'));
-        const all = el('button', 'lire-tout', 'Tout lire dans l’app ›');
+        // Montré quand la bulle ne peut pas tout montrer (reponse.css).
+        const all = el('button', 'lire-tout', 'Lire en grand ›');
         all.type = 'button';
-        all.hidden = true;
-        all.addEventListener('click', () => this.onReadAll?.());
+        all.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.onReadAll?.();
+        });
+        // Toute la bulle s'ouvre en grand d'un clic (sauf après un glisser pour faire défiler).
+        card.addEventListener('click', () => this.onReadAll?.());
         card.append(zone, el('div', 'tags'), all);
         this.scroll = new Defilement(zone, text);
         this.scroll.setInstant(this.reduced);
@@ -193,13 +196,6 @@ export class Bubbles {
         break;
       case 'answer': {
         this.typed(card, kind, data.answer ?? '');
-        const long = (data.answer ?? '').length >= LONG_ANSWER;
-        const all = card.querySelector<HTMLButtonElement>('.lire-tout')!;
-        if (all.hidden === long) {
-          all.hidden = !long;
-          // Elle porte un bouton : la bulle cesse de flotter (un bouton qui bouge se clique mal).
-          card.classList.toggle('a-bouton', long);
-        }
         const tags = card.querySelector<HTMLElement>('.tags')!;
         const wanted = (data.answerTags ?? []).join('\u0000');
         if (tags.dataset.key !== wanted) {

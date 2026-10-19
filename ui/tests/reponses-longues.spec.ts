@@ -1,11 +1,17 @@
 // Réponses longues (KOB-163) : la bulle grandit jusqu'à un maximum sans tasser
 // le texte, défile en douceur en suivant le flux, met en forme listes, code et
-// chemins longs, propose « Tout lire dans l'app » ; la fenêtre s'agrandit vers
-// le côté libre sans que Kobi bouge. Réponses de 50, 300 et 1 500 mots.
+// chemins longs, propose « Lire en grand » (vue agrandie : vue.spec.ts).
+// Réponses de 50, 300 et 1 500 mots.
 import { expect, test, type Page } from '@playwright/test';
-import { calls, emit, expectNoErrors, mockTauri, openUi } from './helpers';
+import { expectNoErrors, openUi } from './helpers';
 
 test.use({ video: { mode: 'on', size: { width: 820, height: 560 } } });
+
+// Ces tests suivent la bulle elle-même : mode « bulle détaillée », sans
+// ouverture automatique de la vue agrandie (KOB-169, voir vue.spec.ts).
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('kobi.affichage', JSON.stringify({ mode: 'detaille', auto: 'jamais' })));
+});
 
 const MOTS = 'le verrou protège la donnée partagée pendant que chaque fil attend son tour avant de lire ou d’écrire'.split(' ');
 function mots(n: number): string {
@@ -77,7 +83,7 @@ test('50 mots : la bulle grandit avec la réponse, sans défilement ni dégradé
   const z = await zone(page).evaluate((n) => ({ s: n.scrollHeight, c: n.clientHeight }));
   expect(z.s).toBeLessThanOrEqual(z.c + 2);
   await expect(zone(page)).not.toHaveClass(/peut-descendre|peut-monter/);
-  await expect(card(page).getByRole('button', { name: /Tout lire/ })).toBeHidden();
+  await expect(card(page).getByRole('button', { name: /Lire en grand/ })).toBeHidden();
   await page.screenshot({ path: test.info().outputPath('50-mots.png') });
   await expectNoErrors(errors);
 });
@@ -129,13 +135,12 @@ test('300 mots : hauteur maximale, puis défilement doux qui suit le flux ; on r
   await expectNoErrors(errors);
 });
 
-test('1 500 mots : début lisible, défilement, et « Tout lire dans l’app » qui ouvre l’app', async ({ page }) => {
-  await mockTauri(page);
+test('1 500 mots : début lisible, défilement, et « Lire en grand » qui ouvre la vue agrandie', async ({ page }) => {
   const errors = await openUi(page, '');
   await answer(page, mots(1500));
   await typed(page);
   await lisible(page, 18);
-  const all = card(page).getByRole('button', { name: 'Tout lire dans l’app ›' });
+  const all = card(page).getByRole('button', { name: 'Lire en grand ›' });
   await expect(all).toBeVisible();
   // Un bouton ne bouge pas : la bulle ne flotte plus.
   const b1 = await all.boundingBox();
@@ -143,7 +148,7 @@ test('1 500 mots : début lisible, défilement, et « Tout lire dans l’app » 
   expect(await all.boundingBox()).toEqual(b1);
   await page.screenshot({ path: test.info().outputPath('1500-mots.png') });
   await all.click();
-  expect(await calls(page)).toContainEqual(['ouvrir_app', { section: 'notes' }]);
+  await expect(page.getByRole('dialog', { name: 'Conversation avec Kobi' })).toBeVisible();
   await expectNoErrors(errors);
 });
 
@@ -168,72 +173,6 @@ test('mise en forme : paragraphes, liste, code en bloc qui défile à part, chem
   await zone(page).evaluate((n) => (n.scrollTop = n.scrollHeight));
   await page.waitForTimeout(300);
   await page.screenshot({ path: test.info().outputPath('mise-en-forme.png') });
-  await expectNoErrors(errors);
-});
-
-test('fenêtre agrandie vers le côté libre : Kobi ne bouge pas, la réponse se lit à sa vraie taille, puis tout reprend sa place', async ({ page }) => {
-  await page.setViewportSize({ width: 410, height: 280 });
-  // La coque simulée agrandit la fenêtre (ici, la vue) quand l'interface le demande.
-  await page.exposeFunction('__resize', (w: number, h: number) => page.setViewportSize({ width: w, height: h }));
-  await mockTauri(page);
-  await page.addInitScript(() => {
-    const w = window as unknown as { __TAURI__: { core: { invoke: (c: string, a?: Record<string, unknown>) => Promise<unknown> } }; __resize(w: number, h: number): Promise<void> };
-    const base = w.__TAURI__.core.invoke;
-    w.__TAURI__.core.invoke = async (cmd, args) => {
-      const out = await base(cmd, args);
-      if (cmd !== 'agrandir_kobi') return out;
-      if (args?.appliquer) await w.__resize(args.grand ? 830 : 410, args.grand ? 620 : 280);
-      return args?.grand ? { gauche: true, haut: true } : null;
-    };
-  });
-  const errors = await openUi(page, '');
-  const pill = () => page.locator('.kobi .pill').boundingBox();
-  const fromCorner = async () => {
-    // Boucles de Kobi (respiration…) ramenées à leur première image : la mesure
-    // ne dépend plus de la phase où elle tombe (KOB-172).
-    await page.evaluate(() => {
-      for (const a of document.querySelector('.kobi')!.getAnimations({ subtree: true })) {
-        if (a.effect?.getTiming().iterations === Infinity) a.currentTime = 0;
-      }
-    });
-    const b = (await pill())!;
-    const vp = page.viewportSize()!;
-    return { right: Math.round(vp.width - (b.x + b.width)), bottom: Math.round(vp.height - (b.y + b.height)), w: Math.round(b.width) };
-  };
-  await page.waitForTimeout(400);
-  const before = await fromCorner();
-  await page.screenshot({ path: test.info().outputPath('agrandie-avant.png') });
-  // Une tâche longue vient d'être livrée : sa notification ne reste pas par-dessus la réponse (sobriété).
-  await emit(page, 'conversation', [{ tour: 1, question: 'explique le mutex', reponse: '', statut: 'tache', clavier: true }]);
-  await emit(page, 'conversation', [{ tour: 1, question: 'explique le mutex', reponse: RICHE, statut: 'fini', clavier: true }]);
-  await expect(page.locator('.notif')).toBeVisible();
-  await emit(page, 'state', { etat: 'assistant', activite: 'repond', mascotte: 'answer', transcrit: false });
-  await emit(page, 'answer', RICHE + '\n\n' + mots(300));
-  await expect(page.locator('.stage')).toHaveClass(/agrandie/, { timeout: 10_000 });
-  await expect.poll(() => page.viewportSize()!.width, { timeout: 10_000 }).toBe(830);
-  await typed(page);
-  await page.waitForTimeout(800);
-  // Kobi : même taille, même place par rapport au coin bas droit (la fenêtre a grandi vers la gauche et le haut).
-  const after = await fromCorner();
-  expect(Math.abs(after.right - before.right)).toBeLessThanOrEqual(2);
-  expect(Math.abs(after.bottom - before.bottom)).toBeLessThanOrEqual(2);
-  expect(Math.abs(after.w - before.w)).toBeLessThanOrEqual(2);
-  // La réponse : texte à 16 px réels (et non 9 px tassés), dans la fenêtre, sans chevaucher Kobi.
-  await lisible(page, 16);
-  const c = (await card(page).boundingBox())!;
-  const k = (await pill())!;
-  expect(c.x + c.width).toBeLessThanOrEqual(k.x + 1);
-  await expect(page.locator('.notifs')).toBeHidden();
-  await page.screenshot({ path: test.info().outputPath('agrandie-reponse.png') });
-  expect(await calls(page)).toContainEqual(['agrandir_kobi', { grand: true, appliquer: true }]);
-  // Fin de la réponse : la fenêtre reprend sa taille, Kobi n'a pas bougé.
-  await emit(page, 'state', { etat: 'assistant', activite: null, mascotte: 'idle', transcrit: false });
-  await expect.poll(() => page.viewportSize()!.width, { timeout: 10_000 }).toBe(410);
-  await expect(page.locator('.stage')).not.toHaveClass(/agrandie/);
-  await page.waitForTimeout(300);
-  const back = await fromCorner();
-  for (const k of ['right', 'bottom', 'w'] as const) expect(Math.abs(back[k] - before[k]), k).toBeLessThanOrEqual(2);
-  await page.screenshot({ path: test.info().outputPath('agrandie-apres.png') });
   await expectNoErrors(errors);
 });
 

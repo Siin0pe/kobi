@@ -320,6 +320,8 @@ pub struct Config {
     pub hotkey_record: String,
     /// Raccourci qui ouvre la bulle pour écrire à Kobi (KOB-147).
     pub hotkey_write: String,
+    /// Raccourci qui ouvre ou range la vue agrandie de la conversation (KOB-169).
+    pub hotkey_view: String,
     /// Dossiers de code que Kobi peut lire (KOB-138), passés à Claude Code en
     /// `--add-dir`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -348,6 +350,7 @@ impl Default for Config {
             hotkey: "Ctrl+Shift+Space".into(),
             hotkey_record: "Ctrl+Shift+R".into(),
             hotkey_write: "Ctrl+Alt+K".into(),
+            hotkey_view: "Ctrl+Alt+G".into(),
             codebases: Vec::new(),
             audio: AudioConfig::default(),
             stt: SttConfig::default(),
@@ -516,6 +519,7 @@ mod tests {
         assert_eq!(c.hotkey, "Ctrl+Shift+Space");
         assert_eq!(c.hotkey_record, "Ctrl+Shift+R");
         assert_eq!(c.hotkey_write, "Ctrl+Alt+K");
+        assert_eq!(c.hotkey_view, "Ctrl+Alt+G");
         assert_eq!(c.audio.sources, AudioSources::Both);
         assert_eq!(c.stt.engine, "auto");
         assert_eq!(c.notes.mode, NotesMode::Blocks);

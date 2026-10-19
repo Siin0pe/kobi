@@ -33,6 +33,8 @@ pub enum Intention {
     OuEnEst,
     /// « Annule » : arrête la dernière tâche longue.
     Annuler,
+    /// « Montre en grand » : la vue agrandie de la conversation (KOB-169).
+    MontrerEnGrand,
 }
 
 /// Question en minuscules, sans accents ni ponctuation, mots séparés par une
@@ -120,6 +122,27 @@ const CARNET: &[&str] = &[
     " affiche le carnet ",
     " open the notebook ",
 ];
+
+/// Vue agrandie de la conversation (KOB-169) : un verbe pour montrer, et
+/// « en grand » (ou « agrandis »).
+const MONTRER: &[&str] = &[
+    " montre ",
+    " montre moi ",
+    " affiche ",
+    " affiche moi ",
+    " ouvre ",
+    " mets ",
+    " show ",
+];
+const GRAND: &[&str] = &[
+    " en grand ",
+    " en plus grand ",
+    " plus gros ",
+    " en gros ",
+    " bigger ",
+    " en grand ecran ",
+];
+const AGRANDIS: &[&str] = &[" agrandis ", " agrandit ", " agrandis la ", " zoome "];
 
 /// Arrêt de la réponse : seulement en ordre très bref.
 const STOP: &[&str] = &[
@@ -313,6 +336,8 @@ pub fn intention(question: &str) -> Option<Intention> {
         Some(Intention::Interrompre)
     } else if mots <= 8 && contient(CARNET) {
         Some(Intention::OuvrirCarnet)
+    } else if mots <= 7 && ((contient(MONTRER) && contient(GRAND)) || contient(AGRANDIS)) {
+        Some(Intention::MontrerEnGrand)
     } else if contient(DEMARRER) || (mots <= 2 && contient(ENREGISTRE)) {
         Some(Intention::DemarrerReunion)
     // « Pause » et « reprends » seuls sont des mots courants : seulement
@@ -376,6 +401,11 @@ mod tests {
             ("Covid annule", Annuler),
             ("où on est la tâche", OuEnEst),
             ("la recherche avance ?", OuEnEst),
+            ("montre en grand", MontrerEnGrand),
+            ("Montre-moi ça en grand.", MontrerEnGrand),
+            ("affiche la réponse en plus grand", MontrerEnGrand),
+            ("agrandis", MontrerEnGrand),
+            ("show it bigger", MontrerEnGrand),
         ] {
             assert_eq!(intention(texte), Some(attendu), "{texte}");
         }
@@ -442,6 +472,8 @@ mod tests {
             "c'est fini pour le point démo",
             "bon, on a fini",
             "la réunion est finie",
+            "montre-moi comment on voit en grand les étoiles avec un télescope",
+            "quel est le plus grand pays du monde",
             "",
         ] {
             assert_eq!(intention(texte), None, "{texte}");
