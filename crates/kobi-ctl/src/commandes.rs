@@ -131,6 +131,23 @@ pub const SECTIONS: &[&str] = &[
     "apropos",
 ];
 
+/// Panneaux de la section Réglages, dans l'ordre du menu de l'app
+/// (`PANNEAUX` de ui/src/reglages/panneaux.ts, vérifié par un test).
+pub const PANNEAUX: &[&str] = &[
+    "stockage",
+    "dossiers-code",
+    "mcp",
+    "micro",
+    "son-ordi",
+    "modele",
+    "claude",
+    "demarrage",
+    "animations",
+    "affichage",
+    "raccourcis",
+    "premier-lancement",
+];
+
 const FORMAT_JSON_MD: &[&str] = &["json", "md"];
 const ID_REUNION: Param = positionnel(p(
     "id",
@@ -155,7 +172,10 @@ pub const COMMANDES: &[Commande] = &[
                 p("section", Texte, "Section à ouvrir."),
                 SECTIONS,
             ))),
-            p("panneau", Texte, "Panneau des réglages (par exemple « stockage »)."),
+            choix(
+                p("panneau", Texte, "Panneau des réglages (section « reglages »)."),
+                PANNEAUX,
+            ),
             p("reunion", Texte, "Réunion à ouvrir dans les notes (son nom, voir « meetings list »)."),
         ],
     ),
@@ -537,6 +557,57 @@ mod tests {
         assert!(liste.verifier(&json!({"limit": 0})).is_err());
         assert!(liste.verifier(&json!({"limit": "3"})).is_err());
         assert!(liste.verifier(&json!({"limit": 3})).is_ok());
+        // Un panneau inconnu est refusé comme une section inconnue (KOB-184).
+        let ouvrir = trouver("app.open").unwrap();
+        assert!(ouvrir
+            .verifier(&json!({"section": "reglages", "panneau": "son-ordi"}))
+            .is_ok());
+        let e = ouvrir
+            .verifier(&json!({"section": "reglages", "panneau": "inexistant"}))
+            .unwrap_err();
+        assert_eq!(e.code, Code::InvalidParams);
+        assert!(
+            e.message.contains("stockage, dossiers-code"),
+            "{}",
+            e.message
+        );
+    }
+
+    /// Les panneaux du contrat sont ceux du menu Réglages de l'app, dans le
+    /// même ordre : un panneau ajouté à l'UI doit l'être ici (KOB-184).
+    #[test]
+    fn panneaux_de_l_ui() {
+        let ui = concat!(env!("CARGO_MANIFEST_DIR"), "/../../ui/src/reglages");
+        let lire = |f: &str| std::fs::read_to_string(format!("{ui}/{f}")).unwrap();
+        let panneaux = lire("panneaux.ts");
+        let liste = panneaux
+            .split_once("const liste: Panneau[] = [")
+            .and_then(|(_, r)| r.split_once(']'))
+            .expect("liste des panneaux dans panneaux.ts")
+            .0;
+        // Identifiant de chaque constante `export const NOM: Panneau = { id: '…'`.
+        let mut ids = std::collections::HashMap::new();
+        for f in std::fs::read_dir(ui).unwrap() {
+            let texte = std::fs::read_to_string(f.unwrap().path()).unwrap();
+            for bloc in texte.split("export const ").skip(1) {
+                let Some((nom, reste)) = bloc.split_once(": Panneau = {") else {
+                    continue;
+                };
+                let id = reste
+                    .split_once("id: '")
+                    .and_then(|(_, r)| r.split_once('\''))
+                    .expect("id du panneau")
+                    .0;
+                ids.insert(nom.trim().to_owned(), id.to_owned());
+            }
+        }
+        let ui: Vec<&str> = liste
+            .split(',')
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+            .map(|n| ids.get(n).unwrap_or_else(|| panic!("panneau {n}")).as_str())
+            .collect();
+        assert_eq!(ui, PANNEAUX);
     }
 
     #[test]
@@ -544,6 +615,7 @@ mod tests {
         let s = trouver("app.open").unwrap().schema();
         assert_eq!(s["required"], json!(["section"]));
         assert_eq!(s["properties"]["section"]["enum"][0], "notes");
+        assert_eq!(s["properties"]["panneau"]["enum"][0], "stockage");
         assert_eq!(s["additionalProperties"], false);
         assert_eq!(trouver("status").unwrap().schema()["properties"], json!({}));
     }

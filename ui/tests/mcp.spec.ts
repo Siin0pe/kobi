@@ -41,6 +41,7 @@ function fakeTauri(): void {
               { nom: 'notes', portee: 'projet · C:/code/site', transport: 'stdio', resume: 'node', deja: false, secrets: [] },
             ];
           case 'mcp_importer':
+            if (w.__refus) throw String(w.__refus);
             for (const nom of args.noms as string[]) serveurs.push(serveur(nom, { secrets: nom === 'treg' ? [{ nom: 'Authorization', present: true }] : [] }));
             return serveurs;
           case 'mcp_regler': {
@@ -129,6 +130,28 @@ test('import depuis Claude Code : déjà connecté grisé, secrets signalés', a
   await expect(carte(page, 'treg')).toBeVisible();
   await expect(carte(page, 'treg').locator('.mcp-secrets')).toContainText('Authorization');
   await expect(carte(page, 'notes')).toHaveCount(0);
+  await expectNoErrors(errors);
+});
+
+test('import refusé par le gestionnaire d’identifiants : message lisible sous le bouton, rien d’importé', async ({ page }) => {
+  const errors = await ouvrir(page);
+  const refus =
+    "Rien n'est importé : le secret Authorization de « treg » n'a pas pu être rangé. Le gestionnaire d'identifiants du système refuse l'accès : lance Kobi depuis ta session de bureau, puis réessaie.";
+  await page.evaluate((r) => ((window as unknown as Record<string, unknown>).__refus = r), refus);
+  await page.locator('.mcp-candidat input[data-nom="notes"]').uncheck();
+  await page.getByRole('button', { name: 'Importer 1 serveur' }).click();
+  const echec = page.locator('.mcp-import-resultat .etat[data-statut="erreur"]');
+  await expect(echec).toHaveText(refus);
+  await expect(page.getByRole('button', { name: 'Importer 1 serveur' })).toBeEnabled();
+  await expect(carte(page, 'treg')).toHaveCount(0);
+  // Le message reste le temps de le lire (pas un toast qui s'efface).
+  await page.waitForTimeout(6500);
+  await expect(echec).toBeVisible();
+  // Nouvel essai réussi : le message part.
+  await page.evaluate(() => ((window as unknown as Record<string, unknown>).__refus = undefined));
+  await page.getByRole('button', { name: 'Importer 1 serveur' }).click();
+  await expect(carte(page, 'treg')).toBeVisible();
+  await expect(page.locator('.mcp-import-resultat .etat')).toHaveCount(0);
   await expectNoErrors(errors);
 });
 
