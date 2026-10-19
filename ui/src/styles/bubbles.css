@@ -465,3 +465,20 @@
 .card-notes[data-typing='1'] .crayon {
   animation-duration: 0.36s;
 }
+
+/* Pointe vers Kobi (KOB-216) : comme une bulle de BD, elle part du flanc
+   droit de la bulle, à hauteur de sa bouche (--pointe-y, placement-bulles.ts).
+   La bulle elle-même reste à l'écart de sa tête. */
+.bubbles .card::before,
+.kval::before {
+  content: '';
+  position: absolute;
+  right: -18px;
+  top: var(--pointe-y, 50%);
+  width: 20px;
+  height: 24px;
+  margin-top: -12px;
+  background: var(--ink);
+  clip-path: polygon(0 0, 100% 50%, 0 100%);
+  pointer-events: none;
+}

@@ -12,6 +12,11 @@ import './styles/effets.css';
 
 /** Centre de la pilule de Kobi dans la scène (820 × 560). */
 export const KOBI = { x: 578, y: 258 } as const;
+/**
+ * Bord de sa bouche, côté bulles (KOB-216) : les cartes en sortent et y
+ * reviennent, comme une parole, sans passer sur son visage.
+ */
+export const BOUCHE = { x: 440, y: 300 } as const;
 
 /** « Réduire les animations » est actif pour cet élément. */
 export function reduced(node: Element): boolean {
@@ -29,10 +34,10 @@ function center(node: HTMLElement): { x: number; y: number } {
   return { x, y };
 }
 
-/** Écart de l'élément à Kobi, en px de scène. */
+/** Écart de l'élément à la bouche de Kobi, en px de scène. */
 function fromKobi(node: HTMLElement): { dx: number; dy: number } {
   const c = center(node);
-  return { dx: KOBI.x - c.x, dy: KOBI.y - c.y };
+  return { dx: BOUCHE.x - c.x, dy: BOUCHE.y - c.y };
 }
 
 /**
