@@ -1732,6 +1732,7 @@ mod tests {
             assert!(matches!(v, Verdict::Refus), "{ligne} : {v:?}");
         }
 
+        #[test]
         fn commandes_de_lecture_acceptees() {
             for ligne in [
                 "ls",
