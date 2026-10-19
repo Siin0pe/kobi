@@ -501,7 +501,10 @@ mod tests {
         let prompt = valeur(&args, "--append-system-prompt")[0];
         assert!(prompt.contains("## Piloter la réunion"), "{prompt}");
         // Hors réunion, ni réunion ni vouvoiement (KOB-181).
-        assert!(prompt.contains("## Au quotidien comme en réunion"), "{prompt}");
+        assert!(
+            prompt.contains("## Au quotidien comme en réunion"),
+            "{prompt}"
+        );
         assert!(prompt.contains("Tutoie toujours"), "{prompt}");
         // Sans MCP de Kobi, rien à piloter.
         let args = arguments("haiku", "Tu es Kobi.", &[], None, None, true);
