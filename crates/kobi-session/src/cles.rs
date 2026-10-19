@@ -385,7 +385,11 @@ mod tests {
             assert_eq!(m.application, AChaud);
         }
         assert_eq!(
-            modifier(&c, "animations.fps", json!("ecran")).unwrap().config.animations.fps,
+            modifier(&c, "animations.fps", json!("ecran"))
+                .unwrap()
+                .config
+                .animations
+                .fps,
             crate::config::Fps::Ecran
         );
         for v in [json!(45), json!(0), json!(-5), json!("vite")] {
