@@ -1,0 +1,17 @@
+/* Fenêtre du menu du clic droit (KOB-202) : transparente, sans fond, juste
+   la carte du menu (menu.css) posée à 3 px du bord, place gardée pour son
+   liseré et son ombre dure. */
+.kmenu-page {
+  margin: 0;
+  background: transparent;
+  font-family: var(--font);
+  -webkit-user-select: none;
+  user-select: none;
+}
+.kmenu-page .kmenu {
+  position: fixed;
+  left: 3px;
+  top: 3px;
+  /* La fenêtre prend la taille du menu : rien ne le contraint. */
+  max-width: none;
+}

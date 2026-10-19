@@ -28,10 +28,14 @@
     {
       "fichiers": [
         "src/menu.ts",
-        "src/styles/menu.css"
+        "src/styles/menu.css",
+        "src/menu-fenetre.ts",
+        "src/menu-place.ts",
+        "src/styles/menu-fenetre.css"
       ],
       "tests": [
-        "menu"
+        "menu",
+        "menu-souris"
       ]
     },
     {
