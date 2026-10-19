@@ -350,7 +350,12 @@ pub fn installer<R: Runtime>(app: &AppHandle<R>, fabrique: Fabrique, intervalle_
     });
     let cerveau = {
         let _guard = rt.enter();
-        Cerveau::lancer(fabrique, sortie)
+        let app = app.clone();
+        Cerveau::lancer_avec(
+            fabrique,
+            sortie,
+            Arc::new(move || crate::validation::attend(&app)),
+        )
     };
     let ecrivain = Ecrivain::lancer(move |compte| {
         let _ = tx_disque.lock().map(|tx| tx.send(Message::Disque(compte)));

@@ -51,3 +51,19 @@ test('réduire les animations : la cloche ne bouge pas', async ({ page }) => {
   expect(await icon.evaluate((e) => getComputedStyle(e).animationName)).toBe('none');
   await expectNoErrors(errors);
 });
+
+test('plusieurs rappels : un seul visible à la fois, les suivants arrivent dans l’ordre sans se perdre', async ({ page }) => {
+  await mockTauri(page);
+  const errors = await openUi(page, '');
+  for (const [id, texte] of [['a', 'boire de l’eau'], ['b', 'sortir le linge'], ['c', 'appeler Paul']]) {
+    await emit(page, 'rappel', { id, texte, echeance_ms: null });
+  }
+  const visible = page.locator('.notif-reminder:not(.en-attente):not(.leaving)');
+  for (const texte of ['boire de l’eau', 'sortir le linge', 'appeler Paul']) {
+    await expect(visible).toHaveCount(1);
+    await expect(visible.locator('.notif-text')).toHaveText(texte);
+    await visible.click();
+  }
+  await expect(page.locator('.notif-reminder:not(.leaving)')).toHaveCount(0);
+  await expectNoErrors(errors);
+});
