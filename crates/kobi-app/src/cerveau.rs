@@ -5,7 +5,8 @@
 //!
 //! * la **conversation** répond aux questions, une à la fois, dans l'ordre.
 //!   Un tour qui n'a rien écrit au bout de [`ANNONCE`], ou qui appelle un
-//!   outil, devient une tâche longue : Kobi l'annonce, le tour continue en
+//!   outil, devient une tâche longue (annoncée seulement si elle tarde,
+//!   [`PATIENCE`]) : le tour continue en
 //!   arrière-plan sur sa session, et la conversation passe sur une session
 //!   de réserve déjà chaude. Une carte de confirmation détache aussi le
 //!   tour : la conversation continue pendant que la carte attend son clic.
@@ -36,11 +37,10 @@ use crate::pannes::{classer, Panne};
 pub const ANNONCE: Duration = Duration::from_secs(4);
 /// Délai maximal d'un bloc de notes ou du compte rendu.
 const NOTES_MAX: Duration = Duration::from_secs(180);
-/// Message affiché à l'annonce d'une tâche longue.
-pub const MESSAGE_ANNONCE: &str = "Je m'en occupe, je te donne le résultat dès qu'il est prêt.";
-/// Tour détaché toujours sans texte après ce délai : « je cherche encore »
-/// (KOB-68).
-pub const PATIENCE: Duration = Duration::from_secs(8);
+/// Tour détaché toujours sans texte après ce délai : Kobi dit, une seule
+/// fois, qu'il s'en occupe (KOB-68). Avant, Kobi au travail se voit et ne dit
+/// rien : la plupart des tâches finissent avant (KOB-215).
+pub const PATIENCE: Duration = Duration::from_secs(15);
 /// Un tour sans aucune activité (texte, outil) pendant ce délai est
 /// abandonné et sa session fermée (KOB-68).
 pub const ABANDON: Duration = Duration::from_secs(45);
@@ -712,7 +712,7 @@ async fn suivre(
 }
 
 /// Termine un tour détaché : ses cartes s'affichent, son résultat est livré.
-/// Toujours sans texte après `PATIENCE` : « je cherche encore » ; sans
+/// Toujours sans texte après `PATIENCE` : Kobi dit qu'il s'en occupe ; sans
 /// aucune activité pendant `ABANDON` : abandon. S'il plante, la question est
 /// reposée une fois sur une session neuve ; hors ligne, elle part en attente.
 async fn finir(
@@ -1091,9 +1091,9 @@ mod tests {
         );
     }
 
-    /// Lenteur : annonce, puis « je cherche encore » à 8 s, puis le résultat.
+    /// Lenteur : détaché, puis la seule annonce à `PATIENCE`, puis le résultat.
     #[tokio::test(start_paused = true)]
-    async fn lenteur_je_cherche_encore_a_8_s() {
+    async fn lenteur_annoncee_une_fois_a_15_s() {
         let (s, recus) = sortie();
         let debut = tokio::time::Instant::now();
         let quand = Arc::new(Mutex::new(Vec::new()));
