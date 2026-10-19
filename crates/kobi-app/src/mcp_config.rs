@@ -22,7 +22,12 @@ pub const PROMPT_MCP_KOBI: &str = "\
 Les outils `mcp__kobi__*` sont les tiens : ton état, tes réunions enregistrées (notes, \
 comptes rendus, transcriptions), tes conversations, tes rappels et tes réglages. \
 Sers-t'en pour répondre à « qu'est-ce qu'on a décidé hier ? », « quels sont mes rappels ? », \
-« que disent mes notes ? ». Pour l'instant, ils ne font que lire. Quand tu prends des notes ou écris un compte rendu, ne les appelle pas : tout ce qu'il te faut est dans le message, et l'état de la réunion y change encore.";
+« que disent mes notes ? ». Les outils marqués [lecture] et [affichage] passent tout de suite, \
+comme démarrer, mettre en pause ou arrêter la réunion. Ceux marqués [écriture] (changer un réglage, \
+ajouter un rappel…) demandent d'abord un « oui » à l'utilisateur : Kobi lui montre une carte et attend \
+jusqu'à une minute. Appelle simplement l'outil, sans demander l'accord en texte ; s'il est refusé, \
+dis-le en une phrase et ne réessaie pas. Quand tu prends des notes ou écris un compte rendu, ne les \
+appelle pas : tout ce qu'il te faut est dans le message, et l'état de la réunion y change encore.";
 
 /// Un serveur MCP d'une session.
 #[derive(Debug, Clone, PartialEq)]
@@ -57,7 +62,7 @@ pub fn serveur_kobi(exe: &Path) -> ServeurMcp {
             "command": exe.display().to_string(),
             "args": ["mcp", "--agent"],
         }),
-        outils_autorises: kobi_ctl::mcp::outils_de_lecture(SERVEUR_KOBI),
+        outils_autorises: kobi_ctl::mcp::outils_de_l_agent(SERVEUR_KOBI),
     }
 }
 
@@ -105,7 +110,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn kobi_toujours_present_et_en_lecture() {
+    fn kobi_toujours_present() {
         let dir = tempfile::tempdir().unwrap();
         let fichier = dir.path().join("mcp").join("session-conversation.json");
         let linear = ServeurMcp {
@@ -141,13 +146,14 @@ mod tests {
         assert!(session
             .outils_autorises
             .contains(&"mcp__linear__list_issues".into()));
-        // Ni écriture de Kobi, ni outil de l'imposteur.
+        // Les outils d'écriture de Kobi passent le harness : c'est Kobi qui
+        // demande la validation de l'utilisateur (KOB-156).
         for o in [
             "mcp__kobi__config_set",
             "mcp__kobi__meeting_start",
             "mcp__kobi__app_quit",
         ] {
-            assert!(!session.outils_autorises.contains(&o.to_string()), "{o}");
+            assert!(session.outils_autorises.contains(&o.to_string()), "{o}");
         }
     }
 }

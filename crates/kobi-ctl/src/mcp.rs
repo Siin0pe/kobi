@@ -2,9 +2,9 @@
 //! ligne). Chaque outil est une commande de la table ; l'appel passe à l'app
 //! en cours par le point d'accès local.
 //!
-//! `kobi mcp --agent` sert l'agent de Kobi : en attendant la validation
-//! (KOB-156), il n'expose que les commandes de lecture, et l'app refuse les
-//! autres venant de lui.
+//! `kobi mcp --agent` sert l'agent de Kobi : toutes les commandes, mais
+//! l'app demande à l'utilisateur de valider celles qui écrivent (KOB-156),
+//! sauf la réunion (décision du propriétaire).
 
 use std::io::{self, BufRead, Write};
 
@@ -28,7 +28,7 @@ Ces outils ne marchent que si l'app Kobi est lancée.";
 pub enum Mode {
     /// Un agent branché par l'utilisateur (`claude mcp add kobi -- kobi mcp`).
     Externe,
-    /// L'agent de Kobi : lecture seule en attendant KOB-156.
+    /// L'agent de Kobi : ce qui écrit est validé par l'utilisateur (KOB-156).
     Agent,
 }
 
@@ -40,17 +40,27 @@ impl Mode {
         }
     }
 
-    /// Commandes exposées.
+    /// Commandes exposées : toutes ; pour l'agent, l'app valide celles qui
+    /// écrivent.
     pub fn commandes(self) -> impl Iterator<Item = &'static Commande> {
-        COMMANDES
-            .iter()
-            .filter(move |c| self == Mode::Externe || c.effet == Effet::Lecture)
+        COMMANDES.iter()
     }
 }
 
 /// Noms complets des outils de lecture, tels que Claude Code les voit
-/// (`mcp__<serveur>__<outil>`), pour `--allowedTools`.
+/// (`mcp__<serveur>__<outil>`).
 pub fn outils_de_lecture(serveur: &str) -> Vec<String> {
+    COMMANDES
+        .iter()
+        .filter(|c| c.effet == Effet::Lecture)
+        .map(|c| format!("mcp__{serveur}__{}", c.outil()))
+        .collect()
+}
+
+/// Tous les outils de l'agent, pour `--allowedTools` : le harness les laisse
+/// passer, et c'est Kobi qui demande la validation de ceux qui écrivent
+/// (rien ne dépend du harness).
+pub fn outils_de_l_agent(serveur: &str) -> Vec<String> {
     Mode::Agent
         .commandes()
         .map(|c| format!("mcp__{serveur}__{}", c.outil()))
@@ -264,14 +274,13 @@ mod tests {
             .unwrap()
             .starts_with("[lecture]"));
 
+        // L'agent voit tout ; l'app valide ce qui écrit (KOB-156).
         let agent = liste(Mode::Agent);
-        assert!(!agent.is_empty());
-        assert!(agent
-            .iter()
-            .all(|t| t["annotations"]["readOnlyHint"] == true));
-        assert!(!agent.iter().any(|t| t["name"] == "config_set"));
+        assert_eq!(agent.len(), tous.len());
+        assert!(agent.iter().any(|t| t["name"] == "config_set"));
         assert!(outils_de_lecture("kobi").contains(&"mcp__kobi__notes_last".to_string()));
         assert!(!outils_de_lecture("kobi").contains(&"mcp__kobi__app_quit".to_string()));
+        assert!(outils_de_l_agent("kobi").contains(&"mcp__kobi__config_set".to_string()));
     }
 
     #[test]
@@ -311,9 +320,9 @@ mod tests {
         .unwrap();
         assert_eq!(r["result"]["isError"], true);
 
-        // L'agent n'a pas les outils d'écriture.
+        // L'agent a les outils d'écriture ; l'app décide (validation).
         let r = traiter(&appel("meeting_start", json!({})), Mode::Agent, &faux).unwrap();
-        assert_eq!(r["error"]["code"], -32602);
+        assert!(r.get("error").is_none(), "{r}");
         let r = traiter(&appel("rm_rf", json!({})), Mode::Externe, &faux).unwrap();
         assert_eq!(r["error"]["code"], -32602);
     }

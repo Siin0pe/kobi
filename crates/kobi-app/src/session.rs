@@ -183,6 +183,10 @@ fn interrompre<R: Runtime>(app: AppHandle<R>) {
 /// Clic sur une carte de confirmation (`id` de la carte, `accepte`).
 #[tauri::command]
 fn decider_carte<R: Runtime>(app: AppHandle<R>, id: String, accepte: bool) -> Result<(), String> {
+    // Carte de validation d'une action qui écrit (KOB-156).
+    if crate::validation::decider(&app, &id, accepte) {
+        return Ok(());
+    }
     let carte = id.parse().map_err(|_| format!("carte inconnue : {id}"))?;
     // Carte de validation (KOB-62) : elle quitte la liste de l'app Kobi.
     crate::validation::retirer(&app, &id, accepte);

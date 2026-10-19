@@ -190,6 +190,61 @@ const QUESTIONS: &[&str] = &[
     " why ",
 ];
 
+/// Réponse à une carte de validation, tant qu'elle attend (KOB-156) :
+/// `Some(true)` pour « oui », `Some(false)` pour « non ». La phrase entière
+/// doit être la réponse : « oui mais change le titre » n'en est pas une.
+pub fn reponse_validation(texte: &str) -> Option<bool> {
+    const OUI: &[&str] = &[
+        "oui",
+        "oui vas y",
+        "vas y",
+        "valide",
+        "ok",
+        "okay",
+        "d accord",
+        "oui valide",
+        "c est bon",
+        "oui c est bon",
+        "fais le",
+        "oui fais le",
+        "go",
+        "yes",
+        "oui merci",
+    ];
+    const NON: &[&str] = &[
+        "non",
+        "non laisse tomber",
+        "non annule",
+        "non merci",
+        "annule",
+        "attends",
+        "refuse",
+        "pas maintenant",
+        "laisse tomber",
+        "non attends",
+        "stop",
+        "no",
+    ];
+    let mut n = normaliser(texte);
+    for p in [" kobi ", " s il te plait "] {
+        n = n.replace(p, " ");
+    }
+    let n = n.trim();
+    // La transcription ajoute parfois un mot parasite à la fin (« oui vas y
+    // grec ») : on le tolère, sauf s'il nuance la réponse.
+    let court = match n.rsplit_once(' ') {
+        Some((debut, fin)) if !["mais", "pas", "sauf", "si"].contains(&fin) => debut,
+        _ => n,
+    };
+    if OUI.contains(&n) || OUI.contains(&court) {
+        Some(true)
+    } else if NON.contains(&n) || NON.contains(&court) {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 /// Intention de la question, s'il y en a une. Les ordres sont courts : au
 /// delà de 12 mots, c'est une question pour Claude.
 pub fn intention(question: &str) -> Option<Intention> {
@@ -292,6 +347,42 @@ mod tests {
             ("la recherche avance ?", OuEnEst),
         ] {
             assert_eq!(intention(texte), Some(attendu), "{texte}");
+        }
+    }
+
+    #[test]
+    fn reponses_a_une_carte() {
+        for t in [
+            "Oui",
+            "oui, vas-y",
+            "Vas-y !",
+            "Valide.",
+            "OK",
+            "d'accord",
+            "Kobi, oui",
+            "Oui, vas y grec",
+        ] {
+            assert_eq!(reponse_validation(t), Some(true), "{t}");
+        }
+        for t in [
+            "Non",
+            "non merci",
+            "Annule",
+            "Attends !",
+            "pas maintenant",
+            "Non, laisse tomber",
+        ] {
+            assert_eq!(reponse_validation(t), Some(false), "{t}");
+        }
+        for t in [
+            "oui mais change le titre",
+            "oui mais",
+            "non pas",
+            "non, c'est le dossier site",
+            "quelle heure est-il ?",
+            "",
+        ] {
+            assert_eq!(reponse_validation(t), None, "{t}");
         }
     }
 
