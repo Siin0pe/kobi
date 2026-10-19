@@ -96,6 +96,11 @@ pub trait SttEngine {
     /// Fin du flux : renvoie les derniers segments, tous finaux.
     fn finish(&mut self) -> Result<Vec<Segment>>;
 
+    /// Une parole commence sur `source` après un silence où rien n'a été
+    /// transmis (porte d'énergie) : le moteur peut repartir d'un état neuf
+    /// si la phrase précédente est conclue (KOB-190). Rien par défaut.
+    fn nouvel_enonce(&mut self, _source: Source) {}
+
     /// Options de compilation qui comptent pour la vitesse (instructions
     /// CPU, accélérateur), reprises dans les rapports. Vide par défaut.
     fn build_info(&self) -> String {
@@ -110,6 +115,10 @@ impl<E: SttEngine + ?Sized> SttEngine for Box<E> {
 
     fn push(&mut self, frame: &AudioFrame) -> Result<Vec<Segment>> {
         (**self).push(frame)
+    }
+
+    fn nouvel_enonce(&mut self, source: Source) {
+        (**self).nouvel_enonce(source)
     }
 
     fn finish(&mut self) -> Result<Vec<Segment>> {

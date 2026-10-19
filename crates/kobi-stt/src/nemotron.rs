@@ -268,6 +268,27 @@ impl SttEngine for NemotronEngine {
         Ok(self.drain(frame.source))
     }
 
+    /// KOB-190 : après un silence non transmis, une phrase qui arrive dans
+    /// le flux de la précédente (contexte de l'encodeur, découpage en blocs
+    /// décalé) peut perdre son premier mot (« Kobi, enregistre la réunion »
+    /// → « Enregistre la réunion »). Si la phrase précédente est conclue,
+    /// elle repart d'un flux neuf, comme la toute première ; la position est
+    /// gardée (horodatage des segments).
+    fn nouvel_enonce(&mut self, source: Source) {
+        let Some(track) = self.tracks.get_mut(&source) else {
+            return;
+        };
+        if !track.last_text.is_empty() {
+            return;
+        }
+        track.stream = self.recognizer.create_stream();
+        track.stream.set_option(
+            "language",
+            self.config.language.as_deref().unwrap_or("auto"),
+        );
+        track.utterance_start = track.pos;
+    }
+
     fn finish(&mut self) -> Result<Vec<Segment>> {
         let mut sources: Vec<Source> = self.tracks.keys().copied().collect();
         sources.sort_by_key(|s| *s as u8);
