@@ -9,11 +9,16 @@
 //!   pour lui écrire (KOB-147) ;
 //! * `hotkey_view` (`Ctrl+Alt+G` par défaut) : ouvre ou range la vue agrandie
 //!   de la conversation (KOB-169).
+//!
+//! Un changement de réglage (à la voix, par Claude, `kobi config set`)
+//! s'applique à chaud (KOB-214) : l'ancien raccourci est libéré, le nouveau
+//! inscrit ; une combinaison déjà prise ne change rien.
 
 use std::str::FromStr;
+use std::sync::Mutex;
 
 use tauri::{AppHandle, Emitter, Manager, Runtime};
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+use tauri_plugin_global_shortcut::{GlobalShortcut, GlobalShortcutExt, Shortcut, ShortcutState};
 
 use crate::chef::{publier, ChefPartage, Message};
 use crate::intentions::Intention;
@@ -36,11 +41,116 @@ pub fn lire(cle: &str, valeur: &str, defaut: &str) -> (Shortcut, Option<String>)
 }
 
 /// Raccourcis enregistrés, pour reconnaître celui qui est pressé.
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct Raccourcis {
     interpeller: Shortcut,
     enregistrer: Shortcut,
     ecrire: Shortcut,
     vue: Shortcut,
+}
+
+impl Raccourcis {
+    /// Les quatre raccourcis de la config ; un raccourci illisible est
+    /// remplacé par son défaut (avec la raison, à journaliser).
+    fn depuis(config: &kobi_session::config::Config) -> (Self, Vec<String>) {
+        let defaut = kobi_session::config::Config::default();
+        let (interpeller, p1) = lire("hotkey", &config.hotkey, &defaut.hotkey);
+        let (enregistrer, p2) = lire(
+            "hotkey_record",
+            &config.hotkey_record,
+            &defaut.hotkey_record,
+        );
+        let (ecrire, p3) = lire("hotkey_write", &config.hotkey_write, &defaut.hotkey_write);
+        let (vue, p4) = lire("hotkey_view", &config.hotkey_view, &defaut.hotkey_view);
+        let r = Raccourcis {
+            interpeller,
+            enregistrer,
+            ecrire,
+            vue,
+        };
+        (r, [p1, p2, p3, p4].into_iter().flatten().collect())
+    }
+
+    fn tous(&self) -> [Shortcut; 4] {
+        [self.interpeller, self.enregistrer, self.ecrire, self.vue]
+    }
+}
+
+/// Raccourcis actifs, changés à chaud.
+struct Actifs(Mutex<Raccourcis>);
+
+/// Inscription des raccourcis auprès du système (le plugin ; un faux en test).
+trait Clavier {
+    fn inscrire(&self, r: Shortcut) -> Result<(), String>;
+    fn desinscrire(&self, r: Shortcut);
+}
+
+impl<R: Runtime> Clavier for GlobalShortcut<R> {
+    fn inscrire(&self, r: Shortcut) -> Result<(), String> {
+        self.register(r).map_err(|e| e.to_string())
+    }
+    fn desinscrire(&self, r: Shortcut) {
+        let _ = self.unregister(r);
+    }
+}
+
+/// Passe des raccourcis `anciens` aux `nouveaux` : libère ceux qui changent,
+/// inscrit les nouveaux. Si l'un est déjà pris (autre application, ou un
+/// autre raccourci de Kobi), tout revient comme avant et l'erreur le dit.
+fn remplacer(
+    clavier: &impl Clavier,
+    anciens: Raccourcis,
+    nouveaux: Raccourcis,
+) -> Result<(), String> {
+    let changes: Vec<(Shortcut, Shortcut)> = anciens
+        .tous()
+        .into_iter()
+        .zip(nouveaux.tous())
+        .filter(|(a, n)| a != n)
+        .collect();
+    for (ancien, _) in &changes {
+        clavier.desinscrire(*ancien);
+    }
+    let mut inscrits = Vec::new();
+    for (ancien, nouveau) in &changes {
+        if let Err(e) = clavier.inscrire(*nouveau) {
+            for n in &inscrits {
+                clavier.desinscrire(*n);
+            }
+            for (a, _) in &changes {
+                let _ = clavier.inscrire(*a);
+            }
+            return Err(format!(
+                "{} est déjà utilisé, par une autre application ou un autre raccourci de Kobi : {} reste le raccourci ({e}).",
+                nouveau.into_string(),
+                ancien.into_string()
+            ));
+        }
+        inscrits.push(*nouveau);
+    }
+    Ok(())
+}
+
+/// Applique à chaud les raccourcis de `config` (KOB-214). Sans raccourcis
+/// installés (essais), il n'y a rien à changer.
+pub fn appliquer<R: Runtime>(
+    app: &AppHandle<R>,
+    config: &kobi_session::config::Config,
+) -> Result<(), String> {
+    let Some(actifs) = app.try_state::<Actifs>() else {
+        return Ok(());
+    };
+    let (nouveaux, problemes) = Raccourcis::depuis(config);
+    if let Some(p) = problemes.first() {
+        return Err(p.clone());
+    }
+    let mut actuels = actifs.0.lock().unwrap_or_else(|e| e.into_inner());
+    remplacer(app.global_shortcut(), *actuels, nouveaux)?;
+    if *actuels != nouveaux {
+        tracing::info!(raccourcis = ?nouveaux.tous().map(|r| r.into_string()), "raccourcis globaux changés à chaud");
+    }
+    *actuels = nouveaux;
+    Ok(())
 }
 
 /// Événement qui ouvre la bulle d'écriture dans l'interface.
@@ -81,31 +191,22 @@ pub fn installer<R: Runtime>(
     app: &AppHandle<R>,
     config: &kobi_session::config::Config,
 ) -> tauri::Result<()> {
-    let defaut = kobi_session::config::Config::default();
-    let (interpeller, p1) = lire("hotkey", &config.hotkey, &defaut.hotkey);
-    let (enregistrer, p2) = lire(
-        "hotkey_record",
-        &config.hotkey_record,
-        &defaut.hotkey_record,
-    );
-    let (ecrire, p3) = lire("hotkey_write", &config.hotkey_write, &defaut.hotkey_write);
-    let (vue, p4) = lire("hotkey_view", &config.hotkey_view, &defaut.hotkey_view);
-    for probleme in [p1, p2, p3, p4].into_iter().flatten() {
+    let (raccourcis, problemes) = Raccourcis::depuis(config);
+    for probleme in problemes {
         tracing::warn!(%probleme, "raccourci de la config ignoré");
     }
-    app.manage(Raccourcis {
-        interpeller,
-        enregistrer,
-        ecrire,
-        vue,
-    });
+    app.manage(Actifs(Mutex::new(raccourcis)));
     app.plugin(
         tauri_plugin_global_shortcut::Builder::new()
             .with_handler(|app, raccourci, evenement| {
                 if evenement.state() != ShortcutState::Pressed {
                     return;
                 }
-                let r = app.state::<Raccourcis>();
+                let r = *app
+                    .state::<Actifs>()
+                    .0
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 if *raccourci == r.enregistrer {
                     basculer_enregistrement(app);
                 } else if *raccourci == r.ecrire {
@@ -121,7 +222,7 @@ pub fn installer<R: Runtime>(
             })
             .build(),
     )?;
-    for raccourci in [interpeller, enregistrer, ecrire, vue] {
+    for raccourci in raccourcis.tous() {
         if let Err(e) = app.global_shortcut().register(raccourci) {
             tracing::warn!(raccourci = ?raccourci, erreur = %e, "raccourci global non enregistré");
         } else {
@@ -135,7 +236,89 @@ pub fn installer<R: Runtime>(
 mod tests {
     use super::*;
     use kobi_session::config::Config;
+    use std::cell::RefCell;
+    use std::collections::HashSet;
     use tauri_plugin_global_shortcut::{Code, Modifiers};
+
+    /// Faux système : les raccourcis inscrits, et ceux pris ailleurs.
+    #[derive(Default)]
+    struct FauxClavier {
+        inscrits: RefCell<HashSet<Shortcut>>,
+        pris: HashSet<Shortcut>,
+    }
+
+    impl Clavier for FauxClavier {
+        fn inscrire(&self, r: Shortcut) -> Result<(), String> {
+            if self.pris.contains(&r) || !self.inscrits.borrow_mut().insert(r) {
+                return Err("déjà enregistré".into());
+            }
+            Ok(())
+        }
+        fn desinscrire(&self, r: Shortcut) {
+            self.inscrits.borrow_mut().remove(&r);
+        }
+    }
+
+    fn raccourcis(c: &Config) -> Raccourcis {
+        Raccourcis::depuis(c).0
+    }
+
+    fn installe(c: &Config) -> FauxClavier {
+        let clavier = FauxClavier::default();
+        for r in raccourcis(c).tous() {
+            clavier.inscrire(r).unwrap();
+        }
+        clavier
+    }
+
+    /// KOB-214 : « change ton raccourci en Ctrl+Alt+J » s'applique tout de
+    /// suite ; l'ancien ne fait plus rien.
+    #[test]
+    fn changement_a_chaud() {
+        let avant = Config::default();
+        let clavier = installe(&avant);
+        let mut apres = avant.clone();
+        apres.hotkey = "Ctrl+Alt+J".into();
+        apres.hotkey_view = "Ctrl+Alt+V".into();
+        remplacer(&clavier, raccourcis(&avant), raccourcis(&apres)).unwrap();
+        let inscrits = clavier.inscrits.borrow();
+        assert_eq!(*inscrits, raccourcis(&apres).tous().into_iter().collect());
+        assert!(!inscrits.contains(&raccourcis(&avant).interpeller));
+        assert!(inscrits.contains(&Shortcut::new(
+            Some(Modifiers::CONTROL | Modifiers::ALT),
+            Code::KeyJ
+        )));
+    }
+
+    /// Combinaison déjà prise (autre application, ou un autre raccourci de
+    /// Kobi) : rien ne change, et l'erreur dit laquelle.
+    #[test]
+    fn combinaison_prise_rien_ne_change() {
+        let avant = Config::default();
+        let mut clavier = installe(&avant);
+        let prise = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyJ);
+        clavier.pris.insert(prise);
+        let mut apres = avant.clone();
+        apres.hotkey_record = "Ctrl+Alt+Q".into();
+        apres.hotkey = "Ctrl+Alt+J".into();
+        let e = remplacer(&clavier, raccourcis(&avant), raccourcis(&apres)).unwrap_err();
+        assert!(
+            e.contains("déjà utilisé") && e.contains("reste le raccourci"),
+            "{e}"
+        );
+        assert_eq!(
+            *clavier.inscrits.borrow(),
+            raccourcis(&avant).tous().into_iter().collect()
+        );
+        // Le raccourci d'un autre réglage de Kobi : refusé de même.
+        let mut double = avant.clone();
+        double.hotkey_view = avant.hotkey_write.clone();
+        assert!(remplacer(&clavier, raccourcis(&avant), raccourcis(&double)).is_err());
+        assert_eq!(
+            *clavier.inscrits.borrow(),
+            raccourcis(&avant).tous().into_iter().collect()
+        );
+    }
 
     #[test]
     fn raccourcis_par_defaut_et_reglables() {
