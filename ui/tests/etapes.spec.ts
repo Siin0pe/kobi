@@ -24,7 +24,7 @@ async function ouvrir(page: Page): Promise<string[]> {
   await page.setViewportSize({ width: 900, height: 620 });
   await mockTauri(page);
   await page.addInitScript(() => {
-    localStorage.setItem('kobi.affichage', JSON.stringify({ auto: 'jamais', delai: 0 }));
+    localStorage.setItem('kobi.affichage', JSON.stringify({ v: 2, auto: 'jamais', delai: 0 }));
     const w = window as unknown as { __TAURI__: { window: unknown }; __deplacements: number };
     w.__deplacements = 0;
     let pris = false;

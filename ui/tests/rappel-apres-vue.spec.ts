@@ -10,7 +10,7 @@ async function kobi(page: Page, reglages: Record<string, unknown>): Promise<stri
   await page.setViewportSize({ width: 410, height: 280 });
   await page.exposeFunction('__resize', (w: number, h: number) => page.setViewportSize({ width: w, height: h }));
   await mockTauri(page);
-  await page.addInitScript((r) => localStorage.setItem('kobi.affichage', JSON.stringify(r)), reglages);
+  await page.addInitScript((r) => localStorage.setItem('kobi.affichage', JSON.stringify({ v: 2, ...r })), reglages);
   await page.addInitScript(() => {
     const w = window as unknown as { __TAURI__: { core: { invoke: (c: string, a?: Record<string, number | string | boolean>) => Promise<unknown> } }; __resize(w: number, h: number): Promise<void> };
     const base = w.__TAURI__.core.invoke;
@@ -46,7 +46,7 @@ async function reponseLongue(page: Page): Promise<void> {
 
 test('la souris retient la vue agrandie : le rappel qui arrive la range et se montre', async ({ page }) => {
   await page.clock.install();
-  const errors = await kobi(page, {});
+  const errors = await kobi(page, { auto: 'longues' });
   await reponseLongue(page);
   await emit(page, 'state', etat('idle'));
   // Le pointeur reste sur le panneau (comme sous Xvfb) : la vue ne se range pas seule.
@@ -84,7 +84,7 @@ test('vue réglée sur « toujours » : le rappel ne la rouvre pas et reste visi
 
 test('comme l’essai réel : deuxième échange pendant la vue, Kobi s’endort, puis le rappel apparaît', async ({ page }) => {
   await page.clock.install();
-  const errors = await kobi(page, {});
+  const errors = await kobi(page, { auto: 'longues' });
   await reponseLongue(page);
   await emit(page, 'state', etat('idle'));
   await page.clock.runFor(10_000);

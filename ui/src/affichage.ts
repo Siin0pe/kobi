@@ -25,7 +25,7 @@ export interface Affichage {
 
 export const CLE_AFFICHAGE = 'kobi.affichage';
 
-export const PAR_DEFAUT: Affichage = { mode: 'simple', auto: 'longues', taille: 'moyenne', position: 'a-cote', texte: 'moyen', delai: 30 };
+export const PAR_DEFAUT: Affichage = { mode: 'simple', auto: 'jamais', taille: 'moyenne', position: 'a-cote', texte: 'moyen', delai: 30 };
 
 /** Valeurs permises de chaque réglage, dans l'ordre des choix. */
 export const VALEURS = {
@@ -45,39 +45,52 @@ function valide<K extends keyof Affichage>(cle: K, v: unknown): v is Affichage[K
   return (VALEURS[cle] as readonly unknown[]).includes(v);
 }
 
-export function affichage(): Affichage {
-  const out = { ...PAR_DEFAUT };
+/**
+ * Choix explicites de l'utilisateur, sans les valeurs par défaut : un défaut
+ * qui change (KOB-215 : vue agrandie à la demande) vaut pour qui n'a rien
+ * choisi. Format 2 : `{ v: 2, …choix }`. L'ancien format gardait l'objet
+ * entier, défauts compris : `auto: 'longues'`, l'ancien défaut, ne s'y
+ * distingue pas d'un choix et retombe sur le nouveau défaut, une fois.
+ */
+function choix(): Partial<Affichage> {
+  const out: Partial<Affichage> = {};
   try {
     const brut = JSON.parse(window.localStorage.getItem(CLE_AFFICHAGE) ?? '{}') as Record<string, unknown>;
     for (const cle of Object.keys(PAR_DEFAUT) as Array<keyof Affichage>) {
       if (valide(cle, brut[cle])) (out as Record<string, unknown>)[cle] = brut[cle];
     }
+    if (brut.v !== 2 && out.auto === 'longues') delete out.auto;
   } catch {
-    // Stockage illisible : les valeurs par défaut.
+    // Stockage illisible : rien de choisi.
   }
   return out;
 }
 
+export function affichage(): Affichage {
+  return { ...PAR_DEFAUT, ...(memoire ?? choix()) };
+}
+
 export function changerAffichage(patch: Partial<Affichage>): Affichage {
-  const suivant = { ...affichage(), ...patch };
+  const choisis = { ...(memoire ?? choix()), ...patch };
+  const suivant = { ...PAR_DEFAUT, ...choisis };
   try {
-    window.localStorage.setItem(CLE_AFFICHAGE, JSON.stringify(suivant));
+    window.localStorage.setItem(CLE_AFFICHAGE, JSON.stringify({ v: 2, ...choisis }));
   } catch {
     // Stockage indisponible : le choix vaut pour cette fenêtre seulement.
-    memoire = suivant;
+    memoire = choisis;
   }
   ecouteurs.forEach((fn) => fn(suivant));
   return suivant;
 }
 
-let memoire: Affichage | null = null;
+let memoire: Partial<Affichage> | null = null;
 const ecouteurs = new Set<(a: Affichage) => void>();
 
 /** Appelle `fn` à chaque changement, ici ou dans une autre fenêtre de Kobi. */
 export function suivreAffichage(fn: (a: Affichage) => void): () => void {
   ecouteurs.add(fn);
   const surStockage = (e: StorageEvent): void => {
-    if (e.key === CLE_AFFICHAGE) fn(memoire ?? affichage());
+    if (e.key === CLE_AFFICHAGE) fn(affichage());
   };
   window.addEventListener('storage', surStockage);
   return () => {
