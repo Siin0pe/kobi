@@ -11,7 +11,7 @@
 //! micro, pour se tester sur des transcriptions écrites.
 
 /// Fins du nom produites par la reconnaissance (après « kob », « cob »…).
-const FINS: [&str; 6] = ["i", "y", "ie", "e", "ey", "is"];
+const FINS: [&str; 7] = ["i", "y", "ie", "e", "ey", "is", "ye"];
 
 /// Sans aucun mot après l'interpellation, l'écoute s'arrête.
 pub const SANS_PAROLE: f64 = 6.0;
@@ -87,7 +87,8 @@ const ENTENDUS: &[&str] = &["kirby", "kirbi", "cody", "codi", "cogi"];
 /// Petits mots que Nemotron colle devant le nom (« Etkobi », « Okeikobi »,
 /// « Wicoby » pour « oui Kobi », « Makobi »).
 const COLLES: &[&str] = &[
-    "et", "ok", "oke", "okei", "okey", "okay", "oui", "wi", "ma", "eh", "he", "hey", "e", "ve",
+    "et", "ok", "oke", "okei", "okey", "okay", "hockey", "oui", "wi", "ma", "eh", "he", "hey", "e",
+    "ve",
 ];
 
 /// Graphie douteuse de « Kobi » (KOB-179) en position d'appel : un mot de
@@ -161,7 +162,7 @@ const INTERJECTIONS: &[&str] = &[
     "okay", "dis", "dites", "moi", "allo", "salut", "bonjour", "bonsoir", "coucou", "tiens",
     "ecoute", "pardon", "hm", "hmm", "mais", "et", "donc",
     // KOB-179 : « dis » écrit « di », et d'autres débuts d'appel.
-    "di", "voila", "allez", "bref", "attends",
+    "di", "dit", "voila", "allez", "bref", "attends",
 ];
 
 /// Mots qui, juste avant le nom, en font une citation : « à Kobi », « que Kobi ».
@@ -1030,6 +1031,18 @@ mod tests {
             (
                 "C'est quoi le prochain point, Kirby ?",
                 "C'est quoi le prochain point ?",
+            ),
+            (
+                "Qu'est-ce que t'en penses, Kobye?",
+                "Qu'est-ce que t'en penses?",
+            ),
+            (
+                "Dit Koby,, combien on a de tickets ouverts?",
+                "combien on a de tickets ouverts?",
+            ),
+            (
+                "Hockeykobi lance la prise de notes",
+                "lance la prise de notes",
             ),
         ];
         for (texte, question) in appels {
