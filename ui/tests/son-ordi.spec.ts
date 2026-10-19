@@ -8,7 +8,13 @@ function fakeTauri(): void {
   const w = window as unknown as Record<string, unknown>;
   const appels: Array<[string, unknown]> = [];
   w.__appels = appels;
-  let etat = { actif: false, sortie: null as unknown, capte: false, sorties: ['Haut-parleurs (Realtek)', 'Casque USB'], defaut: 'Haut-parleurs (Realtek)' };
+  let etat = { actif: false, sortie: null as unknown, capte: false, sorties: [
+      { nom: 'Haut-parleurs (Realtek)', libelle: 'Haut-parleurs (Realtek)' },
+      // Comme sous Linux (KOB-193) : le sink a un nom technique, l'utilisateur voit sa description.
+      { nom: 'alsa_output.usb-casque.analog-stereo', libelle: 'Casque USB' },
+    ],
+    defaut: 'Haut-parleurs (Realtek)',
+  };
   w.__TAURI__ = {
     core: {
       invoke: async (cmd: string, args: Record<string, unknown> = {}) => {
@@ -40,11 +46,12 @@ test('Réglages → Son de l’ordinateur : désactivé par défaut, activé, so
   expect(await appels(page)).toContainEqual(['regler_son_ordi', { actif: true, sortie: null }]);
   await expect(page.getByRole('switch', { name: 'Écouter aussi le son de l’ordinateur' })).toHaveAttribute('aria-checked', 'true');
   await expect(page.getByRole('radio', { name: /Celle du système/ })).toHaveAttribute('aria-checked', 'true');
+  await expect(page.getByRole('radio')).toHaveCount(3);
   await page.getByRole('radio', { name: 'Casque USB' }).click();
-  expect(await appels(page)).toContainEqual(['regler_son_ordi', { actif: true, sortie: 'Casque USB' }]);
+  expect(await appels(page)).toContainEqual(['regler_son_ordi', { actif: true, sortie: 'alsa_output.usb-casque.analog-stereo' }]);
   await expect(page.getByRole('radio', { name: 'Casque USB' })).toHaveAttribute('aria-checked', 'true');
   await page.getByRole('switch', { name: 'Écouter aussi le son de l’ordinateur' }).click();
-  expect(await appels(page)).toContainEqual(['regler_son_ordi', { actif: false, sortie: 'Casque USB' }]);
+  expect(await appels(page)).toContainEqual(['regler_son_ordi', { actif: false, sortie: 'alsa_output.usb-casque.analog-stereo' }]);
   await expect(page.getByRole('switch', { name: 'Écouter aussi le son de l’ordinateur' })).toHaveAttribute('aria-checked', 'false');
   await expectNoErrors(errors);
 });

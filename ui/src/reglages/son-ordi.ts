@@ -15,7 +15,8 @@ export interface EtatSonOrdi {
   sortie: string | null;
   /** La piste « eux » est ouverte (réunion en cours). */
   capte: boolean;
-  sorties: string[];
+  /** `nom` est enregistré, `libelle` affiché (sous Linux, la description du sink). */
+  sorties: Array<{ nom: string; libelle: string }>;
   defaut: string | null;
 }
 
@@ -38,7 +39,7 @@ function dessiner(el: HTMLElement, e: EtatSonOrdi, ctx: Contexte, regler: (actif
   const choix = h('div', { class: 'choix', role: 'radiogroup', 'aria-label': 'Sortie audio écoutée' });
   const options: Array<{ nom: string | null; libelle: string; detail?: string }> = [
     { nom: null, libelle: 'Celle du système', detail: e.defaut ?? 'sortie par défaut' },
-    ...e.sorties.map((s) => ({ nom: s, libelle: s })),
+    ...e.sorties.map((s) => ({ nom: s.nom, libelle: s.libelle })),
   ];
   for (const o of options) {
     choix.append(
