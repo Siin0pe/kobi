@@ -123,6 +123,14 @@ pub fn charger_stt() -> Result<NemotronEngine, String> {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(BLANK_PENALTY);
+    // Mesures de KOB-179 : hotwords sherpa-onnx (recherche en faisceau).
+    config.hotwords_file = std::env::var_os("KOBI_HOTWORDS").map(PathBuf::from);
+    if let Some(score) = std::env::var("KOBI_HOTWORDS_SCORE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+    {
+        config.hotwords_score = score;
+    }
     // Langue imposée (`fr`, `en`…) ; détection automatique sinon.
     config.language = std::env::var("KOBI_LANGUE").ok().filter(|l| !l.is_empty());
     let debut = Instant::now();
