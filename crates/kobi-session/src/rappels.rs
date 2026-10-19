@@ -175,23 +175,23 @@ fn dans(mots: &[Mot], i: usize, maintenant: &Zoned) -> Option<Moment> {
         j += 1;
         if est(mots, j, MINUTES) {
             j += 1;
-            Span::new().minutes(n)
+            Span::new().try_minutes(n).ok()?
         } else if est(mots, j, &["jour", "jours"]) {
             j += 1;
-            Span::new().days(n)
+            Span::new().try_days(n).ok()?
         } else if est(mots, j, SECONDES) {
             j += 1;
-            Span::new().seconds(n)
+            Span::new().try_seconds(n).ok()?
         } else if est(mots, j, HEURES) {
             j += 1;
-            let mut s = Span::new().hours(n);
+            let mut s = Span::new().try_hours(n).ok()?;
             // « dans 1 h 30 », « dans une heure et demie ».
             if let Some(m) = mots.get(j).and_then(|m| m.norm.parse::<i64>().ok()) {
                 j += 1;
                 if est(mots, j, MINUTES) {
                     j += 1;
                 }
-                s = s.minutes(m);
+                s = s.try_minutes(m).ok()?;
             } else if suite(mots, j, "et demie") {
                 j += 2;
                 s = s.minutes(30);
@@ -710,6 +710,25 @@ mod tests {
             "",
         ] {
             assert_eq!(comprendre(phrase, &m), None, "{phrase}");
+        }
+    }
+
+    /// Un délai hors des bornes de jiff n'est pas un rappel et ne panique pas.
+    #[test]
+    fn delai_demesure_sans_panique() {
+        let m = maintenant();
+        for phrase in [
+            "rappelle-moi dans 99999999 jours d'appeler Léa",
+            "rappelle-moi dans 9223372036854775807 minutes d'appeler Léa",
+            "rappelle-moi dans 99999999999 secondes d'appeler Léa",
+            "rappelle-moi dans 99999999 heures d'appeler Léa",
+            "rappelle-moi dans 1 h 99999999999 d'appeler Léa",
+            "rappelle-moi dans 7000000 jours d'appeler Léa",
+        ] {
+            assert!(
+                !matches!(comprendre(phrase, &m), Some(Demande::Rappel { .. })),
+                "{phrase}"
+            );
         }
     }
 
