@@ -108,8 +108,8 @@ pub fn classer(e: &BrainError) -> Panne {
     }
 }
 
-/// Phrase de patience, quand un tour tarde (8 s).
-pub const PATIENCE: &str = "Je cherche encore…";
+/// Seule annonce d'une tâche longue, quand elle tarde (15 s, KOB-215).
+pub const PATIENCE: &str = "Je m'en occupe, je te préviens dès que c'est prêt.";
 
 /// Annonce d'une session relancée après un plantage.
 pub const RELANCE: &str = "Claude s'est arrêté, je le relance et je repose ta question.";

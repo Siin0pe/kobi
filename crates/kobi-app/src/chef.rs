@@ -23,7 +23,7 @@ use kobi_stt::Segment;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
-use crate::cerveau::{self, Cerveau, Demande, Fabrique, Retour, MESSAGE_ANNONCE};
+use crate::cerveau::{self, Cerveau, Demande, Fabrique, Retour};
 use crate::ecrivain::{Ecrivain, Nouvelle};
 use crate::intentions::{intention, Intention};
 use crate::interpellation::{EVENEMENT_ERREUR, EVENEMENT_QUESTION, EVENEMENT_REPONSE};
@@ -1284,18 +1284,15 @@ impl<R: Runtime> Chef<R> {
                     self.taches.insert(tour, (Instant::now(), question));
                     if let Some(b) = self.bulle(tour) {
                         b.statut = "tache";
-                        if b.reponse.is_empty() {
-                            b.reponse = MESSAGE_ANNONCE.into();
-                        }
                     }
+                    // Rien n'est dit ni écrit ici : Kobi au travail se voit,
+                    // et la plupart des tâches finissent vite. Seule une
+                    // tâche qui tarde est annoncée, une fois (`Patience`,
+                    // KOB-215).
                     if tour == self.dernier {
-                        let _ = self.app.emit(EVENEMENT_REPONSE, MESSAGE_ANNONCE);
-                        // L'annonce remplace ce qui se disait du tour.
                         if self.voix.as_ref().is_some_and(|(t, _)| *t == tour) {
                             self.voix = None;
                         }
-                        crate::voix::dire(&self.app, MESSAGE_ANNONCE);
-                        self.lire(MESSAGE_ANNONCE);
                         // Kobi reste « je m'en occupe » jusqu'au résultat
                         // (KOB-152), sans retour au calme après l'annonce.
                         self.calme_a = None;
@@ -1322,8 +1319,12 @@ impl<R: Runtime> Chef<R> {
                     self.activite(),
                     Some("calme" | "fait" | "reflechit" | "repond" | "occupe") | None
                 ) {
-                    if let Some(q) = question {
-                        let _ = self.app.emit(EVENEMENT_QUESTION, &q);
+                    // La question n'est rappelée que si une autre a été posée
+                    // depuis : sinon la bulle la répétait (KOB-215).
+                    if tour != self.dernier {
+                        if let Some(q) = question {
+                            let _ = self.app.emit(EVENEMENT_QUESTION, &q);
+                        }
                     }
                     self.dernier = tour;
                     self.transition(&[Evenement::Interpellation]);
@@ -1579,7 +1580,7 @@ impl<R: Runtime> Chef<R> {
     fn patienter(&mut self, tour: u64, phrase: &str) {
         tracing::info!(tour, phrase, "tour : patience");
         if let Some(b) = self.bulle(tour) {
-            if b.reponse.is_empty() || b.reponse == MESSAGE_ANNONCE || b.statut == "tache" {
+            if b.reponse.is_empty() || b.statut == "tache" {
                 b.reponse = phrase.into();
             }
         }
