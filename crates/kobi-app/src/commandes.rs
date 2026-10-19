@@ -163,17 +163,6 @@ fn demander_a_l_app(genre: &'static str, resume: String, appel: Value) -> Option
     }
 }
 
-/// Décision du hook pour un appel (JSON de Claude Code) et des dossiers,
-/// sans app pour valider : une écriture est refusée, avec le texte à copier.
-pub fn decider(entree: &str, dossiers: &[PathBuf]) -> Value {
-    decider_avec(
-        entree,
-        dossiers,
-        &PermissionsConfig::default(),
-        &|_, _, _| None,
-    )
-}
-
 /// Décision du hook. `demander` ouvre la carte de validation et rend la
 /// décision de l'utilisateur, ou `None` si personne ne peut répondre.
 pub fn decider_avec(
@@ -282,6 +271,17 @@ fn reponse(autorise: bool, raison: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Décision du hook pour un appel (JSON de Claude Code) et des dossiers,
+    /// sans app pour valider : une écriture est refusée, avec le texte à copier.
+    fn decider(entree: &str, dossiers: &[PathBuf]) -> Value {
+        decider_avec(
+            entree,
+            dossiers,
+            &PermissionsConfig::default(),
+            &|_, _, _| None,
+        )
+    }
 
     fn kobi() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
