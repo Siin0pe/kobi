@@ -95,6 +95,8 @@ const TERMINER: &[&str] = &[
     " termine l enregistrement ",
     " mets fin a l enregistrement ",
     " mets fin a la reunion ",
+    " stoppe la reunion ",
+    " stop la reunion ",
     " stop the meeting ",
     " end the meeting ",
     " stop recording ",
@@ -297,6 +299,75 @@ pub fn annule_la_fin(texte: &str) -> bool {
         .any(|m| n.contains(m))
 }
 
+/// Fins de réunion dites en entier (KOB-203) : « la réunion est terminée »,
+/// « tu peux arrêter de noter ». La phrase entière doit être l'ordre, avec au
+/// plus « bon », « ok »… devant et « merci » derrière. En mention (« on en
+/// reparle à la fin de la réunion »), elle va à Claude. Le chef ne les prend
+/// que pendant une réunion.
+const FIN_DITE: &[&str] = &[
+    "la reunion est terminee",
+    "la reunion est finie",
+    "la reunion est close",
+    "fin de la reunion",
+    "fin de reunion",
+    "c est la fin de la reunion",
+    "c est fini",
+    "c est termine",
+    "on a fini",
+    "on a termine",
+    "on a fini la reunion",
+    "on a termine la reunion",
+    "la reunion est finie on a fini",
+    "on s arrete la",
+    "on arrete la",
+    "on peut arreter la",
+    "on peut s arreter la",
+    "arrete de noter",
+    "tu peux arreter de noter",
+    "tu peux arreter la reunion",
+    "arrete de prendre des notes",
+    "tu peux arreter de prendre des notes",
+    "plus besoin de noter",
+    "c est bon tu peux arreter",
+];
+const AVANT_FIN: &[&str] = &[
+    "bon", "ok", "okay", "allez", "alors", "donc", "bien", "voila", "parfait", "ben", "eh", "kobi",
+];
+const APRES_FIN: &[&str] = &[
+    "merci",
+    "a tous",
+    "beaucoup",
+    "kobi",
+    "pour aujourd hui",
+    "c est bon",
+];
+
+/// La phrase entière demande la fin de la réunion (voir [`FIN_DITE`]).
+pub fn fin_de_reunion_dite(question: &str) -> bool {
+    let n = normaliser(question);
+    let mut q = n.trim().to_owned();
+    for p in POLITESSE {
+        q = format!(" {q} ").replace(p, " ").trim().to_owned();
+    }
+    loop {
+        let avant = q.clone();
+        for m in AVANT_FIN {
+            if let Some(reste) = q.strip_prefix(&format!("{m} ")) {
+                q = reste.trim().to_owned();
+            }
+        }
+        for m in APRES_FIN {
+            if let Some(reste) = q.strip_suffix(&format!(" {m}")) {
+                q = reste.trim().to_owned();
+            }
+        }
+        if q == avant {
+            break;
+        }
+    }
+    FIN_DITE.contains(&q.as_str())
+}
+
 /// Intention de la question, s'il y en a une. Les ordres sont courts : au
 /// delà de 12 mots, c'est une question pour Claude.
 pub fn intention(question: &str) -> Option<Intention> {
@@ -354,6 +425,45 @@ pub fn intention(question: &str) -> Option<Intention> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// KOB-203 : les fins de réunion dites en entier sont des ordres ; une
+    /// mention dans une phrase plus longue n'en est pas un.
+    #[test]
+    fn fins_de_reunion_dites() {
+        for texte in [
+            "Kobi, la réunion est terminée.",
+            "la réunion est terminée, merci",
+            "Bon, la réunion est finie.",
+            "Kobi, tu peux arrêter de noter.",
+            "tu peux arrêter de noter s'il te plaît",
+            "Kobi, fin de la réunion.",
+            "fin de réunion",
+            "ok c'est fini, merci à tous",
+            "c'est terminé",
+            "on a fini",
+            "bon, on s'arrête là",
+            "arrête de prendre des notes",
+            "c'est la fin de la réunion",
+            "allez, on a fini la réunion, merci beaucoup",
+        ] {
+            assert!(fin_de_reunion_dite(texte), "{texte}");
+        }
+        for texte in [
+            "on en reparle à la fin de la réunion",
+            "la réunion est terminée à quelle heure ?",
+            "est-ce que la réunion est finie ?",
+            "quand est-ce que la réunion est terminée",
+            "c'est fini pour le budget, on passe au planning",
+            "on a fini le prototype hier",
+            "Marc dit que la réunion est terminée pour lui",
+            "tu peux arrêter de parler",
+            "note que la réunion est terminée à midi",
+            "on arrête le projet ?",
+            "",
+        ] {
+            assert!(!fin_de_reunion_dite(texte), "{texte}");
+        }
+    }
     use Intention::*;
 
     #[test]
@@ -379,6 +489,7 @@ mod tests {
             ("coupe l'enregistrement s'il te plaît", TerminerReunion),
             ("mets fin à la réunion", TerminerReunion),
             ("stop recording", TerminerReunion),
+            ("Kobi, stoppe la réunion.", TerminerReunion),
             ("stop", Interrompre),
             ("Attends !", Interrompre),
             ("tais-toi", Interrompre),
