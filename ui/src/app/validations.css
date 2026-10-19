@@ -1,0 +1,97 @@
+/* « À valider » (KOB-62), section Activité de l'app Kobi. Les boutons ne
+   bougent pas au survol : on clique ce qui ne bouge pas. */
+
+.validations {
+  margin-top: 20px;
+}
+.validations[hidden] {
+  display: none;
+}
+.validations .groupe {
+  margin: 0 0 4px;
+  font-size: 12.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-variation-settings: 'wght' 850, 'MONO' 1;
+}
+.validations-liste {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 10px;
+}
+.validation {
+  padding: 14px 16px;
+  border: 2.5px solid var(--ink);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 6px 6px 0 var(--ink);
+  animation: app-arrive 0.35s var(--ressort) both;
+  animation-delay: calc(var(--i, 0) * 40ms);
+  transition: opacity 0.3s, transform 0.3s;
+}
+.validation[data-genre='suppression'] {
+  box-shadow: 6px 6px 0 var(--danger);
+}
+.validation.partie {
+  opacity: 0;
+  transform: translateX(24px);
+}
+.validation-genre {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-variation-settings: 'MONO' 1, 'wght' 700;
+}
+.validation-glyphe {
+  display: inline-grid;
+  place-items: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  border-radius: 7px;
+  background: var(--ink);
+  color: var(--acide);
+}
+.validation[data-genre='suppression'] .validation-glyphe {
+  color: var(--danger);
+}
+.validation-resume {
+  margin: 6px 0 0;
+  font-size: 18px;
+  font-variation-settings: 'CASL' 1, 'wght' 800;
+}
+.validation-cible {
+  margin: 2px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+  font-variation-settings: 'MONO' 1, 'wght' 500;
+}
+.validation-boutons {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+.validation .bouton:hover,
+.validation .bouton:active {
+  transform: none;
+  box-shadow: none;
+}
+.validation .bouton.plein {
+  background: var(--ink);
+  color: var(--acide);
+}
+.validation .erreur {
+  margin: 8px 0 0;
+  color: var(--danger);
+}
+.reduced-motion .validation {
+  animation: none;
+  transition: none;
+}

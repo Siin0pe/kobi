@@ -1,0 +1,66 @@
+/* Détail d'une carte de validation (KOB-62) : diff, commande, paramètres
+   MCP, réglage avant → après. Lu dans l'app Kobi, section Activité. */
+
+.kval-detail {
+  margin-top: 8px;
+  min-height: 0;
+  flex: 0 1 auto;
+  overflow: auto;
+  max-height: 320px;
+  border-radius: 8px;
+  border: 1.5px dashed var(--ink);
+  background: #fff;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.kval-detail[hidden] {
+  display: none;
+}
+.kval-detail pre {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font);
+  font-variation-settings: 'MONO' 1, 'wght' 450;
+}
+.kval-diff .file {
+  color: var(--muted);
+}
+.kval-diff .hunk {
+  color: var(--muted);
+  font-variation-settings: 'MONO' 1, 'wght' 700;
+}
+.kval-diff .add {
+  background: #e6ff8a;
+}
+.kval-diff .del {
+  background: #ffd9d1;
+}
+.kval-cmd .prompt {
+  color: var(--muted);
+}
+.kval-where {
+  padding: 8px 10px 0;
+  font-size: 12px;
+  color: var(--muted);
+  font-variation-settings: 'MONO' 1, 'wght' 600;
+}
+.kval-setting {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px;
+  font-size: 15px;
+}
+.kval-setting .avant {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+.kval-setting .apres {
+  font-variation-settings: 'wght' 800;
+}
+
