@@ -47,6 +47,13 @@ async function repond(page: Page, question: string, reponse: string): Promise<vo
 }
 
 const pill = async (page: Page) => {
+  // Boucles de Kobi (respiration…) ramenées à leur première image : la mesure
+  // ne dépend plus de la phase où elle tombe (comme KOB-172).
+  await page.evaluate(() => {
+    for (const a of document.querySelector('.kobi')!.getAnimations({ subtree: true })) {
+      if (a.effect?.getTiming().iterations === Infinity) a.currentTime = 0;
+    }
+  });
   const b = (await page.locator('.kobi .pill').boundingBox())!;
   const vp = page.viewportSize()!;
   return { right: Math.round(vp.width - (b.x + b.width)), bottom: Math.round(vp.height - (b.y + b.height)), w: Math.round(b.width) };
