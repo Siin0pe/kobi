@@ -84,6 +84,8 @@ export async function ouvrir(o: Ouverture): Promise<void> {
   items = remplirMenu(heading, list, o.contexte, choisir);
   root.hidden = false;
   root.classList.remove('opening');
+  // Mesuré avec sa police : à la première ouverture, Recursive se charge encore.
+  await document.fonts.ready;
   // Taille de mise en page : l'animation d'ouverture (scale) n'y compte pas.
   const width = root.offsetWidth;
   const height = root.offsetHeight;

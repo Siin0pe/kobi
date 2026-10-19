@@ -67,7 +67,10 @@ pub fn installer<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     WebviewWindowBuilder::new(app, FENETRE, WebviewUrl::App("menu.html".into()))
         .title("Menu de Kobi")
         .inner_size(TAILLE.0, TAILLE.1)
-        .resizable(false)
+        // Redimensionnable : sous GTK, une fenêtre qui ne l'est pas garde sa
+        // taille de création (`resize` est ignoré). Sans bordure, elle n'offre
+        // aucune prise à la souris ; seule la page la met à la taille du menu.
+        .resizable(true)
         .maximizable(false)
         .minimizable(false)
         .decorations(false)
@@ -156,13 +159,10 @@ pub fn montrer_menu<R: Runtime>(
     // La position d'abord : l'échelle de la fenêtre suit l'écran où elle est.
     w.set_position(PhysicalPosition::new(x, y))
         .map_err(|e| e.to_string())?;
-    // Sous GTK, une fenêtre non redimensionnable garde sa taille : elle le
-    // devient le temps de prendre celle du menu. Plus grande, sa partie
-    // transparente prendrait des clics (et sortirait de l'écran).
-    let _ = w.set_resizable(true);
-    let taille = w.set_size(PhysicalSize::new(largeur.max(1), hauteur.max(1)));
-    let _ = w.set_resizable(false);
-    taille.map_err(|e| e.to_string())?;
+    // À la taille du menu : plus grande, sa partie transparente prendrait
+    // des clics (et sortirait de l'écran).
+    w.set_size(PhysicalSize::new(largeur.max(1), hauteur.max(1)))
+        .map_err(|e| e.to_string())?;
     w.show().map_err(|e| e.to_string())?;
     w.set_focus().map_err(|e| e.to_string())
 }
