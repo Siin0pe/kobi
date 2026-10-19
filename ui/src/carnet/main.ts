@@ -6,7 +6,7 @@
 
 import './carnet.css';
 import { animationsReduites, h, normaliser, surligner } from '../dom';
-import { disponible, message } from '../ipc';
+import { disponible, ecouter, message } from '../ipc';
 import { reagir } from '../app/mini-kobi';
 import { creerNotifieur } from '../notif';
 import { copier, formatCopie, type Quoi } from '../copie';
@@ -120,7 +120,8 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
     return cle ? `Réunion ${libelleDuJour(cle).toLowerCase()}` : 'Réunion';
   }
 
-  function titreConversation(apercu: string): string {
+  function titreConversation(apercu: string, titre?: string | null): string {
+    if (titre) return titre;
     const t = apercu.trim();
     return t ? (t.length > 70 ? `${t.slice(0, 68)}…` : t) : 'Conversation';
   }
@@ -162,7 +163,7 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
           id: c.id,
           jour: c.debut_ms !== null ? cleDuJour(c.debut_ms) : c.date,
           ms: c.debut_ms ?? 0,
-          titre: titreConversation(c.apercu),
+          titre: titreConversation(c.apercu, c.titre),
           meta: [c.debut_ms !== null ? heure(c.debut_ms) : null, `${c.tours} ${c.tours > 1 ? 'échanges' : 'échange'}`].filter(Boolean).join(' · '),
           apercu: '',
           enCours: false,
@@ -178,6 +179,17 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
   }
 
   function ligne(e: Entree, i: number): HTMLElement {
+    const bouton = ligneBouton(e, i);
+    const titre = bouton.querySelector<HTMLElement>('.element-titre');
+    return h(
+      'div',
+      { class: 'element-ligne', 'data-genre': e.genre, 'data-id': e.id },
+      bouton,
+      titre && crayon(e.titre, () => editerTitre(titre, e.titre, e.genre, e.id)),
+    );
+  }
+
+  function ligneBouton(e: Entree, i: number): HTMLElement {
     return h(
       'button',
       {
@@ -296,7 +308,7 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
           jour = r?.debut_ms != null ? cleDuJour(r.debut_ms) : (r?.date ?? null);
         } else {
           const c = index?.conversations.find((x) => x.id === t.id);
-          titre = titreConversation(c?.apercu ?? '');
+          titre = titreConversation(c?.apercu ?? '', c?.titre);
           jour = c?.date ?? null;
         }
         groupes.set(cle, { genre, id, titre, jour, trouves: [] });
@@ -595,19 +607,99 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
   }
 
   function entete(surtitre: string, titre: string, genre: Genre, id: string, animer: boolean, enCours = false, r?: ReunionLue): HTMLElement {
-    const h1 = h('h1', { class: 'titre' });
+    const h1 = h('h1', { class: 'titre', title: 'Renommer' });
     if (animer) poserTitre(h1, titre);
     else {
       h1.textContent = titre;
       h1.setAttribute('aria-label', titre);
     }
+    // Titre éditable sur place (KOB-223) : clic sur le titre ou crayon.
+    h1.addEventListener('click', () => editerTitre(h1, titre, genre, id));
     return h(
       'header',
       { class: 'entete' },
       h('p', { class: 'surtitre' }, enCours && h('span', { class: 'rec' }, 'REC'), surtitre),
-      h1,
+      h('div', { class: 'titre-ligne' }, h1, crayon(titre, () => editerTitre(h1, titre, genre, id))),
       actions(genre, id, titre, r),
     );
+  }
+
+  /** Petit bouton « Renommer » (crayon dessiné, pas d'emoji). */
+  function crayon(titre: string, editer: () => void): HTMLElement {
+    const b = h('button', { type: 'button', class: 'crayon', 'aria-label': `Renommer « ${titre} »`, title: 'Renommer' });
+    b.innerHTML =
+      '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3 13l1-3.5 7-7 2.5 2.5-7 7zM9.5 4l2.5 2.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>';
+    b.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      editer();
+    });
+    return b;
+  }
+
+  /**
+   * Remplace le titre par un champ prérempli et sélectionné : Entrée
+   * valide, Échap ou clic ailleurs annule. Le nouveau titre s'affiche tout
+   * de suite ; l'ancien revient si Kobi refuse.
+   */
+  function editerTitre(cible: HTMLElement, actuel: string, genre: Genre, id: string): void {
+    if (cible.querySelector('input')) return;
+    const avant = Array.from(cible.childNodes);
+    const champ = h('input', {
+      type: 'text',
+      class: 'titre-champ',
+      value: actuel,
+      maxlength: '120',
+      'aria-label': genre === 'reunion' ? 'Titre de la réunion' : 'Titre de la conversation',
+      spellcheck: 'true',
+    }) as HTMLInputElement;
+    cible.replaceChildren(champ);
+    champ.focus();
+    champ.select();
+    let fini = false;
+    const remettre = (texte?: string): void => {
+      if (texte === undefined) cible.replaceChildren(...avant);
+      else {
+        cible.textContent = texte;
+        cible.setAttribute('aria-label', texte);
+      }
+    };
+    const valider = async (): Promise<void> => {
+      const titre = champ.value.trim();
+      if (fini) return;
+      fini = true;
+      if (!titre || titre === actuel) {
+        remettre();
+        return;
+      }
+      remettre(titre);
+      try {
+        const nouveau = await carnet.renommer(genre, id, titre);
+        notifier('Titre enregistré.');
+        await rafraichir();
+        if (estSelectionne(genre, id) || estSelectionne(genre, nouveau)) await ouvrir(genre, nouveau);
+      } catch (e) {
+        remettre();
+        notifier(message(e), 'erreur');
+      }
+    };
+    champ.addEventListener('keydown', (ev) => {
+      ev.stopPropagation();
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        void valider();
+      } else if (ev.key === 'Escape') {
+        ev.preventDefault();
+        fini = true;
+        remettre();
+      }
+    });
+    champ.addEventListener('click', (ev) => ev.stopPropagation());
+    champ.addEventListener('blur', () => {
+      if (!fini) {
+        fini = true;
+        remettre();
+      }
+    });
   }
 
   function section(titre: string, cle: string, texte: string, mot: string): HTMLElement | null {
@@ -749,7 +841,7 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
     const feuille = h(
       'article',
       { class: 'feuille', 'data-genre': 'conversation', 'data-id': c.resume.id },
-      entete(surtitre, titreConversation(c.resume.apercu), 'conversation', c.resume.id, animer),
+      entete(surtitre, titreConversation(c.resume.apercu, c.resume.titre), 'conversation', c.resume.id, animer),
       h('div', { class: 'contenu' }, contenu),
     );
     if (!animer) feuille.classList.add('sans-entree');
@@ -823,6 +915,14 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
   // conversation a pu s'ajouter pendant qu'elle était en arrière-plan.
   window.addEventListener('focus', () => {
     if (!hote.closest('[hidden]')) void rafraichir();
+  });
+
+  // La réunion en cours a reçu un titre (KOB-223) : son dossier a peut-être
+  // changé de nom ; la vue ouverte suit.
+  ecouter<{ ancien: string | null; reunion: string; titre: string | null }>('reunion-nommee', (n) => {
+    const s = etat.selection;
+    const ouverte = s && 'genre' in s && s.genre === 'reunion' && (s.id === n.ancien || s.id === n.reunion);
+    void rafraichir().then(() => (ouverte ? ouvrir('reunion', n.reunion) : undefined));
   });
 
   window.carnet = { rafraichir, ouvrir, normaliser };

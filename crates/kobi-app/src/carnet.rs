@@ -13,7 +13,7 @@ use kobi_session::stockage::{
     Stockage, Trouve,
 };
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Runtime};
+use tauri::{AppHandle, Manager, Runtime};
 use tauri_plugin_dialog::DialogExt;
 
 /// Une réunion marquée « en cours » mais sans écriture depuis ce délai est
@@ -230,6 +230,74 @@ pub fn carnet_supprimer<R: Runtime>(
     }
     tracing::info!(?genre, id, "carnet : supprimé");
     Ok(())
+}
+
+/// Renomme une réunion ou une conversation à la main (KOB-223), depuis l'app
+/// (titre édité sur place) ou `kobi meeting rename`. Le titre devient
+/// manuel : Kobi ne le remplace plus. Renvoie l'identifiant à jour (le
+/// dossier d'une réunion terminée change de nom tout de suite ; celui de la
+/// réunion en cours suit par l'événement `reunion-nommee`).
+pub fn renommer<R: Runtime>(
+    app: &AppHandle<R>,
+    genre: Genre,
+    id: Option<&str>,
+    titre: &str,
+) -> Result<String, String> {
+    let titre = titre.trim();
+    if titre.is_empty() {
+        return Err("Il me faut un titre.".into());
+    }
+    let st = stockage(app)?;
+    if genre == Genre::Conversation {
+        let id = id.ok_or("Quelle conversation ?")?;
+        st.renommer_conversation(id, titre)
+            .map_err(|e| e.to_string())?;
+        tracing::info!(id, "conversation renommée");
+        return Ok(id.to_owned());
+    }
+    let chef = app.try_state::<crate::chef::ChefPartage<R>>();
+    let en_cours = chef.as_ref().and_then(|c| {
+        c.0.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .dossier_en_cours()
+    });
+    let visee = match id {
+        Some(id) => Some(st.lire_reunion(id).map_err(|e| e.to_string())?.dossier),
+        None => None,
+    };
+    let courante = match (&visee, &en_cours) {
+        (None, Some(_)) => true,
+        (Some(v), Some(c)) => v == c,
+        (None, None) => return Err("Aucune réunion en cours.".into()),
+        (Some(_), None) => false,
+    };
+    if courante {
+        let chef = chef.ok_or("Aucune réunion en cours.")?;
+        chef.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .renommer_reunion(titre)?;
+        let dossier = en_cours.unwrap_or_default();
+        return Ok(dossier
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default());
+    }
+    let id = id.expect("réunion visée");
+    let nouveau = st.renommer_reunion(id, titre).map_err(|e| e.to_string())?;
+    tracing::info!(id, nouveau, "réunion renommée");
+    Ok(nouveau)
+}
+
+/// Titre édité sur place dans l'app (KOB-223).
+#[tauri::command(async)]
+pub fn carnet_renommer<R: Runtime>(
+    app: AppHandle<R>,
+    genre: Genre,
+    id: String,
+    titre: String,
+) -> Result<String, String> {
+    renommer(&app, genre, Some(&id), &titre)
 }
 
 #[tauri::command]

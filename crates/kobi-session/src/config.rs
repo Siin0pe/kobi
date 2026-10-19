@@ -305,12 +305,24 @@ impl Default for VoiceConfig {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MeetingsConfig {
     pub retention_days: Retention,
+    /// Kobi nomme la réunion d'après ce qui est dit au début (KOB-223).
+    pub titre_auto: bool,
     #[serde(flatten)]
     pub extra: toml::Table,
+}
+
+impl Default for MeetingsConfig {
+    fn default() -> Self {
+        Self {
+            retention_days: Retention::default(),
+            titre_auto: true,
+            extra: toml::Table::new(),
+        }
+    }
 }
 
 /// Conversations du quotidien, rangées à part des réunions (KOB-141).

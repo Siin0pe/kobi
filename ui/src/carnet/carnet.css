@@ -924,3 +924,52 @@
     opacity: 1;
   }
 }
+/* Titre éditable sur place (KOB-223) : crayon au survol de la ligne, champ
+   à la place du titre. */
+.vue-notes .element-ligne {
+  position: relative;
+}
+.vue-notes .crayon {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.vue-notes .crayon:hover,
+.vue-notes .crayon:focus-visible {
+  background: var(--acide);
+  color: var(--ink);
+}
+.vue-notes .element-ligne > .crayon {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  opacity: 0;
+}
+.vue-notes .element-ligne:hover > .crayon,
+.vue-notes .element-ligne:focus-within > .crayon {
+  opacity: 1;
+}
+.vue-notes .titre-ligne {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.vue-notes .titre {
+  cursor: text;
+}
+.vue-notes .titre-champ {
+  width: 100%;
+  min-width: 12ch;
+  font: inherit;
+  color: var(--ink);
+  background: var(--papier);
+  border: 2px solid var(--ink);
+  border-radius: 10px;
+  padding: 2px 8px;
+}

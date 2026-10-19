@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use kobi_session::etat::Evenement;
-use kobi_session::stockage::{maintenant_ms, CompteRendu, Qui};
+use kobi_session::stockage::{maintenant_ms, CompteRendu, Origine, Qui};
 use kobi_stt::Segment;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
@@ -31,6 +31,40 @@ use crate::session::{appliquer, etat};
 
 /// État de l'enregistrement (contrat avec l'interface, KOB-137).
 pub const EVENEMENT_ENREGISTREMENT: &str = "enregistrement";
+/// La réunion en cours a reçu un titre (KOB-223) ; son dossier a peut-être
+/// changé de nom : l'app suit.
+pub const EVENEMENT_REUNION_NOMMEE: &str = "reunion-nommee";
+
+/// Charge de [`EVENEMENT_REUNION_NOMMEE`].
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ReunionNommee {
+    /// Ancien nom du dossier, s'il a changé.
+    pub ancien: Option<String>,
+    /// Nom actuel du dossier (celui du Carnet).
+    pub reunion: String,
+    pub titre: Option<String>,
+}
+
+/// Titre de réunion (KOB-223) : demandé après ce délai, avec au moins
+/// [`TITRE_MOTS`] mots dits.
+const TITRE_APRES: Duration = Duration::from_secs(120);
+const TITRE_MOTS: usize = 60;
+/// Après deux fois [`TITRE_APRES`], ce peu de mots suffit.
+const TITRE_MOTS_MIN: usize = 20;
+/// Parole gardée pour le titre, au plus (octets).
+const TITRE_PAROLE_MAX: usize = 8_000;
+/// Demandes de titre au plus, quand Claude ne trouve pas.
+const TITRE_ESSAIS: u8 = 3;
+
+/// Titre automatique réglé (`meetings.titre_auto`, à chaud).
+fn titre_auto_actif() -> bool {
+    kobi_session::config::default_path().map_or(true, |p| {
+        kobi_session::config::load_or_create(&p)
+            .config
+            .meetings
+            .titre_auto
+    })
+}
 /// Historique de la conversation (dernières bulles, KOB-133).
 pub const EVENEMENT_CONVERSATION: &str = "conversation";
 /// La conversation du quotidien est close : la vue agrandie pourra de
@@ -300,6 +334,17 @@ struct EnCours {
     vidange: Option<Instant>,
     /// Compte rendu demandé : plus rien n'entre dans la transcription.
     compte_rendu_demande: bool,
+    /// Titre de la réunion (KOB-223), affiché dans le badge REC.
+    titre: Option<String>,
+    /// Titre donné à la main : Kobi ne le remplace plus.
+    titre_manuel: bool,
+    /// Premières minutes de parole, d'où Kobi tire le titre.
+    debut_parole: String,
+    /// Demande de titre envoyée (ou titre déjà donné).
+    titre_demande: bool,
+    /// Demandes sans titre exploitable (« — ») : Kobi réessaie avec plus de
+    /// parole, au plus [`TITRE_ESSAIS`] fois.
+    titre_essais: u8,
 }
 
 /// Le chef, partagé entre son fil et les commandes de l'interface.
@@ -610,7 +655,7 @@ impl<R: Runtime> Chef<R> {
                 pause: r.pause,
                 debut_ms: r.debut_ms,
                 notes: compter_notes(&r.notes),
-                titre: None,
+                titre: r.titre.clone(),
                 derniere_note: r.derniere_note.clone(),
                 annulable: false,
             },
@@ -819,6 +864,14 @@ impl<R: Runtime> Chef<R> {
                 etapes: Vec::new(),
             });
             return;
+        }
+        // « Kobi, appelle cette réunion … » (KOB-223) : titre donné à la main.
+        if self.reunion.is_some() && consigne.is_none() {
+            if let Some(titre) = crate::intentions::titre_de_reunion_dit(&texte) {
+                let reponse = self.renommer_reunion(&titre).unwrap_or_else(|e| e);
+                self.repondre_localement(texte, reponse, voix);
+                return;
+            }
         }
         // Pendant une réunion, « la réunion est terminée », « tu peux arrêter
         // de noter »… l'arrêtent sur place, sans dépendre de Claude (KOB-203).
@@ -1053,8 +1106,68 @@ impl<R: Runtime> Chef<R> {
             arret: None,
             vidange: None,
             compte_rendu_demande: false,
+            titre: None,
+            titre_manuel: false,
+            debut_parole: String::new(),
+            titre_demande: false,
+            titre_essais: 0,
         });
         "C'est parti : j'enregistre la réunion et je prends des notes.".into()
+    }
+
+    /// Titre proposé par Claude (KOB-223) : retenu s'il est exploitable et
+    /// qu'aucun titre n'a été donné à la main entre-temps.
+    fn titre_recu(&mut self, resultat: Result<String, String>) {
+        let Some(r) = &mut self.reunion else { return };
+        let titre = match resultat {
+            Ok(texte) => cerveau::titre_propose(&texte),
+            Err(e) => {
+                tracing::warn!(erreur = %e, "titre de la réunion");
+                None
+            }
+        };
+        let Some(titre) = titre else {
+            // Rien d'exploitable : Kobi réessaiera avec plus de parole.
+            r.titre_essais += 1;
+            r.titre_demande = false;
+            tracing::info!(
+                essais = r.titre_essais,
+                "pas encore de titre pour la réunion"
+            );
+            return;
+        };
+        if r.titre_manuel {
+            return;
+        }
+        tracing::info!(%titre, "titre de la réunion");
+        r.titre = Some(titre.clone());
+        r.debut_parole.clear();
+        self.ecrivain.nommer(titre, Origine::Auto);
+        self.emettre_enregistrement();
+    }
+
+    /// Dossier de la réunion en cours, une fois créé.
+    pub fn dossier_en_cours(&self) -> Option<PathBuf> {
+        self.reunion.as_ref().and_then(|r| r.dossier.clone())
+    }
+
+    /// Titre donné à la main (app, voix, `kobi meeting rename`) : la réunion
+    /// en cours le garde, Kobi ne le remplace plus.
+    pub fn renommer_reunion(&mut self, titre: &str) -> Result<String, String> {
+        let titre = titre.trim();
+        if titre.is_empty() {
+            return Err("Il me faut un titre.".into());
+        }
+        let Some(r) = &mut self.reunion else {
+            return Err("Aucune réunion en cours.".into());
+        };
+        r.titre = Some(titre.to_owned());
+        r.titre_manuel = true;
+        r.titre_demande = true;
+        tracing::info!(titre, "titre de la réunion donné à la main");
+        self.ecrivain.nommer(titre.to_owned(), Origine::Manuel);
+        self.emettre_enregistrement();
+        Ok(format!("C'est noté : la réunion s'appelle « {titre} »."))
     }
 
     /// Fin de la réunion, la même par la voix, Claude, le raccourci, le menu
@@ -1209,6 +1322,9 @@ impl<R: Runtime> Chef<R> {
             s.text
         );
         r.a_noter.push_str(&ligne);
+        if !r.titre_demande && r.debut_parole.len() < TITRE_PAROLE_MAX {
+            r.debut_parole.push_str(&ligne);
+        }
         self.pour_conversation.push_str(&ligne);
     }
 
@@ -1567,6 +1683,7 @@ impl<R: Runtime> Chef<R> {
             Retour::Activite { demande, at_ms } => self.activite_outil(&demande, at_ms),
             Retour::Notes(resultat) => self.notes(resultat),
             Retour::CompteRendu(resultat) => self.compte_rendu(resultat),
+            Retour::Titre(resultat) => self.titre_recu(resultat),
         }
     }
 
@@ -1676,6 +1793,32 @@ impl<R: Runtime> Chef<R> {
                     );
                     r.dossier = Some(dossier);
                 }
+            }
+            Nouvelle::ReunionNommee {
+                dossier,
+                ancien,
+                titre,
+            } => {
+                let nouveau = dossier
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                if let Some(r) = &mut self.reunion {
+                    r.dossier = Some(dossier.clone());
+                    if titre.is_some() {
+                        r.titre = titre.clone();
+                    }
+                }
+                tracing::info!(?ancien, %nouveau, "réunion nommée");
+                let _ = self.app.emit(
+                    EVENEMENT_REUNION_NOMMEE,
+                    ReunionNommee {
+                        ancien,
+                        reunion: nouveau,
+                        titre,
+                    },
+                );
+                self.emettre_enregistrement();
             }
             Nouvelle::NotesEcrites(dossier) => {
                 let notes = self.reunion.as_ref().map_or(0, |r| compter_notes(&r.notes));
@@ -1909,6 +2052,23 @@ impl<R: Runtime> Chef<R> {
         {
             self.clore_annulation();
             return;
+        }
+        // Titre de la réunion (KOB-223) : demandé d'après les premières
+        // minutes, plus tôt si la parole abonde, plus tard s'il y en a peu.
+        if !r.titre_demande && !r.titre_manuel && !r.pause && !r.fin_demandee {
+            let mots = r.debut_parole.split_whitespace().count();
+            let seuil = TITRE_MOTS * (usize::from(r.titre_essais) + 1);
+            let depuis = r.debut.elapsed();
+            let pret = (depuis >= TITRE_APRES && mots >= seuil)
+                || mots >= 3 * seuil
+                || (depuis >= 2 * TITRE_APRES && mots >= TITRE_MOTS_MIN);
+            if pret && r.titre_essais < TITRE_ESSAIS && titre_auto_actif() {
+                r.titre_demande = true;
+                tracing::info!(mots, s = depuis.as_secs(), "titre de la réunion demandé");
+                self.cerveau.demander(Demande::Titre {
+                    transcript: r.debut_parole.clone(),
+                });
+            }
         }
         if r.pause || r.fin_demandee || r.envoye.is_some() || Instant::now() < r.prochain_bloc {
             return;

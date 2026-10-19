@@ -41,6 +41,34 @@ use crate::pannes::{classer, Panne};
 /// Sans texte après ce délai (ou dès un appel d'outil), le tour est annoncé
 /// comme tâche longue.
 pub const ANNONCE: Duration = Duration::from_secs(4);
+/// Consigne du titre de réunion (KOB-223).
+const CONSIGNE_TITRE: &str = "Donne un titre à cette réunion d'après la transcription \
+ci-dessus, et seulement d'après elle : 3 à 7 mots, dans la langue de la réunion, sans date, \
+sans guillemets ni ponctuation finale, sans rien inventer. Réponds uniquement par le titre. \
+Si la transcription ne dit pas de quoi parle la réunion, réponds seulement « — ».";
+
+/// Délai maximal de la demande de titre.
+const TITRE_MAX: Duration = Duration::from_secs(60);
+
+/// Titre exploitable dans la réponse brute de Claude : première ligne, sans
+/// préfixe « Titre : », guillemets ni ponctuation finale, 2 à 9 mots.
+/// `None` si Claude n'a pas trouvé (« — ») ou a répondu autre chose.
+pub fn titre_propose(reponse: &str) -> Option<String> {
+    let ligne = reponse.lines().map(str::trim).find(|l| !l.is_empty())?;
+    let mut t = ligne.trim_start_matches(['#', '*', '-', ' ']).trim();
+    for prefixe in ["Titre :", "Titre:", "titre :", "Title:", "Title :"] {
+        if let Some(reste) = t.strip_prefix(prefixe) {
+            t = reste.trim();
+        }
+    }
+    let t = t
+        .trim_matches(['«', '»', '"', '\'', '“', '”', '*', ' ', '\u{a0}'])
+        .trim_end_matches(['.', '!', '?', ':', ';', ','])
+        .trim();
+    let mots = t.split_whitespace().count();
+    (t != "—" && (2..=9).contains(&mots) && t.chars().count() <= 80).then(|| t.to_owned())
+}
+
 /// Délai maximal d'un bloc de notes ou du compte rendu.
 const NOTES_MAX: Duration = Duration::from_secs(180);
 /// Tour détaché toujours sans texte après ce délai : Kobi dit, une seule
@@ -99,6 +127,11 @@ pub enum Demande {
     CompteRendu {
         transcript: String,
         notes: String,
+    },
+    /// Titre de la réunion d'après ses premières minutes (KOB-223), par la
+    /// session des notes : la conversation n'attend pas.
+    Titre {
+        transcript: String,
     },
     /// Clic sur une carte de confirmation.
     Decision {
@@ -182,6 +215,8 @@ pub enum Retour {
     },
     Notes(Result<String, String>),
     CompteRendu(Result<String, String>),
+    /// Titre proposé pour la réunion, brut (voir [`titre_propose`]).
+    Titre(Result<String, String>),
 }
 
 /// Destination des retours.
@@ -1217,6 +1252,7 @@ async fn prise_de_notes(
                     let e = Err(e.to_string());
                     sortie(match demande {
                         Demande::CompteRendu { .. } => Retour::CompteRendu(e),
+                        Demande::Titre { .. } => Retour::Titre(e),
                         _ => Retour::Notes(e),
                     });
                     continue;
@@ -1224,6 +1260,24 @@ async fn prise_de_notes(
             }
         }
         let s = session.as_mut().expect("session ouverte");
+        if let Demande::Titre { transcript } = demande {
+            let turn = s.ask(kobi_brain::Ask {
+                question: CONSIGNE_TITRE.to_owned(),
+                transcript,
+                notes: String::new(),
+            });
+            let resultat = turn.wait_timeout(TITRE_MAX).await;
+            if matches!(
+                resultat,
+                Err(BrainError::Crashed(_) | BrainError::Timeout(_))
+            ) {
+                session = None;
+            }
+            sortie(Retour::Titre(
+                resultat.map(|r| r.text).map_err(|e| e.to_string()),
+            ));
+            continue;
+        }
         let (turn, compte_rendu) = match demande {
             Demande::Notes { transcript, notes } => {
                 (s.update_notes(NotesUpdate { transcript, notes }), false)
@@ -1445,6 +1499,24 @@ mod tests {
                 tour: 1,
                 texte: "trouvé".into()
             }));
+    }
+
+    /// KOB-223 : le titre proposé par Claude, nettoyé ; « — » ou une
+    /// réponse bavarde ne donnent pas de titre.
+    #[test]
+    fn titres_proposes() {
+        for (reponse, titre) in [
+            ("Budget du séminaire d'Annecy", Some("Budget du séminaire d'Annecy")),
+            ("« Lancement de la fusée »\n", Some("Lancement de la fusée")),
+            ("Titre : Point hebdo sur le recrutement.", Some("Point hebdo sur le recrutement")),
+            ("**Refonte du site web**", Some("Refonte du site web")),
+            ("—", None),
+            ("Budget", None),
+            ("Je n'ai pas assez d'éléments pour donner un titre précis à cette réunion pour le moment.", None),
+            ("", None),
+        ] {
+            assert_eq!(titre_propose(reponse).as_deref(), titre, "{reponse}");
+        }
     }
 
     /// Abandon à 45 s pour les essais : bien en dessous de l'outil de 2 min

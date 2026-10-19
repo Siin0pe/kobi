@@ -221,6 +221,15 @@ pub const COMMANDES: &[Commande] = &[
     c("meeting.pause", Ecriture, "Met l'enregistrement de la réunion en pause.", &[]),
     c("meeting.resume", Ecriture, "Reprend l'enregistrement de la réunion.", &[]),
     c(
+        "meeting.rename",
+        Ecriture,
+        "Donne un titre à la réunion en cours (ou à une réunion passée avec --id) ; Kobi ne le remplace plus.",
+        &[
+            requis(positionnel(p("titre", Texte, "Nouveau titre."))),
+            p("id", Texte, "Réunion passée (dossier du Carnet) ; la réunion en cours sinon."),
+        ],
+    ),
+    c(
         "meeting.status",
         Lecture,
         "État de la réunion en cours : actif, pause, début, durée, nombre de notes, dernière note.",
