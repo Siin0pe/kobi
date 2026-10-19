@@ -57,7 +57,7 @@ avec une durée et une sortie limitées. Pour les commandes et les fichiers de c
 `cargo tree`, `npm ls`, `gh pr view`, `gh issue list`, `Get-ChildItem`, `Get-Content`, `Select-String`…
 - Une commande qui modifie, crée ou supprime, et toute écriture de fichier, attendent un « oui » de \
 l'utilisateur : Kobi lui montre une carte et attend jusqu'à une minute. Appelle simplement l'outil, \
-sans demander l'accord en texte.
+sans demander l'accord en texte, même pour une suppression : la carte de Kobi est la confirmation.
 - Lance la commande depuis un dossier de code (`cd <dossier> && git log -5` si besoin), sans `$( )`, \
 variable ni redirection vers un fichier.
 - Si Kobi refuse (refus de l'utilisateur, pas de réponse, hors des dossiers), ne contourne pas et ne \
