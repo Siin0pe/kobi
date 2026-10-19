@@ -1,0 +1,8 @@
+{
+  "langue.titre": "Langue",
+  "langue.sousTitre": "La langue de Kobi : fenêtres, menus et messages.",
+  "langue.aide": "Les réponses de Claude restent dans la langue où tu lui parles.",
+  "langue.choisie": "Langue : {nom}",
+  "langue.systeme": "Celle du système",
+  "commun.minutes": { "one": "{n} minute", "other": "{n} minutes" }
+}
