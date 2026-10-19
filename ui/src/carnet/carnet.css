@@ -852,7 +852,8 @@
   padding: 0 7px;
   border: 2px solid var(--ink);
   border-radius: 999px;
-  background: #fff;
+  --fond-copie: #fff;
+  background: var(--fond-copie);
   color: var(--ink);
   font: inherit;
   font-size: 12.5px;
@@ -874,7 +875,7 @@
 .vue-notes .copie-survol:hover,
 .vue-notes .copie-survol:focus-visible {
   gap: 6px;
-  background: var(--acide);
+  --fond-copie: var(--acide);
   outline: none;
 }
 .vue-notes .copie-icone {
@@ -882,8 +883,11 @@
   width: 11px;
   height: 13px;
   border: 2px solid currentColor;
+  flex: none;
+  /* La feuille de derrière dépasse de 3 px : elle ne touche pas le libellé. */
+  margin-right: 3px;
   border-radius: 3px;
-  box-shadow: 3px -3px 0 -1px #fff, 3px -3px 0 1px currentColor;
+  box-shadow: 3px -3px 0 -1px var(--fond-copie), 3px -3px 0 1px currentColor;
 }
 .vue-notes .copie-libelle {
   max-width: 0;
@@ -894,6 +898,11 @@
 .vue-notes .copie-survol:hover .copie-libelle,
 .vue-notes .copie-survol:focus-visible .copie-libelle {
   max-width: 220px;
+}
+/* Libellé hors du flux de texte : ni dans une sélection à la souris ni dans
+   le texte de la puce (le nom accessible vient d'aria-label). */
+.vue-notes .copie-libelle::after {
+  content: attr(data-libelle);
 }
 /* La puce garde la place du bouton : il ne couvre pas le texte. */
 .vue-notes li.copiable,

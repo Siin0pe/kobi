@@ -152,7 +152,7 @@ export function menuCopier(parties: Partie[], quand: QuandCopie): HTMLElement {
  * son libellé dit quoi (« Copier cette décision »).
  */
 export function boutonCopie(quoi: Quoi, texte: () => string, quand: QuandCopie): HTMLButtonElement {
-  const b = h('button', { type: 'button', class: 'copie-survol', 'data-quoi': quoi, 'aria-label': TEXTES[quoi].bouton, title: TEXTES[quoi].bouton }, h('span', { class: 'copie-icone', 'aria-hidden': 'true' }), h('span', { class: 'copie-libelle' }, TEXTES[quoi].bouton));
+  const b = h('button', { type: 'button', class: 'copie-survol', 'data-quoi': quoi, 'aria-label': TEXTES[quoi].bouton, title: TEXTES[quoi].bouton }, h('span', { class: 'copie-icone', 'aria-hidden': 'true' }), h('span', { class: 'copie-libelle', 'data-libelle': TEXTES[quoi].bouton }));
   b.addEventListener('click', (e) => {
     // Ni la ligne cliquable autour (aller au moment de la transcription…).
     e.stopPropagation();
