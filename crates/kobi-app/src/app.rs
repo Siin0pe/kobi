@@ -96,6 +96,18 @@ impl Section {
     }
 }
 
+/// Dernière adresse demandée à l'app (KOB-189). Une page encore en
+/// chargement n'écoute pas `app://section` : elle lit cette adresse au
+/// démarrage (`app_section_demandee`), et la dernière demande gagne.
+#[derive(Default)]
+pub struct SectionDemandee(std::sync::Mutex<Option<String>>);
+
+fn retenir<R: Runtime>(app: &AppHandle<R>, adresse: &str) {
+    if let Some(s) = app.try_state::<SectionDemandee>() {
+        *s.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(adresse.to_owned());
+    }
+}
+
 /// Ouvre l'app sur `section` (sur la section en cours, ou les notes, si
 /// `None`), ou la ramène devant si elle est déjà ouverte.
 ///
@@ -106,6 +118,7 @@ impl Section {
 pub fn ouvrir<R: Runtime>(app: &AppHandle<R>, section: Option<Section>) -> tauri::Result<()> {
     if let Some(w) = app.get_webview_window(FENETRE) {
         if let Some(s) = &section {
+            retenir(app, &s.adresse());
             app.emit_to(FENETRE, EVENEMENT_SECTION, s.adresse())?;
         }
         let _ = w.unminimize();
@@ -115,6 +128,7 @@ pub fn ouvrir<R: Runtime>(app: &AppHandle<R>, section: Option<Section>) -> tauri
     let adresse = section
         .as_ref()
         .map_or_else(|| "notes".to_owned(), Section::adresse);
+    retenir(app, &adresse);
     crate::placement::a_cote_de_kobi_ou_centre(
         app,
         WebviewWindowBuilder::new(
@@ -145,6 +159,17 @@ pub fn ouvrir_app<R: Runtime>(app: AppHandle<R>, section: Option<String>) -> Res
         None => None,
     };
     ouvrir(&app, section).map_err(|e| e.to_string())
+}
+
+/// Section demandée pendant que la page de l'app chargeait (KOB-189), lue
+/// une seule fois par la page à son démarrage.
+#[tauri::command]
+pub fn app_section_demandee<R: Runtime>(app: AppHandle<R>) -> Option<String> {
+    app.try_state::<SectionDemandee>()?
+        .0
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
 }
 
 /// Erreur JavaScript d'une fenêtre (`window.onerror`, promesse rejetée sans
@@ -245,5 +270,35 @@ mod tests {
         assert_eq!(fenetres, ["app", "main"]);
         let a = appeler(&main, "a_propos", json!({})).unwrap();
         assert_eq!(a["version"], env!("CARGO_PKG_VERSION"));
+    }
+
+    /// KOB-189 : la page de l'app lit à son démarrage la dernière section
+    /// demandée (l'événement a pu partir avant qu'elle l'écoute), une fois.
+    #[test]
+    fn section_demandee_pendant_le_chargement() {
+        use crate::test_ipc::appeler;
+        use serde_json::{json, Value};
+        use tauri::test::{mock_builder, mock_context, noop_assets};
+
+        let app = crate::session::installer(mock_builder())
+            .build(mock_context(noop_assets()))
+            .unwrap();
+        let main = WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .unwrap();
+        let demandee = || appeler(&main, "app_section_demandee", json!({})).unwrap();
+        assert_eq!(demandee(), Value::Null);
+        // Ouverture sans section : l'adresse de départ (les notes).
+        appeler(&main, "ouvrir_app", json!({})).unwrap();
+        // Fenêtre déjà là (page encore en chargement) : la dernière gagne.
+        appeler(&main, "ouvrir_app", json!({ "section": "rappels" })).unwrap();
+        appeler(
+            &main,
+            "ouvrir_app",
+            json!({ "section": "reglages/stockage" }),
+        )
+        .unwrap();
+        assert_eq!(demandee(), json!("reglages/stockage"));
+        assert_eq!(demandee(), Value::Null);
     }
 }

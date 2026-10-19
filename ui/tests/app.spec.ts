@@ -34,6 +34,8 @@ function fakeTauri(): void {
             };
           case 'a_propos':
             return { version: '0.1.0', dossier: '/home/test/Kobi' };
+          case 'app_section_demandee':
+            return (w.__sectionDemandee as string | undefined) ?? null;
           case 'historique':
             return [
               { tour: 1, question: 'quelle heure est-il ?', reponse: '14 h 05.', statut: 'fini', clavier: false, etapes: [] },
@@ -117,6 +119,19 @@ test('app::ouvrir : adresse de départ et événement app://section', async ({ p
   await expect(visible(page)).toHaveAttribute('data-section', 'rappels');
   await page.evaluate(() => (window as unknown as { __emit: (e: string, p: unknown) => void }).__emit('app://section', 'a-propos'));
   await expect(page.locator('.vue-a-propos .infos')).toContainText('0.1.0');
+  await expectNoErrors(errors);
+});
+
+test('KOB-189 : section demandée pendant le chargement de la page, pas perdue', async ({ page }) => {
+  // `kobi --app` puis `kobi --reglages` aussitôt : l'événement app://section
+  // part avant que la page l'écoute ; Rust garde l'adresse, la page la lit.
+  await page.addInitScript(() => {
+    (window as unknown as { __sectionDemandee: string }).__sectionDemandee = 'reglages/stockage';
+  });
+  const errors = await ouvrirApp(page, '#notes');
+  await expect(visible(page)).toHaveAttribute('data-section', 'reglages');
+  await expect(page.locator('.vue-reglages .titre')).toHaveText('Stockage');
+  await expect(page).toHaveURL(/#reglages\/stockage/);
   await expectNoErrors(errors);
 });
 

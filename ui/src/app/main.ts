@@ -18,7 +18,7 @@ import './app.css';
 import { monterAccueil } from '../bienvenue/main';
 import { monterCarnet, type VueCarnet } from '../carnet/main';
 import { animationsReduites, h } from '../dom';
-import { disponible, ecouter } from '../ipc';
+import { disponible, ecouter, invoke } from '../ipc';
 import { creerNotifieur } from '../notif';
 import { vivreTitres } from '../titre';
 import { monterNotesEnDirect, type VueDirect } from '../notes/direct';
@@ -265,4 +265,12 @@ declare global {
 window.kobiApp = { aller, ajouterPanneau };
 
 aller(location.hash || 'notes');
+// Une section demandée pendant le chargement de la page (KOB-189) : son
+// événement est parti avant qu'on l'écoute. La dernière demande gagne.
+invoke<string | null>('app_section_demandee').then(
+  (adresse) => {
+    if (adresse && adresse !== location.hash.replace(/^#/, '')) aller(adresse);
+  },
+  () => {},
+);
 if (!disponible()) notifier('Ouvrez l’app depuis Kobi.', 'erreur');
