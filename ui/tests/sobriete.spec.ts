@@ -79,9 +79,11 @@ for (const state of ['idle', 'think', 'answer', 'listen'] as const) {
   });
 }
 
-test('après 20 s de veille, Kobi passe en sommeil profond : le mot ondule lentement, au pas du métronome', async ({ page }) => {
+test('économie d’énergie : après 20 s de veille, sommeil profond, le mot ondule lentement, au pas du métronome', async ({ page }) => {
   await page.clock.install();
   const errors = await openUi(page, '');
+  // Économie d'énergie activée (KOB-200) : l'ancien repos économe.
+  await page.evaluate(() => window.kobiAnimations.poser({ economie: true }));
   const kobi = page.locator('.kobi');
   await page.clock.runFor(19_000);
   await expect(kobi).not.toHaveClass(/deep/);
@@ -100,9 +102,11 @@ test('après 20 s de veille, Kobi passe en sommeil profond : le mot ondule lente
   await expectNoErrors(errors);
 });
 
-test('repos économe en réunion : tout bouge encore, au rythme d’un seul métronome (3 images/s, puis 2)', async ({ page }) => {
+test('économie d’énergie en réunion : tout bouge encore, au rythme d’un seul métronome (3 images/s, puis 2)', async ({ page }) => {
   await page.clock.install();
   const errors = await openUi(page, '');
+  // Économie d'énergie activée (KOB-200) : l'ancien repos économe.
+  await page.evaluate(() => window.kobiAnimations.poser({ economie: true }));
   await page.evaluate(() =>
     window.kobi.recording({ actif: true, pause: false, debut_ms: Date.now(), notes: 2, titre: 'Point hebdo', derniere_note: 'Décision : refresh token à 30 jours' }),
   );
@@ -125,7 +129,7 @@ test('repos économe en réunion : tout bouge encore, au rythme d’un seul mét
   // Le mot, la pilule, l'anneau bougent toujours ; l'étiquette REC et la fiche,
   // cliquables, restent immobiles, mais leur point rouge (clignote, onde), leur
   // surtitre, leur libellé et le crayon vivent…
-  for (const name of ['kobi-wave', 'kobi-bob', 'kobi-scribble', 'kobi-rec', 'rec-blink', 'rec-onde', 'kicker-bob', 'crayon-gratte']) {
+  for (const name of ['kobi-fin', 'kobi-gras', 'kobi-bob', 'kobi-scribble', 'kobi-rec', 'rec-blink', 'rec-onde', 'kicker-bob', 'crayon-gratte']) {
     expect(before.map((a) => a.name)).toContain(name);
   }
   // … mais aucune ne produit d'image d'elle-même : le métronome les fait avancer ensemble.
@@ -162,9 +166,11 @@ test('repos économe en réunion : tout bouge encore, au rythme d’un seul mét
   await expectNoErrors(errors);
 });
 
-test('au repos, un geste (animation Web) suit le métronome puis se termine normalement', async ({ page }) => {
+test('économie d’énergie : au repos, un geste (animation Web) suit le métronome puis se termine normalement', async ({ page }) => {
   await page.clock.install();
   const errors = await openUi(page, '');
+  // Économie d'énergie activée (KOB-200) : l'ancien repos économe.
+  await page.evaluate(() => window.kobiAnimations.poser({ economie: true }));
   await page.clock.runFor(23_000);
   await expect(page.locator('.stage')).toHaveClass(/econome/);
   const state = await page.evaluate(() => {

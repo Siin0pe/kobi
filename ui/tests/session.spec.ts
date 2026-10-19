@@ -118,8 +118,8 @@ test('démarrer puis terminer une réunion depuis la webview', async ({ page }) 
   // `etat_enregistrement` est inconnue de cette coque : repli sur `etat_session`.
   // `historique` (KOB-133) l'est aussi : l'historique reste vide, sans erreur.
   // `etat_voix_ui` : réglage de la voix (KOB-142) ; `etat_ecoute` : état initial du menu du clic droit (KOB-139) ;
-  // `son_ordi` : son de l'ordinateur capté ou non (KOB-164).
-  expect(invokes.filter((c) => !['etat_voix_ui', 'etat_ecoute', 'son_ordi'].includes(c))).toEqual(['etat_session', 'etat_enregistrement', 'historique', 'etat_session', 'demarrer', 'pause', 'reprendre', 'terminer', 'pause']);
+  // `son_ordi` : son de l'ordinateur capté ou non (KOB-164) ; `reglage_animations` : images par seconde (KOB-200).
+  expect(invokes.filter((c) => !['etat_voix_ui', 'etat_ecoute', 'son_ordi', 'reglage_animations'].includes(c))).toEqual(['etat_session', 'etat_enregistrement', 'historique', 'etat_session', 'demarrer', 'pause', 'reprendre', 'terminer', 'pause']);
   await expectNoErrors(errors);
 });
 

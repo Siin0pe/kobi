@@ -2,7 +2,6 @@
    docs/design/mascotte/Glyphe.dc.html (noms préfixés par `kobi-`, sélecteurs
    limités à `.kobi`). Coordonnées dans la scène de 820 × 560 px. */
 
-@keyframes kobi-wave{0%,100%{font-variation-settings:"wght" 350,"CASL" 0,"slnt" 0}50%{font-variation-settings:"wght" 1000,"CASL" 1,"slnt" -12}}
 @keyframes kobi-thump{0%,100%{font-variation-settings:"wght" 700,"CASL" 1;transform:scale(1)}50%{font-variation-settings:"wght" 1000,"CASL" 1;transform:scale(1.2)}}
 @keyframes kobi-spin{to{transform:rotate(360deg)}}
 @keyframes kobi-breathe{0%,100%{transform:scale(1)}50%{transform:scale(1.025,.975)}}
@@ -14,7 +13,8 @@
 @keyframes kobi-bounce{0%,100%{transform:translateY(0) scale(1,1)}15%{transform:translateY(0) scale(1.08,.9)}40%{transform:translateY(-28px) scale(.95,1.06) rotate(-3deg)}65%{transform:translateY(0) scale(1.05,.95)}80%{transform:translateY(-6px)}}
 @keyframes kobi-shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-12px) rotate(-2deg)}40%{transform:translateX(10px) rotate(2deg)}60%{transform:translateX(-7px)}80%{transform:translateX(4px)}}
 @keyframes kobi-droop{to{transform:translateY(8px) rotate(5deg)}}
-@keyframes kobi-zfloat{0%{transform:translate(0,0) scale(.6);opacity:0;font-variation-settings:"wght" 300}30%{opacity:1}100%{transform:translate(26px,-70px) scale(1.2);opacity:0;font-variation-settings:"wght" 1000}}
+/* Les « z » du repos : compositeur seul (KOB-200), sans graisse animée. */
+@keyframes kobi-zfloat{0%{transform:translate(0,0) scale(.6);opacity:0}30%{opacity:1}100%{transform:translate(26px,-70px) scale(1.2);opacity:0}}
 @keyframes kobi-ripple{0%{opacity:0;transform:translateX(-8px)}40%{opacity:1}100%{opacity:0;transform:translateX(16px);font-variation-settings:"wght" 1000}}
 @keyframes kobi-popbang{0%{transform:scale(0) rotate(-30deg)}60%{transform:scale(1.25) rotate(8deg)}100%{transform:scale(1) rotate(0)}}
 @keyframes kobi-bangpulse{0%,100%{font-variation-settings:"wght" 800,"CASL" 1}50%{font-variation-settings:"wght" 1000,"CASL" 1,"slnt" -15}}
@@ -69,7 +69,7 @@
 .kobi .fx,.kobi .orbit span,.kobi .word,.kobi .burst span{paint-order:stroke fill;-webkit-text-stroke:var(--halo,6px) #D7FF3A}
 .kobi .fx{position:absolute;display:none;font-family:'Recursive',monospace;color:#0B0B0B;--halo:5px}
 .kobi.m-idle .zz{display:block}
-.kobi .zz span{position:absolute;font-size:34px;animation:kobi-zfloat 2.6s ease-out infinite}
+.kobi .zz span{position:absolute;font-size:34px;font-variation-settings:"wght" 650;animation:kobi-zfloat 2.6s ease-out infinite}
 .kobi .zz span:nth-child(2){animation-delay:.85s;left:18px;font-size:26px}
 .kobi .zz span:nth-child(3){animation-delay:1.7s;left:-10px;font-size:22px}
 .kobi.m-listen .waves{display:flex}
@@ -87,17 +87,29 @@
 .kobi .orbit span{--halo:6px;position:absolute;left:50%;top:50%;margin:-28px 0 0 -18px;font-family:'Recursive',monospace;font-size:48px;line-height:1;color:#0B0B0B;will-change:transform,opacity}
 
 /* Le grand mot vit en permanence : chaque lettre ondule en graisse, CASL et
-   inclinaison (font-variation-settings) et sautille (translate, compositeur),
-   avec un décalage par lettre ; le mot entier respire (scale). */
+   inclinaison, et sautille (translate), avec un décalage par lettre ; le mot
+   entier respire (scale). L'ondulation se fait sans mise en page à chaque
+   image (KOB-200) : deux couches préparées de la lettre, fine et droite
+   (::before), grasse et casual (::after), passent de l'une à l'autre par
+   l'opacité, et penchent ensemble (skew) ; tout est composé par le GPU.
+   La lettre elle-même, transparente, ne fait que tenir sa place. */
 .kobi .word{--halo:8px;position:absolute;left:330px;top:410px;width:500px;text-align:center;font-size:104px;line-height:1;letter-spacing:-.03em;transform-origin:50% 70%;animation:kobi-word-breathe 3.6s ease-in-out infinite}
 @keyframes kobi-word-breathe{0%,100%{scale:1}50%{scale:1.03 .98}}
 @keyframes kobi-bob{0%,100%{translate:0 0}50%{translate:0 -7px}}
-.kobi .ch{display:inline-block;white-space:pre;animation:kobi-wave 2.4s ease-in-out infinite,kobi-bob 1.8s ease-in-out infinite}
-.kobi.m-listen .ch,.kobi.m-suggest .ch{animation-duration:1.1s,.9s}
-.kobi.m-done .ch{animation-duration:1.6s,.7s}
+.kobi .ch{position:relative;display:inline-block;white-space:pre;color:transparent;-webkit-text-stroke-color:transparent;font-variation-settings:"wght" 350,"CASL" 0;animation:kobi-bob 1.8s ease-in-out var(--d,0s) infinite}
+.kobi .ch::before,.kobi .ch::after{content:attr(data-c);position:absolute;left:0;top:0;color:#0B0B0B;-webkit-text-stroke-color:#D7FF3A;animation:kobi-fin 2.4s ease-in-out var(--d,0s) infinite}
+.kobi .ch::after{font-variation-settings:"wght" 1000,"CASL" 1;opacity:0;animation-name:kobi-gras}
+@keyframes kobi-fin{0%,100%{opacity:1;transform:skewX(0)}50%{opacity:0;transform:skewX(-12deg)}}
+@keyframes kobi-gras{0%,100%{opacity:0;transform:skewX(0)}50%{opacity:1;transform:skewX(-12deg)}}
+.kobi.m-listen .ch,.kobi.m-suggest .ch{animation-duration:.9s}
+.kobi.m-listen .ch::before,.kobi.m-listen .ch::after,.kobi.m-suggest .ch::before,.kobi.m-suggest .ch::after{animation-duration:1.1s}
+.kobi.m-done .ch{animation-duration:.7s}
+.kobi.m-done .ch::before,.kobi.m-done .ch::after{animation-duration:1.6s}
 /* Oups : le mot reste gras et penché, mais il bégaie (saccades) au lieu de se figer. */
 @keyframes kobi-stutter{0%,100%{translate:0 0}25%{translate:-2px 1px}50%{translate:2px -1px}75%{translate:-1px 0}}
-.kobi.m-error .ch{animation:kobi-stutter .6s steps(4) infinite;font-variation-settings:"wght" 1000,"slnt" -15}
+.kobi.m-error .ch{animation:kobi-stutter .6s steps(4) infinite}
+.kobi.m-error .ch::before{animation:none;opacity:1;font-variation-settings:"wght" 1000,"slnt" -15}
+.kobi.m-error .ch::after{display:none}
 
 /* Réunion enregistrée : anneau rouge autour de la pilule, dans tous les
    états. Il pulse lentement, à 7,5 images/s (steps) : une réunion dure des
@@ -141,14 +153,15 @@
    puis 2). Mesuré dans l'app (WebKitGTK sans GPU), redessiner la graisse d'une
    lettre cernée de son contour est le poste le plus cher : l'ondulation du mot
    ralentit, les autres mouvements gardent leur vitesse. Un seul « z » s'envole. */
-.kobi.m-idle.deep .ch,.kobi.m-write.deep .ch{animation-duration:8s,2.4s}
+.kobi.m-idle.deep .ch,.kobi.m-write.deep .ch{animation-duration:2.4s}
+.kobi.m-idle.deep .ch::before,.kobi.m-idle.deep .ch::after,.kobi.m-write.deep .ch::before,.kobi.m-write.deep .ch::after{animation-duration:8s}
 @keyframes kobi-zfloat-deep{0%{transform:translate(0,0) scale(.6);opacity:0}30%{opacity:1}100%{transform:translate(26px,-70px) scale(1.2);opacity:0}}
 .kobi.m-idle.deep .zz span{animation-name:kobi-zfloat-deep;font-variation-settings:"wght" 650}
 .kobi.m-idle.deep .zz span+span{visibility:hidden;animation:none}
 
 /* Réduire les animations : la mascotte garde ses expressions (yeux, mot,
    bouche, symboles), sans mouvement continu. */
-.kobi.reduced-motion *,.kobi.reduced-motion{animation:none!important;transition:none!important}
+.kobi.reduced-motion *,.kobi.reduced-motion,.kobi.reduced-motion .ch::before,.kobi.reduced-motion .ch::after{animation:none!important;transition:none!important}
 .kobi.reduced-motion .zz span{opacity:1}
 .kobi.reduced-motion .zz span:nth-child(1){transform:translate(14px,-36px)}
 .kobi.reduced-motion .zz span:nth-child(2){transform:translate(26px,-70px) scale(.9)}

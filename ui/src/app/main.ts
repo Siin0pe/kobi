@@ -16,8 +16,10 @@ import '../styles/fonts.css';
 import '../reglages/reglages.css';
 import './app.css';
 import { monterAccueil } from '../bienvenue/main';
+import { suivreCadence } from '../cadence';
 import { monterCarnet, type VueCarnet } from '../carnet/main';
 import { animationsReduites, h } from '../dom';
+import { Metronome } from '../econome';
 import { disponible, ecouter, invoke } from '../ipc';
 import { creerNotifieur } from '../notif';
 import { vivreTitres } from '../titre';
@@ -104,6 +106,15 @@ const masquer = () => {
     enPause = [];
   }
 };
+// Images par seconde réglées (KOB-200) : toute l'app suit le même métronome
+// que la mascotte, appliqué à chaud.
+const metronome = new Metronome(document.body, (fps) => (document.documentElement.dataset.fps = String(fps)));
+document.documentElement.dataset.fps = '0';
+suivreCadence((cadence, voulue) => {
+  document.documentElement.dataset.cadence = String(voulue);
+  metronome.setCadence(cadence);
+});
+document.addEventListener('visibilitychange', () => metronome.setSuspended(document.hidden));
 document.addEventListener('visibilitychange', masquer);
 masquer();
 // Titres vivants : une lettre d'un titre visible se brouille de temps en temps.

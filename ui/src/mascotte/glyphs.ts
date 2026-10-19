@@ -41,6 +41,15 @@ const LETTER_POP: Keyframe[] = [
 /** Paire d'yeux : gauche, droite. */
 export type Eyes = readonly [string, string];
 
+/**
+ * Écrit une lettre du mot. Son caractère est aussi dans `data-c` : les deux
+ * couches de graisse de l'ondulation (kobi.css, KOB-200) le reprennent.
+ */
+function poser(span: HTMLElement, c: string): void {
+  span.textContent = c;
+  span.dataset.c = c;
+}
+
 export class Scrambler {
   private eye = '';
   private letters: string[] = [];
@@ -68,7 +77,8 @@ export class Scrambler {
     const spans = this.letters.map((_, i) => {
       const span = document.createElement('span');
       span.className = 'ch';
-      span.style.animationDelay = `${(i * 0.12).toFixed(2)}s`;
+      // Décalage par lettre, repris par les couches de l'ondulation.
+      span.style.setProperty('--d', `${(i * 0.12).toFixed(2)}s`);
       return span;
     });
     // Une seule boucle à la fois : un changement d'état rapproché ne doit pas
@@ -122,7 +132,7 @@ export class Scrambler {
       if (k === step) return true;
       step = k;
       if (k < 4) {
-        span.textContent = noise(index * 5 + k * 3 + 1);
+        poser(span, noise(index * 5 + k * 3 + 1));
         return true;
       }
       this.endGlitch();
@@ -157,7 +167,7 @@ export class Scrambler {
     const spans = this.word.children;
     for (let i = 0; i < spans.length; i++) {
       const c = this.letters[i];
-      if (c !== undefined && spans[i]!.textContent !== c) spans[i]!.textContent = c;
+      if (c !== undefined && spans[i]!.textContent !== c) poser(spans[i] as HTMLElement, c);
     }
   }
 
@@ -166,7 +176,7 @@ export class Scrambler {
     this.glitched = null;
     if (!g) return;
     g.unsub();
-    g.span.textContent = g.final;
+    poser(g.span, g.final);
   }
 
   private loop(): void {
@@ -196,7 +206,7 @@ export class Scrambler {
       const c = text[i]!;
       if (span.textContent === c) continue;
       const settled = c === this.letters[i];
-      span.textContent = c;
+      poser(span, c);
       if (!live) continue;
       if (settled) {
         span.style.transform = '';

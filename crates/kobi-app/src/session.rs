@@ -236,6 +236,9 @@ pub fn installer<R: Runtime>(builder: Builder<R>) -> Builder<R> {
             crate::voix::etat_voix_ui,
             crate::voix::regler_voix,
             crate::voix::basculer_voix,
+            // Images par seconde et économie d'énergie (KOB-200).
+            crate::controle::reglage_animations,
+            crate::controle::regler_animations,
             // Fil d'activité affiché (KOB-152) : délai mesuré dans le journal.
             crate::chef::activite_affichee,
             // Dossiers de code lisibles (KOB-138), pour la fenêtre des réglages.
