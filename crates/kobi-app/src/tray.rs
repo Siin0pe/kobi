@@ -35,7 +35,13 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Exécute une entrée du menu (refus journalisés par `menu::executer`).
+/// Exécute une entrée du menu (refus journalisés par `menu::executer`), sur
+/// un fil à part : le menu de la barre système appelle sur le fil principal,
+/// où créer la fenêtre de l'app bloque WebView2 sous Windows (KOB-167).
 pub fn handle<R: Runtime>(app: &AppHandle<R>, id: &str) {
-    let _ = menu::executer(app, id);
+    let app = app.clone();
+    let id = id.to_owned();
+    std::thread::spawn(move || {
+        let _ = menu::executer(&app, &id);
+    });
 }

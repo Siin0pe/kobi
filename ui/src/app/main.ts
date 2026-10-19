@@ -9,6 +9,7 @@
 // `notes/<réunion>`, `rappels`, `activite`, `reglages`, `reglages/<panneau>`,
 // `a-propos`, `accueil`.
 
+import '../erreurs';
 import '../styles/fonts.css';
 import '../reglages/reglages.css';
 import './app.css';

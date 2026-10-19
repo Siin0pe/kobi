@@ -91,6 +91,11 @@ impl Section {
 
 /// Ouvre l'app sur `section` (sur la section en cours, ou les notes, si
 /// `None`), ou la ramène devant si elle est déjà ouverte.
+///
+/// Jamais depuis le fil principal une fois la boucle d'événements lancée
+/// (menu de la barre système, commande synchrone) : sous Windows, la
+/// création de la WebView y attend la boucle qu'elle bloque, et la fenêtre
+/// reste blanche (KOB-167). Voir `tray::handle`.
 pub fn ouvrir<R: Runtime>(app: &AppHandle<R>, section: Option<Section>) -> tauri::Result<()> {
     if let Some(w) = app.get_webview_window(FENETRE) {
         if let Some(s) = &section {
@@ -123,13 +128,35 @@ pub fn ouvrir<R: Runtime>(app: &AppHandle<R>, section: Option<Section>) -> tauri
 }
 
 /// Ouvre l'app sur une section donnée par son adresse (voir [`Section::lire`]).
-#[tauri::command]
+// Asynchrone : une commande synchrone tourne sur le fil principal, et y
+// créer la fenêtre bloque WebView2 sous Windows (fenêtre blanche, KOB-167).
+#[tauri::command(async)]
 pub fn ouvrir_app<R: Runtime>(app: AppHandle<R>, section: Option<String>) -> Result<(), String> {
     let section = match section.as_deref() {
         Some(a) => Some(Section::lire(a).ok_or_else(|| format!("section inconnue : {a}"))?),
         None => None,
     };
     ouvrir(&app, section).map_err(|e| e.to_string())
+}
+
+/// Erreur JavaScript d'une fenêtre (`window.onerror`, promesse rejetée sans
+/// `catch`), écrite dans le journal (KOB-167) : une fenêtre blanche dit
+/// enfin pourquoi.
+#[tauri::command]
+pub fn erreur_interface<R: Runtime>(
+    fenetre: tauri::WebviewWindow<R>,
+    erreur: String,
+    source: Option<String>,
+    ligne: Option<u32>,
+) {
+    let erreur: String = erreur.chars().take(500).collect();
+    tracing::error!(
+        fenetre = fenetre.label(),
+        erreur = %erreur,
+        source = source.as_deref().unwrap_or(""),
+        ligne = ligne.unwrap_or(0),
+        "erreur de l'interface"
+    );
 }
 
 #[derive(Debug, Clone, Serialize)]

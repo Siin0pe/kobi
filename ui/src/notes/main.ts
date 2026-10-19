@@ -4,6 +4,7 @@
 // réunion en cours) et rafraîchi sur les événements `notes` et
 // `enregistrement`, avec une relecture régulière en secours.
 
+import '../erreurs';
 import '../styles/fonts.css';
 import '../reglages/reglages.css';
 import './notes.css';

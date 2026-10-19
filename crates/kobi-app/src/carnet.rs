@@ -58,7 +58,9 @@ pub struct Index {
     pub rappels: Vec<Rappel>,
 }
 
-#[tauri::command]
+// Asynchrone : une commande synchrone tourne sur le fil principal, et y
+// créer la fenêtre bloque WebView2 sous Windows (fenêtre blanche, KOB-167).
+#[tauri::command(async)]
 pub fn ouvrir_carnet<R: Runtime>(app: AppHandle<R>, reunion: Option<String>) -> Result<(), String> {
     ouvrir_sur(&app, reunion.as_deref()).map_err(|e| e.to_string())
 }

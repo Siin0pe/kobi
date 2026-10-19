@@ -259,6 +259,39 @@ pub fn init(dir: &Path) -> io::Result<()> {
         .map_err(|e| io::Error::other(e.to_string()))
 }
 
+/// Crochet de panique (KOB-167) : sans lui, une panique dans l'exécutable
+/// graphique de Windows ne laisse aucune trace. La panique va au journal, et
+/// avec son fil et sa trace dans `dir/crash-<horodatage>.txt` ; le crochet
+/// d'avant suit (message sur la sortie d'erreur).
+pub fn installer_crochet_panique(dir: &Path) {
+    let dir = dir.to_owned();
+    let precedent = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let fil = std::thread::current()
+            .name()
+            .unwrap_or("sans nom")
+            .to_owned();
+        let trace = std::backtrace::Backtrace::force_capture();
+        let fichier = dir.join(format!(
+            "crash-{}.txt",
+            jiff::Zoned::now().strftime("%Y%m%d-%H%M%S")
+        ));
+        tracing::error!(fil = %fil, panique = %info, fichier = %fichier.display(), "panique");
+        let _ = fs::write(
+            &fichier,
+            rapport_de_panique(&fil, &info.to_string(), &trace),
+        );
+        precedent(info);
+    }));
+}
+
+fn rapport_de_panique(fil: &str, panique: &str, trace: &impl fmt::Display) -> String {
+    format!(
+        "Kobi {}\nfil : {fil}\n{panique}\n\n{trace}\n",
+        jiff::Zoned::now().strftime("%Y-%m-%d %H:%M:%S %:z")
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -273,6 +306,40 @@ mod tests {
             }
         }
         tout
+    }
+
+    /// KOB-167 : une panique provoquée exprès apparaît dans le journal et
+    /// dans un `crash-*.txt`.
+    #[test]
+    fn panique_dans_le_journal() {
+        let dir = tempfile::tempdir().unwrap();
+        let chemin = dir.path().to_owned();
+        std::thread::Builder::new()
+            .name("essai-panique".into())
+            .spawn(move || {
+                let abonne = subscriber(&chemin).unwrap();
+                tracing::subscriber::with_default(abonne, || {
+                    installer_crochet_panique(&chemin);
+                    let r = std::panic::catch_unwind(|| panic!("panique provoquée exprès"));
+                    let _ = std::panic::take_hook();
+                    assert!(r.is_err());
+                });
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        let log = lire_tout(dir.path());
+        assert!(log.contains("panique provoquée exprès"), "{log}");
+        assert!(log.contains("essai-panique"), "{log}");
+        let crash: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with("crash-"))
+            .collect();
+        assert_eq!(crash.len(), 1);
+        let texte = fs::read_to_string(crash[0].path()).unwrap();
+        assert!(texte.contains("panique provoquée exprès"));
+        assert!(texte.contains("fil : essai-panique"));
     }
 
     #[test]

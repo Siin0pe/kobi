@@ -352,7 +352,9 @@ pub fn executer<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<(), String> 
 }
 
 /// Entrée choisie dans le menu du clic droit.
-#[tauri::command]
+// Asynchrone : une commande synchrone tourne sur le fil principal, et y
+// créer la fenêtre bloque WebView2 sous Windows (fenêtre blanche, KOB-167).
+#[tauri::command(async)]
 pub fn menu_kobi<R: Runtime>(app: AppHandle<R>, entree: String) -> Result<(), String> {
     executer(&app, &entree)
 }

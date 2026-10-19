@@ -298,7 +298,9 @@ pub fn basculer<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<bool> {
     Ok(true)
 }
 
-#[tauri::command]
+// Asynchrone : une commande synchrone tourne sur le fil principal, et y
+// créer la fenêtre bloque WebView2 sous Windows (fenêtre blanche, KOB-167).
+#[tauri::command(async)]
 pub fn basculer_notes<R: Runtime>(app: AppHandle<R>) -> Result<bool, String> {
     basculer(&app).map_err(|e| e.to_string())
 }
