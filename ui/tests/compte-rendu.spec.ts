@@ -45,9 +45,11 @@ test('« Plus tard » ou une nouvelle question replie la carte en badge sur la t
   await emit(page, 'state', { etat: 'veille', activite: 'ecoute', mascotte: 'listen', transcrit: false });
   await expect(card).toBeHidden();
   await expect(pill).toBeVisible();
-  // Accroché à la tête qui bouge (KOB-204) : jamais « immobile », d'où le clic forcé.
+  // Accroché à la tête qui bouge (KOB-204) : jamais « immobile », d'où le
+  // clic forcé, une fois fini son rebond d'arrivée.
+  await expect.poll(() => pill.evaluate((n) => n.getAnimations().length)).toBe(0);
   await pill.click({ force: true });
-  expect(await calls(page)).toContainEqual(['ouvrir_carnet', { reunion: CR.reunion }]);
+  await expect.poll(() => calls(page)).toContainEqual(['ouvrir_carnet', { reunion: CR.reunion }]);
   await expect(pill).toBeHidden();
   await expectNoErrors(errors);
 });

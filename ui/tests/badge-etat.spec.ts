@@ -60,6 +60,34 @@ test('survol : le badge se déploie et dit ce qu’il fait ; clic : ouvre le com
   await b.click({ force: true });
   expect(await calls(page)).toContainEqual(['ouvrir_carnet', { reunion: CR.reunion }]);
   await expect(b).toBeHidden();
+  // Le clic s'arrête au badge : la bulle d'écriture de Kobi ne s'ouvre pas.
+  await page.waitForTimeout(300);
+  await expect(page.locator('.ecrire')).toBeHidden();
+  await expectNoErrors(errors);
+});
+
+test('au clavier (Entrée) : ouvre le compte rendu, sans ouvrir la bulle d’écriture', async ({ page }) => {
+  await mockTauri(page);
+  const errors = await openUi(page, '');
+  const b = await badge(page);
+  await b.focus();
+  await page.keyboard.press('Enter');
+  expect(await calls(page)).toContainEqual(['ouvrir_carnet', { reunion: CR.reunion }]);
+  await page.waitForTimeout(300);
+  await expect(page.locator('.ecrire')).toBeHidden();
+  await expectNoErrors(errors);
+});
+
+test('le badge s’efface devant la vue agrandie, puis revient', async ({ page }) => {
+  await mockTauri(page);
+  const errors = await openUi(page, '');
+  const b = await badge(page);
+  await emit(page, 'vue', { action: 'ouvrir' });
+  await expect(page.locator('.stage')).toHaveClass(/vue-ouverte/);
+  await expect(b).toBeHidden();
+  await emit(page, 'vue', { action: 'fermer' });
+  await expect(page.locator('.stage')).not.toHaveClass(/vue-ouverte/);
+  await expect(b).toBeVisible();
   await expectNoErrors(errors);
 });
 

@@ -79,7 +79,12 @@ export class ReportCard {
     this.pill.append(icone, el('span', 'rapport-badge-texte', 'Compte rendu prêt · ouvrir'));
     this.pill.setAttribute('aria-label', 'Compte rendu prêt : ouvrir dans l’app');
     this.pill.title = 'Compte rendu prêt · clic droit : plus tard';
-    this.pill.addEventListener('click', () => this.open());
+    // Accroché dans le dessin de Kobi : le clic ne va pas plus loin (il
+    // ouvrirait aussi la bulle d'écriture, ecrire.ts).
+    this.pill.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.open();
+    });
     // Ni le pincement de Kobi ni le déplacement de la fenêtre.
     this.pill.addEventListener('pointerdown', (e) => e.stopPropagation());
     // Clic droit : « plus tard », le compte rendu reste dans le Carnet.

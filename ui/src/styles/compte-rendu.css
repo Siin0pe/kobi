@@ -33,7 +33,8 @@
   visibility: hidden;
 }
 .stage:has(.notifs .notif:not(.leaving)) .rapport-badge,
-.history-open .rapport-badge {
+.history-open .rapport-badge,
+.vue-ouverte .rapport-badge {
   display: none;
 }
 .card-rapport .kicker {
