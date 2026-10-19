@@ -126,6 +126,38 @@ test('fermeture comme un menu natif : choix, Échap, clavier, perte du focus', a
   await expectNoErrors(errors);
 });
 
+test('fenêtre du menu refusée par la coque : le menu se referme et la mascotte est prévenue', async ({ page }) => {
+  await page.addInitScript(() => {
+    const appels: Appel[] = [];
+    (window as unknown as Record<string, unknown>).__appels = appels;
+    (window as unknown as Record<string, unknown>).__TAURI__ = {
+      event: { listen: async () => () => {} },
+      core: {
+        invoke: async (cmd: string, args?: Record<string, unknown>) => {
+          appels.push({ cmd, args });
+          if (cmd === 'montrer_menu') throw 'fenêtre du menu indisponible';
+          return null;
+        },
+      },
+    };
+  });
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(String(e)));
+  await page.goto('/menu.html');
+  await page.waitForFunction(() => '__ouvrirMenu' in window);
+  await page.evaluate(() =>
+    (window as unknown as { __ouvrirMenu(o: unknown): Promise<void> }).__ouvrirMenu({
+      pointeur: { x: 100, y: 100 },
+      zone: { x: 0, y: 0, largeur: 1920, hauteur: 1032 },
+      echelle: 1,
+      contexte: { recording: false, paused: false, compact: false, voice: false },
+    }),
+  );
+  await expect(page.locator('.kmenu')).toBeHidden();
+  expect((await appels(page)).filter((a) => a.cmd === 'menu_choisi').map((a) => a.args?.entree)).toEqual([null]);
+  await expectNoErrors(errors);
+});
+
 test('libellés selon l’état : réunion en cours', async ({ page }) => {
   const errors = await pageMenu(page);
   await page.evaluate(() =>

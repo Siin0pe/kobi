@@ -96,12 +96,19 @@ export async function ouvrir(o: Ouverture): Promise<void> {
   root.style.setProperty('--oy', place.versHaut ? `${height}px` : '0px');
   root.dataset.coin = `${place.versHaut ? 'bas' : 'haut'}-${place.versGauche ? 'droite' : 'gauche'}`;
   ouvert = true;
-  await tauri()?.core.invoke('montrer_menu', {
-    x: Math.round(place.x - BORD * e),
-    y: Math.round(place.y - BORD * e),
-    largeur: Math.ceil((width + BORD + OMBRE) * e),
-    hauteur: Math.ceil((height + BORD + OMBRE) * e),
-  });
+  try {
+    await tauri()?.core.invoke('montrer_menu', {
+      x: Math.round(place.x - BORD * e),
+      y: Math.round(place.y - BORD * e),
+      largeur: Math.ceil((width + BORD + OMBRE) * e),
+      hauteur: Math.ceil((height + BORD + OMBRE) * e),
+    });
+  } catch {
+    // Fenêtre jamais montrée (refus du gestionnaire de fenêtres…) : aucun
+    // `blur` ne la fermerait ; la mascotte retrouve tout de suite son état.
+    fermer();
+    return;
+  }
   void root.offsetWidth;
   root.classList.add('opening');
   items[0]?.focus({ preventScroll: true });
