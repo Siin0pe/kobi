@@ -4,6 +4,8 @@ import { expectNoErrors, openUi } from './helpers';
 // Vidéo de la carte de validation (KOB-62), jointe au ticket : fenêtre native
 // (410 × 280) filmée en 820 × 560.
 test.use({ viewport: { width: 410, height: 280 }, deviceScaleFactor: 2, video: { mode: 'on', size: { width: 820, height: 560 } } });
+// Vidéo pour le ticket seulement, pas en vérification (KOB-172).
+test.skip(!process.env.KOBI_PW_VIDEOS, 'vidéo des tickets : KOBI_PW_VIDEOS=1');
 
 const CARTES = [
   {
