@@ -98,6 +98,11 @@ export class Bubbles {
     if (this.card) this.card.dataset.typing = '0';
   }
 
+  /** Texte source de la bulle arrêtée (markdown compris), pas sa version affichée. */
+  frozenText(): string | null {
+    return this.typer?.text ?? null;
+  }
+
   setPaused(paused: boolean): void {
     this.root.classList.toggle('paused', paused);
   }

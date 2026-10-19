@@ -168,6 +168,41 @@ test('Échap interrompt la réponse : la frappe s’arrête net et la suite du f
   await expectNoErrors(errors);
 });
 
+for (const moment of ['tapée', 'en cours de frappe'] as const) {
+  test(`Échap sur une réponse mise en forme (${moment}), puis un morceau tardif : elle garde sa forme et ne se retape pas (KOB-230)`, async ({ page }) => {
+    await mockTauri(page);
+    // La vue agrandie reste fermée : Échap s'adresse à la bulle.
+    await page.addInitScript(() => localStorage.setItem('kobi.affichage', JSON.stringify({ auto: 'jamais' })));
+    const errors = await openUi(page, '');
+    const md = '**Deux pistes :**\n\n- `api/src/auth/refresh.ts`, ligne 88\n- `app/lib/session.dart`, ligne 41\n\nLa durée actuelle est de quinze minutes.';
+    await emit(page, 'state', { etat: 'veille', activite: 'repond', mascotte: 'answer', transcrit: false });
+    await emit(page, 'answer', md);
+    const card = page.locator('[data-card=answer]');
+    const text = card.locator('.text');
+    if (moment === 'tapée') await expect(card).toHaveAttribute('data-typing', '0', { timeout: 15_000 });
+    // En cours de frappe : déjà la liste, pas encore la fin.
+    else await expect(text.locator('li')).toHaveCount(1, { timeout: 15_000 });
+    await page.keyboard.press('Escape');
+    expect(await calls(page)).toContainEqual(['interrompre', null]);
+    const avant = await text.innerHTML();
+    // Le texte ne doit jamais repartir de zéro (ni s'aplatir) après Échap.
+    await page.evaluate(() => {
+      const w = window as unknown as { min: number };
+      const n = document.querySelector('[data-card=answer] .text')!;
+      w.min = n.textContent!.length;
+      new MutationObserver(() => (w.min = Math.min(w.min, n.textContent!.length))).observe(n, { subtree: true, childList: true, characterData: true });
+    });
+    // Un morceau du flux encore en route arrive après Échap.
+    await emit(page, 'answer', `${md} Un ticket ouvert en parle déjà.`);
+    // Contrôle négatif : 800 ms laissés au texte pour se retaper.
+    await page.waitForTimeout(800);
+    expect(await text.innerHTML()).toBe(avant);
+    await expect(text.locator('strong')).toHaveText('Deux pistes :');
+    expect(await page.evaluate(() => (window as unknown as { min: number }).min)).toBe((await text.textContent())!.length);
+    await expectNoErrors(errors);
+  });
+}
+
 test('réunion : la dernière note de l’événement enregistrement s’écrit dans la fiche de Kobi', async ({ page }) => {
   await mockTauri(page);
   const errors = await openUi(page, '');
