@@ -10,6 +10,11 @@
 //!   arrière-plan sur sa session, et la conversation passe sur une session
 //!   de réserve déjà chaude. Une carte de confirmation détache aussi le
 //!   tour : la conversation continue pendant que la carte attend son clic.
+//!   Fini, le tour rend sa session à la conversation, qui la reprend avec
+//!   son contexte. Une question qui suit de près ([`RAFALE`]) une tâche
+//!   encore en cours l'attend ([`ATTENTE_RAFALE`] au plus) et reprend sa
+//!   session : une rafale ne fait plus une session et une tâche détachée
+//!   par question (KOB-238).
 //! * les **notes** mettent à jour les notes de la réunion par blocs et
 //!   écrivent le compte rendu.
 //!
@@ -44,6 +49,12 @@ pub const PATIENCE: Duration = Duration::from_secs(15);
 /// Un tour sans aucune activité (texte, outil) pendant ce délai est
 /// abandonné et sa session fermée (KOB-68).
 pub const ABANDON: Duration = Duration::from_secs(45);
+/// Une question qui arrive moins de ce délai après la précédente, encore en
+/// cours en arrière-plan, est de la même rafale (KOB-238).
+pub const RAFALE: Duration = Duration::from_secs(10);
+/// Dans une rafale, une question attend au plus ce délai la session de la
+/// tâche en cours avant d'en prendre une de réserve.
+pub const ATTENTE_RAFALE: Duration = Duration::from_secs(20);
 /// Hors ligne, la première question en attente est reposée à ce rythme.
 pub const REESSAI_RESEAU: Duration = Duration::from_secs(20);
 /// Outils internes de Claude Code, qui ne font pas d'un tour une tâche.
@@ -407,6 +418,11 @@ async fn conversation(
     // la file d'attente).
     let mut prochaine: Option<Question> = None;
     let mut echanges: VecDeque<(String, String)> = VecDeque::new();
+    // Sessions rendues par les tâches finies (KOB-238).
+    let (rendue_tx, mut rendues) = mpsc::unbounded_channel::<Session>();
+    // Moment de la dernière question prise : une suivante proche est de la
+    // même rafale.
+    let mut derniere: Option<tokio::time::Instant> = None;
     loop {
         let q = if let Some(q) = prochaine.take() {
             q
@@ -445,6 +461,15 @@ async fn conversation(
                     reessai_depuis(&mut reessai, &en_attente);
                     continue;
                 }
+                Some(s) = rendues.recv() => {
+                    // Une tâche finie rend sa session : la conversation la
+                    // reprend si elle n'en a pas (sinon elle se ferme).
+                    if session.is_none() {
+                        tracing::info!("session de la tâche reprise par la conversation");
+                        session = Some(s);
+                    }
+                    continue;
+                }
                 _ = reessai.tick(), if !en_attente.is_empty() => {
                     tracing::info!(attente = en_attente.len(), "réseau : question reposée");
                     en_attente.pop_front().expect("file non vide")
@@ -452,6 +477,45 @@ async fn conversation(
             }
         };
         let tour = q.tour;
+        let arrivee = tokio::time::Instant::now();
+        let en_rafale = derniere.is_some_and(|d| arrivee.duration_since(d) < RAFALE);
+        derniere = Some(arrivee);
+        if session.is_none() {
+            if let Ok(s) = rendues.try_recv() {
+                session = Some(s);
+            } else if en_rafale && !taches.lock().unwrap_or_else(|e| e.into_inner()).is_empty() {
+                // Rafale (KOB-238) : la question attend la tâche en cours et
+                // reprend sa session, au lieu d'en ouvrir une de plus.
+                tracing::info!(
+                    tour,
+                    "rafale : la question attend la session de la tâche en cours"
+                );
+                // Kobi « réfléchit » déjà (question envoyée). Un arrêt de
+                // cette question pendant l'attente l'annule : elle n'est pas
+                // posée (relecture de kobi-qualite).
+                let fin_attente = tokio::time::Instant::now() + ATTENTE_RAFALE;
+                let mut annulee = false;
+                loop {
+                    tokio::select! {
+                        s = rendues.recv() => {
+                            session = s;
+                            break;
+                        }
+                        Some(arret) = arrets.recv() => {
+                            if arret == tour {
+                                annulee = true;
+                                break;
+                            }
+                        }
+                        () = tokio::time::sleep_until(fin_attente) => break,
+                    }
+                }
+                if annulee {
+                    tracing::info!(tour, "rafale : question arrêtée avant d'être posée");
+                    continue;
+                }
+            }
+        }
         // Le délai d'annonce court dès la question, ouverture de session comprise.
         let annonce = tokio::time::Instant::now() + ANNONCE;
         if session.is_none() {
@@ -474,17 +538,22 @@ async fn conversation(
                     attente: attente_tx.clone(),
                     echanges: echanges.iter().cloned().collect(),
                 };
-                let (sortie, cartes) = (sortie.clone(), cartes.clone());
+                let (sortie, cartes, rendue) = (sortie.clone(), cartes.clone(), rendue_tx.clone());
                 detacher(&taches, tour, async move {
                     match prete
                         .await
                         .unwrap_or_else(|e| Err(BrainError::Crashed(e.to_string())))
                     {
                         Ok(s) => {
-                            // La session vit jusqu'à la fin du tour.
+                            // La session vit jusqu'à la fin du tour, puis
+                            // revient à la conversation.
                             let mut s = Some(s);
                             let turn = poser(&mut s, &reprise.question);
-                            finir(turn, String::new(), reprise, &sortie, &cartes).await;
+                            if finir(turn, String::new(), reprise, &sortie, &cartes).await {
+                                if let Some(s) = s {
+                                    let _ = rendue.send(s);
+                                }
+                            }
                         }
                         Err(e) => echec_d_ouverture(e, reprise.question, &reprise.attente, &sortie),
                     }
@@ -548,10 +617,15 @@ async fn conversation(
                     attente: attente_tx.clone(),
                     echanges: echanges.iter().cloned().collect(),
                 };
-                let (sortie, cartes) = (sortie.clone(), cartes.clone());
+                let (sortie, cartes, rendue) = (sortie.clone(), cartes.clone(), rendue_tx.clone());
                 detacher(&taches, tour, async move {
-                    let _session = detachee;
-                    finir(turn, texte, reprise, &sortie, &cartes).await;
+                    // La session vit jusqu'à la fin du tour, puis revient à
+                    // la conversation (KOB-238).
+                    if finir(turn, texte, reprise, &sortie, &cartes).await {
+                        if let Some(s) = detachee {
+                            let _ = rendue.send(s);
+                        }
+                    }
                 });
             }
         }
@@ -715,13 +789,14 @@ async fn suivre(
 /// Toujours sans texte après `PATIENCE` : Kobi dit qu'il s'en occupe ; sans
 /// aucune activité pendant `ABANDON` : abandon. S'il plante, la question est
 /// reposée une fois sur une session neuve ; hors ligne, elle part en attente.
+/// `true` si le tour s'est fini normalement : sa session peut resservir.
 async fn finir(
     mut turn: Turn,
     mut texte: String,
     reprise: Reprise,
     sortie: &Sortie,
     cartes: &Cartes,
-) {
+) -> bool {
     let tour = reprise.question.tour;
     let patience = tokio::time::sleep(PATIENCE.saturating_sub(ANNONCE));
     tokio::pin!(patience);
@@ -743,13 +818,15 @@ async fn finir(
                 }
                 tracing::warn!(tour, "tâche sans activité : abandon");
                 sortie(Retour::Erreur { tour, message: BrainError::Timeout(ABANDON).to_string() });
-                return;
+                return false;
             }
         };
         inactif
             .as_mut()
             .reset(tokio::time::Instant::now() + ABANDON);
-        let Some(evenement) = evenement else { return };
+        let Some(evenement) = evenement else {
+            return false;
+        };
         match evenement {
             BrainEvent::Text(t) => {
                 patient = true;
@@ -767,7 +844,7 @@ async fn finir(
             BrainEvent::Done(fin) => {
                 let texte = if fin.text.is_empty() { texte } else { fin.text };
                 sortie(Retour::Resultat { tour, texte });
-                return;
+                return true;
             }
             BrainEvent::Error(e) => match classer(&e) {
                 Panne::Plantage if !reprise.question.relancee => {
@@ -779,27 +856,28 @@ async fn finir(
                             let mut reprise = reprise;
                             reprise.question = relancee(reprise.question, &reprise.echanges);
                             let turn = poser(&mut s, &reprise.question);
-                            return Box::pin(finir_relance(turn, reprise, sortie, cartes, s)).await;
+                            Box::pin(finir_relance(turn, reprise, sortie, cartes, s)).await;
+                            return false;
                         }
                         Err(e) => {
                             sortie(Retour::Erreur {
                                 tour,
                                 message: e.to_string(),
                             });
-                            return;
+                            return false;
                         }
                     }
                 }
                 Panne::HorsLigne => {
                     let _ = reprise.attente.send(reprise.question.clone());
-                    return;
+                    return false;
                 }
                 _ => {
                     sortie(Retour::Erreur {
                         tour,
                         message: e.to_string(),
                     });
-                    return;
+                    return false;
                 }
             },
         }
@@ -828,6 +906,7 @@ async fn finir_relance(
     cartes: &Cartes,
     _session: Option<Session>,
 ) {
+    // Session neuve d'une relance : elle se ferme avec le tour.
     finir(turn, String::new(), reprise, sortie, cartes).await;
 }
 
@@ -1316,6 +1395,108 @@ mod tests {
             }
         });
         assert!(annonce < reponse && reponse < resultat, "{recus:?}");
+    }
+
+    /// KOB-238 : la rafale du journal (3 questions en 13 s, la première
+    /// longue) passe dans une seule session, dans l'ordre ; la réserve ne
+    /// sert pas, et rien n'est annoncé (la tâche finit avant `PATIENCE`).
+    #[tokio::test(start_paused = true)]
+    async fn rafale_dans_une_seule_session() {
+        let (s, recus) = sortie();
+        let a = vec![
+            vec![Step::Wait(Duration::from_secs(9)), Step::Text("r1".into())],
+            vec![Step::Text("r2".into())],
+            vec![Step::Text("r3".into())],
+        ];
+        let reserve = vec![vec![Step::Text("autre session".into())]; 3];
+        let c = Cerveau::lancer(fabrique(vec![a, reserve.clone(), reserve]), s);
+        c.demander(question(1, "longue phrase prise pour une question"));
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        c.demander(question(2, "et ça ?"));
+        tokio::time::sleep(Duration::from_secs(8)).await;
+        c.demander(question(3, "et encore ?"));
+        attendre(&recus, |r| matches!(r, Retour::Fin { tour: 3, .. })).await;
+        let recus: Vec<Retour> = recus
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, r)| r.clone())
+            .collect();
+        let fins: Vec<(u64, &str)> = recus
+            .iter()
+            .filter_map(|r| match r {
+                Retour::Resultat { tour, texte } | Retour::Fin { tour, texte } => {
+                    Some((*tour, texte.as_str()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(fins, [(1, "r1"), (2, "r2"), (3, "r3")], "{recus:?}");
+        // Au plus le détachement de la première ; aucune annonce de patience.
+        let detaches = recus
+            .iter()
+            .filter(|r| matches!(r, Retour::Detache { .. }))
+            .count();
+        assert!(detaches <= 1, "{recus:?}");
+        assert!(!recus.iter().any(|r| matches!(r, Retour::Patience { .. })));
+    }
+
+    /// Arrêtée pendant qu'elle attend la tâche de la rafale, la question
+    /// n'est jamais posée ; la suivante l'est (relecture de kobi-qualite).
+    #[tokio::test(start_paused = true)]
+    async fn rafale_arret_pendant_l_attente() {
+        let (s, recus) = sortie();
+        let a = vec![
+            vec![Step::Wait(Duration::from_secs(9)), Step::Text("r1".into())],
+            vec![Step::Text("r3".into())],
+        ];
+        let c = Cerveau::lancer(fabrique(vec![a]), s);
+        c.demander(question(1, "longue"));
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        c.demander(question(2, "arrêtée"));
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        c.demander(Demande::Interrompre { tour: 2 });
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        c.demander(question(3, "suivante"));
+        attendre(&recus, |r| matches!(r, Retour::Fin { tour: 3, .. })).await;
+        let recus = recus.lock().unwrap();
+        assert!(
+            !recus.iter().any(|(_, r)| matches!(
+                r,
+                Retour::Fin { tour: 2, .. } | Retour::Texte { tour: 2, .. }
+            )),
+            "{recus:?}"
+        );
+        assert!(
+            recus
+                .iter()
+                .any(|(_, r)| matches!(r, Retour::Fin { tour: 3, texte } if texte == "r3")),
+            "{recus:?}"
+        );
+    }
+
+    /// Une question posée bien après (hors rafale) n'attend pas la tâche
+    /// longue : Kobi reste disponible (KOB-152).
+    #[tokio::test(start_paused = true)]
+    async fn hors_rafale_la_question_n_attend_pas() {
+        let (s, recus) = sortie();
+        let longue = vec![vec![
+            Step::Wait(Duration::from_secs(60)),
+            Step::Text("r1".into()),
+        ]];
+        let autre = vec![vec![Step::Text("tout de suite".into())]];
+        let c = Cerveau::lancer(fabrique(vec![longue, autre]), s);
+        c.demander(question(1, "lis toute la codebase"));
+        tokio::time::sleep(RAFALE + Duration::from_secs(2)).await;
+        // Temps de tokio (en pause dans ce test), pas l'horloge du système.
+        let posee = tokio::time::Instant::now();
+        c.demander(question(2, "quelle heure ?"));
+        attendre(&recus, |r| matches!(r, Retour::Fin { tour: 2, .. })).await;
+        assert!(
+            posee.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            recus.lock().unwrap()
+        );
     }
 
     #[tokio::test(start_paused = true)]

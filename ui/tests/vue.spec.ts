@@ -307,3 +307,39 @@ test('ancien format : « Toujours », choisi exprès, reste', async ({ page }) =
   await page.goto('/app.html#reglages/affichage');
   await expect(page.getByRole('radiogroup', { name: 'Ouvrir la conversation en grand' }).getByRole('radio', { name: /Toujours/ })).toHaveAttribute('aria-checked', 'true');
 });
+
+// KOB-238 : la vue ne s'ouvre seule qu'une fois par conversation, et jamais pendant une rafale.
+const veille = (page: Page) => emit(page, 'state', { etat: 'veille', activite: null, mascotte: 'idle', transcrit: false });
+const calme = (page: Page) => emit(page, 'state', { etat: 'assistant', activite: 'calme', mascotte: 'idle', transcrit: false });
+
+test('ouverture seule : une fois par conversation, de nouveau après la veille (KOB-238)', async ({ page }) => {
+  const errors = await kobi(page, { auto: 'toujours', delai: 0 });
+  await repond(page, 'q1', 'Première réponse.');
+  await expect(vue(page)).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(vue(page)).toBeHidden();
+  await calme(page);
+  await page.waitForTimeout(10_500);
+  await repond(page, 'q2', 'Deuxième réponse, même conversation.');
+  await page.waitForTimeout(800);
+  await expect(vue(page)).toBeHidden();
+  // Conversation finie (veille), puis une nouvelle : elle peut s'ouvrir seule.
+  await veille(page);
+  await page.waitForTimeout(10_500);
+  await repond(page, 'q3', 'Réponse d’une nouvelle conversation.');
+  await expect(vue(page)).toBeVisible();
+  await expectNoErrors(errors);
+});
+
+test('rafale : deux réponses à moins de 10 s, la seconde n’ouvre rien (KOB-238)', async ({ page }) => {
+  const errors = await kobi(page, { auto: 'toujours', delai: 0 });
+  await repond(page, 'q1', 'Première réponse.');
+  await expect(vue(page)).toBeVisible();
+  await page.keyboard.press('Escape');
+  await veille(page);
+  await repond(page, 'q2', 'Deuxième réponse, deux secondes après.');
+  await page.waitForTimeout(800);
+  await expect(vue(page)).toBeHidden();
+  expect((await calls(page)).filter(([c, a]) => c === 'agrandir_kobi' && (a as { grand?: boolean } | null)?.grand && (a as { appliquer?: boolean }).appliquer)).toHaveLength(1);
+  await expectNoErrors(errors);
+});

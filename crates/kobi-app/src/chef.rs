@@ -46,6 +46,9 @@ pub const EVENEMENT_ACTIVITE: &str = "activite";
 const PREMIER_BLOC: Duration = Duration::from_secs(60);
 /// Temps de lecture minimal d'une réponse avant le retour au calme.
 const LECTURE_MIN: Duration = Duration::from_secs(5);
+/// Entre le passage « au travail » et un résultat de tâche montré : la
+/// transition se voit (KOB-238).
+const TRANSITION_RESULTAT: Duration = Duration::from_millis(600);
 /// Temps d'affichage d'une erreur.
 const ERREUR_AFFICHEE: Duration = Duration::from_secs(6);
 /// Bulles gardées dans l'historique.
@@ -288,6 +291,12 @@ pub struct Chef<R: Runtime> {
     pour_conversation: String,
     /// Retour au calme prévu (fin de lecture d'une réponse, d'une erreur).
     calme_a: Option<(Instant, Evenement)>,
+    /// Résultats de tâches à montrer, un à la fois (KOB-238) : tour, texte,
+    /// question.
+    a_livrer: std::collections::VecDeque<(u64, String, Option<String>)>,
+    /// Le prochain résultat attend ce moment (Kobi vient de passer « au
+    /// travail » : la transition se voit avant la réponse).
+    livrable_a: Option<Instant>,
     /// Dernier tour de la conversation du quotidien ouverte chez l'écrivain
     /// (KOB-141), s'il y en a une.
     conversation: Option<Instant>,
@@ -492,6 +501,8 @@ impl<R: Runtime> Chef<R> {
             cartes: BTreeMap::new(),
             pour_conversation: String::new(),
             calme_a: None,
+            a_livrer: Default::default(),
+            livrable_a: None,
             conversation: None,
             voix: None,
             suite_apres_voix: false,
@@ -1326,25 +1337,10 @@ impl<R: Runtime> Chef<R> {
                     b.question.clone()
                 });
                 self.emettre_historique();
-                // Livré dans la bulle si Kobi n'est pas en train d'écouter.
-                if matches!(
-                    self.activite(),
-                    Some("calme" | "fait" | "reflechit" | "repond" | "occupe") | None
-                ) {
-                    // La question n'est rappelée que si une autre a été posée
-                    // depuis : sinon la bulle la répétait (KOB-215).
-                    if tour != self.dernier {
-                        if let Some(q) = question {
-                            let _ = self.app.emit(EVENEMENT_QUESTION, &q);
-                        }
-                    }
-                    self.dernier = tour;
-                    self.transition(&[Evenement::Interpellation]);
-                    self.transition(&[Evenement::QuestionEnvoyee, Evenement::ReponseCommence]);
-                    let _ = self.app.emit(EVENEMENT_REPONSE, &texte);
-                    crate::voix::dire(&self.app, &texte);
-                    self.lire(&texte);
-                }
+                // Montré à son tour : plusieurs résultats arrivés ensemble
+                // passent l'un après l'autre (KOB-238).
+                self.a_livrer.push_back((tour, texte, question));
+                self.livrer();
             }
             Retour::Erreur { tour, message } => {
                 tracing::warn!(tour, %message, "tour en erreur");
@@ -1625,6 +1621,53 @@ impl<R: Runtime> Chef<R> {
         self.calme_a = Some((Instant::now() + ERREUR_AFFICHEE, Evenement::Acquitter));
     }
 
+    /// Montre le prochain résultat de tâche, s'il peut l'être : pas pendant
+    /// que Kobi écoute, propose une carte, parle, ou qu'une réponse se lit
+    /// encore. Kobi passe d'abord « au travail » s'il n'y est pas, puis la
+    /// réponse vient : une vraie transition, pas écoute → réflexion →
+    /// réponse dans la même milliseconde (KOB-238).
+    fn livrer(&mut self) {
+        if self.a_livrer.is_empty() {
+            return;
+        }
+        let activite = self.activite();
+        let lit_encore = self
+            .calme_a
+            .is_some_and(|(_, e)| matches!(e, Evenement::ReponseTerminee));
+        if matches!(
+            activite,
+            Some("ecoute" | "reflechit" | "repond" | "propose")
+        ) || lit_encore
+            || crate::voix::parle(&self.app)
+            || self.livrable_a.is_some_and(|t| Instant::now() < t)
+        {
+            return;
+        }
+        if activite != Some("occupe") {
+            // Sans état « au travail » possible ici (oups, fin…), on
+            // réessaie au prochain tic.
+            self.livrable_a = Some(Instant::now() + TRANSITION_RESULTAT);
+            self.transition(&[Evenement::TacheLongue]);
+            return;
+        }
+        self.livrable_a = None;
+        let Some((tour, texte, question)) = self.a_livrer.pop_front() else {
+            return;
+        };
+        // La question n'est rappelée que si une autre a été posée depuis :
+        // sinon la bulle la répétait (KOB-215).
+        if tour != self.dernier {
+            if let Some(q) = question {
+                let _ = self.app.emit(EVENEMENT_QUESTION, &q);
+            }
+        }
+        self.dernier = tour;
+        self.transition(&[Evenement::ReponseCommence]);
+        let _ = self.app.emit(EVENEMENT_REPONSE, &texte);
+        crate::voix::dire(&self.app, &texte);
+        self.lire(&texte);
+    }
+
     /// Délais : retour au calme, blocs de notes.
     pub fn tick(&mut self) {
         let parle = crate::voix::parle(&self.app);
@@ -1635,6 +1678,8 @@ impl<R: Runtime> Chef<R> {
                 self.transition(&[evenement]);
             }
         }
+        // Résultats de tâches en attente : le suivant, s'il peut passer.
+        self.livrer();
         // Kobi s'est tu : la conversation attend la suite à partir de maintenant.
         if self.suite_apres_voix && !parle {
             self.suite_apres_voix = false;
