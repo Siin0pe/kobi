@@ -49,6 +49,16 @@ function fakeTauri(): void {
                 ],
               },
             ];
+          case 'etat_session':
+            return { etat: 'veille', activite: null, mascotte: 'idle', transcrit: false };
+          case 'etat_enregistrement':
+            return { actif: false, pause: false, debut_ms: 0, notes: 0, titre: null };
+          case 'journal_activite':
+            return [
+              { quand_ms: Date.now() - 86_400_000, genre: 'reunion', texte: 'Réunion terminée', detail: 'Point hebdo · 4 lignes de notes' },
+              { quand_ms: Date.now() - 60_000, genre: 'question', texte: 'Quelle heure est-il ?' },
+              { quand_ms: Date.now() - 30_000, genre: 'action', texte: 'Proposé : cargo test', detail: 'Commande' },
+            ];
           default:
             // Les étapes de l'accueil ont leurs propres tests (bienvenue.spec.ts).
             throw `Command ${cmd} not found`;
@@ -171,5 +181,64 @@ test('Activité : les étapes des derniers échanges (KOB-152), à jour en direc
     ]),
   );
   await expect(journal.locator('.journal-question')).toHaveText(['et les tests ?']);
+  await expectNoErrors(errors);
+});
+
+test('le petit Kobi de la navigation suit la mascotte', async ({ page }) => {
+  const errors = await ouvrirApp(page, '#rappels');
+  const kobi = page.locator('.nav-kobi');
+  const emettre = (etat: string) =>
+    page.evaluate((m) => (window as unknown as { __emit: (e: string, p: unknown) => void }).__emit('state', { etat: 'assistant', activite: null, mascotte: m, transcrit: false }), etat);
+  // Au repos : le mot de la section.
+  await expect(kobi).toHaveAttribute('data-etat', 'idle');
+  await expect(kobi.locator('.mot')).toHaveText('rappels');
+  for (const [etat, oeil, mot] of [
+    ['listen', 'O', 'oui ?'],
+    ['think', '@', 'hmm…'],
+    ['answer', '^', 'alors'],
+    ['error', 'x', 'oups'],
+  ] as const) {
+    await emettre(etat);
+    await expect(kobi).toHaveAttribute('data-etat', etat);
+    await expect(kobi.locator('.g').first()).toHaveText(oeil);
+    await expect(kobi.locator('.mot')).toHaveText(mot);
+  }
+  // Occupé, il garde son mot quand on change de section ; au repos, il reprend celui de la section.
+  await page.getByRole('button', { name: 'Réglages' }).click();
+  await expect(kobi.locator('.mot')).toHaveText('oups');
+  await emettre('idle');
+  await expect(kobi.locator('.mot')).toHaveText('réglages');
+  // En réunion, au calme : il prend des notes, comme la mascotte.
+  await page.evaluate(() =>
+    (window as unknown as { __emit: (e: string, p: unknown) => void }).__emit('state', { etat: 'reunion', activite: 'calme', mascotte: 'idle', transcrit: true }),
+  );
+  await expect(kobi).toHaveAttribute('data-etat', 'write');
+  await expect(kobi.locator('.mot')).toHaveText('noté');
+  await expectNoErrors(errors);
+});
+
+test('Activité : le journal, du plus récent au plus ancien, et les nouvelles entrées en direct', async ({ page }) => {
+  const errors = await ouvrirApp(page, '#activite');
+  const entrees = page.locator('.vue-activite .fil .entree');
+  await expect(entrees).toHaveCount(3);
+  await expect(entrees.locator('.entree-texte')).toHaveText(['Proposé : cargo test', 'Quelle heure est-il ?', 'Réunion terminée']);
+  await expect(page.locator('.vue-activite .fil .groupe')).toHaveText(['Aujourd’hui', 'Hier']);
+  await expect(entrees.nth(2).locator('.entree-meta')).toContainText('Point hebdo · 4 lignes de notes');
+  await page.evaluate(() =>
+    (window as unknown as { __emit: (e: string, p: unknown) => void }).__emit('journal', { quand_ms: Date.now(), genre: 'validation', texte: 'Accepté : cargo test' }),
+  );
+  await expect(entrees).toHaveCount(4);
+  await expect(entrees.first()).toHaveAttribute('data-genre', 'validation');
+  await expect(entrees.first()).toHaveClass(/nouvelle/);
+  await expectNoErrors(errors);
+});
+
+test('la feuille de styles de l’app est lue jusqu’au bout (aucune accolade perdue)', async ({ page }) => {
+  const errors = await ouvrirApp(page);
+  const animations = await page.evaluate(() =>
+    [...document.styleSheets].flatMap((f) => [...f.cssRules].filter((r) => r instanceof CSSKeyframesRule).map((r) => (r as CSSKeyframesRule).name)),
+  );
+  // Les dernières de app.css : une accolade perdue plus haut les ferait disparaître.
+  expect(animations).toEqual(expect.arrayContaining(['app-pulse-rec', 'app-ecoute', 'app-bandeau', 'app-nouvelle']));
   await expectNoErrors(errors);
 });

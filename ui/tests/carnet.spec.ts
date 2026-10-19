@@ -224,6 +224,8 @@ test('la recherche retrouve un mot sans casse ni accents et mène au passage', a
   // Un mot d'une conversation.
   await page.getByRole('searchbox').fill('tokyo');
   await expect(page.locator('.resultat')).toHaveCount(1);
+  // Le compte est le même qu'avant : on attend les résultats de « tokyo ».
+  await expect(page.locator('.extrait mark').first()).toHaveText('Tokyo');
   await page.locator('.extrait').first().click();
   await expect(page.locator('.feuille[data-genre="conversation"]')).toBeVisible();
   await expect(page.locator('.tour.cible mark')).toHaveText('Tokyo');

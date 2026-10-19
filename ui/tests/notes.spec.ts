@@ -1,5 +1,6 @@
-// Notes en direct (KOB-73) avec une fausse coque Tauri. La lecture réelle
-// du `notes.md` est testée côté Rust (crates/kobi-app/src/notes.rs).
+// Notes en direct (KOB-73), section `direct` de l'app Kobi (KOB-159), avec
+// une fausse coque Tauri. La lecture réelle du `notes.md` est testée côté
+// Rust (crates/kobi-app/src/notes.rs).
 import { expect, test, type Page } from '@playwright/test';
 import { expectNoErrors, openUi } from './helpers';
 
@@ -9,6 +10,7 @@ function fakeTauri(): void {
   const appels: Array<[string, unknown]> = [];
   w.__appels = appels;
   w.__notes = null;
+  w.__rec ??= { actif: false, pause: false, debut_ms: 0, notes: 0, titre: null };
   w.__emit = (event: string, payload: unknown) => (listeners[event] ?? []).forEach((h) => h({ payload }));
   w.__TAURI__ = {
     window: { getCurrentWindow: () => ({ startDragging: async () => {} }) },
@@ -17,8 +19,9 @@ function fakeTauri(): void {
         appels.push([cmd, args]);
         if (cmd === 'notes_en_cours') return w.__notes;
         if (cmd === 'basculer_notes') return true;
-        if (cmd === 'replier_notes' || cmd === 'fermer_notes') return null;
-        // La mascotte demande son état au démarrage : rien d'autre ici.
+        if (cmd === 'etat_enregistrement') return w.__rec;
+        if (cmd === 'etat_session') return { etat: 'reunion', activite: null, mascotte: 'write', transcrit: true };
+        if (cmd === 'carnet_index') return { racine: '/home/test/Kobi', reunions: [], conversations: [], rappels: [] };
         throw new Error(`commande inconnue ${cmd}`);
       },
     },
@@ -52,8 +55,8 @@ async function ouvrirNotes(page: Page, notes: unknown): Promise<string[]> {
   });
   await page.addInitScript(fakeTauri);
   await page.addInitScript((n) => ((window as unknown as Record<string, unknown>).__notes = n), notes);
-  await page.setViewportSize({ width: 360, height: 480 });
-  await page.goto('/notes.html');
+  await page.setViewportSize({ width: 1180, height: 760 });
+  await page.goto('/app.html#direct');
   await page.evaluate(() => document.fonts.ready);
   return errors;
 }
@@ -62,65 +65,77 @@ const appels = (page: Page) => page.evaluate(() => (window as unknown as { __app
 
 test('décisions, actions, questions et dernière note mise en valeur', async ({ page }) => {
   const errors = await ouvrirNotes(page, NOTES);
-  await expect(page.locator('.titre')).toHaveText('Point hebdo');
-  await expect(page.locator('.duree')).toContainText(/ · 12:0\d/);
-  await expect(page.locator('.derniere-texte')).toHaveText('Sophie : devis');
-  await expect(page.locator('[data-section="decisions"] li')).toHaveText(['Budget validé', 'Séminaire à Annecy']);
-  await expect(page.locator('[data-section="decisions"] .nombre')).toHaveText('2');
-  await expect(page.locator('[data-section="actions"] li.tache')).toHaveCount(1);
-  await expect(page.locator('[data-section="questions"] .vide')).toHaveText('Aucune question ouverte.');
+  await expect(page.locator('.vue-direct .titre')).toHaveText('Point hebdo');
+  await expect(page.locator('.vue-direct .duree')).toContainText(/ · 12:0\d/);
+  await expect(page.locator('.vue-direct .derniere-texte')).toHaveText('Sophie : devis');
+  await expect(page.locator('.vue-direct [data-section="decisions"] li')).toHaveText(['Budget validé', 'Séminaire à Annecy']);
+  await expect(page.locator('.vue-direct [data-section="decisions"] .nombre')).toHaveText('2');
+  await expect(page.locator('.vue-direct [data-section="actions"] li.tache')).toHaveCount(1);
+  await expect(page.locator('.vue-direct [data-section="questions"] .vide')).toHaveText('Aucune question ouverte.');
   await expectNoErrors(errors);
 });
 
 test('une nouvelle note arrive : relue sur l’événement, mise en valeur, sections repliées gardées', async ({ page }) => {
   const errors = await ouvrirNotes(page, NOTES);
-  await expect(page.locator('.derniere-texte')).toHaveText('Sophie : devis');
+  await expect(page.locator('.vue-direct .derniere-texte')).toHaveText('Sophie : devis');
   // Section Décisions repliée par l'utilisateur.
-  await page.locator('[data-section="decisions"] summary').click();
-  await expect(page.locator('[data-section="decisions"]')).not.toHaveAttribute('open', '');
+  await page.locator('.vue-direct [data-section="decisions"] summary').click();
+  await expect(page.locator('.vue-direct [data-section="decisions"]')).not.toHaveAttribute('open', '');
   await page.evaluate(() => {
     const w = window as unknown as { __notes: Record<string, unknown>; __emit: (e: string, p: unknown) => void };
     w.__notes = { ...w.__notes, questions: '- Date du séminaire ?', derniere_note: 'Date du séminaire ?', lignes: 4 };
     w.__emit('notes', '');
   });
-  await expect(page.locator('.derniere-texte')).toHaveText('Date du séminaire ?');
-  await expect(page.locator('.derniere')).toHaveClass(/arrive/);
-  await expect(page.locator('[data-section="questions"] li')).toHaveText(['Date du séminaire ?']);
-  await expect(page.locator('[data-section="questions"] li')).toHaveClass(/nouvelle/);
+  await expect(page.locator('.vue-direct .derniere-texte')).toHaveText('Date du séminaire ?');
+  await expect(page.locator('.vue-direct .derniere')).toHaveClass(/arrive/);
+  await expect(page.locator('.vue-direct [data-section="questions"] li')).toHaveText(['Date du séminaire ?']);
+  await expect(page.locator('.vue-direct [data-section="questions"] li')).toHaveClass(/nouvelle/);
   // Seul le premier affichage entre en cascade : un rafraîchissement ne rejoue rien.
-  await expect(page.locator('.sections')).not.toHaveClass(/premier/);
+  await expect(page.locator('.vue-direct .sections')).not.toHaveClass(/premier/);
   // Les anciennes puces ne sont pas « nouvelles », la section repliée le reste.
-  await expect(page.locator('[data-section="actions"] li.nouvelle')).toHaveCount(0);
-  await expect(page.locator('[data-section="decisions"]')).not.toHaveAttribute('open', '');
+  await expect(page.locator('.vue-direct [data-section="actions"] li.nouvelle')).toHaveCount(0);
+  await expect(page.locator('.vue-direct [data-section="decisions"]')).not.toHaveAttribute('open', '');
   await expectNoErrors(errors);
 });
 
-test('replier, déplier et fermer le panneau', async ({ page }) => {
+test('pendant une réunion, le bandeau REC mène aux notes en direct depuis toutes les sections', async ({ page }) => {
+  await page.addInitScript(() => {
+    (window as unknown as Record<string, unknown>).__rec = { actif: true, pause: false, debut_ms: Date.now() - 65_000, notes: 3, titre: 'Point hebdo' };
+  });
   const errors = await ouvrirNotes(page, NOTES);
-  await page.getByRole('button', { name: 'Replier' }).click();
-  await expect(page.locator('.panneau-notes')).toHaveAttribute('data-replie', 'true');
-  await expect(page.locator('.sections')).toBeHidden();
-  await expect(page.locator('.derniere-texte')).toBeVisible();
-  await page.getByRole('button', { name: 'Déplier' }).click();
-  await expect(page.locator('.sections')).toBeVisible();
-  await page.getByRole('button', { name: 'Fermer les notes' }).click();
-  const faits = await appels(page);
-  expect(faits).toContainEqual(['replier_notes', { replie: true }]);
-  expect(faits).toContainEqual(['replier_notes', { replie: false }]);
-  expect(faits.map(([c]) => c)).toContain('fermer_notes');
+  await page.evaluate(() => window.kobiApp.aller('rappels'));
+  const bandeau = page.locator('.bandeau-rec');
+  await expect(bandeau).toBeVisible();
+  await expect(bandeau).toContainText('REC');
+  await expect(bandeau.locator('.rec-titre')).toHaveText('Point hebdo');
+  await expect(bandeau.locator('.rec-duree')).toHaveText(/^1:0\d$/);
+  await expect(bandeau.locator('.rec-etat')).toHaveText('3 notes');
+  await expect(page.getByRole('button', { name: 'En direct', exact: true })).toBeVisible();
+  await bandeau.click();
+  await expect(page.locator('.vue:not([hidden])')).toHaveAttribute('data-section', 'direct');
+  await expect(page).toHaveURL(/#direct$/);
+  await expect(page.locator('.vue-direct .derniere-texte')).toHaveText('Sophie : devis');
+  // Pause, puis fin de la réunion : le bandeau suit, puis s'efface.
+  await page.evaluate(() => (window as unknown as { __emit: (e: string, p: unknown) => void }).__emit('enregistrement', { actif: true, pause: true, debut_ms: Date.now(), notes: 3, titre: 'Point hebdo' }));
+  await expect(bandeau).toHaveAttribute('data-pause', 'true');
+  await expect(bandeau.locator('.rec-etat')).toHaveText('en pause');
+  await page.evaluate(() => (window as unknown as { __emit: (e: string, p: unknown) => void }).__emit('enregistrement', { actif: false, pause: false, debut_ms: 0, notes: 0, titre: null }));
+  await expect(bandeau).toBeHidden();
+  await page.evaluate(() => window.kobiApp.aller('notes'));
+  await expect(page.getByRole('button', { name: 'En direct', exact: true })).toBeHidden();
   await expectNoErrors(errors);
 });
 
 test('avant la première note, puis hors réunion', async ({ page }) => {
   const errors = await ouvrirNotes(page, { ...NOTES, decisions: '', actions: '', derniere_note: null, lignes: 0 });
-  await expect(page.locator('.derniere .vide')).toContainText('les premières notes arrivent');
+  await expect(page.locator('.vue-direct .derniere .vide')).toContainText('les premières notes arrivent');
   await page.evaluate(() => {
     const w = window as unknown as { __notes: unknown; __emit: (e: string, p: unknown) => void };
     w.__notes = null;
     w.__emit('enregistrement', { actif: false });
   });
-  await expect(page.locator('.titre')).toHaveText('Pas de réunion');
-  await expect(page.locator('.derniere .vide')).toContainText('pendant une réunion enregistrée');
+  await expect(page.locator('.vue-direct .titre')).toHaveText('Pas de réunion');
+  await expect(page.locator('.vue-direct .derniere .vide')).toContainText('pendant une réunion enregistrée');
   await expectNoErrors(errors);
 });
 
@@ -144,7 +159,7 @@ test('depuis Kobi, un clic sur REC ou sur la fiche de notes ouvre le panneau', a
   await expect.poll(async () => (await appels(page)).filter(([c]) => c === 'basculer_notes').length).toBe(3);
 });
 
-test('animations réduites : rien ne bouge dans le panneau', async ({ page }) => {
+test('animations réduites : rien ne bouge dans les notes en direct', async ({ page }) => {
   // Réglage « Animations : réduites » de Kobi : la classe sur l'élément racine.
   await page.addInitScript(() => {
     const poser = () => document.documentElement?.classList.add('reduced-motion');
@@ -152,7 +167,7 @@ test('animations réduites : rien ne bouge dans le panneau', async ({ page }) =>
     document.addEventListener('readystatechange', poser);
   });
   const errors = await ouvrirNotes(page, NOTES);
-  await expect(page.locator('.titre')).toHaveText('Point hebdo');
+  await expect(page.locator('.vue-direct .titre')).toHaveText('Point hebdo');
   const animees = await page.evaluate(() => document.getAnimations().filter((a) => a.playState === 'running').length);
   expect(animees).toBe(0);
   await expectNoErrors(errors);

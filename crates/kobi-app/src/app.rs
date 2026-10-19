@@ -18,8 +18,10 @@ pub const FENETRE: &str = "app";
 /// charge est l'adresse de la section ([`Section::adresse`]).
 pub const EVENEMENT_SECTION: &str = "app://section";
 
-/// Taille de la fenêtre, en pixels logiques.
+/// Taille de la fenêtre, en pixels logiques ; elle rétrécit jusqu'à
+/// `MINIMUM` pour ne pas passer sous la mascotte.
 const TAILLE: (f64, f64) = (1180.0, 760.0);
+const MINIMUM: (f64, f64) = (760.0, 500.0);
 
 /// Section de l'app.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,6 +38,9 @@ pub enum Section {
         panneau: Option<String>,
     },
     APropos,
+    /// Notes en direct de la réunion en cours (KOB-73), ouvertes d'un clic
+    /// sur REC ou la fiche de notes de Kobi.
+    Direct,
     /// Écran d'accueil du premier lancement.
     Accueil,
 }
@@ -51,7 +56,7 @@ fn identifiant_valide(id: &str) -> bool {
 
 impl Section {
     /// Lit une adresse (`notes`, `notes/<réunion>`, `rappels`, `activite`,
-    /// `reglages`, `reglages/<panneau>`, `a-propos`, `accueil`) ; `None` si
+    /// `reglages`, `reglages/<panneau>`, `a-propos`, `direct`, `accueil`) ; `None` si
     /// elle est inconnue ou si son détail n'est pas un identifiant sûr.
     pub fn lire(adresse: &str) -> Option<Self> {
         let (tete, detail) = match adresse.split_once('/') {
@@ -69,6 +74,7 @@ impl Section {
             "activite" => Section::Activite,
             "reglages" => Section::Reglages { panneau: detail },
             "a-propos" => Section::APropos,
+            "direct" => Section::Direct,
             "accueil" | "bienvenue" => Section::Accueil,
             _ => return None,
         })
@@ -84,6 +90,7 @@ impl Section {
             Section::Reglages { panneau: Some(p) } => format!("reglages/{p}"),
             Section::Reglages { panneau: None } => "reglages".into(),
             Section::APropos => "a-propos".into(),
+            Section::Direct => "direct".into(),
             Section::Accueil => "accueil".into(),
         }
     }
@@ -117,10 +124,11 @@ pub fn ouvrir<R: Runtime>(app: &AppHandle<R>, section: Option<Section>) -> tauri
         )
         .title("Kobi")
         .inner_size(TAILLE.0, TAILLE.1)
-        .min_inner_size(760.0, 500.0)
+        .min_inner_size(MINIMUM.0, MINIMUM.1)
         .visible(true)
         .focused(true),
         TAILLE,
+        MINIMUM,
     )
     .build()?;
     tracing::info!(%adresse, "app ouverte");
@@ -190,6 +198,7 @@ mod tests {
             "reglages",
             "reglages/stockage",
             "a-propos",
+            "direct",
             "accueil",
         ] {
             assert_eq!(Section::lire(a).unwrap().adresse(), a);

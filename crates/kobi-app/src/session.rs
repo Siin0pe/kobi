@@ -214,6 +214,7 @@ fn historique<R: Runtime>(app: AppHandle<R>) -> Vec<Bulle> {
 pub fn installer<R: Runtime>(builder: Builder<R>) -> Builder<R> {
     builder
         .manage(SessionPartagee::default())
+        .manage(crate::activite::Journal::default())
         .invoke_handler(tauri::generate_handler![
             etat_session,
             demarrer,
@@ -277,12 +278,11 @@ pub fn installer<R: Runtime>(builder: Builder<R>) -> Builder<R> {
             crate::bienvenue::annuler_telechargement,
             crate::notes::notes_en_cours,
             crate::notes::basculer_notes,
-            crate::notes::replier_notes,
-            crate::notes::fermer_notes,
             crate::menu::menu_kobi,
             crate::menu::etat_ecoute,
             // Réponse longue : la fenêtre s'agrandit (KOB-163).
-            crate::agrandir::agrandir_kobi
+            crate::agrandir::agrandir_kobi,
+            crate::activite::journal_activite
         ])
 }
 

@@ -173,6 +173,63 @@ pub fn a_cote_de_kobi(work_area: Rect, fenetre: (u32, u32), kobi: Rect, scale: f
     ((ax + marge) as i32, (ay + marge) as i32)
 }
 
+/// Place et dimensionne l'app (KOB-159) : à côté de Kobi comme
+/// [`a_cote_de_kobi`] ; si elle ne tient pas entière à gauche de Kobi ni
+/// au-dessus, elle rétrécit (jamais sous `minimum`) pour s'y loger plutôt
+/// que de passer sous la mascotte, toujours au premier plan. Rend
+/// `(x, y, largeur, hauteur)`, en pixels physiques.
+pub fn place_a_cote_de_kobi(
+    work_area: Rect,
+    fenetre: (u32, u32),
+    minimum: (u32, u32),
+    kobi: Rect,
+    scale: f64,
+) -> (i32, i32, u32, u32) {
+    let (x, y) = a_cote_de_kobi(work_area, fenetre, kobi, scale);
+    let posee = Rect {
+        x,
+        y,
+        width: fenetre.0,
+        height: fenetre.1,
+    };
+    if !posee.croise(&kobi) {
+        return (x, y, fenetre.0, fenetre.1);
+    }
+    let marge = (MARGIN * scale).round() as i64;
+    let (ax, ay) = (i64::from(work_area.x), i64::from(work_area.y));
+    let (al, ah) = (i64::from(work_area.width), i64::from(work_area.height));
+    // Place libre à gauche de Kobi, puis au-dessus.
+    let gauche = i64::from(kobi.x) - ax - 2 * marge;
+    let dessus = i64::from(kobi.y) - ay - 2 * marge;
+    if gauche >= i64::from(minimum.0) {
+        let l = gauche.min(i64::from(fenetre.0));
+        let h = (ah - 2 * marge)
+            .min(i64::from(fenetre.1))
+            .max(i64::from(minimum.1));
+        let y = ay + (ah - h) / 2;
+        return (
+            (i64::from(kobi.x) - marge - l) as i32,
+            y as i32,
+            l as u32,
+            h as u32,
+        );
+    }
+    if dessus >= i64::from(minimum.1) {
+        let h = dessus.min(i64::from(fenetre.1));
+        let l = (al - 2 * marge)
+            .min(i64::from(fenetre.0))
+            .max(i64::from(minimum.0));
+        let x = ax + (al - l) / 2;
+        return (
+            x as i32,
+            (i64::from(kobi.y) - marge - h) as i32,
+            l as u32,
+            h as u32,
+        );
+    }
+    (x, y, fenetre.0, fenetre.1)
+}
+
 /// Construit une fenêtre secondaire de `taille` (pixels logiques) à côté de
 /// la mascotte (fenêtre `main`), sur l'écran de celle-ci ; centrée si la
 /// position de Kobi est illisible. La position est donnée au constructeur :
@@ -181,8 +238,9 @@ pub fn a_cote_de_kobi_ou_centre<'a, R: tauri::Runtime, M: tauri::Manager<R>>(
     app: &M,
     constructeur: tauri::WebviewWindowBuilder<'a, R, M>,
     taille: (f64, f64),
+    minimum: (f64, f64),
 ) -> tauri::WebviewWindowBuilder<'a, R, M> {
-    let lire = || -> tauri::Result<Option<(f64, f64)>> {
+    let lire = || -> tauri::Result<Option<(f64, f64, f64, f64)>> {
         let Some(kobi) = app.get_webview_window("main") else {
             return Ok(None);
         };
@@ -203,17 +261,21 @@ pub fn a_cote_de_kobi_ou_centre<'a, R: tauri::Runtime, M: tauri::Manager<R>>(
             .map(|w| (w.width, w.height))
             .unwrap_or((410.0, 280.0));
         let t = physical_size((t.width, t.height), declaree, echelle);
-        let (x, y) = a_cote_de_kobi(
+        let physique = |t: (f64, f64)| {
+            (
+                (t.0 * echelle).round() as u32,
+                (t.1 * echelle).round() as u32,
+            )
+        };
+        let (x, y, l, h) = place_a_cote_de_kobi(
             Rect {
                 x: zone.position.x,
                 y: zone.position.y,
                 width: zone.size.width,
                 height: zone.size.height,
             },
-            (
-                (taille.0 * echelle).round() as u32,
-                (taille.1 * echelle).round() as u32,
-            ),
+            physique(taille),
+            physique(minimum),
             Rect {
                 x: pos.x,
                 y: pos.y,
@@ -222,12 +284,17 @@ pub fn a_cote_de_kobi_ou_centre<'a, R: tauri::Runtime, M: tauri::Manager<R>>(
             },
             echelle,
         );
-        Ok(Some((f64::from(x) / echelle, f64::from(y) / echelle)))
+        Ok(Some((
+            f64::from(x) / echelle,
+            f64::from(y) / echelle,
+            f64::from(l) / echelle,
+            f64::from(h) / echelle,
+        )))
     };
     match lire() {
-        Ok(Some((x, y))) => {
-            tracing::info!(x, y, "fenêtre rangée à côté de Kobi");
-            constructeur.position(x, y)
+        Ok(Some((x, y, l, h))) => {
+            tracing::info!(x, y, l, h, "fenêtre rangée à côté de Kobi");
+            constructeur.position(x, y).inner_size(l, h)
         }
         autre => {
             tracing::info!(?autre, "position de Kobi illisible : fenêtre centrée");
@@ -381,5 +448,65 @@ mod tests {
         }
         .croise(&kobi));
         assert_eq!(y, 900 - 16 - 640);
+    }
+
+    /// L'app sur un écran de 1440 × 900 : trop large pour la gauche de Kobi,
+    /// elle rétrécit pour s'y loger au lieu de passer sous la mascotte.
+    #[test]
+    fn app_retrecit_pour_ne_pas_couvrir_kobi() {
+        let ecran = Rect {
+            x: 0,
+            y: 0,
+            width: 1440,
+            height: 900,
+        };
+        let kobi = Rect {
+            x: 1014,
+            y: 604,
+            width: 410,
+            height: 280,
+        };
+        let (x, y, l, h) = place_a_cote_de_kobi(ecran, (1180, 760), (760, 500), kobi, 1.0);
+        assert_eq!((x, l), (16, 982));
+        assert_eq!(h, 760);
+        assert!(!Rect {
+            x,
+            y,
+            width: l,
+            height: h
+        }
+        .croise(&kobi));
+        // Grand écran : taille d'origine, décalée à gauche de Kobi.
+        let grand = Rect {
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1040,
+        };
+        let kobi = Rect {
+            x: 1494,
+            y: 744,
+            width: 410,
+            height: 280,
+        };
+        assert_eq!(
+            place_a_cote_de_kobi(grand, (1180, 760), (760, 500), kobi, 1.0),
+            (298, 140, 1180, 760)
+        );
+        // Écran trop petit pour éviter Kobi même réduite : taille minimale gardée.
+        let petit = Rect {
+            x: 0,
+            y: 0,
+            width: 1000,
+            height: 700,
+        };
+        let kobi = Rect {
+            x: 574,
+            y: 404,
+            width: 410,
+            height: 280,
+        };
+        let (_, _, l, h) = place_a_cote_de_kobi(petit, (1180, 760), (760, 500), kobi, 1.0);
+        assert!(l >= 760 && h >= 500);
     }
 }

@@ -4,6 +4,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod activite;
 mod agrandir;
 mod app;
 mod bienvenue;
@@ -196,6 +197,7 @@ fn main() {
             // Interface de contrôle (KOB-161) : `kobi <commande>`, `kobi mcp`.
             controle::installer(app.handle(), config_path.clone());
             stockage::installer(app.handle(), &config.config, config_path.clone());
+            activite::installer(app.handle());
             // Réponse à voix haute ou en texte (KOB-142) : la voix se charge en arrière-plan.
             voix::installer(app.handle(), &config.config.voice, config_path);
             rappels::installer(app.handle());
@@ -218,18 +220,28 @@ fn main() {
             bienvenue::installer(app.handle());
             // `kobi --app` / `--carnet` / `--reglages` / `--bienvenue` : ouvre
             // l'app (sur sa section) au lancement (raccourci du menu
-            // Démarrer, essai sous Xvfb).
-            for arg in std::env::args().skip(1) {
-                let ouverte = match arg.as_str() {
-                    "--app" => app::ouvrir(app.handle(), None),
-                    "--carnet" => carnet::ouvrir(app.handle()),
-                    "--reglages" => reglages::ouvrir(app.handle(), None),
-                    "--bienvenue" => bienvenue::ouvrir(app.handle()),
-                    _ => continue,
-                };
-                if let Err(e) = ouverte {
-                    tracing::warn!(erreur = %e, arg, "ouverture au lancement");
-                }
+            // Démarrer, essai sous Xvfb). Comme la bienvenue, un peu après
+            // la mascotte : juste après `show()`, GTK n'annonce pas encore sa
+            // place et l'app se poserait dessus. Depuis ce fil et pas le fil
+            // principal, où créer la fenêtre bloque WebView2 (KOB-167).
+            let args: Vec<String> = std::env::args().skip(1).collect();
+            if args.iter().any(|a| a.starts_with("--")) {
+                let h = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(800));
+                    for arg in args {
+                        let ouverte = match arg.as_str() {
+                            "--app" => app::ouvrir(&h, None),
+                            "--carnet" => carnet::ouvrir(&h),
+                            "--reglages" => reglages::ouvrir(&h, None),
+                            "--bienvenue" => bienvenue::ouvrir(&h),
+                            _ => continue,
+                        };
+                        if let Err(e) = ouverte {
+                            tracing::warn!(erreur = %e, arg, "ouverture au lancement");
+                        }
+                    }
+                });
             }
             // Essai réel des cartes de validation (KOB-62), avant KOB-156.
             validation::essai(app.handle());
