@@ -254,12 +254,14 @@ fn nettoyer(dossier: &Path) {
 
 /// Session Claude de Kobi : serveurs MCP activés (relus dans `config.toml`),
 /// MCP de Kobi (KOB-161) et serveur de permission, qui classe chaque appel
-/// d'outil MCP (lecture sans carte, écriture avec).
+/// d'outil MCP (lecture sans carte, écriture avec) ; avec `reglages`, les
+/// commandes passent par le hook de Kobi (KOB-154).
 pub fn session_claude(
     role: crate::cerveau::Role,
     modele: &'static str,
     codebases: Arc<Vec<PathBuf>>,
     memoire: Option<crate::lecture::Memoire>,
+    reglages: Option<PathBuf>,
 ) -> SessionClaude {
     let cfg = config::default_path()
         .map(|p| config::load_or_create(&p).config)
@@ -307,12 +309,16 @@ pub fn session_claude(
             .map_err(|e| format!("config MCP de la session : {e}"))?;
         mcp.permission_prompt_tool = Some(kobi_perms::PERMISSION_PROMPT_TOOL.into());
         mcp.prompt = prompt.clone();
-        Ok(crate::lecture::arguments(
-            modele,
-            kobi_brain::SYSTEM_PROMPT,
-            &codebases,
-            memoire.as_ref(),
-            Some(&mcp),
+        // Commandes validées par le hook de Kobi (KOB-154).
+        Ok(crate::commandes::brancher(
+            crate::lecture::arguments(
+                modele,
+                kobi_brain::SYSTEM_PROMPT,
+                &codebases,
+                memoire.as_ref(),
+                Some(&mcp),
+            ),
+            reglages.as_deref(),
         ))
     }));
     SessionClaude {

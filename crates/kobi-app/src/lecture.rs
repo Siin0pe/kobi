@@ -51,9 +51,10 @@ pub const OUTILS_REFUSES: &[&str] = &[
 pub const PROMPT_LECTURE: &str = "\
 ## Pour l'instant, tu ne fais que lire
 
-Tu as seulement les outils Read, Grep et Glob, sur les dossiers de code de l'utilisateur. \
-Tu n'écris aucun fichier, ne lances aucune commande et n'agis sur aucun outil externe \
-(tickets, messages, agenda…), même si on te le demande. C'est vrai partout, en réunion comme au quotidien.
+Tu lis et tu cherches dans les dossiers de code de l'utilisateur (Read, Grep, Glob, et \
+des commandes en lecture seule si l'outil Bash est là). Tu n'écris aucun fichier, ne lances \
+aucune commande qui modifie quelque chose et n'agis sur aucun outil externe (tickets, \
+messages, agenda…), même si on te le demande. C'est vrai partout, en réunion comme au quotidien.
 
 - Pour une question sur le code, cherche avec Grep et Glob, lis avec Read, et cite le \
 fichier et la ligne (`chemin/fichier.rs:42`).
@@ -232,19 +233,16 @@ pub fn outils_appeles(event: &Event) -> Vec<String> {
 }
 
 /// Classe d'un appel pour le fil d'activité (`lecture`, `ecriture`,
-/// `refus`) : en lecture seule, tout ce qui n'est pas une lecture est refusé.
-/// Le classement de `kobi_perms` (KOB-154, KOB-156) prendra le relais.
-pub fn classe(action: &kobi_brain::Action) -> &'static str {
-    use kobi_brain::Action;
-    match action {
-        Action::LireFichier { .. } | Action::Chercher { .. } | Action::Lister { .. } => "lecture",
-        _ => "refus",
-    }
+/// `refus`), d'après le classement de Kobi ([`kobi_perms::classer`]) : une
+/// commande est une lecture seulement si le validateur de KOB-154 l'accepte.
+pub fn classe(action: &kobi_brain::Action, ctx: &kobi_perms::Contexte) -> &'static str {
+    kobi_perms::classer(action, ctx).cle()
 }
 
-/// L'outil est-il permis en lecture seule ?
+/// L'outil est-il permis en lecture seule ? Bash et PowerShell le sont,
+/// chaque commande étant validée par Kobi avant de s'exécuter (KOB-154).
 pub fn permis(outil: &str) -> bool {
-    OUTILS_LECTURE.contains(&outil)
+    OUTILS_LECTURE.contains(&outil) || crate::commandes::OUTILS_COMMANDE.contains(&outil)
 }
 
 fn config_path() -> Result<PathBuf, String> {
@@ -468,8 +466,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(outils_appeles(&e), ["Grep", "Bash"]);
-        assert!(permis("Grep") && permis("Read") && permis("Glob"));
-        assert!(!permis("Bash") && !permis("mcp__linear__save_issue"));
+        assert!(permis("Grep") && permis("Read") && permis("Glob") && permis("Bash"));
+        assert!(!permis("Write") && !permis("mcp__linear__save_issue"));
     }
 
     /// Essai contre le vrai Claude Code (KOB-138) : une écriture et une

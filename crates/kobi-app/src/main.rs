@@ -10,6 +10,7 @@ mod bienvenue;
 mod carnet;
 mod cerveau;
 mod chef;
+mod commandes;
 mod controle;
 mod demarrage;
 mod depots;
@@ -152,6 +153,10 @@ fn main() {
     // `kobi status`, `kobi mcp`… : la CLI de Kobi (KOB-161), qui parle à
     // l'app en cours ; les options de l'app (`--carnet`…) lancent l'app.
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // Hook de Claude Code (KOB-154) : une commande à valider, sans fenêtre.
+    if args.first().is_some_and(|a| a == commandes::SOUS_COMMANDE) {
+        std::process::exit(commandes::hook());
+    }
     if args
         .first()
         .is_some_and(|a| kobi_ctl::cli::est_une_commande(a))

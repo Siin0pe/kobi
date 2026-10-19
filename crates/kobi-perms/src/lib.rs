@@ -12,11 +12,16 @@
 //! autorisent d'office la lecture seule et la liste blanche du workspace,
 //! sans carte.
 
+pub mod action;
 pub mod cards;
+pub mod classement;
+pub mod commande;
 pub mod mcp;
 pub mod rules;
 
+pub use action::{Action, DemandeOutil, Etape, Famille, Shell};
 pub use cards::{Card, Cards};
+pub use classement::{classer, Classe, Contexte, Genre};
 pub use rules::{Rules, Verdict};
 
 use std::net::SocketAddr;
