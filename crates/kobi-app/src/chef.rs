@@ -961,9 +961,10 @@ impl<R: Runtime> Chef<R> {
         }
         r.fin_demandee = true;
         r.fin_differee = Some(Instant::now() + ANNULATION);
-        // Pendant l'annulation, la réunion est en pause : rien n'est rédigé,
-        // pas d'animation de rédaction (KOB-174). Déjà en pause : rien à faire.
-        self.transition(&[Evenement::Pause]);
+        // Pendant l'annulation, la session reste en réunion (KOB-174) : le
+        // micro reste ouvert pour entendre « reprends » (en pause, il est
+        // coupé), et rien n'est rédigé. Les segments ne sont plus notés, et
+        // l'enregistrement est annoncé arrêté et annulable.
         // « Reprends » s'entend sans redire « Kobi » pendant l'annulation.
         let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::Annulable);
         tracing::info!("réunion arrêtée, annulable");
@@ -988,8 +989,8 @@ impl<R: Runtime> Chef<R> {
         };
         r.fin_demandee = false;
         r.fin_differee = None;
-        r.pause = false;
-        self.transition(&[Evenement::Reprendre]);
+        // La session n'a pas quitté la réunion (ni sa pause) : rien à changer
+        // côté état.
         tracing::info!("arrêt de la réunion annulé");
         "J'enregistre de nouveau : la réunion continue.".into()
     }

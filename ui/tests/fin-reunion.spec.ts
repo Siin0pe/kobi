@@ -78,13 +78,16 @@ test('fin de réunion avec « réduire les animations » : mêmes étapes, sans 
   await expectNoErrors(errors);
 });
 
-/** Arrêt à la voix ou par Claude (KOB-165) : annulable 30 s, réunion en pause. */
+/**
+ * Arrêt à la voix ou par Claude (KOB-165) : annulable 30 s. La session reste
+ * en réunion (micro ouvert pour « reprends ») ; seul l'enregistrement est
+ * annoncé arrêté et annulable.
+ */
 async function reunionPuisArretAnnulable(page: Page, debut: number): Promise<void> {
   await emit(page, 'state', { etat: 'reunion', activite: 'calme', mascotte: 'idle', transcrit: true });
   await emit(page, 'enregistrement', { actif: true, pause: false, debut_ms: debut, notes: 3, titre: null, derniere_note: 'Budget validé' });
   await expect(page.locator('.stage')).toHaveAttribute('data-state', 'write');
   await suivreEtats(page);
-  await emit(page, 'state', { etat: 'pause', activite: null, mascotte: 'idle', transcrit: false });
   await emit(page, 'enregistrement', { actif: true, pause: true, debut_ms: debut, notes: 3, titre: null, derniere_note: 'Budget validé', annulable: true });
 }
 
@@ -105,7 +108,6 @@ test('arrêt annulable puis « reprends » : pas de rédaction, REC continue la 
   await expect(rec.locator('.rec-time')).toHaveText(/^7:0\d$/);
 
   // « Reprends » : la même réunion continue, le compteur ne repart pas de zéro.
-  await emit(page, 'state', { etat: 'reunion', activite: 'calme', mascotte: 'idle', transcrit: true });
   await emit(page, 'enregistrement', { actif: true, pause: false, debut_ms: debut, notes: 3, titre: null, derniere_note: 'Budget validé', annulable: false });
   await expect(rec.locator('.rec-label')).toHaveText('REC');
   await expect(rec).not.toHaveClass(/is-stopping|is-paused/);
