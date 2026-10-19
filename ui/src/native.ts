@@ -29,7 +29,9 @@ const DRAG_THRESHOLD = 4;
 /**
  * Glisser la mascotte déplace la fenêtre ; un simple clic reste un clic (il
  * ouvre la bulle pour écrire à Kobi, KOB-147). Les cartes, leurs boutons et
- * la bulle restent cliquables.
+ * la bulle restent cliquables, et la vue agrandie n'est pas une poignée : un
+ * clic qui bouge de quelques pixels sur « N étapes » déplaçait la fenêtre au
+ * lieu de déplier (KOB-213), et le texte s'y sélectionne.
  */
 export function enableWindowDrag(root: HTMLElement): void {
   const api = tauri();
@@ -37,7 +39,7 @@ export function enableWindowDrag(root: HTMLElement): void {
   root.addEventListener('mousedown', (e) => {
     if (e.button !== 0) return;
     const target = e.target as Element | null;
-    if (target?.closest('button, a, input, textarea, select, .card, .rec, .ecrire')) return;
+    if (target?.closest('button, a, input, textarea, select, summary, .card, .rec, .ecrire, .lecture')) return;
     // Pas de sélection ni de perte du focus de la bulle.
     e.preventDefault();
     const x0 = e.screenX;
