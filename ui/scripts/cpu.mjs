@@ -8,7 +8,7 @@
 // tâches de Windows). Un échauffement de 5 s précède chaque mesure.
 
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { cpus } from 'node:os';
@@ -124,7 +124,13 @@ if (mode === 'chromium') {
   const display = `:${90 + Math.floor(Math.random() * 9)}`;
   const xvfb = spawn('Xvfb', [display, '-screen', '0', '1920x1080x24', '-nolisten', 'tcp'], { stdio: 'ignore', detached: true });
   await sleep(1500);
-  const app = spawn(bin, [], { stdio: 'ignore', detached: true, env: { ...process.env, DISPLAY: display, HOME: process.env.KOBI_HOME ?? mkdtempSync(join(tmpdir(), 'kobi-cpu-')) } });
+  // HOME de test : premier lancement marqué comme fait, sinon l'accueil
+  // (KOB-144) s'ouvre dans une seconde fenêtre animée et la mesure compte les
+  // deux (KOB-170).
+  const home = process.env.KOBI_HOME ?? mkdtempSync(join(tmpdir(), 'kobi-cpu-'));
+  mkdirSync(join(home, 'Kobi'), { recursive: true });
+  writeFileSync(join(home, 'Kobi', 'premier-lancement.fait'), '');
+  const app = spawn(bin, [], { stdio: 'ignore', detached: true, env: { ...process.env, DISPLAY: display, HOME: home } });
   try {
     await sleep((warmup + 5) * 1000);
     const both = snapshot();

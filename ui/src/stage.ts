@@ -137,12 +137,12 @@ export class Stage {
       if (deep) requestAnimationFrame(() => this.root.classList.contains('econome') && this.metronome.setActive(true));
       else this.metronome.setActive(false);
     };
-    // Scène de la veille ou ballottement pendant le repos : 60 images/s le
-    // temps du geste, puis le métronome reprend (KOB-149).
+    // Scène de la veille ou ballottement pendant le repos : le geste se joue
+    // à 60 images/s, les boucles de fond restent au rythme du métronome
+    // (KOB-149, KOB-170).
     this.kobi.onLivelyChange = (lively) => {
-      if (!this.root.classList.contains('econome')) return;
-      if (lively) this.metronome.setActive(false);
-      else requestAnimationFrame(() => this.root.classList.contains('econome') && this.metronome.setActive(true));
+      this.root.toggleAttribute('data-geste', lively);
+      this.metronome.setLively(lively);
     };
     this.cleanups.push(() => this.metronome.destroy());
     this.root.append(this.scene, this.dot, this.live);

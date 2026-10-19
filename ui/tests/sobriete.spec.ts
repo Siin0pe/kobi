@@ -145,7 +145,8 @@ test('repos économe en réunion : tout bouge encore, au rythme d’un seul mét
   // Et toutes du même pas (mêmes tics) : une seule valeur d'avance.
   expect(new Set(kept.map((a) => Math.round(a.d))).size).toBe(1);
   // Toutes avancent exactement du même pas : elles changent sur les mêmes images.
-  await page.clock.runFor(300);
+  // (400 ms : au moins un tic à 3 images/s, quelle que soit la phase.)
+  await page.clock.runFor(400);
   const later = await loops();
   const steps = new Set(later.map((a, i) => (a.state === 'paused' && after[i]!.state === 'paused' ? Math.round(a.t - after[i]!.t) : null)).filter((d) => d !== null));
   expect(steps.size).toBe(1);
