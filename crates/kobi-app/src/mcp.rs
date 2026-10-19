@@ -47,7 +47,7 @@ const SERVICE: &str = "Kobi MCP";
 const OAUTH: &str = ":oauth";
 
 /// Gestionnaire d'identifiants du système (Windows : Gestionnaire
-/// d'identifiants ; macOS : trousseau).
+/// d'identifiants ; macOS : trousseau ; Linux : Secret Service).
 pub struct CoffreSysteme;
 
 impl CoffreSysteme {
@@ -95,9 +95,8 @@ fn erreur_coffre(e: keyring::Error) -> String {
 
 /// Que faire quand le gestionnaire d'identifiants refuse l'accès.
 #[cfg(target_os = "linux")]
-const MARCHE_A_SUIVRE: &str = "Sous Linux, Kobi passe par le trousseau du noyau (keyutils), \
-    souvent bloqué dans un conteneur ou une session ssh : lance Kobi depuis ta session de \
-    bureau, puis réessaie.";
+const MARCHE_A_SUIVRE: &str = "Sous Linux, Kobi passe par Secret Service : démarre le \
+    trousseau de ta session (gnome-keyring ou KWallet) et déverrouille-le, puis réessaie.";
 #[cfg(target_os = "macos")]
 const MARCHE_A_SUIVRE: &str =
     "Déverrouille ton trousseau de session (app Trousseaux d'accès), puis réessaie.";
@@ -1264,7 +1263,7 @@ mod tests {
         );
     }
 
-    /// Coffre qui refuse tout, comme keyutils dans un conteneur.
+    /// Coffre qui refuse tout, comme un trousseau absent ou verrouillé.
     struct CoffreRefuse;
 
     impl Coffre for CoffreRefuse {

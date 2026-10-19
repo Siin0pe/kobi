@@ -32,14 +32,23 @@ tauri-plugin-dialog = "2"
 tauri-plugin-global-shortcut = "2"
 tracing = "0.1"
 # Serveurs MCP connectés (KOB-155) : test des serveurs et autorisation OAuth,
-# secrets dans le gestionnaire d'identifiants du système.
+# secrets dans le gestionnaire d'identifiants du système (keyring, par
+# système plus bas).
 async-trait = "0.1"
-keyring = { version = "3", features = ["windows-native", "apple-native", "linux-native"] }
 reqwest = { version = "0.13", default-features = false }
 rmcp = { version = "3.5", features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "reqwest", "auth"] }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56"
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+keyring = { version = "3", features = ["windows-native", "apple-native"] }
+
+# Linux : Secret Service (gnome-keyring, kwallet), qui garde les secrets sur
+# le disque, chiffrés. Le trousseau du noyau (keyutils) est en mémoire et se
+# vide au redémarrage (KOB-188).
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
 
 [dev-dependencies]
 # Test d'intégration de la carte de validation avec le serveur de permission (KOB-62).
