@@ -219,6 +219,7 @@ pub fn installer<R: Runtime>(builder: Builder<R>) -> Builder<R> {
     builder
         .manage(SessionPartagee::default())
         .manage(crate::activite::Journal::default())
+        .manage(crate::app::SectionDemandee::default())
         .invoke_handler(tauri::generate_handler![
             etat_session,
             demarrer,
@@ -271,6 +272,7 @@ pub fn installer<R: Runtime>(builder: Builder<R>) -> Builder<R> {
             crate::app::ouvrir_app,
             crate::app::a_propos,
             crate::app::erreur_interface,
+            crate::app::app_section_demandee,
             crate::bienvenue::ouvrir_bienvenue,
             crate::bienvenue::terminer_bienvenue,
             crate::bienvenue::etat_claude,
