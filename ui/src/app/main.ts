@@ -55,8 +55,8 @@ export const SECTIONS: readonly Entree[] = [
 
 const notifierBase = creerNotifieur(document.body);
 /** Notification de l'app : le petit Kobi réagit aussi (noté, ou oups). */
-const notifier: typeof notifierBase = (texte, ton) => {
-  notifierBase(texte, ton);
+const notifier: typeof notifierBase = (texte, ton, plus) => {
+  notifierBase(texte, ton, plus);
   reagir(ton === 'erreur' ? 'erreur' : 'enregistre');
 };
 

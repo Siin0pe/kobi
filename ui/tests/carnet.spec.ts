@@ -240,19 +240,140 @@ test('la recherche retrouve un mot sans casse ni accents et mène au passage', a
   await expectNoErrors(errors);
 });
 
+const copie = (page: Page) => page.evaluate(() => (window as unknown as { __copie: string }).__copie);
+const nbCar = (t: string) => `${new Intl.NumberFormat('fr-FR').format([...t].length)} caractères`;
+
+const CR_MD = '## Résumé\n\nBudget validé pour le prototype.\n\n## Décisions\n\n- On garde la **fusée** v2\n\n## Actions\n\n- [ ] Envoyer le devis\n- [x] Réserver la salle';
+const TRANSCRIPTION_MD = '- `00:00` **Moi** : Bonjour à tous, on parle du budget.\n- `00:05` **Eux** : Le prototype de la fusée vole jeudi.\n- `01:15` **Moi** : Parfait, on valide.';
+const NOTES_MD = '- Budget : 12 k€\n- Fusée prête jeudi';
+
 test('copier, exporter, ouvrir le dossier', async ({ page }) => {
   const errors = await ouvrirCarnet(page);
   await page.locator('.element[data-genre="reunion"]').click();
   await page.getByRole('button', { name: 'Copier' }).click();
-  await expect(page.locator('.notif')).toHaveText('Copié en markdown.');
-  expect(await page.evaluate(() => (window as unknown as { __copie: string }).__copie)).toBe('# 2026-10-18_point-budget\n');
-  await page.getByRole('button', { name: 'Exporter' }).click();
-  await expect(page.locator('.notif').last()).toContainText('Exporté : /home/test/Documents/');
+  await page.getByRole('menuitem', { name: /Copier tout/ }).click();
+  await expect(page.locator('.notif .notif-texte')).toHaveText(`Réunion copiée en entier · ${nbCar('# 2026-10-18_point-budget\n')} · markdown`);
+  expect(await copie(page)).toBe('# 2026-10-18_point-budget\n');
+  await page.getByRole('button', { name: 'Exporter…' }).click();
+  await expect(page.locator('.notif').last()).toContainText('Exporté en markdown : 2026-10-18_point-budget.md');
+  await expect(page.locator('.notif').last().locator('.notif-apercu')).toHaveText('titre, compte rendu et transcription\ndans /home/test/Documents/');
   // Un seul message à la fois : « Exporté » remplace « Copié » (KOB-215).
   await expect(page.locator('.notif:not(.sort)')).toHaveCount(1);
-  await expect(page.locator('.notif', { hasText: 'Copié en markdown.' })).toHaveCount(0);
+  await expect(page.locator('.notif', { hasText: 'Réunion copiée' })).toHaveCount(0);
   await page.getByRole('button', { name: 'Ouvrir le dossier' }).click();
   expect(await appels(page)).toContainEqual(['carnet_ouvrir_dossier', { genre: 'reunion', id: '2026-10-18_point-budget' }]);
+  await expectNoErrors(errors);
+});
+
+test('« Copier » dit ce qu’on copie : compte rendu, transcription, notes, tout, avec leur taille ; chacun met exactement son contenu (KOB-224)', async ({ page }) => {
+  const errors = await ouvrirCarnet(page);
+  await page.locator('.element[data-genre="reunion"]').click();
+  const bouton = page.getByRole('button', { name: 'Copier' });
+  await bouton.click();
+  await expect(bouton).toHaveAttribute('aria-expanded', 'true');
+  const menu = page.getByRole('menu', { name: 'Que copier ?' });
+  await expect(menu.getByRole('menuitem')).toHaveText([
+    `Copier le compte rendu${nbCar(CR_MD)}`,
+    'Copier la transcription3 lignes',
+    `Copier les notes${nbCar(NOTES_MD)}`,
+    'Copier toutmarkdown : titre, compte rendu et transcription',
+  ]);
+  await page.screenshot({ path: test.info().outputPath('menu-copier.png') });
+  const cas: Array<[RegExp, string, string]> = [
+    [/compte rendu/, CR_MD, 'Compte rendu copié'],
+    [/transcription/, TRANSCRIPTION_MD, 'Transcription copiée'],
+    [/notes/, NOTES_MD, 'Notes copiées'],
+  ];
+  for (const [nom, attendu, debut] of cas) {
+    if (await menu.isHidden()) await bouton.click();
+    await menu.getByRole('menuitem', { name: nom }).click();
+    await expect(menu).toBeHidden();
+    expect(await copie(page)).toBe(attendu);
+    const notif = page.locator('.notif:not(.sort)');
+    await expect(notif.locator('.notif-texte')).toHaveText(`${debut} · ${nbCar(attendu)} · markdown`);
+    // Aperçu : les deux premières lignes non vides.
+    await expect(notif.locator('.notif-apercu')).toHaveText(attendu.split('\n').filter((l) => l.trim()).slice(0, 2).join('\n'));
+  }
+  await page.screenshot({ path: test.info().outputPath('retour-copie.png') });
+  await expectNoErrors(errors);
+});
+
+test('format « texte brut », retenu : sans dièses ni astérisques, puces en « • » (KOB-224)', async ({ page }) => {
+  const errors = await ouvrirCarnet(page);
+  await page.locator('.element[data-genre="reunion"]').click();
+  await page.getByRole('button', { name: 'Copier' }).click();
+  await page.getByRole('menuitemradio', { name: 'texte brut' }).click();
+  await expect(page.getByRole('menuitemradio', { name: 'texte brut' })).toHaveAttribute('aria-checked', 'true');
+  await page.getByRole('menuitem', { name: /compte rendu/ }).click();
+  expect(await copie(page)).toBe('Résumé\n\nBudget validé pour le prototype.\n\nDécisions\n\n• On garde la fusée v2\n\nActions\n\n• Envoyer le devis\n• Réserver la salle');
+  await expect(page.locator('.notif:not(.sort) .notif-texte')).toContainText('· texte brut');
+  // Retenu : rouvert, le menu montre toujours « texte brut ».
+  await page.reload();
+  await page.locator('.element[data-genre="reunion"]').click();
+  await page.getByRole('button', { name: 'Copier' }).click();
+  await expect(page.getByRole('menuitemradio', { name: 'texte brut' })).toHaveAttribute('aria-checked', 'true');
+  await expectNoErrors(errors);
+});
+
+test('copie au survol : chaque partie, décision, action, note et ligne de transcription, libellée (KOB-224)', async ({ page }) => {
+  const errors = await ouvrirCarnet(page);
+  await page.locator('.element[data-genre="reunion"]').click();
+  const decision = page.locator('[data-section="decisions"] li').first();
+  const bouton = decision.getByRole('button', { name: 'Copier cette décision' });
+  await expect(bouton).toHaveCSS('opacity', '0');
+  await decision.hover();
+  await expect(bouton).toHaveCSS('opacity', '1');
+  await bouton.hover();
+  await expect(bouton.locator('.copie-libelle')).toHaveText('Copier cette décision');
+  await page.screenshot({ path: test.info().outputPath('survol-decision.png') });
+  await bouton.click();
+  expect(await copie(page)).toBe('- On garde la **fusée** v2');
+  await expect(page.locator('.notif:not(.sort) .notif-texte')).toHaveText(`Décision copiée · ${nbCar('- On garde la **fusée** v2')} · markdown`);
+
+  await page.locator('[data-section="actions"] li').nth(1).hover();
+  await page.locator('[data-section="actions"] li').nth(1).getByRole('button', { name: 'Copier cette action' }).click();
+  expect(await copie(page)).toBe('- [x] Réserver la salle');
+  await page.locator('[data-section="resume"]').hover();
+  await page.getByRole('button', { name: 'Copier le résumé' }).click();
+  expect(await copie(page)).toBe('Budget validé pour le prototype.');
+  await page.locator('[data-section="decisions"]').getByRole('button', { name: 'Copier les décisions' }).focus();
+  await page.keyboard.press('Enter');
+  expect(await copie(page)).toBe('- On garde la **fusée** v2');
+
+  await page.getByRole('tab', { name: /Transcription/ }).click();
+  const ligne = page.locator('.parole').nth(1);
+  await ligne.hover();
+  await ligne.getByRole('button', { name: 'Copier cette ligne' }).click();
+  expect(await copie(page)).toBe('- `00:05` **Eux** : Le prototype de la fusée vole jeudi.');
+
+  await page.getByRole('tab', { name: 'Notes' }).click();
+  await page.locator('.notes li').nth(1).hover();
+  await page.locator('.notes li').nth(1).getByRole('button', { name: 'Copier cette note' }).click();
+  expect(await copie(page)).toBe('- Fusée prête jeudi');
+  await expect(page.locator('.notif:not(.sort)')).toHaveCount(1);
+  await expectNoErrors(errors);
+});
+
+test('menu « Copier » au clavier : flèches, Entrée, Échap rend le focus ; les parties vides sont grisées (KOB-224)', async ({ page }) => {
+  const errors = await ouvrirCarnet(page);
+  await page.locator('.element[data-genre="reunion"]').click();
+  const bouton = page.getByRole('button', { name: 'Copier' });
+  await bouton.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('menuitem', { name: /compte rendu/ })).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(page.getByRole('menuitem', { name: /transcription/ })).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('menu')).toBeHidden();
+  await expect(bouton).toBeFocused();
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  expect(await copie(page)).toBe(TRANSCRIPTION_MD);
+  // Clic à côté : le menu se ferme.
+  await bouton.click();
+  await page.locator('.titre').click();
+  await expect(page.getByRole('menu')).toBeHidden();
   await expectNoErrors(errors);
 });
 
