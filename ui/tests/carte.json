@@ -125,7 +125,8 @@
         "effets",
         "sobriete",
         "scene",
-        "fin-reunion"
+        "fin-reunion",
+        "son-ordi"
       ]
     },
     {
@@ -213,7 +214,8 @@
         "app",
         "voix",
         "bienvenue",
-        "mcp"
+        "mcp",
+        "son-ordi"
       ]
     },
     {

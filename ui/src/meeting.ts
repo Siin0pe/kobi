@@ -54,6 +54,8 @@ export class RecIndicator {
   private readonly label: HTMLElement;
   private readonly time: HTMLElement;
   private readonly notes: HTMLElement;
+  /** « son de l'ordi » : la piste « eux » est captée (KOB-164). */
+  private readonly eux: HTMLElement;
   private reduced = false;
   private info: MeetingInfo | null = null;
   private timer = 0;
@@ -71,7 +73,10 @@ export class RecIndicator {
     this.time.setAttribute('aria-hidden', 'true');
     this.notes = el('span', 'rec-notes');
     this.notes.hidden = true;
-    this.root.append(el('span', 'rec-dot'), (this.label = el('span', 'rec-label')), this.time, this.notes);
+    this.eux = el('span', 'rec-eux', 'son de l’ordi');
+    this.eux.title = 'Le son de l’ordinateur (la voix des autres en visio) est transcrit aussi.';
+    this.eux.hidden = true;
+    this.root.append(el('span', 'rec-dot'), (this.label = el('span', 'rec-label')), this.time, this.notes, this.eux);
   }
 
   setReducedMotion(reduced: boolean): void {
@@ -100,6 +105,7 @@ export class RecIndicator {
       const n = info.notes ?? 0;
       this.notes.hidden = n === 0;
       this.digits(this.notes, String(n), ` note${n > 1 ? 's' : ''}`);
+      this.eux.hidden = !info.computerAudio || Boolean(info.paused);
       if (n > before && !this.reduced && !this.paused) this.bump(n - before);
     }
     this.tick();

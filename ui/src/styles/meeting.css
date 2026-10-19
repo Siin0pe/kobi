@@ -121,6 +121,16 @@
 .rec-notes[hidden] {
   display: none;
 }
+/* Son de l'ordinateur capté (KOB-164) : discret, à la suite. */
+.rec-eux {
+  opacity: 0.75;
+}
+.rec-eux::before {
+  content: '· ';
+}
+.rec-eux[hidden] {
+  display: none;
+}
 .rec-plus {
   position: absolute;
   right: 6px;

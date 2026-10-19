@@ -70,14 +70,23 @@ pub enum Brain {
     Api,
 }
 
-/// Sources audio écoutées en réunion.
+/// Sources audio écoutées en réunion. Le son de l'ordinateur (la voix des
+/// autres en visio) n'est capté que sur demande : micro seul par défaut
+/// (KOB-164).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AudioSources {
+    #[default]
     Mic,
     System,
-    #[default]
     Both,
+}
+
+impl AudioSources {
+    /// Le son de l'ordinateur est-il capté (en réunion) ?
+    pub fn son_ordi(self) -> bool {
+        self != AudioSources::Mic
+    }
 }
 
 /// Mode de prise de notes.
@@ -141,12 +150,51 @@ impl<'de> Deserialize<'de> for Retention {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AudioConfig {
     pub sources: AudioSources,
+    /// Sortie audio captée pour le son de l'ordinateur (nom ou morceau de
+    /// nom) ; vide : la sortie par défaut. Toujours écrite : son absence
+    /// signale un fichier d'avant KOB-164 (voir [`AudioConfig::migrer`]).
+    #[serde(default, serialize_with = "sortie_vers_texte")]
+    pub sortie: Option<String>,
     #[serde(flatten)]
     pub extra: toml::Table,
+}
+
+impl Default for AudioConfig {
+    fn default() -> Self {
+        Self {
+            sources: AudioSources::default(),
+            sortie: Some(String::new()),
+            extra: toml::Table::new(),
+        }
+    }
+}
+
+fn sortie_vers_texte<S: Serializer>(sortie: &Option<String>, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_str(sortie.as_deref().unwrap_or_default())
+}
+
+impl AudioConfig {
+    /// Avant KOB-164, `sources = "both"` était écrit d'office alors que rien
+    /// ne permettait de le choisir : un fichier sans `sortie` repasse au
+    /// micro seul, le son de l'ordinateur restant à activer par l'utilisateur.
+    fn migrer(&mut self) {
+        if self.sortie.is_none() {
+            self.sources = AudioSources::Mic;
+            self.sortie = Some(String::new());
+        }
+    }
+
+    /// Sortie choisie ; `None` : la sortie par défaut.
+    pub fn sortie_choisie(&self) -> Option<&str> {
+        self.sortie
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -369,10 +417,11 @@ impl Default for Config {
 impl Config {
     /// Lit une config TOML ; `path` ne sert qu'aux messages d'erreur.
     pub fn parse(text: &str, path: &Path) -> Result<Self, ConfigError> {
-        let config: Config = toml::from_str(text).map_err(|e| ConfigError::Parse {
+        let mut config: Config = toml::from_str(text).map_err(|e| ConfigError::Parse {
             path: path.to_owned(),
             source: Box::new(e),
         })?;
+        config.audio.migrer();
         config.validate(path)?;
         Ok(config)
     }
@@ -511,6 +560,43 @@ mod tests {
         assert_eq!(again.config, Config::default());
     }
 
+    /// KOB-164 : un fichier d'avant (sans `sortie`) avait `both` écrit
+    /// d'office : micro seul. Un choix fait depuis est gardé.
+    #[test]
+    fn son_de_l_ordinateur_desactive_par_defaut() {
+        let path = Path::new("config.toml");
+        let ancien = Config::parse(
+            "[audio]
+sources = \"both\"
+",
+            path,
+        )
+        .unwrap();
+        assert_eq!(ancien.audio.sources, AudioSources::Mic);
+        let ecrit = toml::to_string(&ancien).unwrap();
+        assert!(ecrit.contains("sortie = \"\""), "{ecrit}");
+        let choisi = Config::parse(
+            "[audio]
+sources = \"both\"
+sortie = \"Casque\"
+",
+            path,
+        )
+        .unwrap();
+        assert_eq!(choisi.audio.sources, AudioSources::Both);
+        assert!(choisi.audio.sources.son_ordi());
+        assert_eq!(choisi.audio.sortie_choisie(), Some("Casque"));
+        let defaut = Config::parse(
+            "[audio]
+sources = \"both\"
+sortie = \" \"
+",
+            path,
+        )
+        .unwrap();
+        assert_eq!(defaut.audio.sortie_choisie(), None);
+    }
+
     #[test]
     fn defauts_du_dossier_de_conception() {
         let c = Config::default();
@@ -520,7 +606,8 @@ mod tests {
         assert_eq!(c.hotkey_record, "Ctrl+Shift+R");
         assert_eq!(c.hotkey_write, "Ctrl+Alt+K");
         assert_eq!(c.hotkey_view, "Ctrl+Alt+G");
-        assert_eq!(c.audio.sources, AudioSources::Both);
+        assert_eq!(c.audio.sources, AudioSources::Mic);
+        assert!(!c.audio.sources.son_ordi());
         assert_eq!(c.stt.engine, "auto");
         assert_eq!(c.notes.mode, NotesMode::Blocks);
         assert_eq!(c.notes.interval_min, 3);

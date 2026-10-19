@@ -90,6 +90,8 @@ export interface MeetingInfo {
   notes?: number;
   /** Texte de la dernière note prise, tapé dans la fiche pendant l'enregistrement. */
   lastNote?: string;
+  /** Le son de l'ordinateur (piste « eux ») est capté (KOB-164). */
+  computerAudio?: boolean;
 }
 
 export type ConsentLang = 'fr' | 'en';
