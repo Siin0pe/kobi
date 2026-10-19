@@ -101,6 +101,7 @@ fn essayer(
         cwd: Some(cwd.to_path_buf()),
         partial_messages: false,
         args: args.to_vec(),
+        env: Vec::new(),
     })
     .unwrap();
     rt.block_on(async {
