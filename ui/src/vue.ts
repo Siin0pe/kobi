@@ -85,7 +85,7 @@ export class Vue {
   /**
    * Ouverture seule déjà faite dans cette conversation : pas une seconde
    * sans que l'utilisateur la demande (KOB-238). Remis à zéro quand la
-   * conversation se termine (retour en veille).
+   * coque clôt la conversation (`fin_conversation`).
    */
   private ouverteSeule = false;
   /** Moment de la réponse précédente : deux réponses rapprochées font une rafale. */
@@ -140,10 +140,11 @@ export class Vue {
     this.appliquerReglages(this.reglages);
     suivreAffichage((a) => this.appliquerReglages(a));
 
-    // Fin de la conversation (veille) : la prochaine pourra s'ouvrir seule une fois.
-    new MutationObserver(() => {
-      if (stage.root.dataset.session === 'veille') this.ouverteSeule = false;
-    }).observe(stage.root, { attributes: true, attributeFilter: ['data-session'] });
+    // Conversation close par la coque (pas chaque retour en veille, qui suit
+    // chaque réponse) : la prochaine pourra s'ouvrir seule une fois.
+    void tauri()?.event.listen('fin_conversation', () => {
+      this.ouverteSeule = false;
+    });
 
     const previous = stage.onRender;
     stage.onRender = (state, data) => {

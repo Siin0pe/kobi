@@ -33,6 +33,9 @@ use crate::session::{appliquer, etat};
 pub const EVENEMENT_ENREGISTREMENT: &str = "enregistrement";
 /// Historique de la conversation (dernières bulles, KOB-133).
 pub const EVENEMENT_CONVERSATION: &str = "conversation";
+/// La conversation du quotidien est close : la vue agrandie pourra de
+/// nouveau s'ouvrir seule (KOB-238).
+pub const EVENEMENT_FIN_CONVERSATION: &str = "fin_conversation";
 /// Carte de confirmation (bulle d'action).
 pub const EVENEMENT_CARTE: &str = "carte";
 /// `notes.md` vient d'être écrit (panneau des notes en direct, KOB-73).
@@ -313,6 +316,9 @@ pub struct Chef<R: Runtime> {
     /// Tâches longues en cours : début et question (« où en est… ? ») ;
     /// tant qu'il en reste, Kobi revient à « je m'en occupe » (KOB-152).
     taches: BTreeMap<u64, (Instant, String)>,
+    /// Tâches dont la lenteur a déjà été annoncée (une annonce au plus pour
+    /// des tâches simultanées, KOB-238).
+    annoncees: std::collections::BTreeSet<u64>,
     /// Tours abandonnés : ce qui en revient encore est ignoré.
     interrompus: HashSet<u64>,
     /// Cartes de validation ouvertes (KOB-156), dans l'ordre de l'écran :
@@ -511,6 +517,7 @@ impl<R: Runtime> Chef<R> {
             suite_apres_voix: false,
             derniere: None,
             taches: BTreeMap::new(),
+            annoncees: Default::default(),
             interrompus: HashSet::new(),
             validations: Default::default(),
             peut_etre: false,
@@ -1584,6 +1591,7 @@ impl<R: Runtime> Chef<R> {
     fn fermer_conversation(&mut self) {
         if self.conversation.take().is_some() {
             self.ecrivain.fermer_conversation();
+            let _ = self.app.emit(EVENEMENT_FIN_CONVERSATION, ());
         }
     }
 
@@ -1609,7 +1617,12 @@ impl<R: Runtime> Chef<R> {
             }
         }
         self.emettre_historique();
-        if tour == self.dernier {
+        // Une seule annonce tant que des tâches tournent : une autre déjà
+        // annoncée vaut pour celle-ci (rafale, KOB-238).
+        self.annoncees.retain(|t| self.taches.contains_key(t));
+        let deja = self.annoncees.iter().any(|t| *t != tour);
+        self.annoncees.insert(tour);
+        if tour == self.dernier && !deja {
             let _ = self.app.emit(EVENEMENT_REPONSE, phrase);
             crate::voix::dire(&self.app, phrase);
         }
@@ -1654,9 +1667,12 @@ impl<R: Runtime> Chef<R> {
         {
             return;
         }
-        if activite != Some("occupe") {
-            // Sans état « au travail » possible ici (oups, fin…), on
-            // réessaie au prochain tic.
+        // Réunion en pause ou qui se termine : pas d'état « au travail »,
+        // le résultat est montré tel quel, sans attendre la reprise.
+        let sans_activite = matches!(etat(&self.app).etat, "pause" | "fin");
+        if activite != Some("occupe") && !sans_activite {
+            // Sans état « au travail » possible ici (oups…), on réessaie au
+            // prochain tic.
             self.livrable_a = Some(Instant::now() + TRANSITION_RESULTAT);
             self.transition(&[Evenement::TacheLongue]);
             return;
