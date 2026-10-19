@@ -798,6 +798,11 @@ fn regler<R: Runtime>(
             _ => {}
         }
     }
+    // Combien Kobi parle (KOB-215) : à chaud, déjà écrit dans config.toml.
+    if cle == "voice.verbosite" && app.try_state::<crate::voix::Voix>().is_some() {
+        crate::voix::regler_verbosite(app, m.config.voice.verbosite, false);
+        application = Application::AChaud;
+    }
     // Son de l'ordinateur (KOB-164) : la piste « eux » suit à chaud.
     if cle.starts_with("audio.") && !crate::son_ordi::recharger(app, &m.config) {
         application = Application::AuRedemarrage;

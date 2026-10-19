@@ -96,6 +96,11 @@ pub const CLES: &[(&str, Application, &str)] = &[
     ),
     ("voice.meeting", AChaud, "Réponses à voix haute en réunion."),
     (
+        "voice.verbosite",
+        AChaud,
+        "Combien Kobi parle : bavard, normal (défaut) ou discret.",
+    ),
+    (
         "meetings.retention_days",
         AuRedemarrage,
         "Conservation des réunions : 30, 90, 365 ou \"unlimited\".",
@@ -354,6 +359,12 @@ mod tests {
         );
         assert!(!m.config.voice.assistant);
         assert_eq!(m.application, AChaud);
+
+        // KOB-215 : combien Kobi parle, à chaud ; une valeur inconnue est refusée.
+        let m = modifier(&c, "voice.verbosite", json!("discret")).unwrap();
+        assert_eq!(m.config.voice.verbosite, crate::config::Verbosite::Discret);
+        assert_eq!(m.application, AChaud);
+        assert!(modifier(&c, "voice.verbosite", json!("bavarde")).is_err());
 
         let m = modifier(&c, "notes.mode", json!("end")).unwrap();
         assert_eq!(m.config.notes.mode, NotesMode::End);

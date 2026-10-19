@@ -29,7 +29,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use kobi_session::config::VoiceConfig;
+use kobi_session::config::{Verbosite, VoiceConfig};
 use kobi_tts::texte::Diction;
 use kobi_tts::{Evenement as EvenementVoix, Parleur, Sortie, Synthese};
 use serde::Serialize;
@@ -72,6 +72,8 @@ pub enum CommandeVoix {
 
 pub struct Voix {
     reglage: Mutex<(bool, bool)>,
+    /// Combien Kobi parle (KOB-215).
+    verbosite: Mutex<Verbosite>,
     parleur: Option<Parleur>,
     config: Option<PathBuf>,
     /// Ce que Kobi dit (ou vient de dire) : on n'en coupe pas la voix et
@@ -187,6 +189,7 @@ pub fn installer<R: Runtime>(app: &AppHandle<R>, reglage: &VoiceConfig, config: 
     });
     app.manage(Voix {
         reglage: Mutex::new((reglage.assistant, reglage.meeting)),
+        verbosite: Mutex::new(reglage.verbosite),
         parleur: Some(parleur),
         config,
         recent: Mutex::default(),
@@ -198,10 +201,47 @@ pub fn installer<R: Runtime>(app: &AppHandle<R>, reglage: &VoiceConfig, config: 
 pub fn installer_sans_parleur<R: Runtime>(app: &AppHandle<R>, reglage: &VoiceConfig) {
     app.manage(Voix {
         reglage: Mutex::new((reglage.assistant, reglage.meeting)),
+        verbosite: Mutex::new(reglage.verbosite),
         parleur: None,
         config: None,
         recent: Mutex::default(),
     });
+}
+
+/// Combien Kobi parle en ce moment (normal sans la voix installée).
+pub fn verbosite<R: Runtime>(app: &AppHandle<R>) -> Verbosite {
+    app.try_state::<Voix>()
+        .map(|v| *v.verbosite.lock().unwrap_or_else(|e| e.into_inner()))
+        .unwrap_or_default()
+}
+
+/// Change combien Kobi parle, à chaud ; `enregistrer` l'écrit dans
+/// `config.toml` (déjà fait par `kobi config set`).
+pub fn regler_verbosite<R: Runtime>(app: &AppHandle<R>, v: Verbosite, enregistrer: bool) {
+    let Some(voix) = app.try_state::<Voix>() else {
+        return;
+    };
+    *voix.verbosite.lock().unwrap_or_else(|e| e.into_inner()) = v;
+    if let (true, Some(chemin)) = (enregistrer, &voix.config) {
+        let mut lu = kobi_session::config::load_or_create(chemin);
+        lu.config.voice.verbosite = v;
+        if let Err(e) = kobi_session::config::save(&lu.config, chemin) {
+            tracing::warn!(erreur = %e, "voix : verbosité non enregistrée");
+        }
+    }
+    tracing::info!(?v, "verbosité réglée");
+}
+
+/// Réglages › Affichage : « Kobi parle ».
+#[tauri::command]
+pub fn verbosite_ui<R: Runtime>(app: AppHandle<R>) -> Verbosite {
+    verbosite(&app)
+}
+
+#[tauri::command]
+pub fn regler_verbosite_ui<R: Runtime>(app: AppHandle<R>, verbosite: Verbosite) -> Verbosite {
+    regler_verbosite(&app, verbosite, true);
+    self::verbosite(&app)
 }
 
 fn en_reunion<R: Runtime>(app: &AppHandle<R>) -> bool {
@@ -340,21 +380,43 @@ pub const RESUME_CARACTERES: usize = 240;
 
 /// Budget de la voix pour une réponse : les premières phrases passent, puis
 /// plus rien.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Resume {
     phrases: usize,
     caracteres: usize,
     coupe: bool,
+    /// Phrases et caractères permis, selon la verbosité (KOB-215).
+    max: (usize, usize),
+}
+
+impl Default for Resume {
+    fn default() -> Self {
+        Self::pour(Verbosite::Normal)
+    }
 }
 
 impl Resume {
+    pub fn pour(v: Verbosite) -> Self {
+        let max = match v {
+            Verbosite::Discret => (1, RESUME_CARACTERES * 2 / 3),
+            Verbosite::Normal => (RESUME_PHRASES, RESUME_CARACTERES),
+            Verbosite::Bavard => (RESUME_PHRASES * 2, RESUME_CARACTERES * 2),
+        };
+        Self {
+            phrases: 0,
+            caracteres: 0,
+            coupe: false,
+            max,
+        }
+    }
+
     /// Garde les phrases qui tiennent encore dans le résumé.
     pub fn garder(&mut self, phrases: &[String]) -> Vec<String> {
         let mut gardees = Vec::new();
         for phrase in phrases {
             let longueur = phrase.chars().count();
-            let deborde = self.phrases >= RESUME_PHRASES
-                || (self.phrases > 0 && self.caracteres + longueur > RESUME_CARACTERES);
+            let deborde = self.phrases >= self.max.0
+                || (self.phrases > 0 && self.caracteres + longueur > self.max.1);
             if self.coupe || deborde {
                 self.coupe = true;
                 continue;
@@ -395,7 +457,7 @@ impl Reponse {
         Self {
             enonce,
             diction: Diction::new(),
-            resume: Resume::default(),
+            resume: Resume::pour(verbosite(app)),
         }
     }
 
@@ -786,6 +848,23 @@ mod tests {
         assert!(!basculer(h).actif);
         assert!(!etat_voix(h).reunion);
         assert_eq!(executer(h, CommandeVoix::Stop), None);
+    }
+
+    /// KOB-215 : combien la voix dit d'une réponse, selon la verbosité ;
+    /// changée à chaud.
+    #[test]
+    fn la_voix_suit_la_verbosite() {
+        let p = |t: &str| t.to_owned();
+        let trois = [p("Une."), p("Deux."), p("Trois."), p("Quatre."), p("Cinq.")];
+        assert_eq!(Resume::pour(Verbosite::Discret).garder(&trois).len(), 1);
+        assert_eq!(Resume::pour(Verbosite::Normal).garder(&trois).len(), 2);
+        assert_eq!(Resume::pour(Verbosite::Bavard).garder(&trois).len(), 4);
+        let app = app(VoiceConfig::default());
+        let h = app.handle();
+        assert_eq!(verbosite(h), Verbosite::Normal);
+        regler_verbosite(h, Verbosite::Discret, true);
+        assert_eq!(verbosite(h), Verbosite::Discret);
+        assert_eq!(Reponse::new(h).resume.max.0, 1);
     }
 
     #[test]

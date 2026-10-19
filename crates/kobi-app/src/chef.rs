@@ -1624,12 +1624,20 @@ impl<R: Runtime> Chef<R> {
         let etat = match &self.reunion {
             // Dit aussi hors réunion : sans cela, Claude en suppose une
             // (« comment se passe ta réunion ? », KOB-181).
-            None => return format!("{maintenant}\n(Aucune réunion en cours.)\n{question}"),
+            None => {
+                return format!(
+                    "{maintenant}\n(Aucune réunion en cours.){}\n{question}",
+                    consigne_longueur(crate::voix::verbosite(&self.app))
+                )
+            }
             Some(r) if r.fin_demandee => "arrêté, compte rendu à venir",
             Some(r) if r.pause => "en pause",
             Some(_) => "en cours",
         };
-        format!("{maintenant}\n(Réunion : enregistrement {etat}.)\n{question}")
+        format!(
+            "{maintenant}\n(Réunion : enregistrement {etat}.){}\n{question}",
+            consigne_longueur(crate::voix::verbosite(&self.app))
+        )
     }
 
     fn fermer_conversation(&mut self) {
@@ -1655,6 +1663,12 @@ impl<R: Runtime> Chef<R> {
     /// la question en cours (KOB-68).
     fn patienter(&mut self, tour: u64, phrase: &str) {
         tracing::info!(tour, phrase, "tour : patience");
+        // Discret : la tâche longue ne s'annonce pas, Kobi au travail se voit.
+        if phrase == crate::pannes::PATIENCE
+            && crate::voix::verbosite(&self.app) == kobi_session::config::Verbosite::Discret
+        {
+            return;
+        }
         if let Some(b) = self.bulle(tour) {
             if b.reponse.is_empty() || b.statut == "tache" {
                 b.reponse = phrase.into();
@@ -1887,6 +1901,17 @@ pub fn fabrique_claude(
 /// Date et heure locales, données à Claude avec chaque question (KOB-182) :
 /// sans dossier de code, il ne peut lancer aucune commande, pas même `date`,
 /// et ne savait plus dire l'heure.
+/// Longueur voulue, ajoutée à la question (KOB-215) ; rien en normal : le
+/// prompt système demande déjà une ou deux phrases.
+fn consigne_longueur(v: kobi_session::config::Verbosite) -> &'static str {
+    use kobi_session::config::Verbosite::*;
+    match v {
+        Bavard => "\n(Tu peux répondre en 2 à 4 phrases.)",
+        Normal => "",
+        Discret => "\n(Réponds en une phrase.)",
+    }
+}
+
 fn moment(m: &jiff::Zoned) -> String {
     const JOURS: [&str; 7] = [
         "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche",
@@ -1919,6 +1944,15 @@ fn moment(m: &jiff::Zoned) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// KOB-215 : la longueur voulue part avec la question, sauf en normal.
+    #[test]
+    fn consigne_de_longueur_selon_la_verbosite() {
+        use kobi_session::config::Verbosite::*;
+        assert_eq!(consigne_longueur(Normal), "");
+        assert!(consigne_longueur(Discret).contains("une phrase"));
+        assert!(consigne_longueur(Bavard).contains("2 à 4 phrases"));
+    }
 
     /// KOB-182 : Claude reçoit la date et l'heure locales avec chaque
     /// question, même sans dossier de code (pas de commande `date`).

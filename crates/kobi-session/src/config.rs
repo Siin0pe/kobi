@@ -267,6 +267,20 @@ impl Default for NotesConfig {
     }
 }
 
+/// Combien Kobi parle (KOB-215) : longueur des réponses, ce que la voix en
+/// dit, annonce des tâches longues.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Verbosite {
+    /// Réponses de 2 à 4 phrases, la voix en lit davantage.
+    Bavard,
+    /// Une ou deux phrases, le détail à la demande (défaut).
+    #[default]
+    Normal,
+    /// Une phrase ; pas d'annonce de tâche longue.
+    Discret,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct VoiceConfig {
@@ -274,6 +288,8 @@ pub struct VoiceConfig {
     pub assistant: bool,
     /// Réponses lues à voix haute en réunion.
     pub meeting: bool,
+    /// Combien Kobi parle (KOB-215).
+    pub verbosite: Verbosite,
     #[serde(flatten)]
     pub extra: toml::Table,
 }
@@ -283,6 +299,7 @@ impl Default for VoiceConfig {
         Self {
             assistant: true,
             meeting: false,
+            verbosite: Verbosite::Normal,
             extra: toml::Table::new(),
         }
     }
