@@ -4,6 +4,7 @@
 // Kobi et y retournent (effets.ts) ; pendant la prise de notes, les lettres de
 // chaque nouvelle note volent de Kobi vers la fiche, où un crayon gratte.
 
+import { boutonCopierDedans } from './copie';
 import { dealFromKobi, flyLetters, leaveToKobi } from './effets';
 import { Defilement } from './defilement';
 import type { ActionCard, MascotData, MascotState } from './states';
@@ -65,6 +66,8 @@ export class Bubbles {
   private actionKey = '';
   private typer: Typewriter | null = null;
   private reduced = false;
+  /** Réponse entière (markdown), ce que copie « Copier la réponse ». */
+  private answerText = '';
   /** Texte de la fiche de notes déjà montré (lettres qui volent à la note suivante). */
   private notesShown = '';
 
@@ -170,7 +173,10 @@ export class Bubbles {
           if (sel && !sel.isCollapsed && card.contains(sel.anchorNode)) return;
           this.onReadAll?.();
         });
-        card.append(zone, el('div', 'tags'), all);
+        // Copier la réponse entière (KOB-224) : au survol de la bulle, le
+        // retour s'écrit dans le bouton.
+        const copie = boutonCopierDedans('reponse', () => this.answerText, 'copier-reponse', true);
+        card.append(zone, el('div', 'tags'), all, copie);
         this.scroll = new Defilement(zone, text);
         this.scroll.setInstant(this.reduced);
         break;
@@ -205,7 +211,8 @@ export class Bubbles {
         this.typed(card, kind, COMPOSE_TEXT);
         break;
       case 'answer': {
-        this.typed(card, kind, data.answer ?? '');
+        this.answerText = data.answer ?? '';
+        this.typed(card, kind, this.answerText);
         const tags = card.querySelector<HTMLElement>('.tags')!;
         const wanted = (data.answerTags ?? []).join('\u0000');
         if (tags.dataset.key !== wanted) {

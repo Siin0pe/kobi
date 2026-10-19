@@ -17,6 +17,7 @@
 import { etapeLigne, type Etape } from './activite';
 import { affichage, suivreAffichage, TAILLES, TEXTES, type Affichage } from './affichage';
 import type { Bulle } from './conversation';
+import { boutonCopierDedans } from './copie';
 import { Defilement } from './defilement';
 import { Markdown } from './markdown';
 import { tauri } from './native';
@@ -313,7 +314,9 @@ export class Vue {
         const node = el('article', 'vex');
         const q = el('div', 'vex-q', it.question);
         const reponse = el('div', 'vex-a md');
-        node.append(q, reponse);
+        // Une fois la réponse finie (vue.css) ; elle part en entier, markdown compris.
+        const cle = it.cle;
+        node.append(q, reponse, boutonCopierDedans('reponse', () => this.echanges.get(cle)?.texte ?? '', 'vex-copier'));
         this.liste.append(node);
         e = { node, reponse, md: new Markdown(reponse, () => !this.stage.root.classList.contains('reduced-motion')), texte: '' };
         this.echanges.set(it.cle, e);

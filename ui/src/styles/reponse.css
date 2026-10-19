@@ -216,3 +216,51 @@
   animation: none !important;
   transition: none !important;
 }
+
+/* « Copier la réponse » (KOB-224) : une languette sur le bord haut de la
+   bulle, au survol ou au clavier, jamais pendant que la réponse s'écrit.
+   Le retour (« Réponse copiée · 240 caractères ») s'écrit dedans. */
+.card-answer .copier-reponse {
+  position: absolute;
+  top: -15px;
+  right: 22px;
+  min-height: 30px;
+  padding: 0 12px;
+  border: 2px solid var(--ink);
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--ink);
+  font: 700 12.5px var(--font);
+  white-space: nowrap;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+.card-answer:hover .copier-reponse,
+.card-answer .copier-reponse:focus-visible,
+.card-answer .copier-reponse[data-etat] {
+  opacity: 1;
+  pointer-events: auto;
+}
+.card-answer[data-typing='1'] .copier-reponse:not([data-etat]) {
+  opacity: 0;
+  pointer-events: none;
+}
+.card-answer .copier-reponse:hover,
+.card-answer .copier-reponse[data-etat='copie'] {
+  background: var(--accent);
+}
+.card-answer .copier-reponse:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+@media (hover: none) {
+  .card-answer:not([data-typing='1']) .copier-reponse {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+.reduced-motion .card-answer .copier-reponse {
+  transition: none;
+}
