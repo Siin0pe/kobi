@@ -1,11 +1,12 @@
 // Rappels (KOB-145) : à l'heure dite, la coque envoie l'événement `rappel` ;
-// la notification sonne, reste jusqu'au clic, et Kobi le dit dans sa bulle.
+// la notification sonne et reste jusqu'au clic ; la coque le dit à voix haute.
+// Pas de bulle « Rappel : … » en plus (KOB-176) : elle répétait la notification.
 import { expect, test } from '@playwright/test';
 import { emit, expectNoErrors, mockTauri, openUi } from './helpers';
 
 const RAPPEL = { id: 'r1', texte: "boire de l'eau", echeance_ms: new Date(2026, 9, 18, 15, 30).getTime() };
 
-test('un rappel arrive : notification qui sonne et bulle de Kobi', async ({ page }) => {
+test('un rappel arrive : notification qui sonne, sans bulle en double', async ({ page }) => {
   await page.clock.install();
   await mockTauri(page);
   const errors = await openUi(page, '');
@@ -19,9 +20,9 @@ test('un rappel arrive : notification qui sonne et bulle de Kobi', async ({ page
   await expect(notif).toHaveAttribute('aria-label', "Rappel : boire de l'eau");
   // La cloche sonne.
   expect(await notif.locator('.notif-icon').evaluate((e) => getComputedStyle(e).animationName)).toBe('notif-ring');
-  // Kobi, au repos, le dit dans sa bulle.
-  await expect(page.locator('.stage')).toHaveAttribute('data-state', 'answer');
-  await expect(page.getByText("Rappel : boire de l'eau").first()).toBeVisible();
+  // Une seule chose à l'écran à côté de Kobi : la notification, pas de bulle qui la répète.
+  await expect(page.locator('.stage')).toHaveAttribute('data-state', 'idle');
+  await expect(page.locator('[data-card=answer]')).toBeHidden();
 
   // Un rappel ne s'en va pas tout seul (contrairement aux tâches livrées) : seulement au clic.
   await page.clock.fastForward(60_000);
