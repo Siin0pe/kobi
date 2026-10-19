@@ -303,8 +303,9 @@ pub struct Chef<R: Runtime> {
     taches: BTreeMap<u64, (Instant, String)>,
     /// Tours abandonnés : ce qui en revient encore est ignoré.
     interrompus: HashSet<u64>,
-    /// Carte de validation ouverte (KOB-156) : « oui » ou « non » lui répond.
-    validation: Option<String>,
+    /// Cartes de validation ouvertes (KOB-156), dans l'ordre de l'écran :
+    /// « oui » ou « non » répond à celle affichée (KOB-218).
+    validations: crate::validation::FileValidations,
     /// La question en cours de traitement ne s'adresse peut-être pas à Kobi.
     peut_etre: bool,
     /// Tour d'une telle question : sa réponse n'est montrée qu'une fois
@@ -494,7 +495,7 @@ impl<R: Runtime> Chef<R> {
             derniere: None,
             taches: BTreeMap::new(),
             interrompus: HashSet::new(),
-            validation: None,
+            validations: Default::default(),
             peut_etre: false,
             tour_peut_etre: None,
         }
@@ -606,7 +607,7 @@ impl<R: Runtime> Chef<R> {
         }
         let _ = self.app.emit(EVENEMENT_QUESTION, &texte);
         // Une carte de validation attend : « oui » ou « non » lui répondent.
-        if let Some(id) = self.validation.clone() {
+        if let Some(id) = self.validations.cible().map(str::to_owned) {
             if let Some(accepte) = crate::intentions::reponse_validation(&texte) {
                 tracing::info!(%id, accepte, "réponse à la carte, à la voix ou au clavier");
                 crate::validation::decider(&self.app, &id, accepte);
@@ -1142,31 +1143,60 @@ impl<R: Runtime> Chef<R> {
         }
     }
 
-    /// Une action qui écrit attend un « oui » : Kobi passe en proposition,
-    /// relit la demande si la voix est active, et écoute la réponse sans
-    /// qu'on redise « Kobi » (hors réunion).
+    /// Une action qui écrit attend un « oui » : Kobi passe en proposition et
+    /// écoute la réponse sans qu'on redise « Kobi » (hors réunion). Seule la
+    /// carte affichée est annoncée ; les suivantes le seront à leur tour
+    /// (KOB-218).
     fn validation_ouverte(&mut self, id: String, resume: &str) {
-        self.validation = Some(id);
+        let annonce = self.validations.ouvrir(id, resume);
         self.calme_a = None;
         self.transition(&[Evenement::PermissionDemandee]);
-        crate::voix::dire(&self.app, &format!("{resume}. Je le fais ?"));
+        if let Some(resume) = annonce {
+            self.annoncer_validation(&resume);
+        }
         let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::Suite);
     }
 
     fn validation_fermee(&mut self, id: &str, reponse: crate::validation::Reponse) {
-        if self.validation.as_deref() == Some(id) {
-            self.validation = None;
+        let suivante = self.validations.fermer(id);
+        if self.validations.est_vide() {
+            self.transition(&[if reponse.acceptee() {
+                Evenement::PermissionAccordee
+            } else {
+                Evenement::PermissionRefusee
+            }]);
         }
-        self.transition(&[if reponse.acceptee() {
-            Evenement::PermissionAccordee
-        } else {
-            Evenement::PermissionRefusee
-        }]);
-        if reponse == crate::validation::Reponse::Delai {
+        // La carte montre déjà « Pas de réponse : refusé. » ; la voix ne le
+        // redit que si elle est le seul canal (KOB-215).
+        if reponse == crate::validation::Reponse::Delai && self.voix_seul_canal() {
             let message = "Pas de réponse : je n'ai rien fait.";
             let _ = self.app.emit(EVENEMENT_REPONSE, message);
             crate::voix::dire(&self.app, message);
         }
+        if let Some(resume) = suivante {
+            self.annoncer_validation(&resume);
+            let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::Suite);
+        }
+    }
+
+    /// La carte se lit à l'écran : la voix demande seulement « Je le fais ? ».
+    /// Fenêtre de Kobi cachée, la voix est le seul canal : elle relit la
+    /// demande (KOB-215).
+    fn annoncer_validation(&self, resume: &str) {
+        let phrase = if self.voix_seul_canal() {
+            format!("{resume}. Je le fais ?")
+        } else {
+            "Je le fais ?".to_owned()
+        };
+        crate::voix::dire(&self.app, &phrase);
+    }
+
+    /// La fenêtre de Kobi n'est pas à l'écran : ce qui s'affiche ne se voit pas.
+    fn voix_seul_canal(&self) -> bool {
+        !self
+            .app
+            .get_webview_window("main")
+            .is_some_and(|w| w.is_visible().unwrap_or(true))
     }
 
     fn retour(&mut self, retour: Retour) {
