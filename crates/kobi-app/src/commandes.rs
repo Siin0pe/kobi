@@ -283,6 +283,7 @@ mod tests {
             cwd: Some(depot.clone()),
             partial_messages: false,
             args,
+            env: Vec::new(),
         })
         .unwrap();
         // Question -> (réponse, commandes lancées, résultats d'outils en erreur).
