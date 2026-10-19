@@ -80,6 +80,9 @@ pub enum Message {
     QuestionPeutEtre(String),
     /// L'interpellation n'a pas été suivie d'une question.
     SansQuestion,
+    /// L'écoute est mise en pause hors réunion : la conversation se termine
+    /// et Kobi revient en veille (KOB-238).
+    EcouteCoupee,
     /// Segment final de la transcription continue.
     Segment(Segment),
     /// Menu, interface ou commande vocale.
@@ -581,6 +584,14 @@ impl<R: Runtime> Chef<R> {
             }
             Message::SansQuestion => {
                 self.transition(&[Evenement::PasDeQuestion]);
+            }
+            Message::EcouteCoupee => {
+                // Micro coupé : plus rien ne fera passer le délai de la
+                // conversation, elle se termine tout de suite (KOB-238).
+                tracing::info!("écoute en pause : fin de la conversation");
+                self.suite_apres_voix = false;
+                self.transition(&[Evenement::PasDeQuestion]);
+                self.fermer_conversation();
             }
             Message::Question { texte, voix } => self.question(texte, voix),
             Message::QuestionPeutEtre(texte) => {

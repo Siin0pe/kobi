@@ -90,7 +90,7 @@ export class Vue {
   private ouverteSeule = false;
   /** Moment de la réponse précédente : deux réponses rapprochées font une rafale. */
   private reponsePrecedente = -Infinity;
-  private derniereReponse = 0;
+  private derniereReponse = -Infinity;
   private etatPrecedent: MascotState | null = null;
 
   constructor(private readonly stage: Stage) {

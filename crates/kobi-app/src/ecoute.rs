@@ -348,7 +348,14 @@ impl<R: Runtime> Fil<R> {
     }
 
     fn commande(&mut self, commande: Commande) {
+        let avant = self.en_pause;
         self.executer_commande(commande);
+        // Mis en pause hors réunion : la conversation ne peut plus finir
+        // d'elle-même (micro coupé), elle se termine ici (KOB-238).
+        if self.en_pause && !avant && !self.en_reunion {
+            self.ecouteur = Ecouteur::new(true);
+            publier(&self.app, Message::EcouteCoupee);
+        }
         if let Some(p) = self.app.try_state::<EnPause>() {
             p.0.store(self.en_pause, Ordering::Relaxed);
         }
