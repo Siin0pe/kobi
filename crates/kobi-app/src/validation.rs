@@ -521,6 +521,40 @@ pub fn demander<R: Runtime>(app: &AppHandle<R>, mut carte: CarteValidation) -> R
     reponse
 }
 
+/// Cartes ouvertes, dans l'ordre où l'interface les montre (la plus
+/// ancienne d'abord, les autres en file). La voix vise toujours la carte
+/// affichée, et seule celle-ci est annoncée (KOB-218).
+#[derive(Debug, Default)]
+pub struct FileValidations(std::collections::VecDeque<(String, String)>);
+
+impl FileValidations {
+    /// Nouvelle carte ; son résumé si elle passe aussitôt à l'écran (à annoncer).
+    pub fn ouvrir(&mut self, id: String, resume: &str) -> Option<String> {
+        self.0.push_back((id, resume.to_owned()));
+        (self.0.len() == 1).then(|| resume.to_owned())
+    }
+
+    /// Carte tranchée ; le résumé de la suivante si elle passe à l'écran.
+    pub fn fermer(&mut self, id: &str) -> Option<String> {
+        let tete = self.cible() == Some(id);
+        self.0.retain(|(i, _)| i != id);
+        if tete {
+            self.0.front().map(|(_, r)| r.clone())
+        } else {
+            None
+        }
+    }
+
+    /// La carte affichée, à qui « oui » / « non » répondent.
+    pub fn cible(&self) -> Option<&str> {
+        self.0.front().map(|(i, _)| i.as_str())
+    }
+
+    pub fn est_vide(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
 /// Une carte de Kobi attend sa réponse : le cerveau ne laisse pas tomber
 /// le tour qui l'a demandée (KOB-191).
 pub fn attend<R: Runtime>(app: &AppHandle<R>) -> bool {
@@ -843,5 +877,29 @@ mod tests {
         };
         assert_eq!(diff.lines().count(), LIGNES_DIFF + 1);
         assert!(diff.ends_with("… 123 lignes de plus"));
+    }
+
+    /// KOB-218 : deux cartes, la voix vise celle affichée (la plus ancienne),
+    /// puis la suivante quand elle passe à l'écran.
+    #[test]
+    fn la_voix_vise_la_carte_affichee() {
+        let mut f = FileValidations::default();
+        assert_eq!(
+            f.ouvrir("a".into(), "Écrire notes.md"),
+            Some("Écrire notes.md".into())
+        );
+        // B attend son tour : ni annonce ni cible.
+        assert_eq!(f.ouvrir("b".into(), "Lancer : cargo test"), None);
+        assert_eq!(f.cible(), Some("a"));
+        // B tranchée ailleurs (échéance) pendant qu'elle attend : rien ne change.
+        assert_eq!(f.ouvrir("c".into(), "Pousser la branche"), None);
+        assert_eq!(f.fermer("b"), None);
+        assert_eq!(f.cible(), Some("a"));
+        // A tranchée : C passe à l'écran, annoncée, et devient la cible.
+        assert_eq!(f.fermer("a"), Some("Pousser la branche".into()));
+        assert_eq!(f.cible(), Some("c"));
+        assert_eq!(f.fermer("c"), None);
+        assert!(f.est_vide());
+        assert_eq!(f.cible(), None);
     }
 }

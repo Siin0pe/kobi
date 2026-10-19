@@ -223,3 +223,70 @@ test('sobriété (KOB-156) : pendant qu’une carte de validation attend, la not
   await expect(page.locator('.notif-running')).toBeVisible();
   await expectNoErrors(errors);
 });
+
+// KOB-215 : carte compacte, Entrée qui ne vole pas un autre bouton, « Ne plus demander ».
+const LONGUE = { ...COMMANDE, id: '9', resume: 'Lancer : cargo test --workspace --all-features -- --include-ignored --test-threads 1' };
+
+test('résumé sur une ligne, déplié d’un clic, sans valider', async ({ page }) => {
+  await fakeShell(page);
+  const errors = await openUi(page, '');
+  await carte(page, LONGUE);
+  const titre = dialog(page).locator('.title');
+  const haut = async () => (await titre.boundingBox())!.height;
+  const uneLigne = await haut();
+  expect(await titre.evaluate((n) => n.scrollWidth > n.clientWidth)).toBe(true);
+  await expect(titre).toHaveAttribute('title', LONGUE.resume);
+  // Le nom accessible de la carte reste le résumé entier.
+  await expect(dialog(page)).toHaveAccessibleName(LONGUE.resume);
+  await titre.click();
+  expect(await haut()).toBeGreaterThan(uneLigne * 1.5);
+  await titre.click();
+  expect(await haut()).toBeLessThan(uneLigne * 1.2);
+  expect(await decisions(page)).toEqual([]);
+  await expectNoErrors(errors);
+});
+
+test('Entrée sur un autre bouton de Kobi ne valide pas la carte ; focus sur la carte, si', async ({ page }) => {
+  await fakeShell(page);
+  const errors = await openUi(page, '');
+  await page.evaluate(() => {
+    const b = document.createElement('button');
+    b.id = 'autre';
+    b.textContent = 'Autre';
+    document.body.append(b);
+  });
+  await carte(page, COMMANDE);
+  await page.locator('#autre').focus();
+  await page.keyboard.press('Enter');
+  expect(await decisions(page)).toEqual([]);
+  await dialog(page).focus();
+  await page.keyboard.press('Enter');
+  expect(await decisions(page)).toEqual([{ cmd: 'decider_carte', args: { id: '2', accepte: true } }]);
+  await expectNoErrors(errors);
+});
+
+test('« Ne plus demander » : pour fichiers, commandes et réglages seulement ; Valider règle la permission puis décide', async ({ page }) => {
+  await fakeShell(page);
+  const errors = await openUi(page, '');
+  for (const c of [SUPPRESSION, MCP]) {
+    await carte(page, c);
+    await expect(dialog(page).locator('.kval-toujours')).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.kval')).toHaveCount(0, { timeout: 4000 });
+  }
+  await carte(page, COMMANDE);
+  const caseToujours = dialog(page).getByRole('checkbox', { name: 'Ne plus demander pour les commandes' });
+  await caseToujours.check();
+  // Entrée sur la case ne valide pas.
+  await page.keyboard.press('Enter');
+  expect(await decisions(page)).toEqual([
+    { cmd: 'decider_carte', args: { id: '5', accepte: false } },
+    { cmd: 'decider_carte', args: { id: '3', accepte: false } },
+  ]);
+  await page.getByRole('button', { name: 'Valider' }).click();
+  await expect(page.locator('.kval .meta')).toHaveText('Kobi ne demandera plus (Réglages › Permissions).');
+  const appels = await page.evaluate(() => (window as unknown as { __calls: Appel[] }).__calls.map((c) => c.cmd).filter((c) => c === 'regler_permission' || c === 'decider_carte'));
+  expect(appels.slice(-2)).toEqual(['regler_permission', 'decider_carte']);
+  expect(await page.evaluate(() => (window as unknown as { __calls: Appel[] }).__calls.find((c) => c.cmd === 'regler_permission')!.args)).toEqual({ genre: 'commande', sansDemander: true });
+  await expectNoErrors(errors);
+});

@@ -3,12 +3,14 @@
 // permissions, section 4 : événement `carte` avec `type: "validation"`,
 // réponse `decider_carte { id, accepte }`.
 //
-// Sobriété : la carte reste courte (résumé, cible sur une ligne, compte à
-// rebours, Valider / Refuser) ; « Détail dans Kobi » ouvre la section
+// Sobriété : la carte reste courte (résumé sur une ligne, déplié d'un clic,
+// cible sur une ligne, compte à rebours, Valider / Refuser) ; « Détail dans Kobi » ouvre la section
 // Activité de l'app, où le diff, la commande ou les paramètres se lisent en
 // entier. Une seule carte à la fois, les suivantes attendent (badge « +N »).
 //
-// Valider / Refuser à la souris, Entrée / Échap au clavier ; la voix répond
+// Valider / Refuser à la souris, Entrée / Échap au clavier (Entrée seulement
+// si rien d'autre n'a le focus, KOB-215) ; « Ne plus demander » règle la
+// politique `[permissions]` du genre, révocable dans Réglages › Permissions ; la voix répond
 // côté coque, qui republie alors la carte avec son `statut`. Sans réponse à
 // l'échéance (60 s), le serveur de permission refuse seul : la carte l'annonce
 // et s'en va. Les boutons ne bougent jamais : seuls le pictogramme et la
@@ -37,6 +39,13 @@ const ISSUES: Record<Statut, { titre: string; meta: string }> = {
   expiree: { titre: 'Pas de réponse : refusé.', meta: 'Rien n’a été modifié.' },
 };
 
+/** Genres qu'une case « Ne plus demander » peut laisser passer (jamais une suppression ni un service). */
+const TOUJOURS: Partial<Record<CarteValidation['genre'], string>> = {
+  fichier: 'Ne plus demander pour écrire des fichiers',
+  commande: 'Ne plus demander pour les commandes',
+  reglage: 'Ne plus demander pour les réglages',
+};
+
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -52,6 +61,7 @@ interface Ouverte {
   bar: HTMLElement;
   secs: HTMLElement;
   badge: HTMLElement;
+  toujours: HTMLInputElement | null;
   statut: Statut | null;
 }
 
@@ -103,13 +113,20 @@ export class Validations {
   decide(accepte: boolean): void {
     const o = this.courante;
     if (!o || o.statut) return;
-    this.conclure(accepte ? 'acceptee' : 'refusee');
+    const toujours = accepte && o.toujours?.checked === true;
+    this.conclure(accepte ? 'acceptee' : 'refusee', toujours);
     const api = tauri();
     if (!api) return;
-    api.core.invoke('decider_carte', { id: o.carte.id, accepte }).catch(() => {
-      // Déjà expirée côté coque : Claude a reçu un refus.
-      if (this.courante === o) this.afficherIssue(o, 'expiree');
-    });
+    // La politique d'abord : les actions suivantes du même genre passent seules.
+    const regle = toujours
+      ? api.core.invoke('regler_permission', { genre: o.carte.genre, sansDemander: true }).catch(() => {})
+      : Promise.resolve();
+    void regle.then(() =>
+      api.core.invoke('decider_carte', { id: o.carte.id, accepte }).catch(() => {
+        // Déjà expirée côté coque : Claude a reçu un refus.
+        if (this.courante === o) this.afficherIssue(o, 'expiree');
+      }),
+    );
   }
 
   /** `recue` : arrivée de la carte ; le serveur refuse à `recue + echeance_ms`. */
@@ -127,8 +144,12 @@ export class Validations {
     const badge = el('span', 'kval-badge');
     badge.hidden = true;
     head.append(el('span', 'kval-glyph', g.glyph), el('span', 'kicker', g.kicker), badge);
+    // Une ligne ; un clic déplie le résumé entier. Coupé à l'écran seulement :
+    // un lecteur d'écran lit toujours le texte complet.
     const titre = el('div', 'title', carte.resume);
     titre.id = `kval-titre-${carte.id}`;
+    titre.title = carte.resume;
+    titre.addEventListener('click', () => titre.classList.toggle('deplie'));
     root.append(head, titre);
     const ou = cible(carte.detail);
     if (ou && ou !== carte.resume) root.append(el('div', 'kval-cible', ou));
@@ -155,9 +176,19 @@ export class Validations {
     const detail = el('button', 'kval-lien', 'Détail dans Kobi');
     detail.type = 'button';
     detail.addEventListener('click', () => void tauri()?.core.invoke('ouvrir_app', { section: 'activite' }).catch(() => {}));
-    root.append(temps, buttons, detail);
+    root.append(temps, buttons);
+    let toujours: HTMLInputElement | null = null;
+    const libelle = TOUJOURS[carte.genre];
+    if (libelle) {
+      const ligne = el('label', 'kval-toujours');
+      toujours = el('input');
+      toujours.type = 'checkbox';
+      ligne.append(toujours, el('span', undefined, libelle));
+      root.append(ligne);
+    }
+    root.append(detail);
 
-    const o: Ouverte = { carte, root, echeance: recue + (carte.echeance_ms ?? ECHEANCE_MS), timer: 0, bar, secs, badge, statut: null };
+    const o: Ouverte = { carte, root, echeance: recue + (carte.echeance_ms ?? ECHEANCE_MS), timer: 0, bar, secs, badge, toujours, statut: null };
     this.courante = o;
     this.scene.append(root);
     this.scene.classList.add('validation-open');
@@ -185,19 +216,19 @@ export class Validations {
     o.timer = window.setTimeout(() => this.tick(o), ((reste - 1) % 1000) + 1);
   }
 
-  private conclure(statut: Statut): void {
+  private conclure(statut: Statut, toujours = false): void {
     const o = this.courante;
     if (!o || o.statut) return;
     window.clearTimeout(o.timer);
     this.closes.add(o.carte.id);
-    this.afficherIssue(o, statut);
+    this.afficherIssue(o, statut, toujours);
   }
 
   /** L'issue remplace la question, puis la carte part (vers Kobi si validée). */
-  private afficherIssue(o: Ouverte, statut: Statut): void {
+  private afficherIssue(o: Ouverte, statut: Statut, toujours = false): void {
     o.statut = statut;
     window.clearTimeout(o.timer);
-    const issue = ISSUES[statut];
+    const issue = toujours ? { ...ISSUES[statut], meta: 'Kobi ne demandera plus (Réglages › Permissions).' } : ISSUES[statut];
     o.root.dataset.statut = statut;
     o.root.classList.remove('urgent');
     o.root.setAttribute('role', 'status');
@@ -250,6 +281,9 @@ export class Validations {
       e.stopPropagation();
       return;
     }
+    // Entrée valide seulement si le focus est sur la carte ou nulle part :
+    // jamais pour un autre bouton, lien ou « N étapes » de Kobi (KOB-215).
+    const ailleurs = cible !== null && cible !== document.body && !o.root.contains(cible) && cible.closest('button, a, summary, select, [role=button], [tabindex]') !== null;
     if (e.key === 'Escape') {
       e.preventDefault();
       e.stopPropagation();
@@ -257,7 +291,7 @@ export class Validations {
     } else if (e.key === 'Enter') {
       // Valider et Refuser gardent leur propre clic ; ailleurs (même sur
       // « Détail dans Kobi »), Entrée valide.
-      if (cible instanceof HTMLButtonElement && cible.closest('.kval .buttons')) return;
+      if (ailleurs || (cible instanceof HTMLButtonElement && cible.closest('.kval .buttons'))) return;
       e.preventDefault();
       e.stopPropagation();
       this.decide(true);

@@ -154,6 +154,32 @@
   font-variation-settings: 'CASL' 1, 'wght' 850;
   overflow-wrap: anywhere;
 }
+/* Question d'une ligne ; un clic la déplie en entier (KOB-215). */
+.kval:not([data-statut]) .title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.kval:not([data-statut]) .title.deplie {
+  white-space: normal;
+}
+/* « Ne plus demander » : discret, sous les boutons. */
+.kval-toujours {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 16px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.kval-toujours input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--ink);
+}
 .kval .meta {
   margin-top: 6px;
   font-size: 20px;

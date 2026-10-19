@@ -30,6 +30,7 @@ mod menu;
 mod mot_cle;
 mod notes;
 mod pannes;
+mod permissions;
 mod placement;
 mod porte;
 mod raccourci;
