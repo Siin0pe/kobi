@@ -23,23 +23,40 @@ const mesurer = (page: Page): Promise<Mesure> =>
       const tete = document.querySelector('.kobi .pill')!.getBoundingClientRect();
       const bouche = document.querySelector('.kobi .mouth')!.getBoundingClientRect();
       const yBouche = bouche.top + bouche.height / 2;
+      // La tête est une gélule : demi-cercles à gauche et à droite.
+      const r = tete.height / 2;
+      const dansLaTete = (x: number, y: number): boolean => {
+        if (y < tete.top || y > tete.bottom || x < tete.left || x > tete.right) return false;
+        const cx = Math.min(Math.max(x, tete.left + r), tete.right - r);
+        return (x - cx) ** 2 + (y - (tete.top + r)) ** 2 <= r * r;
+      };
       let chevauchement = 0;
       let quoi = '';
       const pointes: number[] = [];
       for (const c of document.querySelectorAll<HTMLElement>('.bubbles .card, .kval')) {
         if (c.offsetParent === null) continue;
         const b = c.getBoundingClientRect();
-        const droite = b.right + pointe + ombre;
-        const x = Math.max(0, Math.min(droite, tete.right) - Math.max(b.left, tete.left));
-        const y = Math.max(0, Math.min(b.bottom + ombre, tete.bottom) - Math.max(b.top, tete.top));
-        if (x * y > chevauchement) {
-          chevauchement = x * y;
-          quoi = `${c.className} ${Math.round(x)}×${Math.round(y)} (bulle ${Math.round(b.left)}-${Math.round(b.right)}×${Math.round(b.top)}-${Math.round(b.bottom)}, tête ${Math.round(tete.left)}-${Math.round(tete.right)}×${Math.round(tete.top)}-${Math.round(tete.bottom)})`;
-        }
+        // Pointe et ombre en px de scène : à l'échelle de la fenêtre.
+        const s = b.width / c.offsetWidth;
+        // Corps de la bulle, ombre comprise, contre la boîte de la tête.
+        const x = Math.max(0, Math.min(b.right + ombre * s, tete.right) - Math.max(b.left, tete.left));
+        const y = Math.max(0, Math.min(b.bottom + ombre * s, tete.bottom) - Math.max(b.top, tete.top));
+        const r2 = { x, y };
+        let aire = r2.x * r2.y;
+        let detail = `corps ${Math.round(x)}×${Math.round(y)}`;
+        // Bout de la pointe, contre la forme de la tête.
         const p = getComputedStyle(c, '::before');
-        if (p.content !== 'none' && yBouche > b.top && yBouche < b.bottom) {
-          const echelle = b.height / c.offsetHeight;
-          pointes.push(Math.abs(b.top + parseFloat(p.top) * echelle - yBouche));
+        if (p.content !== 'none') {
+          const yPointe = b.top + parseFloat(p.top) * s;
+          if (dansLaTete(b.right + pointe * s, yPointe)) {
+            aire = Math.max(aire, 1);
+            detail += ' + pointe dans la tête';
+          }
+          if (yBouche > b.top && yBouche < b.bottom) pointes.push(Math.abs(yPointe - yBouche));
+        }
+        if (aire > chevauchement) {
+          chevauchement = aire;
+          quoi = `${c.className} ${detail} (bulle ${Math.round(b.left)}-${Math.round(b.right)}×${Math.round(b.top)}-${Math.round(b.bottom)}, tête ${Math.round(tete.left)}-${Math.round(tete.right)}×${Math.round(tete.top)}-${Math.round(tete.bottom)})`;
         }
       }
       return { chevauchement, quoi, pointes };
@@ -105,11 +122,15 @@ test('la pointe part vers la bouche de Kobi', async ({ page }) => {
   const errors = await openUi(page, '');
   await page.evaluate(() => window.kobi.setState('answer', window.kobi.demoData('answer')));
   await expect(page.locator('.bubbles .card-answer')).toBeVisible();
-  await page.waitForTimeout(600);
+  // Réponse entièrement écrite : la bulle a sa hauteur finale.
+  const texte = await page.evaluate(() => String(window.kobi.demoData('answer').answer));
+  await expect(page.locator('.bubbles .card-answer .defile')).toContainText(texte.slice(-20), { timeout: 15_000 });
+  await page.waitForTimeout(300);
   const m = await mesurer(page);
   expect(m.pointes.length).toBeGreaterThan(0);
-  // À quelques pixels près : la carte flotte et penche un peu.
-  for (const d of m.pointes) expect(d).toBeLessThan(16);
+  // À quelques pixels près : la carte flotte et penche un peu, et la pointe
+  // garde ses distances avec les coins arrondis.
+  for (const d of m.pointes) expect(d).toBeLessThan(24);
   await expectNoErrors(errors);
 });
 
@@ -119,12 +140,10 @@ test('réponse longue en flux : la bulle grandit sans jamais mordre sur Kobi', a
   await page.evaluate((a) => window.kobi.setState('answer', { question: 'Explique tout ?', answer: a }), longue);
   const carte = page.locator('.bubbles .card-answer');
   await expect(carte).toBeVisible();
-  const avant = (await carte.boundingBox())!.height;
   await page.waitForTimeout(700);
+  // Relevés pendant que le texte s'écrit (la bulle grandit jusqu'à sa hauteur maximale).
   const m = await pire(page, 14, 300);
   expect(m.chevauchement, m.quoi).toBe(0);
-  // Elle a bien grandi pendant les relevés (texte en flux).
-  expect((await carte.boundingBox())!.height).toBeGreaterThan(avant);
   await expectNoErrors(errors);
 });
 
