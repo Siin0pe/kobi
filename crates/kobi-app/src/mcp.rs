@@ -874,7 +874,19 @@ pub async fn autoriser(nom: &str, url: &str, coffre: Arc<dyn Coffre>) -> Result<
     Ok(())
 }
 
+/// Seules les pages web s'ouvrent : l'adresse vient des métadonnées du
+/// serveur MCP, qui pourrait annoncer `file:` ou un gestionnaire de protocole
+/// (KOB-233).
+fn page_web(url: &str) -> bool {
+    let u = url.trim_start().to_ascii_lowercase();
+    u.starts_with("https://") || u.starts_with("http://")
+}
+
 fn ouvrir_navigateur(url: &str) -> Result<(), String> {
+    if !page_web(url) {
+        tracing::warn!("autorisation MCP : adresse qui n'est pas une page web, refusée");
+        return Err("adresse d'autorisation refusée : ce n'est pas une page web".into());
+    }
     #[cfg(windows)]
     let mut cmd = {
         // Pas de `cmd /c start` : les `&` de l'URL y seraient interprétés.
@@ -894,9 +906,14 @@ fn ouvrir_navigateur(url: &str) -> Result<(), String> {
         c.arg(url);
         c
     };
-    cmd.spawn()
-        .map(|_| ())
-        .map_err(|e| format!("navigateur introuvable : {e}"))
+    let mut enfant = cmd
+        .spawn()
+        .map_err(|e| format!("navigateur introuvable : {e}"))?;
+    // Attendu à part : sinon le lanceur reste zombie jusqu'à la sortie de Kobi.
+    std::thread::spawn(move || {
+        let _ = enfant.wait();
+    });
+    Ok(())
 }
 
 // ----- Commandes de l'interface -----
@@ -1217,6 +1234,22 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
+
+    #[test]
+    fn seules_les_pages_web_s_ouvrent() {
+        assert!(page_web("https://auth.example.com/authorize?x=1&y=2"));
+        assert!(page_web("HTTP://localhost:8080/auth"));
+        for refusee in [
+            "file:///C:/x.exe",
+            "ms-msdt:/id",
+            "search-ms:query=x",
+            "javascript:alert(1)",
+            "",
+        ] {
+            assert!(!page_web(refusee), "{refusee}");
+            assert!(ouvrir_navigateur(refusee).is_err(), "{refusee}");
+        }
+    }
 
     #[derive(Default)]
     struct CoffreMemoire(Mutex<BTreeMap<String, String>>);
