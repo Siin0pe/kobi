@@ -734,3 +734,193 @@
     padding: 22px 18px 60px;
   }
 }
+
+/* ----- Copier en sachant quoi (KOB-224) ----- */
+.vue-notes .copie {
+  position: relative;
+  display: inline-flex;
+}
+.vue-notes .copie .chevron {
+  margin-left: 6px;
+  display: inline-block;
+  transition: transform 0.2s var(--ressort);
+}
+.vue-notes .copie [aria-expanded='true'] .chevron {
+  transform: rotate(180deg);
+}
+.vue-notes .menu-copie {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 20;
+  min-width: 290px;
+  display: grid;
+  gap: 2px;
+  padding: 8px;
+  background: #fff;
+  border: 3px solid var(--ink);
+  border-radius: 18px;
+  box-shadow: 6px 6px 0 var(--ink);
+  animation: entre 0.3s var(--ressort);
+}
+.vue-notes .menu-copie[hidden] {
+  display: none;
+}
+.vue-notes .menu-copie-entree {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: baseline;
+  gap: 16px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+.vue-notes .menu-copie-entree:hover,
+.vue-notes .menu-copie-entree:focus-visible {
+  background: var(--acide);
+  outline: none;
+}
+.vue-notes .menu-copie-entree:disabled {
+  cursor: default;
+  opacity: 0.45;
+  background: transparent;
+}
+.vue-notes .menu-copie-nom {
+  font-variation-settings: 'wght' 700, 'CASL' 0.5;
+}
+.vue-notes .menu-copie-detail {
+  font-size: 12.5px;
+  color: var(--muted);
+  font-variation-settings: 'MONO' 1, 'wght' 500;
+}
+.vue-notes .menu-copie-formats {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 8px 12px 4px;
+  border-top: 2px dashed var(--trait);
+}
+.vue-notes .menu-copie-titre {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  font-variation-settings: 'wght' 800, 'MONO' 1;
+  margin-right: auto;
+}
+.vue-notes .menu-copie-format {
+  border: 2px solid var(--ink);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.vue-notes .menu-copie-format[aria-checked='true'] {
+  background: var(--ink);
+  color: var(--acide);
+}
+.vue-notes .menu-copie-format:focus-visible {
+  outline: 3px solid var(--ink);
+  outline-offset: 2px;
+}
+
+/* Bouton de copie au survol : une icône (deux feuilles) qui se déplie en
+   libellé (« Copier cette décision ») sous la souris ou au clavier. */
+.vue-notes .copiable,
+.vue-notes .parole {
+  position: relative;
+}
+.vue-notes .copie-survol {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  height: 28px;
+  padding: 0 7px;
+  border: 2px solid var(--ink);
+  border-radius: 999px;
+  --fond-copie: #fff;
+  background: var(--fond-copie);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12.5px;
+  font-variation-settings: 'wght' 700;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, gap 0.2s;
+}
+.vue-notes li.copiable > .copie-survol,
+.vue-notes .parole > .copie-survol {
+  top: 50%;
+  translate: 0 -50%;
+}
+.vue-notes .copiable:hover > .copie-survol,
+.vue-notes .parole:hover > .copie-survol,
+.vue-notes .copie-survol:focus-visible {
+  opacity: 1;
+}
+.vue-notes .copie-survol:hover,
+.vue-notes .copie-survol:focus-visible {
+  gap: 6px;
+  --fond-copie: var(--acide);
+  outline: none;
+}
+.vue-notes .copie-icone {
+  position: relative;
+  width: 11px;
+  height: 13px;
+  border: 2px solid currentColor;
+  flex: none;
+  /* La feuille de derrière dépasse de 3 px : elle ne touche pas le libellé. */
+  margin-right: 3px;
+  border-radius: 3px;
+  box-shadow: 3px -3px 0 -1px var(--fond-copie), 3px -3px 0 1px currentColor;
+}
+.vue-notes .copie-libelle {
+  max-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  transition: max-width 0.25s var(--ressort);
+}
+.vue-notes .copie-survol:hover .copie-libelle,
+.vue-notes .copie-survol:focus-visible .copie-libelle {
+  max-width: 220px;
+}
+/* Libellé hors du flux de texte : ni dans une sélection à la souris ni dans
+   le texte de la puce (le nom accessible vient d'aria-label). */
+.vue-notes .copie-libelle::after {
+  content: attr(data-libelle);
+}
+/* La puce garde la place du bouton : il ne couvre pas le texte. */
+.vue-notes li.copiable,
+.vue-notes .bloc.copiable > .bloc-titre {
+  padding-right: 40px;
+}
+.vue-notes .parole {
+  padding-right: 44px;
+}
+.reduced-motion .vue-notes .copie-survol,
+.reduced-motion .vue-notes .copie-libelle,
+.reduced-motion .vue-notes .menu-copie {
+  transition: none;
+  animation: none;
+}
+/* Écran tactile : pas de survol, le bouton reste visible. */
+@media (hover: none) {
+  .vue-notes .copie-survol {
+    opacity: 1;
+  }
+}

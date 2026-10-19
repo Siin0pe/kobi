@@ -9,6 +9,8 @@ import { animationsReduites, h, normaliser, surligner } from '../dom';
 import { disponible, message } from '../ipc';
 import { reagir } from '../app/mini-kobi';
 import { creerNotifieur } from '../notif';
+import { copier, formatCopie, type Quoi } from '../copie';
+import { boutonCopie, copierPuces, ELEMENT, ligneMd, menuCopier, PARTIE, partiesReunion, type QuandCopie } from './copie-reunion';
 import { STOCKAGE } from '../reglages/stockage';
 import { poserTitre } from '../titre';
 import { carnet, type ConversationLue, type Genre, type Index, type ReunionLue, type Trouve } from './donnees';
@@ -460,8 +462,41 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
     }
   }
 
-  function actions(genre: Genre, id: string, nom: string): HTMLElement {
+  /** Retour d'une copie : ce qui est copié, sa taille, son format, ses premières lignes. */
+  const quandCopie: QuandCopie = (r) => (r instanceof Error ? notifier(message(r), 'erreur') : notifier(r.message, 'ok', { apercu: r.apercu }));
+
+  /** Ce que contient le markdown d'export (stockage.rs, document_reunion). */
+  function contenuExport(genre: Genre, r?: ReunionLue): string {
+    if (genre === 'conversation' || !r) return 'la conversation entière';
+    const corps = r.compte_rendu ? 'compte rendu' : r.notes.trim() ? 'notes' : null;
+    return ['titre', corps, 'transcription'].filter(Boolean).join(', ').replace(/, ([^,]*)$/, ' et $1');
+  }
+
+  function actions(genre: Genre, id: string, nom: string, r?: ReunionLue): HTMLElement {
     const barre = h('div', { class: 'actions' });
+    const copie =
+      genre === 'reunion' && r
+        ? menuCopier(
+            partiesReunion(r, () => carnet.markdown(genre, id)),
+            quandCopie,
+          )
+        : h(
+            'button',
+            {
+              type: 'button',
+              class: 'bouton',
+              'data-action': 'copier',
+              onclick: async () => {
+                const quoi: Quoi = 'conversation';
+                try {
+                  quandCopie(await copier(await carnet.markdown(genre, id), quoi, formatCopie()));
+                } catch (e) {
+                  notifier(message(e), 'erreur');
+                }
+              },
+            },
+            'Copier la conversation',
+          );
     const boutons = h(
       'div',
       { class: 'actions-boutons' },
@@ -475,39 +510,27 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
         },
         'Ouvrir le dossier',
       ),
-      h(
-        'button',
-        {
-          type: 'button',
-          class: 'bouton',
-          'data-action': 'copier',
-          onclick: async () => {
-            try {
-              await copier(await carnet.markdown(genre, id));
-              notifier('Copié en markdown.');
-            } catch (e) {
-              notifier(message(e), 'erreur');
-            }
-          },
-        },
-        'Copier',
-      ),
+      copie,
       h(
         'button',
         {
           type: 'button',
           class: 'bouton',
           'data-action': 'exporter',
+          title: `Enregistre un fichier markdown (.md) : ${contenuExport(genre, r)}`,
           onclick: async () => {
             try {
               const chemin = await carnet.exporter(genre, id);
-              if (chemin) notifier(`Exporté : ${chemin}`);
+              if (!chemin) return;
+              const fichier = chemin.split(/[\\/]/).pop() ?? chemin;
+              const dossier = chemin.slice(0, chemin.length - fichier.length);
+              notifier(`Exporté en markdown : ${fichier}`, 'ok', { apercu: `${contenuExport(genre, r)}\ndans ${dossier}` });
             } catch (e) {
               notifier(message(e), 'erreur');
             }
           },
         },
-        'Exporter',
+        'Exporter…',
       ),
       h('button', { type: 'button', class: 'bouton danger', 'data-action': 'supprimer', onclick: () => confirmer() }, 'Supprimer'),
     );
@@ -571,22 +594,7 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
     return barre;
   }
 
-  async function copier(texte: string): Promise<void> {
-    try {
-      await navigator.clipboard.writeText(texte);
-    } catch {
-      // WebKitGTK ou permissions : repli sur la sélection d'un champ caché.
-      const zone = h('textarea', { class: 'presse-papiers', 'aria-hidden': 'true' });
-      zone.value = texte;
-      document.body.append(zone);
-      zone.select();
-      const ok = document.execCommand('copy');
-      zone.remove();
-      if (!ok) throw new Error('Copie refusée par le système.');
-    }
-  }
-
-  function entete(surtitre: string, titre: string, genre: Genre, id: string, animer: boolean, enCours = false): HTMLElement {
+  function entete(surtitre: string, titre: string, genre: Genre, id: string, animer: boolean, enCours = false, r?: ReunionLue): HTMLElement {
     const h1 = h('h1', { class: 'titre' });
     if (animer) poserTitre(h1, titre);
     else {
@@ -598,13 +606,18 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
       { class: 'entete' },
       h('p', { class: 'surtitre' }, enCours && h('span', { class: 'rec' }, 'REC'), surtitre),
       h1,
-      actions(genre, id, titre),
+      actions(genre, id, titre, r),
     );
   }
 
   function section(titre: string, cle: string, texte: string, mot: string): HTMLElement | null {
     if (!texte.trim()) return null;
-    return h('section', { class: 'bloc', 'data-section': cle }, h('h3', { class: 'bloc-titre' }, titre), markdown(texte, mot));
+    const bloc = h('section', { class: 'bloc copiable', 'data-section': cle }, h('h3', { class: 'bloc-titre' }, titre), markdown(texte, mot));
+    // Copier toute la partie, ou une seule décision, action, question (KOB-224).
+    bloc.append(boutonCopie(PARTIE[cle] ?? 'section', () => texte.trim(), quandCopie));
+    const element = ELEMENT[cle];
+    if (element) copierPuces(bloc, texte, element, quandCopie);
+    return bloc;
   }
 
   function pageReunion(r: ReunionLue, cible: Cible, animer: boolean): void {
@@ -662,7 +675,7 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
       onglets.querySelector<HTMLElement>(`[data-onglet="${suivant}"]`)?.focus();
     });
 
-    const feuille = h('article', { class: 'feuille', 'data-genre': 'reunion', 'data-id': r.resume.nom }, entete(surtitre, titre, 'reunion', r.resume.nom, animer, r.resume.en_cours), onglets, contenu);
+    const feuille = h('article', { class: 'feuille', 'data-genre': 'reunion', 'data-id': r.resume.nom }, entete(surtitre, titre, 'reunion', r.resume.nom, animer, r.resume.en_cours, r), onglets, contenu);
     if (!animer) feuille.classList.add('sans-entree');
     page.replaceChildren(feuille);
     montrer(etat.onglet, cible);
@@ -702,6 +715,7 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
           h('span', { class: 'temps' }, horodatage(s.start)),
           h('span', { class: 'qui' }, s.source === 'moi' ? 'Moi' : 'Eux'),
           h('span', { class: 'dit' }, ...surligner(s.text, mot)),
+          boutonCopie('ligne', () => ligneMd(s), quandCopie),
         ),
       ),
     );
@@ -709,7 +723,9 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
 
   function notes(r: ReunionLue, mot: string): HTMLElement {
     if (!r.notes.trim()) return h('div', { class: 'vide-onglet' }, h('p', {}, 'Pas de notes pour cette réunion.'));
-    return h('div', { class: 'notes bloc' }, markdown(r.notes, mot));
+    const bloc = h('div', { class: 'notes bloc' }, markdown(r.notes, mot));
+    copierPuces(bloc, r.notes, 'note', quandCopie);
+    return bloc;
   }
 
   function pageConversation(c: ConversationLue, cible: Cible, animer: boolean): void {
