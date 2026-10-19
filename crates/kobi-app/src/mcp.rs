@@ -52,8 +52,7 @@ pub struct CoffreSysteme;
 
 impl CoffreSysteme {
     fn entree(serveur: &str, nom: &str) -> Result<keyring::Entry, String> {
-        keyring::Entry::new(SERVICE, &format!("{serveur}/{nom}"))
-            .map_err(|e| format!("gestionnaire d'identifiants : {e}"))
+        keyring::Entry::new(SERVICE, &format!("{serveur}/{nom}")).map_err(erreur_coffre)
     }
 }
 
@@ -62,23 +61,49 @@ impl Coffre for CoffreSysteme {
         match Self::entree(serveur, nom)?.get_password() {
             Ok(v) => Ok(Some(v)),
             Err(keyring::Error::NoEntry) => Ok(None),
-            Err(e) => Err(format!("gestionnaire d'identifiants : {e}")),
+            Err(e) => Err(erreur_coffre(e)),
         }
     }
 
     fn ecrire(&self, serveur: &str, nom: &str, valeur: &str) -> Result<(), String> {
         Self::entree(serveur, nom)?
             .set_password(valeur)
-            .map_err(|e| format!("gestionnaire d'identifiants : {e}"))
+            .map_err(erreur_coffre)
     }
 
     fn effacer(&self, serveur: &str, nom: &str) -> Result<(), String> {
         match Self::entree(serveur, nom)?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(format!("gestionnaire d'identifiants : {e}")),
+            Err(e) => Err(erreur_coffre(e)),
         }
     }
 }
+
+/// Erreur du gestionnaire d'identifiants, dite à l'utilisateur (KOB-185) :
+/// un accès refusé dit quoi faire, le détail technique va au journal.
+fn erreur_coffre(e: keyring::Error) -> String {
+    tracing::warn!(erreur = %e, "gestionnaire d'identifiants");
+    match e {
+        keyring::Error::PlatformFailure(_) | keyring::Error::NoStorageAccess(_) => format!(
+            "Le gestionnaire d'identifiants du système refuse l'accès : Kobi ne peut pas \
+             y ranger ce secret, et ne l'écrit jamais en clair sur le disque. {}",
+            MARCHE_A_SUIVRE
+        ),
+        e => format!("gestionnaire d'identifiants : {e}"),
+    }
+}
+
+/// Que faire quand le gestionnaire d'identifiants refuse l'accès.
+#[cfg(target_os = "linux")]
+const MARCHE_A_SUIVRE: &str = "Sous Linux, Kobi passe par le trousseau du noyau (keyutils), \
+    souvent bloqué dans un conteneur ou une session ssh : lance Kobi depuis ta session de \
+    bureau, puis réessaie.";
+#[cfg(target_os = "macos")]
+const MARCHE_A_SUIVRE: &str =
+    "Déverrouille ton trousseau de session (app Trousseaux d'accès), puis réessaie.";
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+const MARCHE_A_SUIVRE: &str = "Vérifie que le Gestionnaire d'identifiants de Windows \
+    fonctionne (service « Gestionnaire d'informations d'identification »), puis réessaie.";
 
 /// Variable d'environnement qui porte un secret jusqu'à la session :
 /// `KOBI_MCP_<SERVEUR>_<NOM>`, en majuscules, `_` pour le reste.
@@ -509,7 +534,12 @@ fn importer(
     let (s, secrets) = depuis_claude(&candidat.brut, &candidat.portee)
         .ok_or_else(|| format!("{} : config illisible", candidat.nom))?;
     for (cle, valeur) in &secrets {
-        coffre.ecrire(&candidat.nom, cle, valeur)?;
+        coffre.ecrire(&candidat.nom, cle, valeur).map_err(|e| {
+            format!(
+                "Rien n'est importé : le secret {cle} de « {} » n'a pas pu être rangé. {e}",
+                candidat.nom
+            )
+        })?;
     }
     config.serveurs.insert(candidat.nom.clone(), s);
     Ok(())
@@ -1232,6 +1262,52 @@ mod tests {
             !toml.contains("s3cr3t") && !toml.contains("\"cle\""),
             "{toml}"
         );
+    }
+
+    /// Coffre qui refuse tout, comme keyutils dans un conteneur.
+    struct CoffreRefuse;
+
+    impl Coffre for CoffreRefuse {
+        fn lire(&self, _: &str, _: &str) -> Result<Option<String>, String> {
+            Ok(None)
+        }
+        fn ecrire(&self, _: &str, _: &str, _: &str) -> Result<(), String> {
+            Err(erreur_coffre(keyring::Error::PlatformFailure(
+                std::io::Error::from(std::io::ErrorKind::PermissionDenied).into(),
+            )))
+        }
+        fn effacer(&self, _: &str, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    /// Gestionnaire d'identifiants inaccessible (KOB-185) : un message en
+    /// français qui dit quoi faire, et le serveur n'est pas ajouté.
+    #[test]
+    fn import_sans_gestionnaire_d_identifiants() {
+        let mut kobi = McpConfig::default();
+        let treg = candidats(&claude_json(), &[], &kobi.clone())
+            .into_iter()
+            .find(|k| k.nom == "treg")
+            .unwrap();
+        let e = importer(&mut kobi, &treg, &CoffreRefuse).unwrap_err();
+        assert!(e.starts_with("Rien n'est importé"), "{e}");
+        assert!(e.contains("« treg »") && e.contains("Authorization"), "{e}");
+        assert!(
+            e.contains("refuse l'accès") && e.contains("puis réessaie"),
+            "{e}"
+        );
+        assert!(!e.contains("Platform secure storage"), "{e}");
+        assert!(kobi.serveurs.is_empty());
+        // Sans secret, le coffre n'est pas sollicité : l'import passe.
+        let linear = candidats(&claude_json(), &[], &kobi.clone())
+            .into_iter()
+            .find(|k| k.nom == "linear")
+            .unwrap();
+        importer(&mut kobi, &linear, &CoffreRefuse).unwrap();
+        assert!(kobi.serveurs.contains_key("linear"));
+        // Les autres erreurs gardent leur détail.
+        assert!(erreur_coffre(keyring::Error::TooLong("x".into(), 1)).contains("gestionnaire"));
     }
 
     #[test]

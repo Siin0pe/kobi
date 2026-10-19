@@ -1277,6 +1277,15 @@ mod tests {
             .code,
             Code::InvalidValue
         );
+        // Panneau inconnu : refusé, l'app ne bouge pas (KOB-184).
+        let e = cli(
+            &e,
+            "app.open",
+            json!({"section": "reglages", "panneau": "inexistant"}),
+        )
+        .unwrap_err();
+        assert_eq!(e.code, Code::InvalidParams);
+        assert!(e.message.contains("son-ordi"), "{}", e.message);
     }
 
     /// Voix (KOB-142) : le réglage change à chaud, `voice say` suit le réglage.

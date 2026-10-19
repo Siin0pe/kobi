@@ -146,17 +146,21 @@ function blocImport(ctx: Contexte, apres: (serveurs: ServeurMcp[]) => void): HTM
       importer.disabled = coches.size === 0;
       importer.textContent = coches.size ? `Importer ${coches.size} serveur${coches.size > 1 ? 's' : ''}` : 'Importer';
     };
+    // Échec de l'import : affiché sous le bouton jusqu'au prochain essai,
+    // le temps de lire la marche à suivre (KOB-185).
+    const resultat = h('div', { class: 'mcp-import-resultat' });
     const lancer = async () => {
       const noms = [...coches];
       importer.disabled = true;
       importer.textContent = 'Import et test…';
+      resultat.replaceChildren();
       try {
         const serveurs = await invoke<ServeurMcp[]>('mcp_importer', { noms });
         ctx.notifier(`${noms.length} serveur${noms.length > 1 ? 's' : ''} importé${noms.length > 1 ? 's' : ''} : ils servent dès la prochaine conversation.`);
         apres(serveurs);
         void charger();
       } catch (e) {
-        ctx.notifier(message(e), 'erreur');
+        resultat.replaceChildren(etat('erreur', message(e)));
         majBouton();
       }
     };
@@ -192,6 +196,7 @@ function blocImport(ctx: Contexte, apres: (serveurs: ServeurMcp[]) => void): HTM
         }),
       ),
       nouveaux.length ? h('div', { class: 'boutons' }, importer) : h('p', { class: 'aide' }, 'Tous les serveurs de Claude Code sont déjà connectés.'),
+      resultat,
     );
     majBouton();
   };
