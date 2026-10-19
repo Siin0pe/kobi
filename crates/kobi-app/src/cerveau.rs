@@ -794,6 +794,9 @@ fn journaliser_outil(outil: &str) {
         tracing::info!(%outil, "pilotage de la réunion par Claude");
     } else if outil.starts_with("mcp__") {
         tracing::info!(%outil, "outil MCP");
+    } else if crate::commandes::OUTILS_FICHIER.contains(&outil) {
+        // Le hook de Kobi demande la carte avant l'écriture (KOB-156).
+        tracing::info!(%outil, "écriture de fichier, validée par la carte");
     } else if !OUTILS_INTERNES.contains(&outil) {
         tracing::warn!(%outil, "outil hors lecture seule demandé par Claude");
     }

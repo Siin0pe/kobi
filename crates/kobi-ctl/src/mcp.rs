@@ -40,10 +40,10 @@ impl Mode {
         }
     }
 
-    /// Commandes exposées : toutes ; pour l'agent, l'app valide celles qui
-    /// écrivent.
+    /// Commandes exposées : toutes sauf les internes ; pour l'agent, l'app
+    /// valide celles qui écrivent.
     pub fn commandes(self) -> impl Iterator<Item = &'static Commande> {
-        COMMANDES.iter()
+        COMMANDES.iter().filter(|c| !c.interne)
     }
 }
 
@@ -270,7 +270,7 @@ mod tests {
                 .clone()
         };
         let tous = liste(Mode::Externe);
-        assert_eq!(tous.len(), COMMANDES.len());
+        assert_eq!(tous.len(), COMMANDES.iter().filter(|c| !c.interne).count());
         let start = tous.iter().find(|t| t["name"] == "meeting_start").unwrap();
         assert_eq!(start["annotations"]["readOnlyHint"], false);
         assert!(start["description"]
@@ -300,6 +300,10 @@ mod tests {
                 "mcp__kobi__meeting_resume"
             ]
         );
+        assert!(!agent.iter().any(|t| t["name"] == "validation_ask"));
+        // Interne : ni listée ni appelable par un MCP.
+        let r = traiter(&appel("validation_ask", json!({})), Mode::Agent, &faux).unwrap();
+        assert_eq!(r["error"]["code"], -32602);
     }
 
     #[test]
