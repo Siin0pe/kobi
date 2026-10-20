@@ -898,6 +898,7 @@ mod tests {
             parleur: None,
             config: Some(chemin.clone()),
             recent: Mutex::default(),
+            verbosite: Mutex::new(Verbosite::default()),
         });
         regler(app.handle(), Some(false), Some(true));
         let lu = kobi_session::config::load_or_create(&chemin).config;
