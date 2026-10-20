@@ -334,6 +334,23 @@ pub fn list_devices() -> Result<DeviceList> {
     })
 }
 
+/// Sortie audio par défaut du système, celle que l'audio système suit quand
+/// aucune n'est choisie (KOB-40) : sous Linux, le sink PulseAudio ou
+/// PipeWire par défaut ; ailleurs, la sortie par défaut de cpal. Légère :
+/// lue à chaque vérification pendant une réunion.
+pub fn default_output_name() -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        crate::pulse::detect().ok().and_then(|i| i.default_sink)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        cpal::default_host()
+            .default_output_device()
+            .map(|d| device_name(&d))
+    }
+}
+
 #[cfg(windows)]
 fn loopback(
     host: &cpal::Host,

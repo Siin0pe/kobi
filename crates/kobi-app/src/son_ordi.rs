@@ -36,6 +36,10 @@ const PERIODE: Duration = Duration::from_millis(500);
 const TRAINE_VOIX: Duration = Duration::from_millis(800);
 /// Après un échec d'ouverture de la sortie, nouvel essai après ce délai.
 const REESSAI: Duration = Duration::from_secs(10);
+/// Pendant une réunion qui suit la sortie du système, la sortie par défaut
+/// est relue à ce rythme : un casque branché en cours de visio est suivi
+/// (KOB-40).
+const SUIVI_DEFAUT: Duration = Duration::from_secs(2);
 
 /// Réglage du son de l'ordinateur, tel que l'app le montre.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -108,6 +112,9 @@ struct Piste {
     /// Ouverture de la capture, sur l'horloge du système : l'instant des
     /// trames et des segments se compte depuis lui (KOB-198).
     origine: Instant,
+    /// Sortie par défaut du système à l'ouverture, quand le réglage la suit
+    /// (aucune sortie choisie) ; `None` sinon.
+    defaut: Option<String>,
 }
 
 struct Fil<R: Runtime> {
@@ -123,6 +130,8 @@ struct Fil<R: Runtime> {
     echec: Option<Instant>,
     /// Segments publiés depuis le lancement (journal de la fermeture).
     publies: usize,
+    /// Dernière lecture de la sortie par défaut (KOB-40).
+    defaut_lu: Instant,
 }
 
 impl<R: Runtime> Fil<R> {
@@ -138,6 +147,7 @@ impl<R: Runtime> Fil<R> {
             voix_kobi: None,
             echec: None,
             publies: 0,
+            defaut_lu: Instant::now(),
         }
     }
 
@@ -194,6 +204,19 @@ impl<R: Runtime> Fil<R> {
             } else {
                 "réglage désactivé"
             }),
+            // La sortie du système a changé (casque branché, haut-parleurs
+            // choisis) : la capture la suit (KOB-40).
+            (Some(piste), true)
+                if reglage.sortie.is_none() && self.defaut_lu.elapsed() >= SUIVI_DEFAUT =>
+            {
+                self.defaut_lu = Instant::now();
+                let actuelle = kobi_audio::default_output_name();
+                if actuelle.is_some() && actuelle != piste.defaut {
+                    tracing::info!(avant = ?piste.defaut, apres = ?actuelle, "son de l'ordinateur : la sortie par défaut a changé");
+                    self.fermer("sortie par défaut changée");
+                    self.ouvrir(None);
+                }
+            }
             _ => {}
         }
         if !en_reunion && self.stt.take().is_some() {
@@ -212,6 +235,13 @@ impl<R: Runtime> Fil<R> {
                 }
             }
         }
+        // Lue avant l'ouverture : un changement pendant celle-ci sera vu au
+        // tour suivant.
+        let defaut = sortie
+            .is_none()
+            .then(kobi_audio::default_output_name)
+            .flatten();
+        self.defaut_lu = Instant::now();
         let capture = Capture::start(&CaptureOptions {
             sources: vec![kobi_audio::Source::Eux],
             mic: None,
@@ -233,6 +263,7 @@ impl<R: Runtime> Fil<R> {
                     capture,
                     porte: Porte::new(kobi_stt::SAMPLE_RATE),
                     origine: Instant::now(),
+                    defaut,
                 });
                 self.echec = None;
                 self.signaler(true);
