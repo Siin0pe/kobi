@@ -26,12 +26,15 @@ export function isNative(): boolean {
 /** Seuil (px) au-delà duquel un appui sur Kobi devient un glisser. */
 const DRAG_THRESHOLD = 4;
 
+/** Seules poignées de la fenêtre : la tête de Kobi, et le point du mode discret (KOB-217). */
+export const POIGNEES = '.kobi .pill, .dot';
+
 /**
- * Glisser la mascotte déplace la fenêtre ; un simple clic reste un clic (il
- * ouvre la bulle pour écrire à Kobi, KOB-147). Les cartes, leurs boutons et
- * la bulle restent cliquables, et la vue agrandie n'est pas une poignée : un
- * clic qui bouge de quelques pixels sur « N étapes » déplaçait la fenêtre au
- * lieu de déplier (KOB-213), et le texte s'y sélectionne.
+ * Glisser la tête de Kobi (ou le point du mode discret) déplace la fenêtre ;
+ * un simple clic reste un clic (il ouvre la bulle pour écrire à Kobi,
+ * KOB-147). Partout ailleurs, un glisser ne déplace rien : le texte des
+ * réponses et des cartes s'y sélectionne, les boutons et « N étapes » se
+ * cliquent (KOB-213, KOB-217).
  */
 export function enableWindowDrag(root: HTMLElement): void {
   const api = tauri();
@@ -39,7 +42,7 @@ export function enableWindowDrag(root: HTMLElement): void {
   root.addEventListener('mousedown', (e) => {
     if (e.button !== 0) return;
     const target = e.target as Element | null;
-    if (target?.closest('button, a, input, textarea, select, summary, .card, .rec, .ecrire, .lecture')) return;
+    if (!target?.closest(POIGNEES)) return;
     // Pas de sélection ni de perte du focus de la bulle.
     e.preventDefault();
     const x0 = e.screenX;

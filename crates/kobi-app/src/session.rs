@@ -256,6 +256,9 @@ pub fn installer<R: Runtime>(builder: Builder<R>) -> Builder<R> {
             crate::mcp::mcp_candidats,
             crate::mcp::mcp_importer,
             crate::mcp::mcp_choix_a_proposer,
+            // Clics qui traversent (KOB-217) : zones actives et appui.
+            crate::traversee::zones_actives,
+            crate::traversee::appui_souris,
             crate::stockage::reglages_stockage,
             crate::stockage::regler_stockage,
             crate::demarrage::demarrage_systeme,

@@ -195,6 +195,18 @@ export function clavierMenu(e: KeyboardEvent, items: HTMLButtonElement[], choisi
 }
 
 /** Zones où le navigateur garde sa sélection et son menu (champ de saisie). */
+/**
+ * Texte des réponses et des cartes : il se sélectionne et se copie (Ctrl+C),
+ * sans déplacer Kobi (KOB-217). Le menu du navigateur reste remplacé par
+ * celui de Kobi.
+ */
+export const TEXTE_SELECTIONNABLE = '.card .text, .card .title, .card .meta, .card .body, .lecture, .kval-detail';
+
+function selectionnable(target: EventTarget | null): boolean {
+  const node = target instanceof Element ? target : (target as Node | null)?.parentElement ?? null;
+  return !!node?.closest(TEXTE_SELECTIONNABLE);
+}
+
 function editable(target: EventTarget | null): boolean {
   return target instanceof Element && target.closest('input, textarea, [contenteditable="true"]') !== null;
 }
@@ -255,7 +267,7 @@ export class KobiMenu {
       else void this.openUnderPointer(e.clientX, e.clientY);
     });
     on('selectstart', (e) => {
-      if (!editable(e.target)) e.preventDefault();
+      if (!editable(e.target) && !selectionnable(e.target)) e.preventDefault();
     });
     on('dragstart', (e) => {
       if (!editable(e.target)) e.preventDefault();

@@ -16,6 +16,18 @@
   -webkit-user-select: text;
   user-select: text;
 }
+/* Le texte des réponses et des cartes se sélectionne et se copie (KOB-217,
+   TEXTE_SELECTIONNABLE dans menu.ts). */
+.stage.no-select :is(.card .text, .card .title, .card .meta, .card .body, .lecture, .kval-detail),
+.stage.no-select :is(.card .text, .card .title, .card .meta, .card .body, .lecture, .kval-detail) * {
+  -webkit-user-select: text;
+  user-select: text;
+}
+/* On ne déplace Kobi que par sa tête (KOB-217, POIGNEES dans native.ts). */
+.kobi .pill,
+.dot {
+  cursor: move;
+}
 
 @keyframes kmenu-pop {
   0% {
