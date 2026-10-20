@@ -37,9 +37,10 @@ async function repondre(page: Page): Promise<void> {
 
 test('on ne déplace Kobi que par sa tête ; ailleurs, un glisser ne déplace rien', async ({ page }) => {
   const errors = await kobi(page);
-  // Sur le grand mot sous Kobi : rien ne bouge.
-  const mot = (await page.locator('.kobi .word').boundingBox())!;
-  await glisser(page, mot.x + mot.width / 2, mot.y + mot.height / 2);
+  // Dans la scène, à côté de Kobi (corps, vide) : rien ne bouge.
+  const scene = (await page.locator('.kobi').boundingBox())!;
+  await glisser(page, scene.x + 12, scene.y + scene.height - 12);
+  await glisser(page, 20, 20);
   expect(await deplacements(page)).toBe(0);
   // Par la tête : la fenêtre se déplace, curseur « déplacer » au survol.
   const tete = page.locator('.kobi .pill');
@@ -68,7 +69,8 @@ test('le texte de la bulle se sélectionne et se copie, sans déplacer Kobi ni o
   expect(await deplacements(page)).toBe(0);
   // Un simple clic sur la bulle l'ouvre toujours en grand.
   await page.evaluate(() => window.getSelection()?.removeAllRanges());
-  await texte.click();
+  // La bulle vit (elle flotte) : un clic par coordonnées, sans attendre qu'elle s'immobilise.
+  await page.mouse.click(b.x + b.width / 2, b.y + 8);
   await expect(page.getByRole('dialog', { name: 'Conversation avec Kobi' })).toBeVisible();
   await expectNoErrors(errors);
 });
