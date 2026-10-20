@@ -190,6 +190,13 @@ const APRES_CITATION: &[&str] = &[
     "nous", "lui", "y", "en",
 ];
 
+/// Mots qui, après « Kobi est » en tête, trahissent un « Kobi, et … » mal
+/// transcrit (KOB-249) : « Kobe est la date du lancement ».
+const EST_POUR_ET: &[&str] = &[
+    "la", "le", "les", "l", "du", "des", "ce", "cet", "cette", "ces", "quand", "combien",
+    "comment", "pourquoi", "quoi", "demain", "apres", "ensuite",
+];
+
 /// Deuxième personne : la phrase parle à quelqu'un.
 const TOI: &[&str] = &[
     "tu", "t", "toi", "te", "ton", "ta", "tes", "vous", "votre", "vos",
@@ -228,12 +235,26 @@ pub fn interpellation(texte: &str) -> Option<(Adresse, String)> {
         .iter()
         .chain(&mots_apres)
         .any(|m| TOI.contains(&m.as_str()));
-    let sujet = !ponctuation_apres && suivant.is_some_and(|m| APRES_CITATION.contains(&m));
     // « A Kobe, c'était quoi… » : le « hé » transcrit « a », suivi d'une
     // virgule d'apostrophe (KOB-179).
     let en_tete = mots_avant
         .iter()
         .all(|m| INTERJECTIONS.contains(&m.as_str()) || (virgule_apres && m == "a"));
+    // « Kobi, et la date ? » transcrit « Kobe est la date » : une question
+    // de suite, pas une phrase sur Kobi (KOB-249).
+    let est_pour_et = en_tete
+        && !virgule_apres
+        && suivant == Some("est")
+        // « Kobi est-ce que… » n'en est pas un.
+        && apres
+            .trim_start()
+            .get(3..)
+            .is_some_and(|r| r.starts_with(char::is_whitespace))
+        && mots_apres
+            .get(1)
+            .is_some_and(|m| EST_POUR_ET.contains(&m.as_str()));
+    let sujet =
+        !ponctuation_apres && !est_pour_et && suivant.is_some_and(|m| APRES_CITATION.contains(&m));
     // « Est-ce que Kobi, … » : la question s'ouvre sur l'appel (KOB-237), et
     // la garde entière.
     let appel_en_tete = en_tete
@@ -274,7 +295,10 @@ pub fn interpellation(texte: &str) -> Option<(Adresse, String)> {
         Adresse::Doute
     };
 
-    let question = if en_tete {
+    let question = if est_pour_et {
+        let apres = apres.trim_start();
+        nettoyer(&format!("et{}", apres.get(3..).unwrap_or_default())).to_string()
+    } else if en_tete {
         nettoyer(apres).to_string()
     } else {
         // Le nom et ses virgules d'apostrophe sortent ; la ponctuation de fin
@@ -1428,6 +1452,28 @@ mod tests {
                 "C'est ce que disait tout à l'heure",
             ),
             ("Kobi a raison sur ce point", Cite, "a raison sur ce point"),
+            // « Kobi, et … » transcrit « Kobe est … » (KOB-249) : une question.
+            (
+                "Kobe est la date du lancement",
+                Appel,
+                "et la date du lancement",
+            ),
+            (
+                "Kobi est la date du tir d'essai ?",
+                Appel,
+                "et la date du tir d'essai ?",
+            ),
+            (
+                "Euh Kobi est combien ça coûte",
+                Appel,
+                "et combien ça coûte",
+            ),
+            ("Kobi est vraiment pratique", Cite, "est vraiment pratique"),
+            (
+                "Kobi est en train d'écouter",
+                Cite,
+                "est en train d'écouter",
+            ),
             ("Kobi dit n'importe quoi", Cite, "dit n'importe quoi"),
             (
                 "Hier Kobi a planté pendant la démo",
@@ -1584,6 +1630,28 @@ mod tests {
             ],
         );
         assert!(actions.is_empty(), "{actions:?}");
+    }
+
+    /// KOB-249 : les segments relevés à l'essai de KOB-196 (réunion, voix
+    /// Piper) : « Kobi, et la date du lancement ? » part enfin.
+    #[test]
+    fn kobi_et_transcrit_kobi_est() {
+        let mut e = Ecouteur::default();
+        let actions = rejouer(
+            &mut e,
+            &[
+                ("Kobe est", false, 1.0),
+                ("Kobe est la date du", false, 2.0),
+                ("Kobe est la date du lancement", false, 2.9),
+                ("Kobe est la date du lancement", true, 3.6),
+            ],
+        );
+        assert!(actions.contains(&Action::Interpeller), "{actions:?}");
+        assert_eq!(
+            actions.last(),
+            Some(&Action::Envoyer("et la date du lancement".into())),
+            "{actions:?}"
+        );
     }
 
     #[test]
