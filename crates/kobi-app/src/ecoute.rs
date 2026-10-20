@@ -339,6 +339,9 @@ struct Fil<R: Runtime> {
     en_pause: bool,
     /// Fin de l'audio reçu, en secondes depuis l'ouverture du micro.
     t: f64,
+    /// Ouverture du micro, sur l'horloge du système : `t` et la fin des
+    /// segments se comptent depuis cet instant (KOB-198).
+    origine: Instant,
     /// Charge : audio transcrit et temps passé à le transcrire.
     audio: f64,
     calcul: Duration,
@@ -362,6 +365,7 @@ impl<R: Runtime> Fil<R> {
             rattrapage: Rattrapage::default(),
             en_pause: false,
             t: 0.0,
+            origine: Instant::now(),
             audio: 0.0,
             calcul: Duration::ZERO,
             bilan: Instant::now(),
@@ -426,6 +430,7 @@ impl<R: Runtime> Fil<R> {
                 self.ecouteur = Ecouteur::new(!self.en_reunion);
                 self.porte = Porte::new(kobi_stt::SAMPLE_RATE);
                 self.t = 0.0;
+                self.origine = Instant::now();
                 self.entree = Some(entree);
                 tracing::info!(entree = %description, "écoute continue : micro ouvert");
                 if let Some(d) = &mut self.diag {
@@ -442,6 +447,7 @@ impl<R: Runtime> Fil<R> {
     }
 
     fn fermer_micro(&mut self) {
+        crate::chef::avancer(&self.app, kobi_stt::Source::Moi, None);
         if self.entree.take().is_some() {
             tracing::info!("écoute continue : micro fermé");
             self.note("micro fermé");
@@ -524,6 +530,7 @@ impl<R: Runtime> Fil<R> {
                 tracing::warn!("écoute continue : le micro s'est arrêté");
                 self.note("le micro s'est arrêté");
                 self.entree = None;
+                crate::chef::avancer(&self.app, kobi_stt::Source::Moi, None);
                 return;
             }
         };
@@ -563,8 +570,12 @@ impl<R: Runtime> Fil<R> {
         );
         self.calcul += debut.elapsed();
         for s in finals {
-            publier(&self.app, Message::Segment(s));
+            let dit_a = self.origine + Duration::from_secs_f64(s.end.max(0.0));
+            publier(&self.app, Message::Segment(s, dit_a));
         }
+        // Tout l'audio reçu jusqu'ici est transcrit.
+        let jusqu_a = self.origine + Duration::from_secs_f64(self.t.max(0.0));
+        crate::chef::avancer(&self.app, kobi_stt::Source::Moi, Some(jusqu_a));
         self.executer(actions);
 
         if self.bilan.elapsed() >= BILAN {
