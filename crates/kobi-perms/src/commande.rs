@@ -891,16 +891,37 @@ fn options_interdites(nom: &str, args: &[String]) -> Option<Avis> {
             }
             None
         }
+        "fd" => {
+            // `-x`/`-X` lancent une commande par résultat, `-l` lance `ls`.
+            let lance = args.iter().any(|x| {
+                (x.starts_with('-') && !x.starts_with("--") && x.contains(['x', 'X', 'l']))
+                    || x.starts_with("--exec")
+                    || x.starts_with("--list-details")
+            });
+            if lance {
+                ecrit("`fd -x`/`-X`/`-l` lance une commande".into())
+            } else {
+                None
+            }
+        }
         "sed" => {
             if args.iter().any(|x| {
                 x == "-i"
-                    || x.starts_with("--in-place")
+                    || abrege(x, "--in-place")
                     || (x.starts_with("-i") && !x.starts_with("--"))
             }) {
                 return Some(Avis::ecriture(
                     Genre::Fichier,
                     "`sed -i` modifie le fichier",
                 ));
+            }
+            // Scripts passés par `-e`/`-f` (même groupés, `-ne`) : non vérifiés.
+            if args.iter().any(|x| {
+                (x.starts_with('-') && !x.starts_with("--") && x.contains(['e', 'f']))
+                    || abrege(x, "--expression")
+                    || abrege(x, "--file")
+            }) {
+                return ecrit("`sed -e`/`sed -f` : script non vérifié".into());
             }
             let scripts: Vec<&String> = args
                 .iter()
@@ -914,22 +935,47 @@ fn options_interdites(nom: &str, args: &[String]) -> Option<Avis> {
                 ecrit("`sed` n'est permis qu'en affichage (`sed -n '1,20p'`)".into())
             }
         }
-        "sort" if a("-o") || commence("--output") => Some(Avis::ecriture(
-            Genre::Fichier,
-            "`sort -o` écrit dans un fichier",
-        )),
+        // `-o` seul, collé (`-o/x`) ou groupé (`-uo`), ou `--output` abrégé.
+        "sort"
+            if args.iter().any(|x| {
+                (x.starts_with('-') && !x.starts_with("--") && x.contains('o'))
+                    || abrege(x, "--output")
+            }) =>
+        {
+            Some(Avis::ecriture(
+                Genre::Fichier,
+                "`sort -o` écrit dans un fichier",
+            ))
+        }
         "uniq" if args.iter().filter(|x| !x.starts_with('-')).count() > 1 => Some(Avis::ecriture(
             Genre::Fichier,
             "`uniq` avec deux fichiers écrit dans le second",
         )),
         "rg" if commence("--pre") => ecrit("`rg --pre` lance une commande".into()),
+        "rg" if commence("--hostname-bin") => {
+            ecrit("`rg --hostname-bin` lance une commande".into())
+        }
         // Suit le fichier sans jamais rendre la main.
         "tail" if a("-f") || a("-F") || commence("--follow") => {
             ecrit("`tail -f` ne s'arrête jamais".into())
         }
-        "tree" if a("-o") => Some(Avis::ecriture(
+        // `-o` seul, groupé (`-ao`) ou collé ; `-R` écrit `00Tree.html` partout.
+        "tree"
+            if args
+                .iter()
+                .any(|x| x.starts_with('-') && !x.starts_with("--") && x.contains(['o', 'R'])) =>
+        {
+            Some(Avis::ecriture(
+                Genre::Fichier,
+                "`tree -o`/`tree -R` écrit dans un fichier",
+            ))
+        }
+        // `printf -v nom` affecte une variable du shell.
+        "printf" if commence("-v") => ecrit("`printf -v` modifie une variable".into()),
+        // Le second positionnel de `xxd` est le fichier de sortie.
+        "xxd" if positionnels_xxd(args) > 1 => Some(Avis::ecriture(
             Genre::Fichier,
-            "`tree -o` écrit dans un fichier",
+            "`xxd entrée sortie` écrit dans un fichier",
         )),
         "date" if a("-s") || commence("--set") => ecrit("`date -s` change l'heure".into()),
         "hostname" if args.iter().any(|x| !x.starts_with('-')) => {
@@ -944,6 +990,12 @@ fn options_interdites(nom: &str, args: &[String]) -> Option<Avis> {
         }
         "git" => git(args),
         "cargo" => {
+            if commence("--config") || commence("-Z") {
+                return ecrit(
+                    "`cargo --config`/`-Z` change la configuration (et peut lancer un programme)"
+                        .into(),
+                );
+            }
             let sous = args
                 .iter()
                 .find(|x| !x.starts_with('-'))
@@ -993,8 +1045,12 @@ fn options_interdites(nom: &str, args: &[String]) -> Option<Avis> {
                 _ => ecrit("cette commande `gh` n'est pas en lecture (seuls view, list, status, diff, checks)".into()),
             }
         }
+        // Un seul argument, la version : `go run -v x.go` n'en est pas une.
         "rustc" | "go" | "dotnet" | "java" | "tsc"
-            if !(a("--version") || a("-V") || a("version") || a("-v")) =>
+            if !matches!(
+                args,
+                [x] if matches!(x.as_str(), "--version" | "-V" | "version" | "-v")
+            ) =>
         {
             ecrit(format!("seul `{nom} --version` est en lecture"))
         }
@@ -1027,6 +1083,47 @@ fn options_interdites(nom: &str, args: &[String]) -> Option<Avis> {
             None
         }
     }
+}
+
+/// Option longue ou son abréviation (getopt accepte `--exp` pour `--expression`).
+fn abrege(x: &str, longue: &str) -> bool {
+    let nom = x.split('=').next().unwrap_or(x);
+    nom.len() >= 3 && nom.starts_with("--") && (longue.starts_with(nom) || nom.starts_with(longue))
+}
+
+/// Positionnels de `xxd`, sans les valeurs d'options (`-l 64`, `-s -0x10`).
+fn positionnels_xxd(args: &[String]) -> usize {
+    let mut n = 0;
+    let mut options = true;
+    let mut i = 0;
+    while let Some(x) = args.get(i) {
+        if options && x == "--" {
+            options = false;
+        } else if options && x.starts_with('-') && x != "-" {
+            let o = x.trim_start_matches('-');
+            if matches!(
+                o,
+                "c" | "cols"
+                    | "g"
+                    | "groupsize"
+                    | "l"
+                    | "len"
+                    | "n"
+                    | "name"
+                    | "o"
+                    | "offset"
+                    | "s"
+                    | "seek"
+                    | "R"
+            ) {
+                i += 1;
+            }
+        } else {
+            n += 1;
+        }
+        i += 1;
+    }
+    n
 }
 
 /// `sed -n` : seulement `p` sur des numéros de lignes ou un motif.
@@ -1074,10 +1171,20 @@ fn git(args: &[String]) -> Option<Avis> {
     let reste = &args[i + 1..];
     let a = |s: &str| reste.iter().any(|x| x == s);
     for x in reste {
-        if x.starts_with("--output")
-            || x == "--ext-diff"
-            || x == "-O"
-            || x.starts_with("--open-files-in-pager")
+        // `git grep -iO<pager>` : `-O` groupé derrière des options sans valeur.
+        let o_groupe = sous == "grep"
+            && x.starts_with('-')
+            && !x.starts_with("--")
+            && x[1..]
+                .chars()
+                .take_while(|c| !"efABCm".contains(*c) && !c.is_ascii_digit())
+                .any(|c| c == 'O');
+        // git accepte les options longues abrégées (`--outp=`, `--ext`).
+        if abrege(x, "--output")
+            || abrege(x, "--ext-diff")
+            || x.starts_with("-O")
+            || o_groupe
+            || abrege(x, "--open-files-in-pager")
             || x.starts_with("--exec")
         {
             return ecrit(format!("`git {sous} {x}` écrit ou lance un programme"));
@@ -1360,12 +1467,43 @@ mod tests {
             "pwd",
             "du -sh crates",
             "rustc --version",
+            "go version",
+            "xxd -l 64 Cargo.toml",
+            "fd -e rs motif crates",
             "cat < Cargo.toml",
             "git log -3 # les trois derniers",
             "ls \"crates/kobi-app\"",
             "ls crates\\ avec\\ espace",
         ] {
             lecture(bash(ligne), ligne);
+        }
+    }
+
+    /// KOB-227 : chaque commande du tableau du ticket, telle quelle, donne
+    /// une carte ou un refus, jamais une lecture.
+    #[test]
+    fn tableau_de_kob_227_jamais_en_lecture() {
+        for ligne in [
+            "fd -x rm -rf {}",
+            "fd -X rm",
+            "fd --exec rm",
+            "sed -n 1p -e '1e touch x' f",
+            "sed -n 1p --expression='1e touch x' f",
+            "sed -n 1p -f script f",
+            "git grep -O'sh -c id' motif",
+            "go run . -v",
+            "java -jar x.jar -v",
+            "dotnet run -v q",
+            "printf -v 'a[$(id>x)]' 1",
+            "xxd -r -p - .git/config",
+            "sort -o/chemin f",
+            "sort -uo f g",
+            "tree -ao out.txt",
+            "cargo --config build.rustc-wrapper=./x tree",
+            "cargo -Zunstable-options tree",
+            "rg --hostname-bin ./x motif",
+        ] {
+            pas_lecture(bash(ligne), ligne);
         }
     }
 
@@ -1410,6 +1548,41 @@ mod tests {
             ("rg --pre ./script fabrique", Genre::Commande),
             ("awk 'BEGIN{system(\"rm x\")}'", Genre::Commande),
             ("xargs rm < liste", Genre::Commande),
+            ("fd -x rm", Genre::Commande),
+            ("fd -HX rm", Genre::Commande),
+            ("fd --exec=rm motif", Genre::Commande),
+            ("fd --exec-batch rm", Genre::Commande),
+            ("fd -l", Genre::Commande),
+            ("sed -n 1p -e 'w sortie' Cargo.toml", Genre::Commande),
+            ("sed -ne 'w sortie' Cargo.toml", Genre::Commande),
+            (
+                "sed -n 1p --expression='w sortie' Cargo.toml",
+                Genre::Commande,
+            ),
+            ("sed -n 1p --exp='w sortie' Cargo.toml", Genre::Commande),
+            ("sed -n 1p -f script.sed Cargo.toml", Genre::Commande),
+            ("sed -n 1p --file=script.sed Cargo.toml", Genre::Commande),
+            ("git grep -Ocalc motif", Genre::Commande),
+            ("git grep -iOcalc motif", Genre::Commande),
+            ("git grep --open motif", Genre::Commande),
+            ("go run -v main.go", Genre::Commande),
+            ("rustc -V main.rs", Genre::Commande),
+            ("printf -v PATH x", Genre::Commande),
+            ("xxd Cargo.toml sortie.hex", Genre::Fichier),
+            ("xxd -l 64 Cargo.toml sortie.hex", Genre::Fichier),
+            ("sort -osortie.txt Cargo.toml", Genre::Fichier),
+            ("sort -uo sortie.txt Cargo.toml", Genre::Fichier),
+            ("sort --out=sortie.txt Cargo.toml", Genre::Fichier),
+            ("tree -ao arbre.txt", Genre::Fichier),
+            ("tree -oarbre.txt", Genre::Fichier),
+            ("cargo --config alias.tree=build tree", Genre::Commande),
+            ("cargo --config=alias.tree=build tree", Genre::Commande),
+            ("cargo tree -Zunstable-options", Genre::Commande),
+            ("rg --hostname-bin=./script motif", Genre::Commande),
+            ("sed --in-pl=.bak 's/a/b/' Cargo.toml", Genre::Fichier),
+            ("git log --outp=log.txt", Genre::Commande),
+            ("git diff --ext", Genre::Commande),
+            ("tree -R -H . -L 1", Genre::Fichier),
         ] {
             let avis = bash(ligne);
             pas_lecture(avis.clone(), ligne);
