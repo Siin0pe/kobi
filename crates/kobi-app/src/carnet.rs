@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 
+use kobi_session::config::Publication;
 use kobi_session::stockage::{
     ConversationLue, DocumentAPublier, Rappel, ResumeConversation, ResumeReunion, ReunionLue,
     Stockage, Trouve,
@@ -122,6 +123,55 @@ pub fn carnet_markdown<R: Runtime>(
     id: String,
 ) -> Result<String, String> {
     Ok(document(&stockage(&app)?, genre, &id)?.markdown)
+}
+
+/// Consigne donnée à Claude pour publier un compte rendu (KOB-75). En
+/// français, comme toutes les consignes : Claude écrit dans la langue du
+/// document.
+fn consigne_publication(doc: &DocumentAPublier, p: &Publication) -> String {
+    let ou = match p.destination.trim() {
+        "" => String::new(),
+        d => format!(", à cet endroit : {d}"),
+    };
+    format!(
+        "Publie le compte rendu ci-dessous avec le serveur MCP « {mcp} »{ou}. \
+         Crée un seul document (page, document ou ticket, selon ce que propose cet outil), \
+         avec ce titre et ce contenu Markdown, sans les modifier. \
+         Réponds ensuite en une phrase, avec le lien du document créé.\n\n\
+         Titre : {titre}\n\n{markdown}",
+        mcp = p.mcp.trim(),
+        titre = doc.titre,
+        markdown = doc.markdown.trim(),
+    )
+}
+
+/// Bouton « Publier » du Carnet (KOB-75) : le compte rendu de la réunion
+/// part vers la destination réglée (Réglages › Stockage), par Claude et le
+/// MCP, après la carte de confirmation. Rend la phrase montrée dans la bulle.
+#[tauri::command]
+pub fn carnet_publier<R: Runtime>(app: AppHandle<R>, nom: String) -> Result<String, String> {
+    let config = kobi_session::config::default_path()
+        .map(|p| kobi_session::config::load_or_create(&p).config)
+        .unwrap_or_default();
+    let p = &config.stockage.publication.reunions;
+    if !p.est_reglee() {
+        return Err(kobi_i18n::tr("coque.carnet.publicationNonReglee", &[]));
+    }
+    let doc = stockage(&app)?
+        .compte_rendu_a_publier(&nom)
+        .map_err(|e| e.to_string())?;
+    let affiche = kobi_i18n::tr(
+        "coque.carnet.publierQuestion",
+        &[("titre", &doc.titre), ("mcp", p.mcp.trim())],
+    );
+    crate::chef::publier(
+        &app,
+        crate::chef::Message::Publier {
+            affiche: affiche.clone(),
+            consigne: consigne_publication(&doc, p),
+        },
+    );
+    Ok(affiche)
 }
 
 /// Nom de fichier proposé à l'export : le titre nettoyé.
@@ -365,6 +415,31 @@ pub async fn choisir_dossier<R: Runtime>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// KOB-75 : la consigne dit à Claude quel MCP, où, et donne le document
+    /// tel quel ; sans destination, elle n'en invente pas.
+    #[test]
+    fn consigne_de_publication() {
+        let doc = DocumentAPublier {
+            titre: "Point budget — 2026-10-20".into(),
+            markdown: "# Point budget — 2026-10-20\n\n## Décisions\n- Budget validé\n".into(),
+        };
+        let mut p = Publication {
+            mcp: " linear ".into(),
+            destination: "Projet Kobi".into(),
+            ..Default::default()
+        };
+        let c = consigne_publication(&doc, &p);
+        assert!(c.starts_with("Publie le compte rendu ci-dessous avec le serveur MCP « linear », à cet endroit : Projet Kobi."), "{c}");
+        assert!(
+            c.contains("Titre : Point budget — 2026-10-20\n\n# Point budget"),
+            "{c}"
+        );
+        assert!(c.ends_with("- Budget validé"), "{c}");
+        p.destination = "  ".into();
+        assert!(consigne_publication(&doc, &p)
+            .starts_with("Publie le compte rendu ci-dessous avec le serveur MCP « linear ». "));
+    }
     use kobi_session::stockage::Qui;
 
     #[test]

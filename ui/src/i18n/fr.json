@@ -341,8 +341,6 @@
   },
   "reglages.stockage.toujours": "Toujours",
   "reglages.stockage.aucuneDestination": "Aucune destination : tout reste sur cet ordinateur.",
-  "reglages.stockage.enAttente": "en attente",
-  "reglages.stockage.lectureSeule": "Kobi ne fait que lire pour l’instant : rien n’est envoyé.",
   "reglages.stockage.dossierChange": "Dossier changé : la prochaine réunion y sera rangée.",
   "reglages.stockage.dossierTitre": "Dossier de Kobi",
   "reglages.stockage.dossierAide": "Réunions, conversations et rappels sont rangés ici, en fichiers lisibles. Un changement vaut pour la prochaine réunion.",
@@ -359,7 +357,7 @@
   "reglages.stockage.garderConversationsAide": "Les échanges du quotidien avec Kobi, rangés à part des réunions.",
   "reglages.stockage.conversationsEnregistre": "Conservation des conversations enregistrée.",
   "reglages.stockage.publicationTitre": "Publication par MCP",
-  "reglages.stockage.publicationAide": "Copie d’un compte rendu vers un outil (Linear, Notion…). Prête, active quand Kobi pourra écrire.",
+  "reglages.stockage.publicationAide": "Copie d’un compte rendu vers un outil (Linear, Notion…), avec le bouton « Publier » du Carnet.",
   "reglages.stockage.reunions": "Réunions",
   "reglages.stockage.conversations": "Conversations",
   "reglages.stockage.chargement": "Lecture des réglages…",
@@ -1252,5 +1250,14 @@
   },
   "coque.latence.premierMot": "Premier mot : médiane {mediane}, 90e centile {p90}",
   "coque.latence.total": "Réponse complète : médiane {mediane}, 90e centile {p90}",
-  "coque.latence.secondes": "{s} s"
+  "coque.latence.secondes": "{s} s",
+  "coque.carnet.publicationNonReglee": "Aucune destination de publication : choisissez-la dans Réglages › Stockage.",
+  "coque.carnet.publierQuestion": "Publie le compte rendu « {titre} » dans {mcp}.",
+  "carnet.main.publier": "Publier",
+  "carnet.main.publierAide": "Publier le compte rendu dans {mcp} ({destination}). Kobi demande confirmation avant d’écrire.",
+  "carnet.main.publierNonRegle": "Choisissez d’abord où publier : Réglages › Stockage.",
+  "carnet.main.publierApercu": "Kobi s’en occupe : confirmez sur sa carte avant qu’il n’écrive.",
+  "carnet.main.regler": "Régler",
+  "reglages.stockage.publierReunions": "Bouton « Publier » du Carnet ; Kobi demande confirmation avant d’écrire.",
+  "reglages.stockage.publierConversations": "Pas encore de bouton « Publier » pour les conversations."
 }

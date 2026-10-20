@@ -463,14 +463,14 @@ pub struct DocumentAPublier {
 pub enum EtatPublication {
     /// Aucune destination réglée : tout reste en local.
     Aucune,
-    /// Destination réglée, mais Kobi est en lecture seule (KOB-138) : rien
-    /// n'est envoyé.
-    LectureSeule { mcp: String, destination: String },
+    /// Destination réglée : le bouton « Publier » du Carnet y envoie le
+    /// compte rendu, après confirmation (KOB-75).
+    Reglee { mcp: String, destination: String },
 }
 
 pub fn etat_publication(p: &Publication) -> EtatPublication {
     if p.est_reglee() {
-        EtatPublication::LectureSeule {
+        EtatPublication::Reglee {
             mcp: p.mcp.trim().to_owned(),
             destination: p.destination.trim().to_owned(),
         }
@@ -844,9 +844,23 @@ impl Stockage {
         Ok(partis)
     }
 
-    /// Document markdown d'une réunion, au format de publication : en-tête,
-    /// compte rendu (ou notes), puis transcription horodatée.
+    /// Document markdown d'une réunion, pour l'export : en-tête, compte
+    /// rendu (ou notes), puis transcription horodatée.
     pub fn document_reunion(&self, nom: &str) -> Result<DocumentAPublier, ErreurDonnees> {
+        self.document_reunion_avec(nom, true)
+    }
+
+    /// Document à publier par MCP (KOB-75) : en-tête et compte rendu (ou
+    /// notes), sans la transcription.
+    pub fn compte_rendu_a_publier(&self, nom: &str) -> Result<DocumentAPublier, ErreurDonnees> {
+        self.document_reunion_avec(nom, false)
+    }
+
+    fn document_reunion_avec(
+        &self,
+        nom: &str,
+        transcription: bool,
+    ) -> Result<DocumentAPublier, ErreurDonnees> {
         let lue = self.lire_reunion(nom)?;
         let titre = match (&lue.resume.titre, &lue.resume.date) {
             (Some(t), Some(d)) => format!("{t} — {d}"),
@@ -868,6 +882,13 @@ impl Stockage {
                 "_{}_",
                 kobi_i18n::tr("session.export.pasDeCompteRendu", &[])
             )),
+        }
+        if !transcription {
+            md.push('\n');
+            return Ok(DocumentAPublier {
+                titre,
+                markdown: md,
+            });
         }
         md.push_str(&format!(
             "\n\n## {}\n\n",
@@ -1575,6 +1596,11 @@ mod tests {
         );
         assert!(doc.markdown.contains("## Décisions\n- Budget validé"));
         assert!(doc.markdown.contains("- `1:02:05` **Eux** : Budget validé"));
+        // À publier (KOB-75) : le compte rendu, sans la transcription.
+        let publie = st.compte_rendu_a_publier(r.nom()).unwrap();
+        assert_eq!(publie.titre, doc.titre);
+        assert!(publie.markdown.contains("## Décisions\n- Budget validé"));
+        assert!(!publie.markdown.contains("1:02:05"), "{}", publie.markdown);
 
         let mut c = st.nouvelle_conversation(T0);
         c.ajouter(Qui::Moi, "bonjour", true).unwrap();
@@ -1587,7 +1613,7 @@ mod tests {
         p.destination = "Kobi".into();
         assert_eq!(
             etat_publication(&p),
-            EtatPublication::LectureSeule {
+            EtatPublication::Reglee {
                 mcp: "linear".into(),
                 destination: "Kobi".into()
             }
