@@ -149,18 +149,7 @@ impl Action {
                 serveur,
                 outil,
                 params,
-            } => {
-                let mut s = format!(
-                    "J'interroge {} : {}",
-                    majuscule(serveur),
-                    outil.replace('_', " ")
-                );
-                let p = parametres(params);
-                if !p.is_empty() {
-                    s.push_str(&format!(" ({p})"));
-                }
-                (s, None)
-            }
+            } => (resume_mcp(serveur, outil, params), None),
             Action::Reglage { cle, .. } => (format!("Je change le réglage {cle}"), None),
             Action::Autre { nom, .. } => (format!("J'utilise {nom}"), None),
         };
@@ -213,6 +202,184 @@ pub fn relatif(chemin: &Path, dossiers: &[PathBuf]) -> String {
     format!("…/{}", morceaux[morceaux.len() - 2..].join("/"))
 }
 
+/// Ce que fait un outil MCP, d'après son nom (KOB-242). Séparé du
+/// classement lecture / écriture de la carte de validation : un outil
+/// classé écriture par prudence n'est pas décrit comme une création.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VerbeMcp {
+    Chercher,
+    Lire,
+    Creer,
+    Modifier,
+    /// `save`, `upsert` : modifier si un identifiant est donné, sinon créer.
+    Enregistrer,
+    Supprimer,
+    Appeler,
+}
+
+/// Mots des noms d'outils et leur verbe. Une seule table, à traduire
+/// (KOB-207).
+const VERBES_MCP: &[(&str, VerbeMcp)] = &[
+    ("search", VerbeMcp::Chercher),
+    ("find", VerbeMcp::Chercher),
+    ("list", VerbeMcp::Chercher),
+    ("query", VerbeMcp::Chercher),
+    ("lookup", VerbeMcp::Chercher),
+    ("get", VerbeMcp::Lire),
+    ("read", VerbeMcp::Lire),
+    ("fetch", VerbeMcp::Lire),
+    ("view", VerbeMcp::Lire),
+    ("show", VerbeMcp::Lire),
+    ("describe", VerbeMcp::Lire),
+    ("retrieve", VerbeMcp::Lire),
+    ("create", VerbeMcp::Creer),
+    ("add", VerbeMcp::Creer),
+    ("write", VerbeMcp::Creer),
+    ("insert", VerbeMcp::Creer),
+    ("new", VerbeMcp::Creer),
+    ("post", VerbeMcp::Creer),
+    ("update", VerbeMcp::Modifier),
+    ("edit", VerbeMcp::Modifier),
+    ("patch", VerbeMcp::Modifier),
+    ("modify", VerbeMcp::Modifier),
+    ("rename", VerbeMcp::Modifier),
+    ("set", VerbeMcp::Modifier),
+    ("save", VerbeMcp::Enregistrer),
+    ("upsert", VerbeMcp::Enregistrer),
+    ("delete", VerbeMcp::Supprimer),
+    ("remove", VerbeMcp::Supprimer),
+    ("archive", VerbeMcp::Supprimer),
+    ("destroy", VerbeMcp::Supprimer),
+    ("call", VerbeMcp::Appeler),
+    ("run", VerbeMcp::Appeler),
+    ("execute", VerbeMcp::Appeler),
+    ("invoke", VerbeMcp::Appeler),
+];
+
+/// Noms de services écrits comme leurs auteurs ; les autres restent tels
+/// quels (« treg »).
+const SERVICES: &[(&str, &str)] = &[
+    ("linear", "Linear"),
+    ("github", "GitHub"),
+    ("gitlab", "GitLab"),
+    ("notion", "Notion"),
+    ("slack", "Slack"),
+    ("jira", "Jira"),
+    ("confluence", "Confluence"),
+    ("figma", "Figma"),
+    ("sentry", "Sentry"),
+    ("stripe", "Stripe"),
+    ("cloudflare", "Cloudflare"),
+    ("deepwiki", "DeepWiki"),
+];
+
+/// Arguments qui disent sur quoi porte l'appel, du plus parlant au moins.
+const ARGUMENTS_PRINCIPAUX: &[&str] = &[
+    "query",
+    "q",
+    "search",
+    "requete",
+    "keyword",
+    "keywords",
+    "title",
+    "titre",
+    "name",
+    "nom",
+    "tool",
+    "method",
+    "id",
+    "identifier",
+    "issueId",
+    "url",
+];
+
+/// Mots d'un nom d'outil : `catalog_search`, `get-issue`, `listIssues`.
+fn mots(outil: &str) -> Vec<String> {
+    let mut mots = Vec::new();
+    let mut mot = String::new();
+    let mut precedent_minuscule = false;
+    for c in outil.chars() {
+        if c == '_' || c == '-' || c == '.' || c == ' ' {
+            if !mot.is_empty() {
+                mots.push(std::mem::take(&mut mot));
+            }
+            precedent_minuscule = false;
+            continue;
+        }
+        if c.is_uppercase() && precedent_minuscule && !mot.is_empty() {
+            mots.push(std::mem::take(&mut mot));
+        }
+        precedent_minuscule = c.is_lowercase() || c.is_ascii_digit();
+        mot.extend(c.to_lowercase());
+    }
+    if !mot.is_empty() {
+        mots.push(mot);
+    }
+    mots
+}
+
+/// Le dernier mot reconnu l'emporte : `catalog_search` cherche.
+fn verbe_mcp(outil: &str) -> Option<VerbeMcp> {
+    mots(outil)
+        .iter()
+        .rev()
+        .find_map(|m| VERBES_MCP.iter().find(|(mot, _)| mot == m).map(|(_, v)| *v))
+}
+
+/// Argument principal (requête, titre, identifiant), masqué et tronqué ;
+/// à défaut, les deux premières valeurs simples.
+fn complement_mcp(params: &Value) -> String {
+    let principal = ARGUMENTS_PRINCIPAUX
+        .iter()
+        .find_map(|cle| match params.get(cle)? {
+            Value::String(s) if !s.trim().is_empty() => Some(court(&masquer(s), 40)),
+            Value::Number(n) => Some(n.to_string()),
+            _ => None,
+        });
+    principal.unwrap_or_else(|| parametres(params))
+}
+
+fn a_un_identifiant(params: &Value) -> bool {
+    params.as_object().is_some_and(|o| {
+        o.iter().any(|(cle, v)| {
+            let cle = cle.to_lowercase();
+            (cle == "id" || cle.ends_with("id") || cle == "identifier")
+                && (v.as_str().is_some_and(|s| !s.is_empty()) || v.is_number())
+        })
+    })
+}
+
+/// « Je cherche dans treg : mot clé », « J'appelle treg : export » ; sans
+/// verbe sûr, « J'utilise treg · catalog_search ».
+fn resume_mcp(serveur: &str, outil: &str, params: &Value) -> String {
+    let service = SERVICES
+        .iter()
+        .find(|(nom, _)| nom.eq_ignore_ascii_case(serveur))
+        .map_or(serveur, |(_, beau)| beau);
+    let Some(verbe) = verbe_mcp(outil) else {
+        return format!("J'utilise {service} · {outil}");
+    };
+    let verbe = match verbe {
+        VerbeMcp::Enregistrer if a_un_identifiant(params) => VerbeMcp::Modifier,
+        VerbeMcp::Enregistrer => VerbeMcp::Creer,
+        v => v,
+    };
+    let debut = match verbe {
+        VerbeMcp::Chercher => format!("Je cherche dans {service}"),
+        VerbeMcp::Lire => format!("Je lis dans {service}"),
+        VerbeMcp::Creer | VerbeMcp::Enregistrer => format!("Je crée dans {service}"),
+        VerbeMcp::Modifier => format!("Je modifie dans {service}"),
+        VerbeMcp::Supprimer => format!("Je supprime dans {service}"),
+        VerbeMcp::Appeler => format!("J'appelle {service}"),
+    };
+    let complement = complement_mcp(params);
+    if complement.is_empty() {
+        debut
+    } else {
+        format!("{debut} : {complement}")
+    }
+}
+
 /// Coupe au-delà de `max` caractères.
 fn court(texte: &str, max: usize) -> String {
     let texte = texte.trim();
@@ -222,13 +389,6 @@ fn court(texte: &str, max: usize) -> String {
     let mut s: String = texte.chars().take(max - 1).collect();
     s.push('…');
     s
-}
-
-fn majuscule(s: &str) -> String {
-    let mut c = s.chars();
-    c.next()
-        .map(|p| p.to_uppercase().chain(c).collect())
-        .unwrap_or_default()
 }
 
 /// Deux premières valeurs simples des paramètres d'un outil MCP.
@@ -399,7 +559,7 @@ mod tests {
         let e = mcp.etape(&d);
         assert_eq!(
             e.resume,
-            "J'interroge Linear : list issues (limit 5, state In Progress)"
+            "Je cherche dans Linear : limit 5, state In Progress"
         );
         assert_eq!(e.famille, Famille::Mcp);
         let long = Action::Commande {
@@ -428,6 +588,117 @@ mod tests {
             outil: "appel".into(),
             params: json!({"api_key": "secret", "nom": "ok"}),
         };
-        assert_eq!(mcp.etape(&[]).resume, "J'interroge X : appel (nom ok)");
+        assert_eq!(mcp.etape(&[]).resume, "J'utilise x · appel");
+        let mcp = Action::Mcp {
+            serveur: "x".into(),
+            outil: "search".into(),
+            params: json!({"api_key": "secret", "filtre": "ok"}),
+        };
+        assert_eq!(mcp.etape(&[]).resume, "Je cherche dans x : filtre ok");
+    }
+
+    fn resume(serveur: &str, outil: &str, params: Value) -> String {
+        Action::Mcp {
+            serveur: serveur.into(),
+            outil: outil.into(),
+            params,
+        }
+        .etape(&[])
+        .resume
+    }
+
+    /// KOB-242 : les quatre appels du journal du 20/10, et des outils réels.
+    /// Le verbe vient du nom de l'outil, pas du classement prudent.
+    #[test]
+    fn libelles_des_outils_mcp() {
+        // Journal du propriétaire (treg).
+        assert_eq!(
+            resume("treg", "catalog_search", json!({"query": "facture client"})),
+            "Je cherche dans treg : facture client"
+        );
+        assert_eq!(
+            resume("treg", "catalog_get", json!({"id": "cat_42"})),
+            "Je lis dans treg : cat_42"
+        );
+        assert_eq!(
+            resume(
+                "treg",
+                "call",
+                json!({"tool": "export_pdf", "args": {"n": 1}})
+            ),
+            "J'appelle treg : export_pdf"
+        );
+        // Linear.
+        assert_eq!(
+            resume(
+                "linear",
+                "list_issues",
+                json!({"query": "rafale", "limit": 5})
+            ),
+            "Je cherche dans Linear : rafale"
+        );
+        assert_eq!(
+            resume("linear", "get_issue", json!({"id": "KOB-238"})),
+            "Je lis dans Linear : KOB-238"
+        );
+        assert_eq!(
+            resume(
+                "linear",
+                "save_issue",
+                json!({"title": "Nouveau ticket", "team": "Kobi"})
+            ),
+            "Je crée dans Linear : Nouveau ticket"
+        );
+        assert_eq!(
+            resume(
+                "linear",
+                "save_issue",
+                json!({"id": "KOB-12", "title": "Renommé"})
+            ),
+            "Je modifie dans Linear : Renommé"
+        );
+        assert_eq!(
+            resume("linear", "delete_comment", json!({"id": "c1"})),
+            "Je supprime dans Linear : c1"
+        );
+        // Notion, GitHub (camelCase, tirets).
+        assert_eq!(
+            resume("notion", "notion-search", json!({"query": "roadmap"})),
+            "Je cherche dans Notion : roadmap"
+        );
+        assert_eq!(
+            resume(
+                "notion",
+                "notion-create-pages",
+                json!({"pages": [{"title": "x"}]})
+            ),
+            "Je crée dans Notion"
+        );
+        assert_eq!(
+            resume(
+                "github",
+                "create_issue",
+                json!({"owner": "o", "repo": "r", "title": "Bug"})
+            ),
+            "Je crée dans GitHub : Bug"
+        );
+        assert_eq!(
+            resume("github", "searchCode", json!({"q": "fn main"})),
+            "Je cherche dans GitHub : fn main"
+        );
+        // Rien de sûr : le nom tel quel.
+        assert_eq!(
+            resume("treg", "catalog", json!({})),
+            "J'utilise treg · catalog"
+        );
+        // Jamais un secret, et un complément tronqué.
+        assert_eq!(
+            resume(
+                "treg",
+                "query_db",
+                json!({"token": "lin_api_123", "q": "x".repeat(80)})
+            ),
+            format!("Je cherche dans treg : {}…", "x".repeat(39))
+        );
     }
 }
