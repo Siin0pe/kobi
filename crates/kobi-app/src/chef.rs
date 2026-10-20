@@ -1089,6 +1089,9 @@ impl<R: Runtime> Chef<R> {
         let debut = Instant::now();
         let debut_ms = maintenant_ms();
         self.ecrivain.ouvrir_reunion(stockage, debut_ms);
+        // Ses notes et son compte rendu ne partent pas de la réunion
+        // précédente (KOB-252).
+        self.cerveau.demander(Demande::NouvelleReunion);
         // Depuis un échange hors réunion, on revient d'abord en veille.
         if etat(&self.app).etat == "assistant" {
             self.transition(&[Evenement::PasDeQuestion]);
