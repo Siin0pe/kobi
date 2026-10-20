@@ -5,6 +5,7 @@
 // de l'app et proposé, décoché, au premier lancement.
 
 import { h } from '../dom';
+import { t } from '../i18n';
 import { absente, invoke, message } from '../ipc';
 import type { Contexte, Panneau } from './panneau';
 
@@ -20,8 +21,6 @@ export interface EtatSonOrdi {
   defaut: string | null;
 }
 
-const EXPLICATION =
-  'En réunion, Kobi transcrit aussi ce que joue l’ordinateur : la voix des autres participants en visio, mais aussi une vidéo ou une musique. Tout reste sur cet ordinateur. Hors réunion, seul le micro compte : le son de l’ordinateur ne réveille jamais Kobi.';
 
 function dessiner(el: HTMLElement, e: EtatSonOrdi, ctx: Contexte, regler: (actif: boolean, sortie: string | null) => void): void {
   const interrupteur = h(
@@ -31,14 +30,14 @@ function dessiner(el: HTMLElement, e: EtatSonOrdi, ctx: Contexte, regler: (actif
       role: 'switch',
       class: 'interrupteur',
       'aria-checked': String(e.actif),
-      'aria-label': 'Écouter aussi le son de l’ordinateur',
+      'aria-label': t('reglages.sonOrdi.ecouter'),
       onclick: () => regler(!e.actif, e.sortie),
     },
     h('span', { class: 'interrupteur-rond', 'aria-hidden': 'true' }),
   );
-  const choix = h('div', { class: 'choix', role: 'radiogroup', 'aria-label': 'Sortie audio écoutée' });
+  const choix = h('div', { class: 'choix', role: 'radiogroup', 'aria-label': t('reglages.sonOrdi.sortieEcoutee') });
   const options: Array<{ nom: string | null; libelle: string; detail?: string }> = [
-    { nom: null, libelle: 'Celle du système', detail: e.defaut ?? 'sortie par défaut' },
+    { nom: null, libelle: t('reglages.sonOrdi.systeme'), detail: e.defaut ?? t('reglages.sonOrdi.sortieParDefaut') },
     ...e.sorties.map((s) => ({ nom: s.nom, libelle: s.libelle })),
   ];
   for (const o of options) {
@@ -59,17 +58,17 @@ function dessiner(el: HTMLElement, e: EtatSonOrdi, ctx: Contexte, regler: (actif
     );
   }
   el.replaceChildren(
-    h('p', { class: 'intro' }, EXPLICATION),
+    h('p', { class: 'intro' }, t('reglages.sonOrdi.explication')),
     h(
       'div',
       { class: 'reglage', 'data-reglage': 'son-ordi' },
-      h('div', { class: 'reglage-titre' }, 'Écouter aussi le son de l’ordinateur'),
-      h('p', { class: 'aide' }, 'Pour les réunions en visio. Désactivé, Kobi n’ouvre jamais la sortie audio.'),
+      h('div', { class: 'reglage-titre' }, t('reglages.sonOrdi.ecouter')),
+      h('p', { class: 'aide' }, t('reglages.sonOrdi.aide')),
       h(
         'div',
         { class: 'ligne-interrupteur' },
         interrupteur,
-        h('span', {}, e.actif ? (e.capte ? 'Activé · capté en ce moment' : 'Activé, en réunion') : 'Désactivé'),
+        h('span', {}, e.actif ? (e.capte ? t('reglages.sonOrdi.etatCapte') : t('reglages.sonOrdi.etatActive')) : t('reglages.sonOrdi.etatDesactive')),
       ),
     ),
   );
@@ -78,34 +77,38 @@ function dessiner(el: HTMLElement, e: EtatSonOrdi, ctx: Contexte, regler: (actif
       h(
         'div',
         { class: 'reglage', 'data-reglage': 'sortie' },
-        h('div', { class: 'reglage-titre' }, 'Sortie écoutée'),
-        h('p', { class: 'aide' }, 'Celle où tu entends la visio (casque, haut-parleurs).'),
+        h('div', { class: 'reglage-titre' }, t('reglages.sonOrdi.sortieTitre')),
+        h('p', { class: 'aide' }, t('reglages.sonOrdi.sortieAide')),
         choix,
       ),
     );
   }
-  ctx.signaler?.(e.actif ? 'ok' : 'attente', e.actif ? 'activé' : 'désactivé');
+  ctx.signaler?.(e.actif ? 'ok' : 'attente', e.actif ? t('reglages.sonOrdi.resumeActive') : t('reglages.sonOrdi.resumeDesactive'));
 }
 
 export const SON_ORDI: Panneau = {
   id: 'son-ordi',
-  titre: 'Son de l’ordinateur',
-  sousTitre: 'La voix des autres en visio',
+  get titre() {
+    return t('reglages.sonOrdi.titre');
+  },
+  get sousTitre() {
+    return t('reglages.sonOrdi.sousTitre');
+  },
   monter(el, ctx) {
     const charger = (e: EtatSonOrdi) => dessiner(el, e, ctx, regler);
     const regler = async (actif: boolean, sortie: string | null) => {
       try {
         const e = await invoke<EtatSonOrdi>('regler_son_ordi', { actif, sortie });
         charger(e);
-        ctx.notifier(e.actif ? 'Kobi écoutera aussi le son de l’ordinateur en réunion.' : 'Kobi n’écoute plus le son de l’ordinateur.');
+        ctx.notifier(e.actif ? t('reglages.sonOrdi.active') : t('reglages.sonOrdi.desactive'));
       } catch (err) {
         ctx.notifier(message(err), 'erreur');
       }
     };
-    el.replaceChildren(h('p', { class: 'intro' }, EXPLICATION), h('p', { class: 'chargement' }, 'Je regarde les sorties audio…'));
+    el.replaceChildren(h('p', { class: 'intro' }, t('reglages.sonOrdi.explication')), h('p', { class: 'chargement' }, t('reglages.sonOrdi.chargement')));
     invoke<EtatSonOrdi>('son_ordi').then(charger, (err) => {
-      el.replaceChildren(h('p', { class: absente(err) ? 'aide' : 'erreur' }, absente(err) ? 'Ce réglage arrive avec la prochaine version de Kobi.' : message(err)));
-      ctx.signaler?.('attente', absente(err) ? 'bientôt' : 'erreur');
+      el.replaceChildren(h('p', { class: absente(err) ? 'aide' : 'erreur' }, absente(err) ? t('reglages.sonOrdi.bientot') : message(err)));
+      ctx.signaler?.('attente', absente(err) ? t('reglages.sonOrdi.resumeBientot') : t('reglages.sonOrdi.resumeErreur'));
     });
   },
 };

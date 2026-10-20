@@ -3,6 +3,7 @@
 // en direct. Suit `etat_enregistrement` puis l'événement `enregistrement`.
 
 import { animationsReduites, h } from '../dom';
+import { surLangue, t } from '../i18n';
 import { ecouter, invoke } from '../ipc';
 import type { RecordingState } from '../recording';
 
@@ -29,16 +30,25 @@ export function monterBandeauRec(ouvrir: () => void, change: (r: RecordingState 
   const duree = h('span', { class: 'rec-duree' });
   const titre = h('span', { class: 'rec-titre' });
   const etat = h('span', { class: 'rec-etat' });
+  const lien = h('span', { class: 'rec-lien' });
   const element = h(
     'button',
-    { type: 'button', class: 'bandeau-rec', hidden: true, 'aria-label': 'Réunion en cours : voir les notes en direct', onclick: ouvrir },
+    { type: 'button', class: 'bandeau-rec', hidden: true, onclick: ouvrir },
     h('span', { class: 'rec-point', 'aria-hidden': 'true' }),
     h('span', { class: 'rec-mot' }, 'REC'),
     duree,
     titre,
     etat,
-    h('span', { class: 'rec-lien' }, 'Notes en direct →'),
+    lien,
   );
+  /** Textes du bandeau, dans la langue courante (redits au changement, KOB-208). */
+  const textes = () => {
+    element.setAttribute('aria-label', t('app.rec.aria'));
+    lien.textContent = t('app.rec.lien');
+    if (!r) return;
+    titre.textContent = r.titre ?? t('app.rec.reunion');
+    etat.textContent = r.pause ? t('app.rec.enPause') : t('app.rec.notes', { n: r.notes });
+  };
 
   let r: RecordingState | null = null;
   let minuterie = 0;
@@ -77,15 +87,14 @@ export function monterBandeauRec(ouvrir: () => void, change: (r: RecordingState 
       element.hidden = !r;
     }
     element.dataset.pause = String(!!r?.pause);
-    if (r) {
-      titre.textContent = r.titre ?? 'Réunion';
-      etat.textContent = r.pause ? 'en pause' : `${r.notes} ${r.notes > 1 ? 'notes' : 'note'}`;
-      tic();
-    }
+    textes();
+    if (r) tic();
     suivre();
     if (avant !== (r !== null)) change(r);
   }
 
+  textes();
+  surLangue(textes);
   ecouter<RecordingState>('enregistrement', poser);
   invoke<RecordingState>('etat_enregistrement').then(poser, () => {});
   document.addEventListener('visibilitychange', suivre);

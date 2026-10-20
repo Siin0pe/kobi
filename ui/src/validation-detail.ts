@@ -2,6 +2,8 @@
 // (section 4) et rendu, partagés par la carte à côté de Kobi (courte) et par
 // la section Activité de l'app Kobi (détail complet).
 
+import { t } from './i18n';
+
 export type Genre = 'fichier' | 'commande' | 'mcp' | 'reglage' | 'suppression';
 
 export type Detail =
@@ -29,16 +31,12 @@ export function isValidation(c: unknown): c is CarteValidation {
   return typeof c === 'object' && c !== null && (c as { type?: unknown }).type === 'validation';
 }
 
-export const GENRES: Record<Genre, { glyph: string; kicker: string }> = {
-  fichier: { glyph: '¶', kicker: 'Écrire un fichier' },
-  commande: { glyph: '>_', kicker: 'Lancer une commande' },
-  mcp: { glyph: '<·>', kicker: 'Agir dans un service' },
-  reglage: { glyph: '=', kicker: 'Changer un réglage' },
-  suppression: { glyph: '✕', kicker: 'Supprimer' },
-};
+/** Glyphe de chaque genre ; son libellé est `validation.genre.<genre>`. */
+export const GENRES: Record<Genre, string> = { fichier: '¶', commande: '>_', mcp: '<·>', reglage: '=', suppression: '✕' };
 
 export function genre(c: CarteValidation): { glyph: string; kicker: string } {
-  return GENRES[c.genre] ?? GENRES.mcp;
+  const g = c.genre in GENRES ? c.genre : 'mcp';
+  return { glyph: GENRES[g], kicker: t(`validation.genre.${g}`) };
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] {
@@ -76,7 +74,7 @@ export function renderDetail(detail: Detail): HTMLElement {
     const pre = el('pre', 'kval-cmd');
     pre.append(el('span', 'prompt', '$ '), detail.commande);
     box.append(pre);
-    if (detail.dossier) box.append(el('div', 'kval-where', `dans ${detail.dossier}`));
+    if (detail.dossier) box.append(el('div', 'kval-where', t('validation.dans', { dossier: detail.dossier })));
   } else if ('serveur' in detail) {
     // Serveur et outil sont déjà sur la ligne de la cible : les paramètres seuls.
     box.append(el('pre', 'kval-params', JSON.stringify(detail.params, null, 2)));

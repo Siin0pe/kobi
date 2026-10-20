@@ -6,6 +6,7 @@
 // erreur. Les sections le préviennent par `reagir(humeur)`.
 
 import { animationsReduites } from '../dom';
+import { surLangue, t } from '../i18n';
 import { invoke, ecouter } from '../ipc';
 import { Blinker, Scrambler, type Eyes } from '../mascotte/glyphs';
 import type { SessionState } from '../native';
@@ -17,17 +18,27 @@ import { isMascotState, type MascotState } from '../states';
  * mascotte et sa feuille de styles).
  */
 export const REGARDS: Record<MascotState, { oeil: string; mot: string }> = {
-  idle: { oeil: '–', mot: 'zzz' },
-  listen: { oeil: 'O', mot: 'oui ?' },
-  think: { oeil: '@', mot: 'hmm…' },
-  write: { oeil: 'o', mot: 'noté' },
-  answer: { oeil: '^', mot: 'alors' },
-  suggest: { oeil: '*', mot: 'idée !' },
-  done: { oeil: '^', mot: 'fait !' },
-  error: { oeil: 'x', mot: 'oups' },
-  work: { oeil: '#', mot: 'occupé' },
-  compose: { oeil: 'o', mot: 'je rédige' },
+  idle: regard('–', 'idle'),
+  listen: regard('O', 'listen'),
+  think: regard('@', 'think'),
+  write: regard('o', 'write'),
+  answer: regard('^', 'answer'),
+  suggest: regard('*', 'suggest'),
+  done: regard('^', 'done'),
+  error: regard('x', 'error'),
+  work: regard('#', 'work'),
+  compose: regard('o', 'compose'),
 };
+
+/** Yeux et mot (`app.miniKobi.etat.<état>`), le mot lu au rendu : la langue change à chaud. */
+function regard(oeil: string, etat: string): { oeil: string; mot: string } {
+  return {
+    oeil,
+    get mot() {
+      return t(`app.miniKobi.etat.${etat}`);
+    },
+  };
+}
 
 /** États où le petit Kobi cligne des yeux (comme la mascotte). */
 const CLIGNE: ReadonlySet<MascotState> = new Set(['idle', 'listen', 'write', 'answer', 'done', 'compose']);
@@ -36,11 +47,11 @@ const CLIGNE: ReadonlySet<MascotState> = new Set(['idle', 'listen', 'write', 'an
 export type Humeur = 'cherche' | 'fait' | 'supprime' | 'enregistre' | 'erreur';
 
 const REACTIONS: Record<Humeur, { oeil: string; mot: string }> = {
-  cherche: { oeil: '@', mot: 'hmm…' },
-  fait: { oeil: '^', mot: 'fait !' },
-  supprime: { oeil: 'o', mot: 'pouf !' },
-  enregistre: { oeil: '^', mot: 'noté' },
-  erreur: { oeil: 'x', mot: 'oups' },
+  cherche: regard('@', 'think'),
+  fait: regard('^', 'done'),
+  supprime: { oeil: 'o', get mot() { return t('app.miniKobi.pouf'); } },
+  enregistre: regard('^', 'write'),
+  erreur: regard('x', 'error'),
 };
 
 /** Durée d'une réaction avant le retour au repos. */
@@ -144,6 +155,11 @@ export function monterMiniKobi(racine: HTMLElement, yeux: HTMLElement[], mot: HT
   });
   vivre();
   poser();
+  // Langue changée (KOB-208) : le mot se redit ; au repos, c'est le mot de
+  // la section, que l'app redonne par `section()`.
+  surLangue(() => {
+    if (etat !== 'idle' && !racine.dataset.reaction) poser();
+  });
 
   return {
     section(m: string) {

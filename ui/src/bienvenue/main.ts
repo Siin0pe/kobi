@@ -15,18 +15,25 @@ import type { Panneau, Statut, Ton } from '../reglages/panneau';
 import { ETAPES } from '../reglages/panneaux';
 import { poserTitre } from '../titre';
 
-/** Mot et yeux de Kobi pour chaque étape. */
-const VISAGES: Record<string, [string, string]> = {
-  intro: ['*', 'salut'],
-  claude: ['o', 'claude'],
-  micro: ['o', 'micro'],
-  modele: ['o', 'modèle'],
-  'dossiers-code': ['o', 'code'],
-  demarrage: ['o', 'réveil'],
-  essai: ['^', 'bonjour'],
-  raccourcis: ['o', 'clavier'],
-  fin: ['^', 'prêt !'],
+/** Yeux de Kobi pour chaque étape ; son mot est `accueil.visage.<étape>`. */
+const OEILS: Record<string, string> = {
+  intro: '*',
+  claude: 'o',
+  micro: 'o',
+  modele: 'o',
+  'dossiers-code': 'o',
+  demarrage: 'o',
+  essai: '^',
+  raccourcis: 'o',
+  fin: '^',
 };
+
+/** Yeux et mot de Kobi pour une étape, le mot dans la langue courante. */
+function visage(id: string): [string, string] {
+  const oeil = OEILS[id];
+  if (oeil === undefined) return ['o', id];
+  return [oeil, t(`accueil.visage.${id === 'dossiers-code' ? 'dossiersCode' : id}`)];
+}
 /** Yeux selon l'état de l'étape. */
 const YEUX: Record<Statut, string> = { ok: '^', attention: 'o', erreur: 'x', attente: '-' };
 
@@ -84,7 +91,7 @@ export function monterAccueil(
     }
     if (ETAPES[courant - 1]?.id === id) {
       brouilleur.express(null);
-      const [, m] = VISAGES[id] ?? ['o', id];
+      const [, m] = visage(id);
       if (!brouilleur.scrambling) brouilleur.show(YEUX[statut], m);
     }
   }
@@ -114,7 +121,7 @@ export function monterAccueil(
     if (n === 0) return presentation();
     if (n > ETAPES.length) return fin();
     const p = ETAPES[n - 1]!;
-    const [oeil, m] = VISAGES[p.id] ?? ['o', p.id];
+    const [oeil, m] = visage(p.id);
     brouilleur.show(oeil, m);
     surtitre.textContent = t('accueil.etape', { n, total: ETAPES.length });
     poserTitre(titre, p.titre);
@@ -132,7 +139,9 @@ export function monterAccueil(
 
   // Langue changée (KOB-207) : les titres des étapes et la page ouverte se
   // traduisent, sans relancer.
-  surLangue(() => {
+  // Écran démonté (accueil rejoué ou quitté) : on se désabonne.
+  const desabonner = surLangue(() => {
+    if (!racine.contains(liste)) return void desabonner();
     ETAPES.forEach((p) => {
       const tt = liste.querySelector(`[data-etape="${p.id}"] .etape-titre`);
       if (tt) tt.textContent = p.titre;
@@ -143,7 +152,7 @@ export function monterAccueil(
   });
 
   function presentation(): void {
-    brouilleur.show(...VISAGES.intro!);
+    brouilleur.show(...visage('intro'));
     surtitre.textContent = t('accueil.premierLancement');
     poserTitre(titre, t('accueil.salut'));
     sousTitre.textContent = '';
@@ -157,9 +166,9 @@ export function monterAccueil(
   }
 
   function fin(): void {
-    brouilleur.show(...VISAGES.fin!);
-    surtitre.textContent = 'C’est prêt';
-    poserTitre(titre, 'À toi de jouer !');
+    brouilleur.show(...visage('fin'));
+    surtitre.textContent = t('accueil.fin.surtitre');
+    poserTitre(titre, t('accueil.fin.titre'));
     sousTitre.textContent = '';
     corps.dataset.panneau = 'fin';
     const aRevoir = ETAPES.filter((p) => {
@@ -167,12 +176,12 @@ export function monterAccueil(
       return s === 'attention' || s === 'erreur';
     });
     corps.replaceChildren(
-      h('p', { class: 'intro' }, 'Dis « Kobi » quand tu as besoin de moi. Je reste en bas à droite de l’écran ; clic droit sur moi pour le Carnet et les réglages.'),
+      h('p', { class: 'intro' }, t('accueil.fin.intro')),
       aRevoir.length
-        ? h('div', { class: 'a-revoir' }, h('p', {}, 'À revoir quand tu veux, dans les réglages :'), h('ul', {}, ...aRevoir.map((p) => h('li', {}, h('strong', {}, p.titre), ` · ${statuts.get(p.id)!.resume}`))))
-        : h('p', { class: 'aide' }, 'Tout est en ordre.'),
+        ? h('div', { class: 'a-revoir' }, h('p', {}, t('accueil.fin.aRevoir')), h('ul', {}, ...aRevoir.map((p) => h('li', {}, h('strong', {}, p.titre), ` · ${statuts.get(p.id)!.resume}`))))
+        : h('p', { class: 'aide' }, t('accueil.fin.toutEnOrdre')),
     );
-    suivant.textContent = 'C’est parti !';
+    suivant.textContent = t('accueil.fin.cestParti');
     suivant.dataset.action = 'terminer';
   }
 
@@ -204,7 +213,7 @@ export function monterAccueil(
 
   aller(0);
   if (disponible()) precontroler();
-  else notifier('Ouvrez le premier lancement depuis Kobi.', 'erreur');
+  else notifier(t('accueil.horsKobi'), 'erreur');
 }
 
 /** Accès pour les tests. */

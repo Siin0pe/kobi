@@ -10,6 +10,7 @@ import './notes.css';
 import { cleDuJour, heure, libelleDuJour, markdown } from '../carnet/format';
 import { chrono } from '../app/rec';
 import { animationsReduites, h } from '../dom';
+import { surLangue, t } from '../i18n';
 import { disponible, ecouter, invoke, message } from '../ipc';
 import { poserTitre } from '../titre';
 
@@ -39,7 +40,7 @@ const RELECTURE_MS = 5_000;
 export function monterNotesEnDirect(hote: HTMLElement): VueDirect {
   const titre = h('h1', { class: 'titre' });
   const duree = h('span', { class: 'duree' });
-  const derniere = h('section', { class: 'derniere', 'aria-live': 'polite', 'aria-label': 'Dernière note' });
+  const derniere = h('section', { class: 'derniere', 'aria-live': 'polite', 'aria-label': t('notes.direct.derniereNote') });
   const sections = h('div', { class: 'sections' });
   const panneau = h(
     'div',
@@ -93,20 +94,20 @@ export function monterNotesEnDirect(hote: HTMLElement): VueDirect {
     courant = n;
     panneau.dataset.etat = n ? (n.lignes ? 'notes' : 'attente') : 'hors-reunion';
     if (!n) {
-      titre.textContent = 'Pas de réunion';
+      titre.textContent = t('notes.direct.pasDeReunion');
       duree.textContent = '';
-      derniere.replaceChildren(h('p', { class: 'vide' }, 'Les notes apparaissent ici pendant une réunion enregistrée.'));
+      derniere.replaceChildren(h('p', { class: 'vide' }, t('notes.direct.horsReunion')));
       sections.replaceChildren();
       return;
     }
-    const nom = n.titre ?? (n.debut_ms ? `Réunion ${libelleDuJour(cleDuJour(n.debut_ms)).toLowerCase()}` : 'Réunion');
+    const nom = n.titre ?? (n.debut_ms ? t('carnet.main.reunionDu', { jour: libelleDuJour(cleDuJour(n.debut_ms), Date.now(), true) }) : t('notes.direct.reunion'));
     if (titre.getAttribute('aria-label') !== nom) poserTitre(titre, nom);
     tic();
     const blocs = [
-      section('decisions', 'Décisions', n.decisions, 'Aucune décision pour l’instant.'),
-      section('actions', 'Actions', n.actions, 'Aucune action pour l’instant.'),
-      section('questions', 'Questions', n.questions, 'Aucune question ouverte.'),
-      ...n.autres.map(([t, texte], i) => section(`autre-${i}`, t, texte, '')),
+      section('decisions', t('notes.direct.decisions'), n.decisions, t('notes.direct.aucuneDecision')),
+      section('actions', t('notes.direct.actions'), n.actions, t('notes.direct.aucuneAction')),
+      section('questions', t('notes.direct.questions'), n.questions, t('notes.direct.aucuneQuestion')),
+      ...n.autres.map(([titreAutre, texte], i) => section(`autre-${i}`, titreAutre, texte, '')),
     ];
     sections.replaceChildren(...blocs);
     // Premier affichage : sections et puces entrent en cascade ; ensuite, seules
@@ -140,7 +141,7 @@ export function monterNotesEnDirect(hote: HTMLElement): VueDirect {
         derniere.dataset.texte = texte;
         const ligne = h('p', { class: 'derniere-texte' });
         derniere.replaceChildren(
-          h('p', { class: 'derniere-etiquette' }, 'Dernière note', n.ecrit_ms ? h('span', { class: 'quand' }, ` · ${heure(n.ecrit_ms)}`) : null),
+          h('p', { class: 'derniere-etiquette' }, t('notes.direct.derniereNote'), n.ecrit_ms ? h('span', { class: 'quand' }, ` · ${heure(n.ecrit_ms)}`) : null),
           ligne,
         );
         // La note s'écrit avec le brouillage de Kobi.
@@ -154,7 +155,7 @@ export function monterNotesEnDirect(hote: HTMLElement): VueDirect {
       }
     } else {
       delete derniere.dataset.texte;
-      derniere.replaceChildren(h('p', { class: 'vide' }, 'J’écoute… les premières notes arrivent dans une minute.'));
+      derniere.replaceChildren(h('p', { class: 'vide' }, t('notes.direct.attente')));
     }
     premierAffichage = false;
   }
@@ -182,7 +183,7 @@ export function monterNotesEnDirect(hote: HTMLElement): VueDirect {
   // peu après, pour ne pas lire le fichier avant son écriture.
   let minuteries: number[] = [];
   function bientot(): void {
-    minuteries.forEach((t) => window.clearTimeout(t));
+    minuteries.forEach((m) => window.clearTimeout(m));
     minuteries = [150, 1500].map((ms) => window.setTimeout(() => void rafraichir(), ms));
   }
   ecouter('notes', bientot);
@@ -203,6 +204,14 @@ export function monterNotesEnDirect(hote: HTMLElement): VueDirect {
   document.addEventListener('visibilitychange', () => {
     suivre();
     if (visible && !document.hidden) void rafraichir();
+  });
+
+  // Langue changée (KOB-208) : les libellés se retraduisent.
+  surLangue(() => {
+    derniere.setAttribute('aria-label', t('notes.direct.derniereNote'));
+    delete derniere.dataset.texte;
+    titre.removeAttribute('aria-label');
+    dessiner(courant);
   });
 
   if (disponible()) void rafraichir();

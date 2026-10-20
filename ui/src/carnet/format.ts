@@ -1,6 +1,8 @@
-// Dates, durées et petit rendu markdown du Carnet (heure locale, français).
+// Dates, durées et petit rendu markdown du Carnet (heure locale, dans la
+// langue de l'interface).
 
 import { h, surligner } from '../dom';
+import { date, t } from '../i18n';
 
 const JOUR = 86_400_000;
 
@@ -16,14 +18,17 @@ function depuisCle(cle: string): Date {
   return new Date(a!, (m ?? 1) - 1, j ?? 1, 12);
 }
 
-/** « Aujourd'hui », « Hier », sinon « samedi 17 octobre » (+ année si autre). */
-export function libelleDuJour(cle: string, maintenant = Date.now()): string {
+/**
+ * « Aujourd'hui », « Hier », sinon « samedi 17 octobre » (+ année si autre).
+ * `enPhrase` : la forme à mettre dans une phrase (« Réunion aujourd’hui »).
+ */
+export function libelleDuJour(cle: string, maintenant = Date.now(), enPhrase = false): string {
   const d = depuisCle(cle);
   const auj = depuisCle(cleDuJour(maintenant));
   const ecart = Math.round((auj.getTime() - d.getTime()) / JOUR);
-  if (ecart === 0) return 'Aujourd’hui';
-  if (ecart === 1) return 'Hier';
-  return d.toLocaleDateString('fr-FR', {
+  if (ecart === 0) return t(enPhrase ? 'carnet.format.aujourdhuiPhrase' : 'carnet.format.aujourdhui');
+  if (ecart === 1) return t(enPhrase ? 'carnet.format.hierPhrase' : 'carnet.format.hier');
+  return date(d, {
     weekday: 'long',
     day: 'numeric',
     month: 'long',
@@ -32,16 +37,16 @@ export function libelleDuJour(cle: string, maintenant = Date.now()): string {
 }
 
 export function heure(ms: number): string {
-  return new Date(ms).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+  return date(ms, { hour: '2-digit', minute: '2-digit' });
 }
 
 /** « 42 min », « 1 h 05 », « 40 s ». */
 export function duree(secondes: number): string {
   const s = Math.max(0, Math.round(secondes));
-  if (s < 60) return `${s} s`;
+  if (s < 60) return t('carnet.format.secondes', { s: String(s) });
   const min = Math.round(s / 60);
-  if (min < 60) return `${min} min`;
-  return `${Math.floor(min / 60)} h ${String(min % 60).padStart(2, '0')}`;
+  if (min < 60) return t('carnet.format.minutes', { min: String(min) });
+  return t('carnet.format.heures', { h: String(Math.floor(min / 60)), mm: String(min % 60).padStart(2, '0') });
 }
 
 /** Horodatage d'un segment : `MM:SS`, ou `H:MM:SS` au-delà d'une heure. */
@@ -55,10 +60,10 @@ export function horodatage(secondes: number): string {
 
 /** Échéance d'un rappel : « aujourd'hui 14:30 », « demain 9:00 », « en retard ». */
 export function echeance(ms: number | null, maintenant = Date.now()): { texte: string; retard: boolean } {
-  if (ms === null) return { texte: 'sans date', retard: false };
+  if (ms === null) return { texte: t('carnet.format.sansDate'), retard: false };
   const jour = libelleDuJour(cleDuJour(ms), maintenant);
   const demain = cleDuJour(maintenant + JOUR) === cleDuJour(ms);
-  return { texte: `${demain ? 'Demain' : jour} · ${heure(ms)}`, retard: ms < maintenant };
+  return { texte: t('carnet.format.echeance', { jour: demain ? t('carnet.format.demain') : jour, heure: heure(ms) }), retard: ms < maintenant };
 }
 
 /** Texte en ligne : **gras** et `code`, le reste en texte brut (surligné). */

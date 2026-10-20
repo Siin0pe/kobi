@@ -5,6 +5,7 @@
 // l'événement `carte` ; une carte tranchée (clic, voix, échéance) s'en va.
 
 import { animationsReduites, h } from '../dom';
+import { surLangue, t } from '../i18n';
 import { ecouter, invoke, message } from '../ipc';
 import { cible, genre, isValidation, renderDetail, type CarteValidation } from '../validation-detail';
 import '../styles/validation-detail.css';
@@ -13,13 +14,20 @@ import './validations.css';
 /** Bloc « À valider » à poser dans la section Activité ; masqué sans carte. */
 export function blocValidations(): HTMLElement {
   const liste = h('div', { class: 'validations-liste' });
-  const bloc = h(
-    'section',
-    { class: 'validations', 'aria-label': 'Actions à valider', hidden: true },
-    h('h2', { class: 'groupe' }, 'À valider'),
-    h('p', { class: 'aide' }, 'Kobi attend ton accord : rien n’est écrit ni envoyé sans toi. Sans réponse en 60 s, c’est non.'),
-    liste,
-  );
+  const titre = h('h2', { class: 'groupe' });
+  const aide = h('p', { class: 'aide' });
+  const bloc = h('section', { class: 'validations', hidden: true }, titre, aide, liste);
+  const textes = () => {
+    bloc.setAttribute('aria-label', t('app.validations.aria'));
+    titre.textContent = t('app.validations.titre');
+    aide.textContent = t('app.validations.aide');
+  };
+  textes();
+  // Langue changée (KOB-208) : le bloc et ses cartes se redessinent.
+  surLangue(() => {
+    textes();
+    afficher();
+  });
   const cartes = new Map<string, CarteValidation>();
 
   const decider = async (c: CarteValidation, accepte: boolean, ligne: HTMLElement): Promise<void> => {
@@ -47,8 +55,8 @@ export function blocValidations(): HTMLElement {
       h(
         'div',
         { class: 'validation-boutons' },
-        h('button', { type: 'button', class: 'bouton plein', onclick: () => void decider(c, true, ligne) }, c.genre === 'suppression' ? 'Supprimer' : 'Valider'),
-        h('button', { type: 'button', class: 'bouton', onclick: () => void decider(c, false, ligne) }, 'Refuser'),
+        h('button', { type: 'button', class: 'bouton plein', onclick: () => void decider(c, true, ligne) }, t(c.genre === 'suppression' ? 'app.validations.supprimer' : 'app.validations.valider')),
+        h('button', { type: 'button', class: 'bouton', onclick: () => void decider(c, false, ligne) }, t('app.validations.refuser')),
       ),
     );
     return ligne;

@@ -8,6 +8,7 @@
 // reste « en attente », sans bloquer le parcours.
 
 import { h } from '../dom';
+import { t } from '../i18n';
 import { absente, ecouter, invoke, message } from '../ipc';
 import type { Contexte, Panneau } from './panneau';
 
@@ -16,8 +17,16 @@ import type { Contexte, Panneau } from './panneau';
 /** « 453 Mo », « 1,2 Go ». */
 export function octets(n: number): string {
   const mo = n / 2 ** 20;
-  if (mo >= 1024) return `${(mo / 1024).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} Go`;
-  return `${Math.round(mo)} Mo`;
+  if (mo >= 1024) return t('reglages.etapes.go', { n: Math.round((mo / 1024) * 10) / 10 });
+  return t('reglages.etapes.mo', { n: String(Math.round(mo)) });
+}
+
+/** Le texte de `cle`, ses `{nom}` remplacés par des nœuds (code, touches…). */
+function avec(cle: string, noeuds: Record<string, Node>, vars: Record<string, string | number> = {}): Array<Node | string> {
+  return t(cle, vars)
+    .split(/\{(\w+)\}/)
+    .map((x, i) => (i % 2 ? (noeuds[x] ?? `{${x}}`) : x))
+    .filter((x) => x !== '');
 }
 
 import { touches } from '../touches';
@@ -47,41 +56,45 @@ type EtatClaude =
 
 export const CLAUDE: Panneau = {
   id: 'claude',
-  titre: 'Claude Code',
-  sousTitre: 'Le cerveau de Kobi',
+  get titre() {
+    return t('reglages.etapes.claudeTitre');
+  },
+  get sousTitre() {
+    return t('reglages.etapes.claudeSousTitre');
+  },
   monter(el, ctx) {
     const zone = h('div');
     const verifier = async () => {
-      zone.replaceChildren(etat('cours', 'Je cherche Claude Code sur cet ordinateur…'));
-      ctx.signaler?.('attente', 'vérification');
+      zone.replaceChildren(etat('cours', t('reglages.etapes.claudeRecherche')));
+      ctx.signaler?.('attente', t('reglages.etapes.claudeResumeVerification'));
       let e: EtatClaude;
       try {
         e = await invoke<EtatClaude>('etat_claude');
       } catch (err) {
         zone.replaceChildren(etat('erreur', message(err)));
-        ctx.signaler?.('erreur', 'erreur');
+        ctx.signaler?.('erreur', t('reglages.etapes.resumeErreur'));
         return;
       }
-      const revoir = bouton('Revérifier', 'reverifier', () => void verifier());
+      const revoir = bouton(t('reglages.etapes.claudeReverifier'), 'reverifier', () => void verifier());
       if (e.etat === 'pret') {
-        zone.replaceChildren(etat('ok', `Claude Code ${e.version.replace(/\s*\(Claude Code\)/, '')} est installé et connecté.`, h('p', { class: 'aide' }, h('code', {}, e.programme))));
-        ctx.signaler?.('ok', 'connecté');
+        zone.replaceChildren(etat('ok', t('reglages.etapes.claudePret', { version: e.version.replace(/\s*\(Claude Code\)/, '') }), h('p', { class: 'aide' }, h('code', {}, e.programme))));
+        ctx.signaler?.('ok', t('reglages.etapes.claudeResumeConnecte'));
       } else if (e.etat === 'non-connecte') {
         zone.replaceChildren(
-          etat('attention', 'Claude Code est installé, mais pas connecté.', h('p', { class: 'aide' }, 'Ouvre un terminal, lance ', h('code', {}, 'claude auth login'), ', puis reviens ici.'), revoir),
+          etat('attention', t('reglages.etapes.claudeNonConnecte'), h('p', { class: 'aide' }, ...avec('reglages.etapes.claudeNonConnecteAide', { commande: h('code', {}, 'claude auth login') })), revoir),
         );
-        ctx.signaler?.('attention', 'à connecter');
+        ctx.signaler?.('attention', t('reglages.etapes.claudeResumeAConnecter'));
       } else if (e.etat === 'introuvable') {
         zone.replaceChildren(
-          etat('erreur', 'Je ne trouve pas Claude Code.', h('p', { class: 'aide' }, 'Installe-le depuis claude.ai/code (une commande dans un terminal), connecte-toi avec ', h('code', {}, 'claude auth login'), ', puis revérifie.'), revoir),
+          etat('erreur', t('reglages.etapes.claudeIntrouvable'), h('p', { class: 'aide' }, ...avec('reglages.etapes.claudeIntrouvableAide', { commande: h('code', {}, 'claude auth login') })), revoir),
         );
-        ctx.signaler?.('erreur', 'introuvable');
+        ctx.signaler?.('erreur', t('reglages.etapes.claudeResumeIntrouvable'));
       } else {
-        zone.replaceChildren(etat('erreur', `Claude Code ne répond pas : ${e.raison}.`, h('p', { class: 'aide' }, h('code', {}, e.programme)), revoir));
-        ctx.signaler?.('erreur', 'ne répond pas');
+        zone.replaceChildren(etat('erreur', t('reglages.etapes.claudeCasse', { raison: e.raison }), h('p', { class: 'aide' }, h('code', {}, e.programme)), revoir));
+        ctx.signaler?.('erreur', t('reglages.etapes.claudeResumeCasse'));
       }
     };
-    el.replaceChildren(h('p', { class: 'intro' }, 'Kobi réfléchit avec ton Claude Code : c’est lui qui répond. Il ne voit que le texte de la conversation, jamais l’audio.'), zone);
+    el.replaceChildren(h('p', { class: 'intro' }, t('reglages.etapes.claudeIntro')), zone);
     void verifier();
   },
 };
@@ -96,15 +109,19 @@ interface Micros {
 
 export const MICRO: Panneau = {
   id: 'micro',
-  titre: 'Micro',
-  sousTitre: 'Celui que Kobi écoute',
+  get titre() {
+    return t('reglages.etapes.microTitre');
+  },
+  get sousTitre() {
+    return t('reglages.etapes.microSousTitre');
+  },
   monter(el, ctx) {
-    el.replaceChildren(h('p', { class: 'intro' }, 'L’écoute se fait sur cet ordinateur : le son ne part nulle part.'), etat('cours', 'Je liste les micros…'));
+    el.replaceChildren(h('p', { class: 'intro' }, t('reglages.etapes.microIntro')), etat('cours', t('reglages.etapes.microListe')));
     invoke<Micros>('micros').then(
       (m) => {
-        const choix = h('div', { class: 'choix', role: 'radiogroup', 'aria-label': 'Micro' });
+        const choix = h('div', { class: 'choix', role: 'radiogroup', 'aria-label': t('reglages.etapes.microTitre') });
         const options: Array<{ nom: string | null; libelle: string; detail?: string }> = [
-          { nom: null, libelle: 'Celui du système', detail: m.micros.find((x) => x.defaut)?.nom ?? 'micro par défaut' },
+          { nom: null, libelle: t('reglages.etapes.microSysteme'), detail: m.micros.find((x) => x.defaut)?.nom ?? t('reglages.etapes.microParDefaut') },
           ...m.micros.map((x) => ({ nom: x.nom, libelle: x.nom })),
         ];
         const selection = (nom: string | null) => {
@@ -123,8 +140,8 @@ export const MICRO: Panneau = {
                   try {
                     await invoke('choisir_micro', { nom: o.nom });
                     selection(o.nom);
-                    ctx.notifier(o.nom ? `Micro : ${o.nom}` : 'Micro du système');
-                    ctx.signaler?.('ok', o.nom ?? 'micro du système');
+                    ctx.notifier(o.nom ? t('reglages.etapes.microNotifChoisi', { nom: o.nom }) : t('reglages.etapes.microNotifSysteme'));
+                    ctx.signaler?.('ok', o.nom ?? t('reglages.etapes.microResumeSysteme'));
                   } catch (e) {
                     ctx.notifier(message(e), 'erreur');
                   }
@@ -138,16 +155,16 @@ export const MICRO: Panneau = {
         selection(m.choisi);
         const rien = m.micros.length === 0;
         el.replaceChildren(
-          h('p', { class: 'intro' }, 'L’écoute se fait sur cet ordinateur : le son ne part nulle part.'),
+          h('p', { class: 'intro' }, t('reglages.etapes.microIntro')),
           rien
-            ? etat('attention', 'Je ne trouve aucun micro.', h('p', { class: 'aide' }, m.erreur ?? 'Branche un micro : Kobi l’utilisera dès qu’il apparaît. En attendant, le clavier marche aussi.'))
+            ? etat('attention', t('reglages.etapes.microAucun'), h('p', { class: 'aide' }, m.erreur ?? t('reglages.etapes.microAucunAide')))
             : choix,
         );
-        ctx.signaler?.(rien ? 'attention' : 'ok', rien ? 'aucun micro' : (m.choisi ?? 'micro du système'));
+        ctx.signaler?.(rien ? 'attention' : 'ok', rien ? t('reglages.etapes.microResumeAucun') : (m.choisi ?? t('reglages.etapes.microResumeSysteme')));
       },
       (e) => {
         el.replaceChildren(etat('erreur', message(e)));
-        ctx.signaler?.('erreur', 'erreur');
+        ctx.signaler?.('erreur', t('reglages.etapes.resumeErreur'));
       },
     );
   },
@@ -164,36 +181,40 @@ interface EtatModele {
 
 export const MODELE: Panneau = {
   id: 'modele',
-  titre: 'Transcription',
-  sousTitre: 'Le modèle qui écrit ce qu’il entend',
+  get titre() {
+    return t('reglages.etapes.modeleTitre');
+  },
+  get sousTitre() {
+    return t('reglages.etapes.modeleSousTitre');
+  },
   monter(el, ctx) {
     const zone = h('div');
-    const barre = h('div', { class: 'barre', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-label': 'Téléchargement du modèle' }, h('span', { class: 'barre-plein' }));
+    const barre = h('div', { class: 'barre', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-label': t('reglages.etapes.modeleBarre') }, h('span', { class: 'barre-plein' }));
     const legende = h('p', { class: 'aide legende' });
     let taille = 0;
     const enCours = () => {
       zone.replaceChildren(
-        etat('cours', 'Je télécharge le modèle…', barre, legende, bouton('Annuler', 'annuler', () => void invoke('annuler_telechargement'))),
+        etat('cours', t('reglages.etapes.modeleTelechargement'), barre, legende, bouton(t('reglages.etapes.annuler'), 'annuler', () => void invoke('annuler_telechargement'))),
       );
-      ctx.signaler?.('attente', 'téléchargement');
+      ctx.signaler?.('attente', t('reglages.etapes.modeleResumeTelechargement'));
     };
     const installe = (dossier: string) => {
-      zone.replaceChildren(etat('ok', 'Le modèle de transcription est installé.', h('p', { class: 'aide' }, h('code', {}, dossier))));
-      ctx.signaler?.('ok', 'installé');
+      zone.replaceChildren(etat('ok', t('reglages.etapes.modeleInstalle'), h('p', { class: 'aide' }, h('code', {}, dossier))));
+      ctx.signaler?.('ok', t('reglages.etapes.modeleResumeInstalle'));
     };
     const proposer = (erreur?: string) => {
       zone.replaceChildren(
         etat(
           erreur ? 'erreur' : 'attention',
-          erreur ? `Le téléchargement s’est arrêté : ${erreur}` : `Il faut le télécharger une fois : ${octets(taille)}.`,
-          h('p', { class: 'aide' }, 'Nemotron, de NVIDIA, tourne sur le processeur. Un téléchargement interrompu reprend là où il s’était arrêté.'),
-          bouton(erreur ? 'Reprendre' : `Télécharger (${octets(taille)})`, 'telecharger', () => {
+          erreur ? t('reglages.etapes.modeleArrete', { erreur }) : t('reglages.etapes.modeleAProposer', { taille: octets(taille) }),
+          h('p', { class: 'aide' }, t('reglages.etapes.modeleAide')),
+          bouton(erreur ? t('reglages.etapes.modeleReprendre') : t('reglages.etapes.modeleTelecharger', { taille: octets(taille) }), 'telecharger', () => {
             enCours();
             invoke('telecharger_modele').catch((e) => proposer(message(e)));
           }, true),
         ),
       );
-      ctx.signaler?.(erreur ? 'erreur' : 'attention', 'à télécharger');
+      ctx.signaler?.(erreur ? 'erreur' : 'attention', t('reglages.etapes.modeleResumeATelecharger'));
     };
     const arrets = [
       ecouter<{ etape: string; recu: number; total: number }>('modele://progression', (p) => {
@@ -201,16 +222,16 @@ export const MODELE: Panneau = {
         const pc = p.total ? Math.floor((p.recu / p.total) * 100) : 0;
         barre.style.setProperty('--p', String(pc / 100));
         barre.setAttribute('aria-valuenow', String(pc));
-        legende.textContent = p.etape === 'extraction' ? `Installation… ${pc} %` : `${octets(p.recu)} sur ${octets(p.total)} · ${pc} %`;
+        legende.textContent = p.etape === 'extraction' ? t('reglages.etapes.modeleExtraction', { pc }) : t('reglages.etapes.modeleProgression', { recu: octets(p.recu), total: octets(p.total), pc });
       }),
       ecouter<string>('modele://fini', (dossier) => {
         installe(dossier);
-        ctx.notifier('Modèle installé.');
+        ctx.notifier(t('reglages.etapes.modeleNotifInstalle'));
       }),
       ecouter<string>('modele://erreur', (e) => proposer(e)),
     ];
-    el.replaceChildren(h('p', { class: 'intro' }, 'Kobi transcrit en local : ta voix ne quitte jamais l’ordinateur.'), zone);
-    zone.replaceChildren(etat('cours', 'Je regarde si le modèle est là…'));
+    el.replaceChildren(h('p', { class: 'intro' }, t('reglages.etapes.modeleIntro')), zone);
+    zone.replaceChildren(etat('cours', t('reglages.etapes.modeleRecherche')));
     invoke<EtatModele>('etat_modele').then(
       (m) => {
         taille = m.taille;
@@ -238,11 +259,15 @@ const sansBarre = (chemin: string) => chemin.replace(/[\\/]+$/, '');
 
 export const DOSSIERS: Panneau = {
   id: 'dossiers-code',
-  titre: 'Dossiers de code',
-  sousTitre: 'Ce que Kobi peut lire',
+  get titre() {
+    return t('reglages.etapes.dossiersTitre');
+  },
+  get sousTitre() {
+    return t('reglages.etapes.dossiersSousTitre');
+  },
   monter(el, ctx) {
     const zone = h('div');
-    el.replaceChildren(h('p', { class: 'intro' }, 'Kobi lit et cherche dans ces dossiers pour répondre sur ton code. Il ne modifie rien.'), zone);
+    el.replaceChildren(h('p', { class: 'intro' }, t('reglages.etapes.dossiersIntro')), zone);
     let dossiers: string[] = [];
     const dessiner = () => {
       const liste = h(
@@ -253,22 +278,22 @@ export const DOSSIERS: Panneau = {
             'li',
             { class: 'dossier-code' },
             h('code', { title: d }, d),
-            h('button', { type: 'button', class: 'retirer', 'aria-label': `Retirer ${d}`, onclick: () => void enregistrer(dossiers.filter((x) => x !== d)) }, '×'),
+            h('button', { type: 'button', class: 'retirer', 'aria-label': t('reglages.etapes.dossiersRetirer', { dossier: d }), onclick: () => void enregistrer(dossiers.filter((x) => x !== d)) }, '×'),
           ),
         ),
       );
       zone.replaceChildren(
-        dossiers.length ? liste : h('p', { class: 'aide' }, 'Aucun dossier pour l’instant : Kobi répondra sans regarder ton code.'),
-        h('div', { class: 'boutons' }, bouton('Ajouter un dossier…', 'ajouter', () => void ajouter(), true)),
+        dossiers.length ? liste : h('p', { class: 'aide' }, t('reglages.etapes.dossiersAucun')),
+        h('div', { class: 'boutons' }, bouton(t('reglages.etapes.dossiersAjouter'), 'ajouter', () => void ajouter(), true)),
       );
-      ctx.signaler?.(dossiers.length ? 'ok' : 'attention', dossiers.length ? `${dossiers.length} dossier${dossiers.length > 1 ? 's' : ''}` : 'aucun');
+      ctx.signaler?.(dossiers.length ? 'ok' : 'attention', dossiers.length ? t('reglages.etapes.dossiersResumeNombre', { n: dossiers.length }) : t('reglages.etapes.dossiersResumeAucun'));
     };
     const enregistrer = async (nouveaux: string[]) => {
       try {
         await invoke('set_codebases', { dossiers: nouveaux });
         dossiers = nouveaux;
         dessiner();
-        ctx.notifier('Dossiers enregistrés : ils servent dès la prochaine question.');
+        ctx.notifier(t('reglages.etapes.dossiersNotifEnregistres'));
       } catch (e) {
         ctx.notifier(message(e), 'erreur');
       }
@@ -276,7 +301,7 @@ export const DOSSIERS: Panneau = {
     const ajouter = async () => {
       let d: string | null;
       try {
-        d = await invoke<string | null>('choisir_dossier', { titre: 'Dossier de code à lire' });
+        d = await invoke<string | null>('choisir_dossier', { titre: t('reglages.etapes.dossiersDialogue') });
       } catch (e) {
         ctx.notifier(message(e), 'erreur');
         return;
@@ -309,16 +334,16 @@ export const DOSSIERS: Panneau = {
       }, true);
       const compter = () => {
         const n = cases.filter((c) => c.checked && !c.disabled).length;
-        valider.textContent = n ? `Ajouter ${n} dépôt${n > 1 ? 's' : ''}` : 'Aucun dépôt choisi';
+        valider.textContent = n ? t('reglages.etapes.depotsAjouter', { n }) : t('reglages.etapes.depotsAucunChoisi');
         valider.disabled = n === 0;
       };
       cases.forEach((c) => c.addEventListener('change', compter));
       compter();
       zone.replaceChildren(
-        h('p', { class: 'aide' }, `${depots.length} dépôts dans `, h('code', {}, racine), ' : coche ceux que Kobi peut lire.'),
+        h('p', { class: 'aide' }, ...avec('reglages.etapes.depotsTrouves', { dossier: h('code', {}, racine) }, { n: depots.length })),
         h(
           'ul',
-          { class: 'depots', 'aria-label': 'Dépôts trouvés' },
+          { class: 'depots', 'aria-label': t('reglages.etapes.depotsListe') },
           ...depots.map((dep, i) =>
             h(
               'li',
@@ -328,8 +353,8 @@ export const DOSSIERS: Panneau = {
                 { title: dep.chemin },
                 cases[i]!,
                 h('span', { class: 'depot-nom' }, dep.nom),
-                h('span', { class: 'depot-infos' }, [dep.branche, dep.langage].filter(Boolean).join(' · ') || 'dépôt git'),
-                dossiers.includes(dep.chemin) ? h('span', { class: 'depot-infos' }, 'déjà lu') : null,
+                h('span', { class: 'depot-infos' }, [dep.branche, dep.langage].filter(Boolean).join(' · ') || t('reglages.etapes.depotGit')),
+                dossiers.includes(dep.chemin) ? h('span', { class: 'depot-infos' }, t('reglages.etapes.depotDejaLu')) : null,
               ),
             ),
           ),
@@ -338,8 +363,8 @@ export const DOSSIERS: Panneau = {
           'div',
           { class: 'boutons' },
           valider,
-          bouton('Tout le dossier', 'tout-le-dossier', () => void enregistrer(dossiers.includes(racine) ? dossiers : [...dossiers, racine])),
-          bouton('Annuler', 'annuler', dessiner),
+          bouton(t('reglages.etapes.depotsToutLeDossier'), 'tout-le-dossier', () => void enregistrer(dossiers.includes(racine) ? dossiers : [...dossiers, racine])),
+          bouton(t('reglages.etapes.annuler'), 'annuler', dessiner),
         ),
       );
     };
@@ -350,11 +375,11 @@ export const DOSSIERS: Panneau = {
       },
       (e) => {
         if (absente(e)) {
-          zone.replaceChildren(etat('attente', 'Le choix des dossiers arrive avec la prochaine version de Kobi.', h('p', { class: 'aide' }, 'Tu pourras le faire ici, ou dans les réglages.')));
-          ctx.signaler?.('attente', 'bientôt');
+          zone.replaceChildren(etat('attente', t('reglages.etapes.dossiersBientot'), h('p', { class: 'aide' }, t('reglages.etapes.dossiersBientotAide'))));
+          ctx.signaler?.('attente', t('reglages.etapes.dossiersResumeBientot'));
         } else {
           zone.replaceChildren(etat('erreur', message(e)));
-          ctx.signaler?.('erreur', 'erreur');
+          ctx.signaler?.('erreur', t('reglages.etapes.resumeErreur'));
         }
       },
     );
@@ -374,25 +399,30 @@ interface Raccourcis {
 
 export const RACCOURCIS: Panneau = {
   id: 'raccourcis',
-  titre: 'Raccourcis',
-  sousTitre: 'Le clavier vaut la voix',
+  get titre() {
+    return t('reglages.etapes.raccourcisTitre');
+  },
+  get sousTitre() {
+    return t('reglages.etapes.raccourcisSousTitre');
+  },
   monter(el, ctx) {
-    el.replaceChildren(etat('cours', 'Un instant…'));
+    el.replaceChildren(etat('cours', t('reglages.etapes.unInstant')));
     invoke<Raccourcis>('raccourcis').then(
       (r) => {
         // Tous les raccourcis globaux de Kobi (KOB-183), lus dans ses réglages.
         const lignes: Array<[string | undefined, string, string]> = [
-          [r.parler, 'Parler à Kobi', 'quand dire « Kobi » n’est pas pratique.'],
-          [r.ecrire, 'Écrire à Kobi', 'une question tapée au clavier, dans sa bulle.'],
-          [r.reunion, 'Enregistrer une réunion', 'le même raccourci l’arrête. Jamais d’enregistrement sans toi.'],
-          [r.agrandir, 'Conversation en grand', 'pour lire une longue réponse ; le même raccourci la range.'],
+          [r.parler, t('reglages.etapes.raccourciParler'), t('reglages.etapes.raccourciParlerAide')],
+          [r.ecrire, t('reglages.etapes.raccourciEcrire'), t('reglages.etapes.raccourciEcrireAide')],
+          [r.reunion, t('reglages.etapes.raccourciReunion'), t('reglages.etapes.raccourciReunionAide')],
+          [r.agrandir, t('reglages.etapes.raccourciAgrandir'), t('reglages.etapes.raccourciAgrandirAide')],
         ];
         const presents = lignes.filter((l): l is [string, string, string] => Boolean(l[0]));
-        const nombre = ['', 'Un raccourci marche', 'Deux raccourcis marchent', 'Trois raccourcis marchent', 'Quatre raccourcis marchent'][presents.length] ?? 'Ces raccourcis marchent';
+        const nombre = ['', 'raccourcisUn', 'raccourcisDeux', 'raccourcisTrois', 'raccourcisQuatre'][presents.length];
+        const intro = t(`reglages.etapes.${nombre || 'raccourcisCes'}`);
         el.replaceChildren(
-          h('p', { class: 'intro' }, `${nombre} partout, même quand une autre fenêtre est devant.`),
+          h('p', { class: 'intro' }, t('reglages.etapes.raccourcisIntro', { nombre: intro })),
           h('dl', { class: 'raccourcis' }, ...presents.flatMap(([touches, titre, aide]) => [h('dt', {}, clavier(touches)), h('dd', {}, h('strong', {}, titre), h('br'), aide)])),
-          h('p', { class: 'aide' }, 'Clic droit sur Kobi : son menu (Carnet, réglages, pause, quitter).'),
+          h('p', { class: 'aide' }, t('reglages.etapes.raccourcisMenu')),
         );
         ctx.signaler?.('ok', touches(r.parler).join('+'));
       },
@@ -414,43 +444,43 @@ export function monterEssai(el: HTMLElement, ctx: Contexte, parler: string): () 
     entendu = false;
     question.textContent = '';
     reponse.textContent = '';
-    zone.replaceChildren(etat('cours', 'J’écoute…'));
-    ctx.signaler?.('attente', 'à essayer');
+    zone.replaceChildren(etat('cours', t('reglages.etapes.essaiEcoute')));
+    ctx.signaler?.('attente', t('reglages.etapes.essaiResumeAEssayer'));
     window.clearTimeout(minuterie);
     minuterie = window.setTimeout(() => {
       if (entendu) return;
       zone.replaceChildren(
         etat(
           'attention',
-          'Je n’ai rien entendu.',
-          h('p', { class: 'aide' }, 'Vérifie le micro, ou appuie sur ', clavier(parler), ' puis dis « bonjour ».'),
-          bouton('Recommencer', 'recommencer', attendre),
+          t('reglages.etapes.essaiRienEntendu'),
+          h('p', { class: 'aide' }, ...avec('reglages.etapes.essaiRienEntenduAide', { touches: clavier(parler) })),
+          bouton(t('reglages.etapes.essaiRecommencer'), 'recommencer', attendre),
         ),
       );
-      ctx.signaler?.('attention', 'rien entendu');
+      ctx.signaler?.('attention', t('reglages.etapes.essaiResumeRienEntendu'));
     }, 20_000);
   };
   const arrets = [
     ecouter<string>('question', (q) => {
       entendu = true;
-      question.textContent = `« ${q} »`;
-      zone.replaceChildren(etat('cours', 'Je t’ai entendu, je réfléchis…'));
+      question.textContent = t('reglages.etapes.essaiQuestion', { question: q });
+      zone.replaceChildren(etat('cours', t('reglages.etapes.essaiReflechit')));
     }),
     ecouter<string>('answer', (a) => {
       entendu = true;
       reponse.textContent = a;
-      zone.replaceChildren(etat('ok', 'Kobi t’a répondu. Tout marche !'));
-      ctx.signaler?.('ok', 'réussi');
+      zone.replaceChildren(etat('ok', t('reglages.etapes.essaiReussi')));
+      ctx.signaler?.('ok', t('reglages.etapes.essaiResumeReussi'));
     }),
     ecouter<{ title: string; message: string }>('erreur', (e) => {
       entendu = true;
-      zone.replaceChildren(etat('erreur', e.title, h('p', { class: 'aide' }, e.message), bouton('Recommencer', 'recommencer', attendre)));
+      zone.replaceChildren(etat('erreur', e.title, h('p', { class: 'aide' }, e.message), bouton(t('reglages.etapes.essaiRecommencer'), 'recommencer', attendre)));
       ctx.signaler?.('erreur', e.title);
     }),
   ];
   el.replaceChildren(
-    h('p', { class: 'essai-consigne' }, 'Dis : ', h('strong', {}, '« Kobi, bonjour »')),
-    h('p', { class: 'aide' }, 'Ou appuie sur ', clavier(parler), ' et dis « bonjour ».'),
+    h('p', { class: 'essai-consigne' }, ...avec('reglages.etapes.essaiConsigne', { phrase: h('strong', {}, t('reglages.etapes.essaiPhrase')) })),
+    h('p', { class: 'aide' }, ...avec('reglages.etapes.essaiAide', { touches: clavier(parler) })),
     question,
     reponse,
     zone,
@@ -464,8 +494,12 @@ export function monterEssai(el: HTMLElement, ctx: Contexte, parler: string): () 
 
 export const ESSAI: Panneau = {
   id: 'essai',
-  titre: 'Essai',
-  sousTitre: '« Kobi, bonjour »',
+  get titre() {
+    return t('reglages.etapes.essaiTitre');
+  },
+  get sousTitre() {
+    return t('reglages.etapes.essaiPhrase');
+  },
   monter(el, ctx) {
     let arreter = () => {};
     let fini = false;
@@ -488,12 +522,16 @@ export const ESSAI: Panneau = {
 
 export const PARCOURS: Panneau = {
   id: 'premier-lancement',
-  titre: 'Premier lancement',
-  sousTitre: 'Rejouer le parcours guidé',
+  get titre() {
+    return t('reglages.etapes.parcoursTitre');
+  },
+  get sousTitre() {
+    return t('reglages.etapes.parcoursSousTitre');
+  },
   monter(el, ctx) {
     el.replaceChildren(
-      h('p', { class: 'intro' }, 'Le parcours du premier lancement vérifie Claude Code, le micro, le modèle, les dossiers de code, puis fait un essai.'),
-      bouton('Rejouer le premier lancement', 'rejouer', () => invoke('ouvrir_bienvenue').catch((e) => ctx.notifier(message(e), 'erreur')), true),
+      h('p', { class: 'intro' }, t('reglages.etapes.parcoursIntro')),
+      bouton(t('reglages.etapes.parcoursRejouer'), 'rejouer', () => invoke('ouvrir_bienvenue').catch((e) => ctx.notifier(message(e), 'erreur')), true),
     );
   },
 };
