@@ -56,6 +56,16 @@ const TITRE_PAROLE_MAX: usize = 8_000;
 /// Demandes de titre au plus, quand Claude ne trouve pas.
 const TITRE_ESSAIS: u8 = 3;
 
+/// Notes en mode fin de réunion (`notes.mode = end`, KOB-71) : rien n'est
+/// demandé à Claude pendant la réunion, tout passe par le compte rendu. Lu
+/// au début de chaque réunion.
+fn notes_a_la_fin() -> bool {
+    kobi_session::config::default_path().is_some_and(|p| {
+        kobi_session::config::load_or_create(&p).config.notes.mode
+            == kobi_session::config::NotesMode::End
+    })
+}
+
 /// Titre automatique réglé (`meetings.titre_auto`, à chaud).
 fn titre_auto_actif() -> bool {
     kobi_session::config::default_path().is_none_or(|p| {
@@ -352,6 +362,9 @@ struct EnCours {
     /// Demandes sans titre exploitable (« — ») : Kobi réessaie avec plus de
     /// parole, au plus [`TITRE_ESSAIS`] fois.
     titre_essais: u8,
+    /// `notes.mode = end` (KOB-71) : ni bloc de notes ni titre pendant la
+    /// réunion ; le titre est demandé avec le compte rendu.
+    a_la_fin: bool,
     /// Latence de chaque interpellation, résumée à la fin du compte rendu
     /// (KOB-85).
     latences: crate::latence::Latences,
@@ -1153,6 +1166,7 @@ impl<R: Runtime> Chef<R> {
             debut_parole: String::new(),
             titre_demande: false,
             titre_essais: 0,
+            a_la_fin: notes_a_la_fin(),
             latences: Default::default(),
         });
         kobi_i18n::tr("coque.chef.reunionCommencee", &[])
@@ -1326,6 +1340,15 @@ impl<R: Runtime> Chef<R> {
     fn demander_compte_rendu(&mut self) {
         let Some(r) = &mut self.reunion else { return };
         r.compte_rendu_demande = true;
+        // Mode fin de réunion (KOB-71) : le titre n'a pas été demandé pendant ;
+        // il part avant le compte rendu, et revient avant lui.
+        if r.a_la_fin && !r.titre_demande && !r.titre_manuel && titre_auto_actif() {
+            r.titre_demande = true;
+            tracing::info!("titre de la réunion demandé avec le compte rendu");
+            self.cerveau.demander(Demande::Titre {
+                transcript: r.debut_parole.clone(),
+            });
+        }
         let reste = std::mem::take(&mut r.a_noter);
         // Rendu à la réunion si la fin est annulée (KOB-245) ; le bloc parti à
         // la prise de notes y revient de lui-même s'il échoue.
@@ -2144,7 +2167,7 @@ impl<R: Runtime> Chef<R> {
         }
         // Titre de la réunion (KOB-223) : demandé d'après les premières
         // minutes, plus tôt si la parole abonde, plus tard s'il y en a peu.
-        if !r.titre_demande && !r.titre_manuel && !r.pause && !r.fin_demandee {
+        if !r.titre_demande && !r.titre_manuel && !r.pause && !r.fin_demandee && !r.a_la_fin {
             let mots = r.debut_parole.split_whitespace().count();
             let seuil = TITRE_MOTS * (usize::from(r.titre_essais) + 1);
             let depuis = r.debut.elapsed();
@@ -2159,7 +2182,12 @@ impl<R: Runtime> Chef<R> {
                 });
             }
         }
-        if r.pause || r.fin_demandee || r.envoye.is_some() || Instant::now() < r.prochain_bloc {
+        if r.pause
+            || r.fin_demandee
+            || r.a_la_fin
+            || r.envoye.is_some()
+            || Instant::now() < r.prochain_bloc
+        {
             return;
         }
         r.prochain_bloc = Instant::now() + self.intervalle;
@@ -2726,6 +2754,56 @@ mod tests {
 
     /// KOB-228 : un compte rendu demandé pendant qu'un bloc est à la prise
     /// de notes reprend ce bloc, avant ce qui reste à noter.
+    /// KOB-71 : en mode fin de réunion, aucun bloc de notes ni titre ne part
+    /// pendant la réunion ; toute la transcription va au compte rendu, avec
+    /// la demande de titre. En mode blocs, le bloc part à l'heure.
+    #[test]
+    fn notes_en_mode_fin_de_reunion() {
+        for a_la_fin in [false, true] {
+            let (app, _dir) = chef_en_essai();
+            avec_chef(&app, |c| {
+                c.commande(Intention::DemarrerReunion);
+                c.reunion.as_mut().unwrap().a_la_fin = a_la_fin;
+                for texte in ["Budget validé.", "Lieu : Annecy.", "Date à fixer."] {
+                    c.recevoir(Message::Segment(dit(texte), Instant::now()));
+                }
+                // Le bloc est dû, puis le titre aussi (beaucoup de parole).
+                let r = c.reunion.as_mut().unwrap();
+                r.prochain_bloc = Instant::now();
+                r.debut_parole = "mot ".repeat(4 * TITRE_MOTS);
+                c.tick();
+                let r = c.reunion.as_ref().unwrap();
+                assert_eq!(r.envoye.is_some(), !a_la_fin, "bloc envoyé : {a_la_fin}");
+                assert_eq!(
+                    r.titre_demande,
+                    !a_la_fin || !titre_auto_actif(),
+                    "titre : {a_la_fin}"
+                );
+                if !a_la_fin {
+                    return;
+                }
+                assert!(
+                    r.a_noter.contains("Budget validé.") && r.a_noter.contains("Date à fixer.")
+                );
+                c.commande(Intention::TerminerReunion);
+                let r = c.reunion.as_ref().unwrap();
+                assert!(r.compte_rendu_demande);
+                for texte in ["Budget validé.", "Lieu : Annecy.", "Date à fixer."] {
+                    assert!(
+                        r.pour_compte_rendu.contains(texte),
+                        "{}",
+                        r.pour_compte_rendu
+                    );
+                }
+                assert_eq!(
+                    r.titre_demande,
+                    titre_auto_actif(),
+                    "titre demandé avec le compte rendu"
+                );
+            });
+        }
+    }
+
     #[test]
     fn compte_rendu_avec_le_bloc_en_cours() {
         assert_eq!(
