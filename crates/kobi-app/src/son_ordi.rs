@@ -96,6 +96,11 @@ fn date(chemin: &Path) -> Option<SystemTime> {
     std::fs::metadata(chemin).and_then(|m| m.modified()).ok()
 }
 
+/// À la fermeture, l'audio en retard est transcrit au plus pendant ce temps :
+/// moins que l'attente du chef, pour que la fin de la dernière phrase lui
+/// parvienne avant le compte rendu (KOB-198).
+const VIDANGE_PISTE: Duration = Duration::from_secs(45);
+
 /// Piste « eux » ouverte : capture et transcription.
 struct Piste {
     capture: Capture,
@@ -116,6 +121,8 @@ struct Fil<R: Runtime> {
     /// Dernière fois que Kobi parlait.
     voix_kobi: Option<Instant>,
     echec: Option<Instant>,
+    /// Segments publiés depuis le lancement (journal de la fermeture).
+    publies: usize,
 }
 
 impl<R: Runtime> Fil<R> {
@@ -130,6 +137,7 @@ impl<R: Runtime> Fil<R> {
             config_lue,
             voix_kobi: None,
             echec: None,
+            publies: 0,
         }
     }
 
@@ -238,8 +246,8 @@ impl<R: Runtime> Fil<R> {
 
     /// Ferme la capture. L'audio encore en file (sous charge, la
     /// transcription prend du retard) est transcrit, au plus pendant
-    /// [`crate::chef::VIDANGE`], puis Nemotron conclut sa dernière phrase :
-    /// la fin de ce qu'ont dit les autres n'est plus perdue (KOB-198).
+    /// [`VIDANGE_PISTE`], puis Nemotron conclut sa dernière phrase : la fin
+    /// de ce qu'ont dit les autres n'est plus perdue (KOB-198).
     fn fermer(&mut self, raison: &str) {
         let Some(piste) = self.piste.take() else {
             return;
@@ -249,13 +257,16 @@ impl<R: Runtime> Fil<R> {
         let (reste, _) = piste.capture.stop();
         tracing::info!(%raison, trames = reste.len(), "son de l'ordinateur : capture fermée");
         self.signaler(false);
-        let limite = Instant::now() + crate::chef::VIDANGE;
-        let mut perdues = 0;
+        let debut = Instant::now();
+        let publies = self.publies;
+        let limite = debut + VIDANGE_PISTE;
+        let (mut transcrites, mut perdues) = (0, 0);
         for frame in reste {
             if Instant::now() >= limite {
                 perdues += 1;
                 continue;
             }
+            transcrites += 1;
             self.transcrire(&mut porte, origine, frame.t.as_secs_f64(), frame.samples);
         }
         let fin = self.stt.as_mut().map(|stt| {
@@ -270,6 +281,12 @@ impl<R: Runtime> Fil<R> {
             }
             None => {}
         }
+        tracing::info!(
+            trames = transcrites,
+            segments = self.publies - publies,
+            ms = debut.elapsed().as_millis() as u64,
+            "son de l'ordinateur : audio en retard transcrit à la fermeture"
+        );
         if perdues > 0 {
             tracing::warn!(
                 trames = perdues,
@@ -347,12 +364,13 @@ impl<R: Runtime> Fil<R> {
     }
 
     /// Publie les segments finis de la piste « eux » (sauf la voix de Kobi).
-    fn publier(&self, origine: Instant, segments: Vec<kobi_stt::Segment>) {
+    fn publier(&mut self, origine: Instant, segments: Vec<kobi_stt::Segment>) {
         for s in segments.into_iter().filter(|s| s.is_final) {
             if crate::voix::est_ma_voix(&self.app, &s.text) {
                 continue;
             }
             let dit_a = origine + Duration::from_secs_f64(s.end.max(0.0));
+            self.publies += 1;
             publier(
                 &self.app,
                 Message::Segment(

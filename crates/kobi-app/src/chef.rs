@@ -67,8 +67,11 @@ const FIN_CONVERSATION: Duration = Duration::from_secs(45);
 /// suite, mais n'est écrit qu'à la fin de ce délai.
 pub const ANNULATION: Duration = Duration::from_secs(10);
 /// À la fin d'une réunion, le compte rendu attend au plus ce temps que les
-/// pistes aient transcrit ce qui a été dit avant l'arrêt (KOB-198).
-pub const VIDANGE: Duration = Duration::from_secs(30);
+/// pistes aient transcrit ce qui a été dit avant l'arrêt (KOB-198). Sous
+/// forte charge, la transcription va deux fois moins vite que la parole :
+/// une demi-minute de retard demande une minute. Kobi montre déjà qu'il
+/// rédige pendant ce temps (KOB-245).
+pub const VIDANGE: Duration = Duration::from_secs(60);
 
 /// Ce qui arrive au chef.
 #[derive(Debug, Clone, PartialEq)]
