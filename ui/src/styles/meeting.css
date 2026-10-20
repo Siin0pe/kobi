@@ -38,6 +38,9 @@
 .rec[hidden] {
   display: none;
 }
+.rec [hidden] {
+  display: none;
+}
 .rec-dot {
   flex: none;
   width: 10px;
@@ -79,9 +82,6 @@
   letter-spacing: 0.02em;
   cursor: pointer;
   pointer-events: auto;
-}
-.rec-undo[hidden] {
-  display: none;
 }
 .rec-undo:hover {
   background: #ffffff;

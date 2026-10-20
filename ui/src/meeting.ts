@@ -146,6 +146,8 @@ export class RecIndicator {
       // du délai, puis s'efface comme d'habitude.
       this.undoable = true;
       this.undo.hidden = false;
+      // « réunion terminée · Annuler » : la durée attend l'effacement.
+      this.time.hidden = true;
       this.root.setAttribute('aria-label', 'Réunion terminée. Annuler pour reprendre la même réunion');
       return;
     }
@@ -157,6 +159,7 @@ export class RecIndicator {
     if (!this.undoable) return;
     this.undoable = false;
     this.undo.hidden = true;
+    this.time.hidden = false;
     this.root.setAttribute('aria-label', 'Réunion terminée');
     this.fade();
   }
@@ -199,6 +202,7 @@ export class RecIndicator {
   private stopEnding(): void {
     this.undoable = false;
     this.undo.hidden = true;
+    this.time.hidden = false;
     window.clearTimeout(this.ending);
     this.ending = 0;
     this.endAnim?.cancel();

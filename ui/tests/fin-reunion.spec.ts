@@ -105,6 +105,9 @@ test('fin annulable : REC éteint, Kobi rédige, « Annuler » reprend la même 
   await expect(page.locator('.stage')).toHaveAttribute('data-state', 'compose');
   const annuler = rec.getByRole('button', { name: 'Annuler' });
   await expect(annuler).toBeVisible();
+  // « réunion terminée · Annuler », sans la durée : rien n'est tronqué.
+  await expect(rec.locator('.rec-time')).toBeHidden();
+  expect(await rec.locator('.rec-label').evaluate((e) => e.scrollWidth <= e.clientWidth)).toBe(true);
   // L'étiquette ne s'efface pas tant que la fin s'annule.
   await page.waitForTimeout(2600);
   await expect(annuler).toBeVisible();
