@@ -15,11 +15,13 @@ pub trait Sortie {
 const PAS: Duration = Duration::from_millis(20);
 /// Marge au-delà de la durée du son : un flux qui ne consomme plus (casque
 /// débranché) rend la main au lieu de bloquer la voix (KOB-235).
+#[cfg(feature = "lecture")]
 const MARGE: Duration = Duration::from_secs(2);
 
 /// Attend que la carte son ait tout joué (`file` vide), l'arrêt, une panne
 /// du flux ou l'échéance. Arrêt : la file est vidée, sans erreur. Panne ou
 /// échéance : la file est vidée et la voix est en erreur.
+#[cfg(any(feature = "lecture", test))]
 pub(crate) fn attendre_lecture(
     file: &std::sync::Mutex<std::collections::VecDeque<f32>>,
     arret: &Arret,
