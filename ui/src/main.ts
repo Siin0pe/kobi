@@ -6,6 +6,7 @@ import './erreurs';
 import { isMascotState, STATES, type MascotData, type MascotState } from './states';
 import { demoData, playDemo } from './demo';
 import { command, enableWindowDrag, followSession, tauri, type Command, type SessionState } from './native';
+import { installerTraversee } from './traversee';
 import { KobiMenu } from './menu';
 import { applyRecording, type RecordingState } from './recording';
 import { relierNotes } from './notes-lien';
@@ -41,6 +42,8 @@ const stage = new Stage(document.getElementById('app')!, {
   reducedMotion: reduced === null ? undefined : reduced === '1',
 });
 enableWindowDrag(stage.root);
+// Hors de Kobi et de ses affichages, la souris passe aux applications en dessous (KOB-217).
+installerTraversee();
 relierNotes(stage.root);
 followSession(stage);
 const menu = new KobiMenu(stage);

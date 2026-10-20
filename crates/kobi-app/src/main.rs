@@ -42,6 +42,7 @@ mod son_ordi;
 mod stockage;
 #[cfg(test)]
 mod test_ipc;
+mod traversee;
 mod tray;
 mod validation;
 mod voix;
@@ -247,6 +248,9 @@ fn main() {
             app.manage(PositionSaver(Mutex::new(placement::spawn_saver(file))));
             app.manage(agrandir::Agrandissement::default());
             window.show()?;
+            // Hors de Kobi et de ses affichages, la souris passe aux
+            // applications en dessous (KOB-217).
+            traversee::installer(app.handle());
             tray::install(app.handle())?;
             // Menu du clic droit sous la souris (KOB-202) : sa fenêtre, cachée.
             if let Err(e) = menu_souris::installer(app.handle()) {

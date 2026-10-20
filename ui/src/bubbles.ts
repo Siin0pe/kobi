@@ -163,8 +163,13 @@ export class Bubbles {
           e.stopPropagation();
           this.onReadAll?.();
         });
-        // Toute la bulle s'ouvre en grand d'un clic (sauf après un glisser pour faire défiler).
-        card.addEventListener('click', () => this.onReadAll?.());
+        // Toute la bulle s'ouvre en grand d'un clic (sauf après un glisser pour
+        // faire défiler, ou pour sélectionner du texte, KOB-217).
+        card.addEventListener('click', () => {
+          const sel = window.getSelection();
+          if (sel && !sel.isCollapsed && card.contains(sel.anchorNode)) return;
+          this.onReadAll?.();
+        });
         card.append(zone, el('div', 'tags'), all);
         this.scroll = new Defilement(zone, text);
         this.scroll.setInstant(this.reduced);
