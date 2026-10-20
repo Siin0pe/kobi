@@ -85,7 +85,10 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
         Err(raison) => return Avis::ecriture(Genre::Commande, raison),
     };
     let mut avis = Avis::lecture();
-    let mut cwd = cwd;
+    // Dossiers courants possibles (KOB-227) : un `cd` qui peut échouer
+    // (`cd x; cat ../../y`) laisse aussi l'ancien. Chaque commande est vérifiée
+    // dans tous.
+    let mut cwds = vec![cwd];
     let mut mots: Vec<String> = Vec::new();
     let mut i = 0;
     while i <= jetons.len() {
@@ -109,8 +112,26 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
                     ));
                 }
                 if !mots.is_empty() {
-                    let a = commande(&mots, shell, ctx, &mut cwd);
-                    avis = avis.pire(a);
+                    let mut suivants = Vec::new();
+                    for c in &cwds {
+                        let mut nouveau = c.clone();
+                        avis = avis.pire(commande(&mots, shell, ctx, &mut nouveau));
+                        // Seul `&&` garantit que le `cd` a réussi ; `|` le lance
+                        // dans un sous-shell.
+                        if op != "&&" && !suivants.contains(c) {
+                            suivants.push(c.clone());
+                        }
+                        if op != "|" && !suivants.contains(&nouveau) {
+                            suivants.push(nouveau);
+                        }
+                    }
+                    if suivants.len() > DOSSIERS_POSSIBLES {
+                        return avis.pire(Avis::ecriture(
+                            Genre::Commande,
+                            "trop de `cd` enchaînés pour suivre le dossier courant",
+                        ));
+                    }
+                    cwds = suivants;
                     mots.clear();
                 } else if matches!(op, "|" | "&&" | "||") {
                     // `| ls`, `ls && && x` : rien avant l'opérateur.
@@ -129,10 +150,14 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
                     Some(Jeton::Mot(m)) if !r.contains('&') || r.ends_with('>') => Some(m.clone()),
                     _ => None,
                 };
-                match redirection(r, cible.as_deref(), ctx, &cwd) {
-                    Ok(saute) => i += 1 + saute,
-                    Err(a) => return avis.pire(a),
+                let mut saute = 0;
+                for c in &cwds {
+                    match redirection(r, cible.as_deref(), ctx, c) {
+                        Ok(n) => saute = n,
+                        Err(a) => return avis.pire(a),
+                    }
                 }
+                i += 1 + saute;
             }
             Some(Jeton::Mot(m)) => {
                 mots.push(m.clone());
@@ -142,6 +167,9 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
     }
     avis
 }
+
+/// Dossiers courants possibles suivis au plus (`cd` incertains enchaînés).
+const DOSSIERS_POSSIBLES: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Jeton {
@@ -215,6 +243,11 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
             '$' => return Err("variable ou substitution `$` non analysable".into()),
             '`' if !ps => return Err("substitution entre accents graves".into()),
             '{' | '}' if ps => return Err("bloc de script PowerShell `{ }`".into()),
+            // `cat {x,../../.ssh/id_rsa}`, `{1..3}` : bash les développe en
+            // plusieurs chemins (KOB-227). `{}` seul reste tel quel.
+            '{' if accolades_developpees(&c[i + 1..]) => {
+                return Err("expansion d'accolades `{…}` non analysable".into())
+            }
             '@' if ps && matches!(c.get(i + 1), Some('(' | '{' | '"' | '\'')) => {
                 return Err("expression PowerShell `@( )` non analysable".into())
             }
@@ -301,6 +334,19 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
     }
     fin_mot(&mut jetons, &mut mot, &mut dans_mot);
     Ok(jetons)
+}
+
+/// Ce qui suit un `{` hors guillemets : bash le développe-t-il (`{a,b}`,
+/// `{1..3}`) ?
+fn accolades_developpees(suite: &[char]) -> bool {
+    let fin = suite
+        .iter()
+        .position(|&x| x == '}' || x.is_whitespace() || matches!(x, ';' | '|' | '&' | '\'' | '"'));
+    let Some(fin) = fin.filter(|&f| suite[f] == '}') else {
+        return false;
+    };
+    let dedans: String = suite[..fin].iter().collect();
+    dedans.contains(',') || dedans.contains("..")
 }
 
 /// Redirection : seules celles qui n'écrivent dans aucun fichier passent.
@@ -860,7 +906,7 @@ fn commande(mots: &[String], shell: Shell, ctx: &Contexte, cwd: &mut PathBuf) ->
     if let Some(a) = options_interdites(&nom, args) {
         return a;
     }
-    chemins(&nom, args, ctx, cwd)
+    chemins(&nom, args, shell, ctx, cwd)
 }
 
 /// Options ou sous-commandes qui écrivent, par commande.
@@ -1303,18 +1349,32 @@ fn git(args: &[String]) -> Option<Avis> {
 }
 
 /// Tous les chemins des arguments doivent rester dans les dossiers déclarés.
-fn chemins(nom: &str, args: &[String], ctx: &Contexte, cwd: &Path) -> Avis {
+fn chemins(nom: &str, args: &[String], shell: Shell, ctx: &Contexte, cwd: &Path) -> Avis {
     if SANS_CHEMIN_PS.contains(&nom) {
         return Avis::lecture();
     }
-    let mut motif_vu = !MOTIF_D_ABORD.contains(&nom);
+    let ps = shell == Shell::PowerShell;
+    // Lecteurs PowerShell (`Env:`, `Variable:`, `HKLM:`…) : pas des dossiers
+    // (KOB-227, `Get-Content Env:ANTHROPIC_API_KEY`).
+    if ps {
+        if let Some(x) = args.iter().find(|x| lecteur_ps(x)) {
+            return Avis::refus(format!("{x} est hors des dossiers de code déclarés"));
+        }
+    }
+    // Motif donné par une option (`grep /etc/passwd -e root`) : tous les
+    // positionnels sont des chemins (KOB-227).
+    let mut motif_vu = !MOTIF_D_ABORD.contains(&nom) || motif_par_option(nom, args);
     let mut i = 0;
     while i < args.len() {
         let x = &args[i];
         let bas = x.to_lowercase();
         if x.starts_with('-') && x.len() > 1 {
-            // `--git-dir=/x`, `-Path=…` : la valeur est vérifiée si c'est un chemin.
-            if let Some((_, v)) = x.split_once('=') {
+            // `--git-dir=/x`, `-Path=…`, PowerShell `-Path:/x` : la valeur est
+            // vérifiée si c'est un chemin.
+            let valeur = x
+                .split_once('=')
+                .or_else(|| if ps { x.split_once(':') } else { None });
+            if let Some((_, v)) = valeur {
                 if ressemble_a_un_chemin(v) && !ctx.contient(Path::new(v), Some(cwd)) {
                     return Avis::refus(format!("{v} est hors des dossiers de code déclarés"));
                 }
@@ -1365,6 +1425,34 @@ fn chemins(nom: &str, args: &[String], ctx: &Contexte, cwd: &Path) -> Avis {
         i += 1;
     }
     Avis::lecture()
+}
+
+/// Le motif est-il donné par une option (`-e`, `-ne`, `--regexp=`, `-f`) ?
+fn motif_par_option(nom: &str, args: &[String]) -> bool {
+    let grep = matches!(nom, "grep" | "egrep" | "fgrep" | "rg");
+    args.iter().take_while(|x| *x != "--").any(|x| {
+        let bas = x.to_lowercase();
+        option_de_motif(nom, x).is_some()
+            || bas.starts_with("--regexp=")
+            || (grep && bas.starts_with("--file="))
+            || (grep
+                && x.len() > 1
+                && x.starts_with('-')
+                && !x.starts_with("--")
+                && x[1..].contains(['e', 'f']))
+    })
+}
+
+/// Lecteur PowerShell qui n'est pas un disque (`Env:x`, `HKLM:\x`,
+/// `Variable:`) : un nom de deux lettres ou plus suivi de `:`.
+fn lecteur_ps(x: &str) -> bool {
+    let x = x
+        .split_once(':')
+        .map(|(_, v)| v)
+        .filter(|_| x.starts_with('-'))
+        .unwrap_or(x);
+    x.split_once(':')
+        .is_some_and(|(nom, _)| nom.len() >= 2 && nom.chars().all(|c| c.is_ascii_alphanumeric()))
 }
 
 /// Valeur d'option qui désigne un fichier (`/x`, `C:\x`, `../x`, `~/x`).
@@ -1471,6 +1559,12 @@ mod tests {
             "xxd -l 64 Cargo.toml",
             "fd -e rs motif crates",
             "cat < Cargo.toml",
+            // KOB-227 : ce qui reste permis.
+            "cd crates && cat ../Cargo.toml",
+            "cd crates; ls",
+            "ls {}",
+            "grep -e motif Cargo.toml",
+            "git show HEAD:Cargo.toml",
             "git log -3 # les trois derniers",
             "ls \"crates/kobi-app\"",
             "ls crates\\ avec\\ espace",
@@ -1640,6 +1734,16 @@ mod tests {
             "git --git-dir=C:/autre/.git log",
             "rg secret C:/Users/moi/Documents",
             "grep -r motdepasse /c/Users/moi",
+            // KOB-227 : `cd` qui peut échouer, accolades, motif par option.
+            "cd crates/kobi-app; cat ../../.ssh/id_rsa",
+            "cd crates/kobi-app || cat ../../.ssh/id_rsa",
+            "cd crates/kobi-app | cat ../../.ssh/id_rsa",
+            "cat {Cargo.toml,../../.ssh/id_rsa}",
+            "cat crates/{a..c}",
+            "grep /etc/passwd -e root",
+            "grep /etc/passwd -eroot",
+            "grep /etc/passwd --regexp=root",
+            "grep -ie root /etc/passwd",
             // Shells imbriqués.
             "bash -c 'rm -rf target'",
             "sh -c ls",
@@ -2103,6 +2207,11 @@ mod tests {
                 "Start-Process notepad",
                 "powershell -EncodedCommand ZQBjAGgAbwA=",
                 "Get-Content $env:USERPROFILE\\secret",
+                // KOB-227 : lecteurs PowerShell hors des dossiers.
+                "Get-Content Env:ANTHROPIC_API_KEY",
+                "Get-ChildItem Env:",
+                "Get-Content -Path:Env:ANTHROPIC_API_KEY",
+                "Get-ChildItem HKLM:\\Software",
                 "& calc.exe",
                 "Copy-Item a b",
             ] {
@@ -2113,6 +2222,11 @@ mod tests {
             refuse(
                 ps(&format!("Get-Content {}", abs("/Windows/win.ini"))),
                 "Get-Content hors dossiers",
+            );
+            // `-Path:valeur` : la valeur est vérifiée comme un chemin (KOB-227).
+            refuse(
+                ps(&format!("Get-Content -Path:{}", abs("/Windows/win.ini"))),
+                "Get-Content -Path: hors dossiers",
             );
         }
 
