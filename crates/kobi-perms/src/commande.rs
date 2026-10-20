@@ -1479,6 +1479,34 @@ mod tests {
         }
     }
 
+    /// KOB-227 : chaque commande du tableau du ticket, telle quelle, donne
+    /// une carte ou un refus, jamais une lecture.
+    #[test]
+    fn tableau_de_kob_227_jamais_en_lecture() {
+        for ligne in [
+            "fd -x rm -rf {}",
+            "fd -X rm",
+            "fd --exec rm",
+            "sed -n 1p -e '1e touch x' f",
+            "sed -n 1p --expression='1e touch x' f",
+            "sed -n 1p -f script f",
+            "git grep -O'sh -c id' motif",
+            "go run . -v",
+            "java -jar x.jar -v",
+            "dotnet run -v q",
+            "printf -v 'a[$(id>x)]' 1",
+            "xxd -r -p - .git/config",
+            "sort -o/chemin f",
+            "sort -uo f g",
+            "tree -ao out.txt",
+            "cargo --config build.rustc-wrapper=./x tree",
+            "cargo -Zunstable-options tree",
+            "rg --hostname-bin ./x motif",
+        ] {
+            pas_lecture(bash(ligne), ligne);
+        }
+    }
+
     #[test]
     fn ecritures_bash_refusees() {
         for (ligne, genre) in [
