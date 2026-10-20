@@ -2024,7 +2024,7 @@ mod tests {
         cfg.stockage.dossier = Some(dir.path().join("donnees"));
         crate::stockage::installer(app.handle(), &cfg, None);
         let jamais: Fabrique = Arc::new(|_| Box::pin(std::future::pending()));
-        installer(app.handle(), jamais, 5);
+        installer(app.handle(), jamais, 5, cerveau::Delais::default());
         (app, dir)
     }
 
