@@ -193,7 +193,7 @@ export class Metronome {
     const pas = 1000 / this.rate;
     const duree = Number(effet.getTiming().duration);
     if (!(duree > 0)) return;
-    effet.updateTiming({ easing: `steps(${Math.max(1, Math.round(duree / pas))}, end)` });
+    effet.updateTiming({ easing: `steps(${Math.max(1, Math.round(duree / pas))})` });
     if (a.startTime !== null) a.startTime = Math.round(Number(a.startTime) / pas) * pas;
     if (this.suspended && a.playState === 'running') a.pause();
   }
