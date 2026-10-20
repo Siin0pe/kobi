@@ -107,6 +107,13 @@ pub trait SttEngine {
         None
     }
 
+    /// Transcrit à part un extrait (le début d'une phrase), sans toucher le
+    /// flux en cours : écoute anticipée quand la transcription est en retard
+    /// (KOB-250). `None` par défaut.
+    fn transcrire_extrait(&mut self, _samples: &[f32]) -> Option<String> {
+        None
+    }
+
     /// Options de compilation qui comptent pour la vitesse (instructions
     /// CPU, accélérateur), reprises dans les rapports. Vide par défaut.
     fn build_info(&self) -> String {
@@ -129,6 +136,10 @@ impl<E: SttEngine + ?Sized> SttEngine for Box<E> {
 
     fn transcrire_court(&mut self, samples: &[f32]) -> Option<String> {
         (**self).transcrire_court(samples)
+    }
+
+    fn transcrire_extrait(&mut self, samples: &[f32]) -> Option<String> {
+        (**self).transcrire_extrait(samples)
     }
 
     fn finish(&mut self) -> Result<Vec<Segment>> {
