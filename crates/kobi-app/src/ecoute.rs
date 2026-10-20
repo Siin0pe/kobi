@@ -751,7 +751,7 @@ mod tests {
             .filter(|p| p.extension().is_some_and(|e| e == "wav"))
             .collect();
         fichiers.sort();
-        let (mut pos, mut pos_ok, mut fausses) = (0, 0, 0);
+        let (mut pos, mut pos_ok, mut fausses, mut envois) = (0, 0, 0, 0);
         // Temps de calcul et durée d'audio : le coût d'un réglage (KOB-179).
         let (mut calcul, mut audio) = (std::time::Duration::ZERO, 0.0);
         let mut manques = Vec::new();
@@ -784,6 +784,18 @@ mod tests {
                 println!("{nom}: {finals:?} -> {envoyees:?}");
             } else {
                 fausses += interpellations;
+                // Ce qui part vers Claude (KOB-237) : questions, et phrases
+                // « peut-être pas pour toi ». Longueur seulement : le corpus
+                // réel n'est jamais recopié.
+                for a in &actions {
+                    let (genre, q) = match a {
+                        Action::Envoyer(q) => ("question", q),
+                        Action::EnvoyerPeutEtre(q) => ("peut-être pas pour toi", q),
+                        _ => continue,
+                    };
+                    envois += 1;
+                    println!("{nom}: {genre} envoyée, {} caractères", q.chars().count());
+                }
                 for f in finals
                     .iter()
                     .filter(|f| crate::mot_cle::reperer(f).is_some())
@@ -800,7 +812,7 @@ mod tests {
             println!("MANQUÉ {m}");
         }
         println!(
-            "BILAN positifs {pos_ok}/{pos}, fausses interpellations {fausses}, \
+            "BILAN positifs {pos_ok}/{pos}, fausses interpellations {fausses}, envois à Claude sans appel {envois}, \
              calcul {:.1} s pour {audio:.1} s d'audio (×{:.2} temps réel)",
             calcul.as_secs_f64(),
             calcul.as_secs_f64() / audio
