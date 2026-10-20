@@ -126,7 +126,8 @@ test('économie d’énergie en réunion : tout bouge encore, au rythme d’un s
           state: a.playState,
           easing: String(a.effect!.getTiming().easing),
           duree: Number(a.effect!.getTiming().duration),
-          debut: a.startTime === null ? null : Number(a.startTime),
+          // Début réel : départ plus délai, à la vitesse de lecture.
+          debut: a.startTime === null ? null : Number(a.startTime) + Number(a.effect!.getTiming().delay ?? 0) / (a.playbackRate || 1),
         })),
     );
   /** À `fps` images/s : chacune en escalier d'un pas par image, toutes sur la même grille. */
@@ -137,7 +138,8 @@ test('économie d’énergie en réunion : tout bouge encore, au rythme d’un s
     for (const a of l) {
       expect(a.state, a.name).toBe('running');
       expect(a.easing, a.name).toBe(`steps(${Math.max(1, Math.round(a.duree / pas))})`);
-      // Départ sur la grille commune : elles changent sur les mêmes images.
+      // Début réel (délai compris, KOB-219) sur la grille commune : elles
+      // changent sur les mêmes images.
       if (a.debut !== null) expect(Math.abs(a.debut / pas - Math.round(a.debut / pas)), a.name).toBeLessThan(1e-3);
     }
   };

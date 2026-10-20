@@ -201,7 +201,21 @@ export class Metronome {
     // ou plus lentement, sinon ses pas tomberaient hors de la grille commune
     // et ajouteraient des images (essai WebKitGTK).
     a.playbackRate = origine.vitesse * (duree / (n * pas));
-    if (a.startTime !== null) a.startTime = Math.round(Number(a.startTime) / pas) * pas;
+    // Départ sur la grille commune. Une animation qui vient d'être créée n'a
+    // pas encore de départ (`startTime` nul, en attente) : WebKit en donne
+    // ainsi à l'adoption, et chacune partait alors à son instant, d'où des
+    // pas décalés et trois fois plus d'images (KOB-219). On l'aligne dès
+    // qu'elle est prête.
+    // C'est le début réel qui se cale, délai compris : les « z » partent
+    // l'un après l'autre (délais décalés), et leurs pas tombaient chacun à
+    // leur heure (KOB-219).
+    const aligner = (): void => {
+      if (a.startTime === null || !this.held.has(a)) return;
+      const delai = Number(effet.getTiming().delay ?? 0) / (a.playbackRate || 1);
+      a.startTime = Math.round((Number(a.startTime) + delai) / pas) * pas - delai;
+    };
+    if (a.startTime === null) a.ready.then(aligner, () => {});
+    else aligner();
     if (this.suspended && a.playState === 'running') a.pause();
   }
 
