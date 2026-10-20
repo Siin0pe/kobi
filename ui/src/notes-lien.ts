@@ -3,6 +3,7 @@
 // l'étiquette REC est un bouton (Entrée, Espace).
 
 import './styles/notes-lien.css';
+import { surLangue, t } from './i18n';
 import { invoke } from './ipc';
 
 const CIBLES = '.rec, .card-notes';
@@ -16,7 +17,8 @@ export function relierNotes(root: HTMLElement): void {
   if (!rec) return;
   rec.setAttribute('role', 'button');
   rec.tabIndex = 0;
-  rec.title = 'Voir les notes';
+  rec.title = t('kobi.notesLien.voir');
+  surLangue(() => (rec.title = t('kobi.notesLien.voir')));
   rec.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();

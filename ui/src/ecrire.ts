@@ -17,6 +17,7 @@
 // bruit a la largeur de la lettre, le miroir ne bouge pas d'un pixel. Le
 // miroir donne aussi la position du curseur, que les yeux de Kobi suivent.
 
+import { surLangue, t } from './i18n';
 import { NOISE } from './mascotte/glyphs';
 import { tauri } from './native';
 import { SCENE_WIDTH, type Stage } from './stage';
@@ -90,7 +91,6 @@ export class Ecrire {
 
   constructor(private readonly stage: Stage) {
     this.form = el('form', 'ecrire');
-    this.form.setAttribute('aria-label', 'Écrire à Kobi');
     this.form.hidden = true;
     this.form.dataset.etat = 'rangee';
     const zone = el('div', 'ecrire-zone');
@@ -103,8 +103,9 @@ export class Ecrire {
     this.field.rows = 1;
     this.field.autocomplete = 'off';
     this.field.spellcheck = false;
-    this.field.placeholder = 'Écrire à Kobi…';
-    this.field.setAttribute('aria-label', 'Écrire à Kobi');
+    this.textes();
+    // Fixés au montage : ils suivent la langue à chaud.
+    surLangue(() => this.textes());
     zone.append(this.mirror, this.field);
     const enter = el('span', 'ecrire-entree', '↵');
     enter.setAttribute('aria-hidden', 'true');
@@ -160,6 +161,12 @@ export class Ecrire {
       if (was === 'assistant' && this.session !== 'assistant' && this.field.value.trim() === '') this.close();
       else this.rearm();
     }).observe(stage.root, { attributes: true, attributeFilter: ['data-session'] });
+  }
+
+  private textes(): void {
+    this.form.setAttribute('aria-label', t('kobi.ecrire.aria'));
+    this.field.placeholder = t('kobi.ecrire.placeholder');
+    this.field.setAttribute('aria-label', t('kobi.ecrire.aria'));
   }
 
   get isOpen(): boolean {

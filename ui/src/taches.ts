@@ -10,6 +10,7 @@
 import type { Bulle } from './conversation';
 import { tauri } from './native';
 import { dealFromKobi, leaveToKobi } from './effets';
+import { date, surLangue, t } from './i18n';
 import type { Stage } from './stage';
 
 /** Une notification de livraison reste affichée ce temps-là sans clic. */
@@ -56,11 +57,16 @@ export class Tasks {
   private readonly statuts = new Map<number, Bulle['statut']>();
   private readonly timers = new Map<string, number>();
   private first = true;
+  /** Textes de chaque notification affichée, à retraduire (un rappel reste jusqu'au clic). */
+  private readonly textes = new WeakMap<HTMLElement, () => void>();
 
   constructor(private readonly stage: Stage) {
     this.root = el('div', 'notifs');
     this.root.setAttribute('aria-live', 'polite');
     stage.mount(this.root);
+    surLangue(() => {
+      for (const n of this.root.querySelectorAll<HTMLElement>('.notif')) this.textes.get(n)?.();
+    });
   }
 
   /** Nouvel historique : chaque changement de statut d'une tâche longue est notifié. */
@@ -104,13 +110,19 @@ export class Tasks {
     if (kind === 'running') for (const c of '···') icon.append(el('i', undefined, c));
     else icon.textContent = kind === 'delivered' ? '✓' : '!';
     const body = el('span', 'notif-body');
-    const kicker = { running: 'Je m’en occupe', delivered: 'Résultat prêt', failed: 'Tâche en échec' }[kind];
-    body.append(el('span', 'notif-kicker', kicker), el('span', 'notif-text', preview(b.question)));
+    const titre = el('span', 'notif-kicker');
+    body.append(titre, el('span', 'notif-text', preview(b.question)));
     if (kind !== 'running' && b.reponse) body.append(el('span', 'notif-preview', preview(b.reponse, 120)));
     n.append(icon, body);
-    n.setAttribute('aria-label', `${kicker} : ${b.question}`);
+    const traduire = (): void => {
+      const kicker = t({ running: 'kobi.taches.enCours', delivered: 'kobi.taches.pret', failed: 'kobi.taches.echec' }[kind]);
+      titre.textContent = kicker;
+      n.setAttribute('aria-label', t('kobi.taches.aria', { titre: kicker, texte: b.question }));
+    };
+    traduire();
+    this.textes.set(n, traduire);
     n.addEventListener('click', () => {
-      if (kind !== 'running') this.stage.setState(kind === 'delivered' ? 'answer' : 'error', kind === 'delivered' ? { answer: b.reponse } : { error: { title: 'Tâche en échec', message: b.reponse } });
+      if (kind !== 'running') this.stage.setState(kind === 'delivered' ? 'answer' : 'error', kind === 'delivered' ? { answer: b.reponse } : { error: { title: t('kobi.taches.echec'), message: b.reponse } });
       this.dismiss(b.tour);
     });
     this.root.append(n);
@@ -139,10 +151,16 @@ export class Tasks {
     const icon = el('span', 'notif-icon');
     icon.innerHTML = BELL;
     const body = el('span', 'notif-body');
-    const heure = r.echeance_ms === null ? '' : new Date(r.echeance_ms).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
-    body.append(el('span', 'notif-kicker', heure ? `Rappel · ${heure}` : 'Rappel'), el('span', 'notif-text', preview(r.texte)));
+    const titre = el('span', 'notif-kicker');
+    body.append(titre, el('span', 'notif-text', preview(r.texte)));
     n.append(icon, body);
-    n.setAttribute('aria-label', `Rappel : ${r.texte}`);
+    const traduire = (): void => {
+      const heure = r.echeance_ms === null ? '' : date(r.echeance_ms, { hour: '2-digit', minute: '2-digit' });
+      titre.textContent = heure ? t('kobi.taches.rappelHeure', { heure }) : t('kobi.taches.rappel');
+      n.setAttribute('aria-label', t('kobi.taches.rappelAria', { texte: r.texte }));
+    };
+    traduire();
+    this.textes.set(n, traduire);
     n.addEventListener('click', () => this.dismiss(key));
     window.dispatchEvent(new CustomEvent('kobi:vue', { detail: 'fermer' }));
     this.root.append(n);

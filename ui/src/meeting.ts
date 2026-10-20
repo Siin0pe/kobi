@@ -4,6 +4,7 @@
 // participants doivent savoir qu'ils sont transcrits).
 
 import { CONSENT_MESSAGES, type ConsentLang, type MeetingInfo } from './states';
+import { surLangue, t } from './i18n';
 import { touches } from './touches';
 
 export interface ConsentEvent {
@@ -72,6 +73,9 @@ export class RecIndicator {
   /** Sortie en cours (« réunion terminée · 7 min ») après la fin (KOB-166). */
   private ending = 0;
   private endAnim: Animation | null = null;
+  /** Réunion qui vient de finir (étiquette « réunion terminée »), pour la retraduire. */
+  private ended: MeetingInfo | null = null;
+  private readonly offLangue: () => void;
 
   constructor() {
     this.root = el('div', 'rec');
@@ -82,17 +86,51 @@ export class RecIndicator {
     this.time.setAttribute('aria-hidden', 'true');
     this.notes = el('span', 'rec-notes');
     this.notes.hidden = true;
-    this.eux = el('span', 'rec-eux', 'son de l’ordi');
-    this.eux.title = 'Le son de l’ordinateur (la voix des autres en visio) est transcrit aussi.';
+    this.eux = el('span', 'rec-eux');
     this.eux.hidden = true;
     this.retard = el('span', 'rec-retard');
     this.retard.hidden = true;
-    this.undo = el('button', 'rec-undo', 'Annuler');
+    this.undo = el('button', 'rec-undo');
     this.undo.type = 'button';
-    this.undo.title = 'Reprendre la même réunion (Ctrl+Z)';
     this.undo.hidden = true;
     this.undo.addEventListener('click', () => this.onUndo?.());
     this.root.append(el('span', 'rec-dot'), (this.label = el('span', 'rec-label')), this.time, this.notes, this.eux, this.retard, this.undo);
+    this.fixes();
+    // L'étiquette reste affichée : elle suit la langue à chaud.
+    this.offLangue = surLangue(() => this.retraduire());
+  }
+
+  /** Textes qui ne dépendent pas de la réunion. */
+  private fixes(): void {
+    this.eux.textContent = t('kobi.meeting.sonOrdi');
+    this.eux.title = t('kobi.meeting.sonOrdiAide');
+    this.undo.textContent = t('kobi.meeting.annuler');
+    this.undo.title = t('kobi.meeting.annulerAide');
+  }
+
+  /** Changement de langue : l'étiquette affichée se réécrit. */
+  private retraduire(): void {
+    this.fixes();
+    if (this.info) this.textes(this.info);
+    else if (this.ended && !this.root.hidden) this.textesFin(this.ended);
+  }
+
+  /** Étiquette, nom accessible et compteur de notes d'une réunion en cours. */
+  private textes(info: MeetingInfo): void {
+    const word = info.paused ? t('kobi.meeting.pause') : t('kobi.meeting.rec');
+    this.label.textContent = info.title ? t('kobi.meeting.etiquette', { mot: word, titre: info.title }) : word;
+    this.root.setAttribute('aria-label', info.paused ? t('kobi.meeting.ariaPause') : t('kobi.meeting.ariaRec'));
+    const n = info.notes ?? 0;
+    this.digits(this.notes, String(n), t('kobi.meeting.notes', { n }));
+    this.montrerRetard(info.late);
+  }
+
+  /** « réunion terminée · 7 min », ou « réunion terminée · Annuler » tant que la fin s'annule. */
+  private textesFin(info: MeetingInfo): void {
+    const minutes = Math.round((Date.now() - info.startedAt) / 60_000);
+    this.label.textContent = t('kobi.meeting.terminee');
+    this.time.textContent = minutes < 1 ? t('kobi.meeting.moinsDUneMinute') : t('kobi.meeting.minutes', { n: minutes });
+    this.root.setAttribute('aria-label', this.undoable ? t('kobi.meeting.ariaTermineeAnnuler') : t('kobi.meeting.ariaTerminee'));
   }
 
   setReducedMotion(reduced: boolean): void {
@@ -116,16 +154,11 @@ export class RecIndicator {
     this.root.hidden = info === null;
     this.root.classList.toggle('is-paused', Boolean(info?.paused));
     if (info) {
-      const word = info.paused ? 'PAUSE' : 'REC';
-      this.label.textContent = info.title ? `${word} · ${info.title}` : word;
-      this.root.setAttribute('aria-label', info.paused ? 'Transcription en pause' : 'Réunion transcrite en local');
-    }
-    if (info) {
+      this.ended = null;
       const n = info.notes ?? 0;
       this.notes.hidden = n === 0;
-      this.digits(this.notes, String(n), ` note${n > 1 ? 's' : ''}`);
+      this.textes(info);
       this.eux.hidden = !info.computerAudio || Boolean(info.paused);
-      this.montrerRetard(info.late);
       if (n > before && !this.reduced && !this.paused) this.bump(n - before);
     }
     this.tick();
@@ -139,12 +172,10 @@ export class RecIndicator {
   private end(info: MeetingInfo, undoable: boolean): void {
     window.clearTimeout(this.timer);
     this.timer = 0;
-    const minutes = Math.round((Date.now() - info.startedAt) / 60_000);
+    this.ended = info;
     this.root.classList.remove('is-paused');
     this.root.classList.add('is-ended');
-    this.root.setAttribute('aria-label', 'Réunion terminée');
-    this.label.textContent = 'réunion terminée';
-    this.time.textContent = minutes < 1 ? 'moins d’une minute' : `${minutes} min`;
+    this.textesFin(info);
     this.notes.hidden = true;
     this.root.hidden = false;
     if (undoable) {
@@ -154,7 +185,7 @@ export class RecIndicator {
       this.undo.hidden = false;
       // « réunion terminée · Annuler » : la durée attend l'effacement.
       this.time.hidden = true;
-      this.root.setAttribute('aria-label', 'Réunion terminée. Annuler pour reprendre la même réunion');
+      this.root.setAttribute('aria-label', t('kobi.meeting.ariaTermineeAnnuler'));
       return;
     }
     this.fade();
@@ -167,10 +198,10 @@ export class RecIndicator {
       this.retard.removeAttribute('title');
       return;
     }
-    const duree = late.seconds < 60 ? `${late.seconds} s` : `${Math.round(late.seconds / 60)} min`;
+    const duree = late.seconds < 60 ? t('carnet.format.secondes', { s: late.seconds }) : t('carnet.format.minutes', { min: Math.round(late.seconds / 60) });
     const arret = touches(late.shortcut).join('+');
-    this.retard.textContent = `retard ${duree}`;
-    this.retard.title = `La transcription a ${duree} de retard. Pour arrêter tout de suite : ${arret}.`;
+    this.retard.textContent = t('kobi.meeting.retard', { duree });
+    this.retard.title = t('kobi.meeting.retardAide', { duree, arret });
     this.retard.setAttribute('aria-label', this.retard.title);
   }
 
@@ -180,7 +211,7 @@ export class RecIndicator {
     this.undoable = false;
     this.undo.hidden = true;
     this.time.hidden = false;
-    this.root.setAttribute('aria-label', 'Réunion terminée');
+    this.root.setAttribute('aria-label', t('kobi.meeting.ariaTerminee'));
     this.fade();
   }
 
@@ -300,6 +331,7 @@ export class RecIndicator {
   }
 
   destroy(): void {
+    this.offLangue();
     window.clearTimeout(this.timer);
     this.stopEnding();
   }
@@ -324,17 +356,24 @@ export class ConsentCard {
   private readonly message: HTMLElement;
   private readonly copyButton: HTMLButtonElement;
   private readonly langButtons: Record<ConsentLang, HTMLButtonElement>;
+  private readonly title: HTMLElement;
+  private readonly langs: HTMLElement;
+  private readonly kicker: HTMLElement;
+  private readonly intro: HTMLElement;
+  private readonly done: HTMLButtonElement;
+  /** Issue de la dernière copie (`null` : pas encore copié). */
+  private copied: boolean | null = null;
+  readonly offLangue: () => void;
 
   constructor() {
     this.root = el('div', 'card card-consent');
     this.root.dataset.card = 'consent';
     this.root.setAttribute('role', 'dialog');
     this.root.setAttribute('aria-labelledby', 'consent-titre');
-    const title = el('div', 'title', 'Prévenez les participants');
+    const title = (this.title = el('div', 'title'));
     title.id = 'consent-titre';
-    const langs = el('div', 'langs');
+    const langs = (this.langs = el('div', 'langs'));
     langs.setAttribute('role', 'group');
-    langs.setAttribute('aria-label', 'Langue du message');
     this.langButtons = { fr: el('button', 'lang', 'FR'), en: el('button', 'lang', 'EN') };
     for (const l of ['fr', 'en'] as const) {
       const b = this.langButtons[l];
@@ -343,23 +382,32 @@ export class ConsentCard {
       langs.append(b);
     }
     this.message = el('blockquote', 'message');
-    this.copyButton = el('button', 'btn btn-primary', 'Copier le message');
+    this.copyButton = el('button', 'btn btn-primary');
     this.copyButton.type = 'button';
     this.copyButton.addEventListener('click', () => void this.copy());
-    const done = el('button', 'btn', 'C’est fait');
+    const done = (this.done = el('button', 'btn'));
     done.type = 'button';
     done.addEventListener('click', () => this.onEvent?.({ action: 'done', lang: this.lang }));
     const buttons = el('div', 'buttons');
     buttons.append(this.copyButton, done);
-    this.root.append(
-      el('div', 'kicker', 'Réunion · transcription locale'),
-      title,
-      el('p', 'intro', 'Kobi transcrit cette réunion. Collez ce message dans le chat de l’appel :'),
-      langs,
-      this.message,
-      buttons,
-    );
+    this.kicker = el('div', 'kicker');
+    this.intro = el('p', 'intro');
+    this.root.append(this.kicker, title, this.intro, langs, this.message, buttons);
     this.setLang('fr');
+    // La carte reste ouverte : elle suit la langue de l'interface (le message
+    // à coller garde la langue choisie sur la carte).
+    // Retirée par la scène (`root.remove()`) : elle se désabonne d'elle-même.
+    this.offLangue = surLangue(() => (this.root.isConnected ? this.textes() : this.offLangue()));
+  }
+
+  private textes(): void {
+    this.kicker.textContent = t('kobi.meeting.consentKicker');
+    this.title.textContent = t('kobi.meeting.consentTitre');
+    this.intro.textContent = t('kobi.meeting.consentIntro');
+    this.langs.setAttribute('aria-label', t('kobi.meeting.consentLangue'));
+    this.done.textContent = t('kobi.meeting.consentFait');
+    this.copyButton.textContent =
+      this.copied === null ? t('kobi.meeting.consentCopier') : this.copied ? t('kobi.meeting.consentCopie') : t('kobi.meeting.consentCopieImpossible');
   }
 
   setLang(lang: ConsentLang): void {
@@ -367,12 +415,14 @@ export class ConsentCard {
     this.message.textContent = CONSENT_MESSAGES[lang];
     this.message.lang = lang;
     for (const l of ['fr', 'en'] as const) this.langButtons[l].setAttribute('aria-pressed', String(l === lang));
-    this.copyButton.textContent = 'Copier le message';
+    this.copied = null;
+    this.textes();
   }
 
   private async copy(): Promise<void> {
     const ok = await copy(CONSENT_MESSAGES[this.lang]);
-    this.copyButton.textContent = ok ? 'Copié ✓' : 'Copie impossible : sélectionnez le texte';
+    this.copied = ok;
+    this.textes();
     if (ok) this.onEvent?.({ action: 'copy', lang: this.lang });
   }
 }

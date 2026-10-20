@@ -11,6 +11,7 @@
 // (`menu://choix`), qui l'exécute comme un clic.
 
 import { suivreClasseAnimations } from './animations';
+import { initLangue, surLangue, t } from './i18n';
 import { clavierMenu, remplirMenu, type MenuContext, type MenuId } from './menu';
 import { placer, type Point, type Zone } from './menu-place';
 import './styles/fonts.css';
@@ -43,11 +44,14 @@ function tauri(): TauriGlobal | undefined {
 }
 
 suivreClasseAnimations();
+// La langue de l'interface (KOB-209) : le menu suit les changements à chaud.
+void initLangue();
 const root = document.createElement('div');
 root.className = 'kmenu';
 root.hidden = true;
 root.setAttribute('role', 'menu');
-root.setAttribute('aria-label', 'Menu de Kobi');
+root.setAttribute('aria-label', t('kobi.menu.aria'));
+surLangue(() => root.setAttribute('aria-label', t('kobi.menu.aria')));
 root.setAttribute('aria-orientation', 'vertical');
 const heading = document.createElement('div');
 heading.className = 'kmenu-head';

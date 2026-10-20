@@ -4,6 +4,8 @@
 // et les cartes (question, sources, notes, réponse, action, erreur) sont
 // dessinées par la scène.
 
+import { t } from './i18n';
+
 /**
  * Les états de la mascotte : les 8 du document « mascotte et skins », puis
  * « je m'en occupe » (KOB-152), tant que Claude travaille avec ses outils, et
@@ -18,33 +20,15 @@ export function isMascotState(value: unknown): value is MascotState {
   return typeof value === 'string' && (STATES as readonly string[]).includes(value);
 }
 
-/** Libellé court de chaque état (affichage, sélecteurs). */
-export const STATE_LABELS: Record<MascotState, string> = {
-  idle: 'Veille',
-  listen: 'Écoute',
-  think: 'Réfléchit',
-  write: 'Note',
-  answer: 'Répond',
-  suggest: 'Propose',
-  done: 'Fait',
-  error: 'Oups',
-  work: 'Je m’en occupe',
-  compose: 'Rédige',
-};
+/** Libellé court de chaque état (affichage, sélecteurs), lu au rendu : la langue change à chaud. */
+export function stateLabel(state: MascotState): string {
+  return t(`kobi.etats.libelle.${state}`);
+}
 
-/** Phrase lue par les lecteurs d'écran à chaque changement d'état. */
-export const STATE_SPOKEN: Record<MascotState, string> = {
-  idle: 'Kobi est en veille.',
-  listen: 'Kobi écoute votre question.',
-  think: 'Kobi réfléchit et consulte ses sources.',
-  write: 'Kobi met à jour les notes.',
-  answer: 'Kobi répond.',
-  suggest: 'Kobi propose une action, à confirmer.',
-  done: 'Action faite.',
-  error: 'Kobi a rencontré un problème.',
-  work: 'Kobi s’en occupe et montre chaque étape.',
-  compose: 'Réunion terminée. Kobi rédige le compte rendu.',
-};
+/** Phrase lue par les lecteurs d'écran à chaque changement d'état, lue au rendu. */
+export function stateSpoken(state: MascotState): string {
+  return t(`kobi.etats.annonce.${state}`);
+}
 
 /** Une source consultée pendant la réflexion (codebase, MCP, web…). */
 export interface SourceItem {

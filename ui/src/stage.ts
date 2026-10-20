@@ -14,14 +14,17 @@ import {
   DOT_COLORS,
   type ConsentLang,
   type MeetingInfo,
-  STATE_LABELS,
-  STATE_SPOKEN,
+  stateLabel,
+  stateSpoken,
   type MascotData,
   type MascotState,
 } from './states';
+import { surLangue, t } from './i18n';
 
 /** Fiche de notes pendant un enregistrement, tant que la coque n'envoie pas la dernière note. */
-export const NOTES_PLACEHOLDER = 'J’écoute et je prends des notes.';
+export function notesPlaceholder(): string {
+  return t('kobi.scene.notesAttente');
+}
 
 /** Taille logique de la scène, en px ; elle est mise à l'échelle de la fenêtre. */
 export const SCENE_WIDTH = 820;
@@ -195,6 +198,19 @@ export class Stage {
     this.rec.setReducedMotion(this.reducedMotion);
     this.setState('idle');
     this.applyPaused();
+    // Langue changée à chaud : les textes qui restent affichés se retraduisent.
+    this.cleanups.push(surLangue(() => this.retraduire()));
+  }
+
+  private retraduire(): void {
+    this.scene.setAttribute('aria-label', t('kobi.scene.aria', { etat: stateLabel(this.state) }));
+    this.paintDot();
+    // L'annonce de l'état en cours, posée avant que la langue soit connue.
+    if (this.spoken) this.live.textContent = stateSpoken(this.spoken);
+    this.bubbles.retraduire();
+    // Fiche de notes d'attente pendant l'enregistrement.
+    if (this.state === 'write' && this.requested === 'idle' && this.meeting && !this.meeting.lastNote) this.show();
+    else this.bubbles.render(this.state, this.data);
   }
 
   get currentState(): MascotState {
@@ -219,7 +235,7 @@ export class Stage {
   private show(): void {
     const taking = this.requested === 'idle' && this.meeting !== null && !this.meeting.paused;
     const state: MascotState = taking ? 'write' : this.requested;
-    const data = taking ? { notes: this.meeting?.lastNote ?? NOTES_PLACEHOLDER } : this.requestedData;
+    const data = taking ? { notes: this.meeting?.lastNote ?? notesPlaceholder() } : this.requestedData;
     if (state === this.state && taking) {
       this.update(data);
       return;
@@ -227,7 +243,7 @@ export class Stage {
     this.state = state;
     this.data = { ...data };
     this.root.dataset.state = state;
-    this.scene.setAttribute('aria-label', `Kobi : ${STATE_LABELS[state]}`);
+    this.scene.setAttribute('aria-label', t('kobi.scene.aria', { etat: stateLabel(state) }));
     this.paintDot();
     this.kobi.setState(state, this.data);
     this.bubbles.render(state, this.data);
@@ -235,7 +251,7 @@ export class Stage {
     this.onRender?.(state, this.data);
     if (state !== this.spoken) {
       this.spoken = state;
-      this.live.textContent = STATE_SPOKEN[state];
+      this.live.textContent = stateSpoken(state);
     }
   }
 
@@ -276,7 +292,7 @@ export class Stage {
    */
   startMeeting(info: MeetingInfo, options: { consent?: boolean; lang?: ConsentLang } = {}): void {
     this.setMeeting(info);
-    this.say(info.title ? `Réunion « ${info.title} » : transcription en local.` : 'Réunion : transcription en local.');
+    this.say(info.title ? t('kobi.scene.reunionTitre', { titre: info.title }) : t('kobi.scene.reunion'));
     if (options.consent ?? true) this.openConsent(options.lang ?? 'fr');
   }
 
@@ -287,7 +303,7 @@ export class Stage {
     const notes = this.meeting.notes ?? 0;
     this.setMeeting({ ...this.meeting, ...patch });
     if ((this.meeting.notes ?? 0) > notes && !this.isPaused()) this.kobi.noteAdded();
-    if (Boolean(this.meeting.paused) !== wasPaused) this.say(this.meeting.paused ? 'Transcription en pause.' : 'Transcription reprise.');
+    if (Boolean(this.meeting.paused) !== wasPaused) this.say(this.meeting.paused ? t('kobi.scene.enPause') : t('kobi.scene.reprise'));
   }
 
   /** `undoable` : « Réunion terminée · Annuler » pendant le délai (KOB-245). */
@@ -295,7 +311,7 @@ export class Stage {
     if (!this.meeting) return;
     this.closeConsent();
     this.setMeeting(null, Boolean(options.undoable));
-    this.say(options.undoable ? 'Réunion terminée. Annuler pour la reprendre.' : 'Réunion terminée.');
+    this.say(options.undoable ? t('kobi.scene.termineeAnnulable') : t('kobi.scene.terminee'));
   }
 
   /** La fin ne s'annule plus : « Annuler » disparaît. */
@@ -453,9 +469,10 @@ export class Stage {
     const color = DOT_COLORS[this.state];
     this.dot.style.setProperty('--dot', color);
     this.dot.dataset.state = this.state;
-    const rec = this.meeting ? (this.meeting.paused ? ', réunion en pause' : ', réunion transcrite') : '';
-    this.dot.setAttribute('aria-label', `Kobi : ${STATE_LABELS[this.state]}${rec}. Déplier la mascotte`);
-    this.dot.title = `Kobi : ${STATE_LABELS[this.state]}`;
+    const etat = stateLabel(this.state);
+    const cle = this.meeting ? (this.meeting.paused ? 'kobi.scene.pastilleAriaPause' : 'kobi.scene.pastilleAriaReunion') : 'kobi.scene.pastilleAria';
+    this.dot.setAttribute('aria-label', t(cle, { etat }));
+    this.dot.title = t('kobi.scene.aria', { etat });
   }
 
   private applyPaused(): void {

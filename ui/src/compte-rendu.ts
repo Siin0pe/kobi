@@ -14,6 +14,7 @@
 // bouton principal qui vivent.
 
 import { reduced } from './effets';
+import { surLangue, t } from './i18n';
 import { tauri } from './native';
 import type { Stage } from './stage';
 
@@ -35,9 +36,8 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, t
 }
 
 /** « 2 décisions », « 1 action », « aucune question ». */
-function compte(n: number, mot: string, feminin: boolean): string {
-  if (n === 0) return `${feminin ? 'aucune' : 'aucun'} ${mot}`;
-  return `${n} ${mot}${n > 1 ? 's' : ''}`;
+function compte(n: number, quoi: 'decisions' | 'actions' | 'questions'): string {
+  return n === 0 ? t(`kobi.compteRendu.${quoi}Aucune`) : t(`kobi.compteRendu.${quoi}`, { n });
 }
 
 export class ReportCard {
@@ -48,6 +48,11 @@ export class ReportCard {
   private current: CompteRenduUi | null = null;
   private readonly resume: HTMLElement;
   private readonly chips: HTMLElement;
+  private readonly titre: HTMLElement;
+  private readonly kicker: HTMLElement;
+  private readonly ouvrir: HTMLButtonElement;
+  private readonly plusTard: HTMLButtonElement;
+  private readonly badgeTexte: HTMLElement;
 
   constructor(private readonly stage: Stage) {
     this.root = el('div', 'card card-rapport');
@@ -55,19 +60,20 @@ export class ReportCard {
     this.root.setAttribute('role', 'dialog');
     this.root.setAttribute('aria-labelledby', 'rapport-titre');
     this.root.hidden = true;
-    const titre = el('div', 'title', 'Compte rendu prêt');
+    const titre = (this.titre = el('div', 'title'));
     titre.id = 'rapport-titre';
     this.resume = el('p', 'rapport-resume');
     this.chips = el('div', 'rapport-chips');
-    const ouvrir = el('button', 'btn btn-primary', 'Ouvrir dans le Carnet');
+    const ouvrir = (this.ouvrir = el('button', 'btn btn-primary'));
     ouvrir.type = 'button';
     ouvrir.addEventListener('click', () => this.open());
-    const plusTard = el('button', 'btn', 'Plus tard');
+    const plusTard = (this.plusTard = el('button', 'btn'));
     plusTard.type = 'button';
     plusTard.addEventListener('click', () => this.collapse());
     const buttons = el('div', 'buttons');
     buttons.append(ouvrir, plusTard);
-    this.root.append(el('div', 'kicker', 'Réunion terminée'), titre, this.resume, this.chips, buttons);
+    this.kicker = el('div', 'kicker');
+    this.root.append(this.kicker, titre, this.resume, this.chips, buttons);
 
     // Badge accroché à la tête (KOB-204) : une feuille sur une pastille vert
     // acide, qui se déploie au survol.
@@ -76,9 +82,11 @@ export class ReportCard {
     this.pill.hidden = true;
     const icone = el('span', 'rapport-badge-icone');
     icone.setAttribute('aria-hidden', 'true');
-    this.pill.append(icone, el('span', 'rapport-badge-texte', 'Compte rendu prêt · ouvrir'));
-    this.pill.setAttribute('aria-label', 'Compte rendu prêt : ouvrir dans l’app');
-    this.pill.title = 'Compte rendu prêt · clic droit : plus tard';
+    this.badgeTexte = el('span', 'rapport-badge-texte');
+    this.pill.append(icone, this.badgeTexte);
+    this.textes();
+    // La carte et le badge restent affichés : ils suivent la langue à chaud.
+    surLangue(() => this.textes());
     // Accroché dans le dessin de Kobi : le clic ne va pas plus loin (il
     // ouvrirait aussi la bulle d'écriture, ecrire.ts).
     this.pill.addEventListener('click', (e) => {
@@ -104,17 +112,30 @@ export class ReportCard {
     };
   }
 
+  private textes(): void {
+    this.kicker.textContent = t('kobi.compteRendu.kicker');
+    this.titre.textContent = t('kobi.compteRendu.titre');
+    this.ouvrir.textContent = t('kobi.compteRendu.ouvrir');
+    this.plusTard.textContent = t('kobi.compteRendu.plusTard');
+    this.badgeTexte.textContent = t('kobi.compteRendu.badge');
+    this.pill.setAttribute('aria-label', t('kobi.compteRendu.badgeAria'));
+    this.pill.title = t('kobi.compteRendu.badgeAide');
+    const c = this.current;
+    if (!c) return;
+    this.resume.textContent = c.resume || t('kobi.compteRendu.resumeVide');
+    this.chips.replaceChildren(
+      ...[compte(c.decisions, 'decisions'), compte(c.actions, 'actions'), compte(c.questions, 'questions')].map((x) => el('span', 'rapport-chip', x)),
+    );
+  }
+
   /** Compte rendu publié par la coque. */
   show(c: CompteRenduUi): void {
     this.current = c;
-    this.resume.textContent = c.resume || 'Le compte rendu est rangé avec la réunion.';
-    this.chips.replaceChildren(
-      ...[compte(c.decisions, 'décision', true), compte(c.actions, 'action', true), compte(c.questions, 'question', true)].map((t) => el('span', 'rapport-chip', t)),
-    );
+    this.textes();
     this.pill.hidden = true;
     this.root.hidden = false;
     this.stage.root.classList.add('rapport-open');
-    this.stage.announce('Compte rendu de la réunion prêt.');
+    this.stage.announce(t('kobi.compteRendu.annonce'));
     this.root.querySelector<HTMLButtonElement>('.btn-primary')?.focus({ preventScroll: true });
   }
 
