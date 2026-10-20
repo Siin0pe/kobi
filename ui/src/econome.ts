@@ -58,8 +58,8 @@ function enCours(root: Element): Animation[] {
 }
 
 export class Metronome {
-  /** Animations tenues par le métronome, avec leur courbe d'origine. */
-  private readonly held = new Map<Animation, string>();
+  /** Animations tenues par le métronome, avec leur courbe et leur vitesse d'origine. */
+  private readonly held = new Map<Animation, { easing: string; vitesse: number }>();
   private slow = 0;
   /** Cadence réglée, 0 : celle de l'écran (le navigateur anime lui-même). */
   private cadence = 0;
@@ -189,18 +189,26 @@ export class Metronome {
   private hold(a: Animation): void {
     const effet = a.effect;
     if (!effet) return;
-    if (!this.held.has(a)) this.held.set(a, String(effet.getTiming().easing ?? 'linear'));
+    if (!this.held.has(a)) this.held.set(a, { easing: String(effet.getTiming().easing ?? 'linear'), vitesse: a.playbackRate });
+    const origine = this.held.get(a)!;
     const pas = 1000 / this.rate;
     const duree = Number(effet.getTiming().duration);
     if (!(duree > 0)) return;
-    effet.updateTiming({ easing: `steps(${Math.max(1, Math.round(duree / pas))})` });
+    const n = Math.max(1, Math.round(duree / pas));
+    effet.updateTiming({ easing: `steps(${n})` });
+    // Chaque pas dure exactement 1/rythme de seconde : une durée qui n'est pas
+    // un multiple du pas (1 100 ms à 5 images/s) est jouée à peine plus vite
+    // ou plus lentement, sinon ses pas tomberaient hors de la grille commune
+    // et ajouteraient des images (essai WebKitGTK).
+    a.playbackRate = origine.vitesse * (duree / (n * pas));
     if (a.startTime !== null) a.startTime = Math.round(Number(a.startTime) / pas) * pas;
     if (this.suspended && a.playState === 'running') a.pause();
   }
 
   /** Rend à une animation sa courbe d'origine : le navigateur l'anime à la cadence de l'écran. */
-  private release(a: Animation, easing: string): void {
+  private release(a: Animation, { easing, vitesse }: { easing: string; vitesse: number }): void {
     a.effect?.updateTiming({ easing });
+    a.playbackRate = vitesse;
     if (a.playState === 'paused') a.play();
   }
 
