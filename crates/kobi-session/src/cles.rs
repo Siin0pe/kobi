@@ -35,17 +35,22 @@ pub const CLES: &[(&str, Application, &str)] = &[
     ("wake_word", AuRedemarrage, "Mot qui réveille Kobi."),
     (
         "hotkey",
-        AuRedemarrage,
+        AChaud,
         "Raccourci qui interpelle Kobi (Ctrl+Shift+Space).",
     ),
     (
         "hotkey_record",
-        AuRedemarrage,
+        AChaud,
         "Raccourci qui démarre ou arrête l'enregistrement (Ctrl+Shift+R).",
     ),
     (
+        "hotkey_write",
+        AChaud,
+        "Raccourci qui ouvre la bulle pour écrire à Kobi (Ctrl+Alt+K).",
+    ),
+    (
         "hotkey_view",
-        AuRedemarrage,
+        AChaud,
         "Raccourci qui ouvre ou range la conversation en grand (Ctrl+Alt+G).",
     ),
     (

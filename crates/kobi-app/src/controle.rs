@@ -769,7 +769,11 @@ fn regler<R: Runtime>(
 ) -> Result<(Value, Value), Erreur> {
     let (chemin, actuelle) = lire_config(app)?;
     let m = cles::modifier(&actuelle, cle, valeur).map_err(erreur_cle)?;
-    if matches!(cle, "hotkey" | "hotkey_record") {
+    let raccourci = matches!(
+        cle,
+        "hotkey" | "hotkey_record" | "hotkey_write" | "hotkey_view"
+    );
+    if raccourci {
         use std::str::FromStr;
         let texte = m.apres.as_str().unwrap_or_default();
         tauri_plugin_global_shortcut::Shortcut::from_str(texte).map_err(|e| {
@@ -779,7 +783,17 @@ fn regler<R: Runtime>(
             )
         })?;
     }
-    config::save(&m.config, &chemin).map_err(|e| erreur(Code::Internal, e.to_string()))?;
+    // Raccourcis (KOB-214) : changés à chaud avant d'écrire le réglage ; une
+    // combinaison déjà prise ne change rien, ni les raccourcis ni le fichier.
+    if raccourci {
+        crate::raccourci::appliquer(app, &m.config).map_err(|e| erreur(Code::Conflict, e))?;
+    }
+    if let Err(e) = config::save(&m.config, &chemin) {
+        if raccourci {
+            let _ = crate::raccourci::appliquer(app, &actuelle);
+        }
+        return Err(erreur(Code::Internal, e.to_string()));
+    }
     let mut application = m.application;
     // Voix (KOB-142) : le réglage se change à chaud.
     if let (Some(actif), true) = (
@@ -1317,6 +1331,24 @@ mod tests {
         .unwrap_err();
         assert_eq!(e.code, Code::InvalidParams);
         assert!(e.message.contains("son-ordi"), "{}", e.message);
+    }
+
+    /// Raccourcis (KOB-214) : les quatre se changent à chaud, et une
+    /// combinaison illisible est refusée.
+    #[test]
+    fn raccourcis_changes_a_chaud() {
+        let e = essai();
+        for cle in ["hotkey", "hotkey_record", "hotkey_write", "hotkey_view"] {
+            let r = cli(&e, "config.set", json!({"key": cle, "value": "Ctrl+Alt+J"})).unwrap();
+            assert_eq!(r["apply"], "hot", "{cle}");
+            assert_eq!(
+                cli(&e, "config.set", json!({"key": cle, "value": "Ctrl+Pomme"}))
+                    .unwrap_err()
+                    .code,
+                Code::InvalidValue,
+                "{cle}"
+            );
+        }
     }
 
     /// Voix (KOB-142) : le réglage change à chaud, `voice say` suit le réglage.
