@@ -14,13 +14,12 @@ export class Defilement {
   /** Suit le flux (en bas), tant que l'utilisateur ne remonte pas. */
   private follow = true;
   private stopTick: (() => void) | null = null;
-  /** Dernière position posée par le suivi : un autre écart vient de l'utilisateur. */
-  private ours = -1;
   private drag: { y: number; top: number } | null = null;
   /** Le glisser a bougé : le clic du relâchement n'ouvre rien (KOB-246). */
   private glisse = false;
-  /** Position au défilement précédent : seul un retour vers le bas reprend le suivi. */
+  /** Position et hauteur au défilement précédent : remonter arrête le suivi, seul un retour vers le bas le reprend. */
   private prevTop = 0;
+  private prevHeight = 0;
   private readonly observer: ResizeObserver;
   private readonly mutations: MutationObserver;
   private instant = false;
@@ -92,7 +91,6 @@ export class Defilement {
   suivreBas(): void {
     this.follow = true;
     this.zone.scrollTop = this.zone.scrollHeight;
-    this.ours = this.zone.scrollTop;
     this.paintFades();
   }
 
@@ -120,7 +118,6 @@ export class Defilement {
     if (!this.follow || this.stopTick) return;
     if (this.instant) {
       this.zone.scrollTop = this.zone.scrollHeight;
-      this.ours = this.zone.scrollTop;
       return;
     }
     this.stopTick = onFrame(() => this.glide());
@@ -135,20 +132,22 @@ export class Defilement {
       return false;
     }
     z.scrollTop += Math.max(1, gap * EASE);
-    this.ours = z.scrollTop;
     return true;
   }
 
   private onScroll(): void {
     const z = this.zone;
     const atBottom = z.scrollTop + z.clientHeight >= z.scrollHeight - BOTTOM;
+    // Le suivi ne fait que descendre : un pas vers le haut vient de
+    // l'utilisateur (molette, barre, clavier), sauf si le contenu a rétréci.
+    const remonte = z.scrollTop < this.prevTop - 0.5 && z.scrollHeight >= this.prevHeight;
     const descend = z.scrollTop >= this.prevTop;
     this.prevTop = z.scrollTop;
-    // Remonté à la main (barre, clavier) : on cesse de suivre ; revenu en bas
-    // en descendant : on reprend. Remonter de quelques pixels depuis le bas
-    // ne relance pas le suivi (KOB-246).
-    if (Math.abs(z.scrollTop - this.ours) > 2 && !atBottom && z.scrollTop < this.ours) this.follow = false;
-    if (atBottom && descend) this.follow = true;
+    this.prevHeight = z.scrollHeight;
+    // Remonté à la main, même de quelques pixels : on cesse de suivre ;
+    // revenu en bas en descendant : on reprend (KOB-246).
+    if (remonte) this.follow = false;
+    else if (atBottom && descend) this.follow = true;
     this.paintFades();
   }
 
