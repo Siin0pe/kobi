@@ -77,7 +77,11 @@ export class Vue {
   private bulles: Bulle[] = [];
   private readonly echanges = new Map<string, Echange>();
   /** Réponse en flux (la coque l'envoie avant de publier l'historique). */
-  private direct: { question: string; reponse: string } | null = null;
+  /**
+   * Réponse en flux. `finis` : tours déjà finis quand elle a commencé, qui ne
+   * peuvent pas être le sien (la même question reposée, KOB-231).
+   */
+  private direct: { question: string; reponse: string; finis: ReadonlySet<number> } | null = null;
   private timer = 0;
   private survol = false;
   /** Vérification du débordement déjà prévue à la prochaine image. */
@@ -181,7 +185,7 @@ export class Vue {
     this.bulles = [...bulles];
     // L'historique a rattrapé le flux (tour fini, ou au moins aussi long) : il fait foi.
     const d = this.direct;
-    if (d && bulles.some((b) => memeEchange(d, b) && (b.statut === 'fini' || b.statut === 'erreur' || b.reponse.trim().length >= d.reponse.trim().length))) this.direct = null;
+    if (d && bulles.some((b) => !d.finis.has(b.tour) && memeEchange(d, b) && (b.statut === 'fini' || b.statut === 'erreur' || b.reponse.trim().length >= d.reponse.trim().length))) this.direct = null;
     if (this.ouverte) this.rendre();
   }
 
@@ -259,9 +263,10 @@ export class Vue {
     }
     this.etatPrecedent = state;
     if (state === 'answer' || state === 'listen' || state === 'think') {
-      if (question) this.direct = { question, reponse: reponse ?? '' };
+      if (question && this.direct?.question === question) this.direct.reponse = reponse ?? '';
+      else if (question) this.direct = { question, reponse: reponse ?? '', finis: this.finis() };
       else if (this.direct && reponse !== undefined) this.direct.reponse = reponse;
-      else if (reponse) this.direct = { question: '', reponse };
+      else if (reponse) this.direct = { question: '', reponse, finis: this.finis() };
     }
     if (this.ouverte) this.rendre();
     if (!ACTIF.has(state)) this.rangeeIci = false;
@@ -299,9 +304,15 @@ export class Vue {
     }, this.reglages.delai * 1000);
   }
 
+  /** Tours de l'historique déjà finis. */
+  private finis(): Set<number> {
+    return new Set(this.bulles.filter((b) => b.statut === 'fini' || b.statut === 'erreur').map((b) => b.tour));
+  }
+
   /** Échanges : l'historique, puis la réponse en flux si elle n'y est pas encore. */
   private rendre(): void {
-    const items: Array<{ cle: string; question: string; reponse: string; etapes: readonly Etape[]; fini: boolean }> = this.bulles.slice(-12).map((b) => ({
+    const items: Array<{ tour?: number; cle: string; question: string; reponse: string; etapes: readonly Etape[]; fini: boolean }> = this.bulles.slice(-12).map((b) => ({
+      tour: b.tour,
       cle: `t${b.tour}`,
       question: b.question,
       reponse: b.reponse,
@@ -311,8 +322,9 @@ export class Vue {
     const d = this.direct;
     if (d) {
       // Un seul échange par tour : le flux complète celui de l'historique
-      // (jamais un second, KOB-177).
-      const meme = items.find((i) => memeEchange(d, i));
+      // (jamais un second, KOB-177), le plus récent, jamais un tour fini
+      // avant lui (KOB-231).
+      const meme = [...items].reverse().find((i) => (i.tour === undefined || !d.finis.has(i.tour)) && memeEchange(d, i));
       if (meme) {
         if (!meme.fini && d.reponse.length > meme.reponse.length) meme.reponse = d.reponse;
       } else items.push({ cle: 'direct', question: d.question, reponse: d.reponse, etapes: [], fini: false });

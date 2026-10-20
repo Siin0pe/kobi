@@ -251,6 +251,33 @@ test('réduire les animations : la vue apparaît et disparaît en fondu court', 
   await expectNoErrors(errors);
 });
 
+// KOB-231 : la même question posée deux fois ; pendant le flux de la seconde,
+// la vue montre le texte qui arrive (et pas le premier échange, déjà fini).
+test('même question reposée : pendant le flux de la seconde, la vue montre le texte qui arrive (KOB-231)', async ({ page }) => {
+  const errors = await kobi(page, { auto: 'toujours' });
+  const question = 'quelle heure est-il ?';
+  await repond(page, question, 'Il est seize heures douze.');
+  await emit(page, 'conversation', [{ tour: 1, question, reponse: 'Il est seize heures douze.', statut: 'fini', clavier: false, etapes: [] }]);
+  await emit(page, 'state', { etat: 'veille', activite: null, mascotte: 'idle', transcrit: false });
+  // La même question, de nouveau : la réponse arrive en flux, l'historique n'a encore que le tour 1.
+  await emit(page, 'state', { etat: 'assistant', activite: 'repond', mascotte: 'answer', transcrit: false });
+  await emit(page, 'question', question);
+  await emit(page, 'answer', 'Il est seize heures');
+  await expect(vue(page)).toBeVisible();
+  await expect(vue(page).locator('.vex')).toHaveCount(2);
+  await expect(vue(page).locator('.vex').last().locator('.vex-a')).toContainText('Il est seize heures');
+  // L'historique publie le tour 2 en cours : toujours deux échanges, le flux dans le second.
+  await emit(page, 'conversation', [
+    { tour: 1, question, reponse: 'Il est seize heures douze.', statut: 'fini', clavier: false, etapes: [] },
+    { tour: 2, question, reponse: 'Il est', statut: 'reponse', clavier: false, etapes: [] },
+  ]);
+  await emit(page, 'answer', 'Il est seize heures treize.');
+  await expect(vue(page).locator('.vex')).toHaveCount(2);
+  await expect(vue(page).locator('.vex').last().locator('.vex-a')).toContainText('seize heures treize');
+  await expect(vue(page).locator('.vex').first().locator('.vex-a')).toContainText('seize heures douze');
+  await expectNoErrors(errors);
+});
+
 // KOB-177 : la réponse ne s'affiche qu'une fois dans la vue, en flux puis
 // finie, même quand la coque publie la réponse finie rognée ou que la
 // question n'est pas arrivée avant le flux.
