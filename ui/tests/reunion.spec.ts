@@ -97,3 +97,13 @@ test('transcription en retard : REC le dit, avec le raccourci réel pour arrête
   await expect(retard).toBeHidden();
   await expectNoErrors(errors);
 });
+
+test('retard signalé juste avant le début de la réunion : REC l’affiche dès qu’il apparaît (KOB-250)', async ({ page }) => {
+  await mockTauri(page);
+  const errors = await openUi(page, '');
+  await emit(page, 'transcription_retard', { secondes: 16, raccourci: 'Ctrl+Shift+R' });
+  await emit(page, 'state', { etat: 'reunion', activite: 'calme', mascotte: 'idle', transcrit: true });
+  await emit(page, 'enregistrement', { actif: true, pause: false, debut_ms: Date.now(), notes: 0, titre: null });
+  await expect(page.locator('.rec .rec-retard')).toHaveText('retard 16 s');
+  await expectNoErrors(errors);
+});
