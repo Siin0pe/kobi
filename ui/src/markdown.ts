@@ -131,9 +131,11 @@ export class Markdown {
       return i + line.indexOf('```') + 3;
     }
     if (line.trim() === '') {
-      // Ligne vide : fin du paragraphe ou de la liste.
+      // Ligne vide : fin du paragraphe. Une liste « aérée » (ligne vide entre
+      // deux éléments, comme Claude les écrit) continue : c'est la prochaine
+      // ligne qui n'en est pas un élément qui la ferme. Sinon, chaque élément
+      // ouvrait sa propre liste et tous s'affichaient « 1. » (KOB-247).
       this.closeBlock();
-      this.closeList();
       return nl < 0 ? text.length : i + line.length;
     }
     const bullet = BULLET.exec(line) ?? NUMBER.exec(line);
@@ -143,6 +145,10 @@ export class Markdown {
       if (this.list?.tagName !== tag) {
         this.closeList();
         this.list = document.createElement(tag.toLowerCase());
+        // Une liste numérotée commence à son premier numéro (« 3. » après un
+        // paragraphe continue à 3).
+        const premier = tag === 'OL' ? Number.parseInt(line, 10) : 1;
+        if (premier > 1) this.list.setAttribute('start', String(premier));
         this.root.append(this.list);
       }
       this.open(document.createElement('li'), this.list);

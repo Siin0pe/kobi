@@ -457,3 +457,40 @@ test('vue agrandie : « Copier la réponse » sous chaque réponse finie, exacte
   await expect(vue(page)).toBeVisible();
   await expectNoErrors(errors);
 });
+
+// KOB-247 : une liste numérotée « aérée » (ligne vide entre les éléments,
+// comme Claude l'écrit), arrivée en flux, reste une seule liste : 1., 2., 3.
+test('KOB-247 : liste numérotée aérée en flux, numérotée 1, 2, 3 dans la bulle et dans la vue', async ({ page }) => {
+  const errors = await kobi(page, { auto: 'jamais', mode: 'detaille', delai: 0 });
+  const liste = '1. **Premier** point.\n\n2. **Deuxième** point.\n\n3. **Troisième** point.';
+  await emit(page, 'state', { etat: 'assistant', activite: 'repond', mascotte: 'answer', transcrit: false });
+  await emit(page, 'question', 'trois points ?');
+  // En flux, morceau par morceau (coupé au milieu des numéros).
+  for (let n = 6; n < liste.length; n += 7) await emit(page, 'answer', liste.slice(0, n));
+  await emit(page, 'answer', liste);
+  const bulle = page.locator('[data-card=answer] .text');
+  await expect(bulle).toContainText('Troisième');
+  const numeros = (racine: import('@playwright/test').Locator) =>
+    racine.locator('ol').evaluateAll((ols) => ols.map((ol) => [Number((ol as HTMLOListElement).start), ol.querySelectorAll(':scope > li').length]));
+  await expect.poll(() => numeros(bulle)).toEqual([[1, 3]]);
+  // Dans la vue agrandie, le même rendu.
+  await emit(page, 'conversation', [{ tour: 1, question: 'trois points ?', reponse: liste, statut: 'fini', clavier: true, etapes: [] }]);
+  await emit(page, 'vue', { action: 'ouvrir' });
+  await expect(vue(page)).toBeVisible();
+  await expect.poll(() => numeros(vue(page))).toEqual([[1, 3]]);
+  await expectNoErrors(errors);
+});
+
+test('KOB-247 : une liste qui reprend après un paragraphe commence à son numéro', async ({ page }) => {
+  const errors = await kobi(page, { auto: 'jamais', mode: 'detaille', delai: 0 });
+  await repond(page, 'suite ?', '1. un\n2. deux\n\nUn paragraphe entre les deux.\n\n3. trois\n4. quatre');
+  const bulle = page.locator('[data-card=answer] .text');
+  await expect(bulle).toContainText('quatre');
+  await expect
+    .poll(() => bulle.locator('ol').evaluateAll((ols) => ols.map((ol) => [Number((ol as HTMLOListElement).start), ol.querySelectorAll(':scope > li').length])))
+    .toEqual([
+      [1, 2],
+      [3, 2],
+    ]);
+  await expectNoErrors(errors);
+});
