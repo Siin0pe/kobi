@@ -299,6 +299,16 @@ pub fn interpellation(texte: &str) -> Option<(Adresse, String)> {
     Some((adresse, question))
 }
 
+/// Mots au plus d'un début de phrase coupé par une pause, repris devant un
+/// appel en tête (KOB-237).
+const DEBUT_COUPE_MOTS: usize = 6;
+
+/// Phrase courte, sans fin de phrase à l'intérieur : un début coupé, pas la
+/// phrase entière de quelqu'un d'autre.
+fn debut_coupe(phrase: &str) -> bool {
+    !phrase.contains(['.', '?', '!', '…']) && mots(phrase).len() <= DEBUT_COUPE_MOTS
+}
+
 /// Le nom vient-il en tête de la phrase (après « euh, dis… ») ?
 fn nom_en_tete(texte: &str) -> bool {
     trouver(texte).is_some_and(|(debut, _)| {
@@ -661,12 +671,17 @@ impl Ecouteur {
             _ => t,
         };
         // La phrase précédente, toute proche, en fait partie quand le nom vient
-        // seul, ou quand elle s'arrêtait en plein milieu.
+        // seul, ou quand elle s'arrêtait en plein milieu. Devant un appel en
+        // tête suivi de sa question, seulement un début coupé (« Est-ce que tu
+        // pourrais »… « Kobi, me rappeler… ») : en conversation de groupe, la
+        // phrase d'avant est souvent celle d'un autre (KOB-237).
+        let appel_complet = !q.is_empty() && nom_en_tete(texte);
         let precedent = self
             .precedent
             .take()
             .filter(|(_, fin)| self.debut.unwrap_or(t) - fin <= PHRASE_PRECEDENTE)
             .filter(|(p, _)| q.is_empty() || !p.ends_with(['.', '?', '!', '…']))
+            .filter(|(p, _)| !appel_complet || debut_coupe(p))
             .map(|(p, _)| p);
         let question = match (&precedent, q.is_empty()) {
             (Some(p), true) => p.clone(),
@@ -1109,6 +1124,24 @@ mod tests {
         let mut e = Ecouteur::default();
         let actions = rejouer(&mut e, &[(ponctue.as_str(), true, 1.0)]);
         assert!(actions.is_empty(), "{actions:?}");
+        // Essai Xvfb : la phrase d'un autre, juste avant un vrai appel en tête,
+        // ne se recolle pas à la question.
+        let mut e = Ecouteur::default();
+        let actions = rejouer(
+            &mut e,
+            &[
+                (
+                    "Ok. Je te suis, tu prends à gauche et moi, je reste derrière toi jusqu'à la fin de la manche",
+                    true,
+                    1.0,
+                ),
+                ("Koby, quelle heure est-il", true, 2.5),
+            ],
+        );
+        assert_eq!(
+            actions,
+            [Interpeller, Envoyer("quelle heure est-il".into())]
+        );
         // Un vrai appel en tête, long (≈ 250 caractères) : il part.
         let question = "résume-moi tout ce qu'on a dit sur le budget ".repeat(5);
         let appel = format!("Kobi, {question}");
