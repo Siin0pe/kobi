@@ -235,6 +235,8 @@ pub fn installer<R: Runtime>(builder: Builder<R>) -> Builder<R> {
             // Réponse à voix haute ou en texte (KOB-142).
             crate::voix::etat_voix_ui,
             crate::voix::verbosite_ui,
+            crate::langue::langue_ui,
+            crate::langue::regler_langue_ui,
             crate::voix::regler_verbosite_ui,
             crate::voix::regler_voix,
             crate::voix::basculer_voix,

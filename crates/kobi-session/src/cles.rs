@@ -106,6 +106,11 @@ pub const CLES: &[(&str, Application, &str)] = &[
         "Combien Kobi parle : bavard, normal (défaut) ou discret.",
     ),
     (
+        "ui.language",
+        AChaud,
+        "Langue de l'interface : \"fr\" ou \"en\" (null : celle du système).",
+    ),
+    (
         "meetings.retention_days",
         AuRedemarrage,
         "Conservation des réunions : 30, 90, 365 ou \"unlimited\".",
@@ -371,6 +376,12 @@ mod tests {
         assert_eq!(m.application, AChaud);
 
         // KOB-215 : combien Kobi parle, à chaud ; une valeur inconnue est refusée.
+        // KOB-207 : langue de l'interface, une langue connue ou null.
+        let m = modifier(&c, "ui.language", json!("en")).unwrap();
+        assert_eq!(m.config.ui.language, Some(crate::config::Langue::En));
+        assert!(modifier(&c, "ui.language", json!("de")).is_err());
+        let m = modifier(&m.config, "ui.language", Value::Null).unwrap();
+        assert_eq!(m.config.ui.language, None);
         let m = modifier(&c, "voice.verbosite", json!("discret")).unwrap();
         assert_eq!(m.config.voice.verbosite, crate::config::Verbosite::Discret);
         assert_eq!(m.application, AChaud);
