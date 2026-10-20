@@ -137,6 +137,7 @@ pub const PANNEAUX: &[&str] = &[
     "stockage",
     "dossiers-code",
     "mcp",
+    "permissions",
     "micro",
     "son-ordi",
     "modele",
