@@ -16,10 +16,8 @@ static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Copie le faux `claude` dans un dossier propre au test, sous le nom du
 /// vrai, avec le mode demandé.
-fn install(test: &str, mode: Option<&str>) -> (PathBuf, PathBuf) {
-    let dir = std::env::temp_dir().join(format!("kobi-detect-{}-{test}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+fn install(test: &str, mode: Option<&str>) -> (kobi_testkit::DossierTemp, PathBuf) {
+    let dir = kobi_testkit::DossierTemp::nouveau("detect", test);
     let exe = dir.join(if cfg!(windows) {
         "claude.exe"
     } else {
@@ -59,7 +57,7 @@ async fn present_et_connecte() {
 #[tokio::test]
 async fn absent() {
     let _serial = SERIAL.lock().await;
-    let (dir, _) = install("absent-vide", None);
+    let (dir, _exe) = install("absent-vide", None);
     std::fs::remove_dir_all(&dir).unwrap();
     std::fs::create_dir_all(&dir).unwrap();
     assert!(find_in(Some(&path_of(&[&dir])), &[]).is_empty());
@@ -71,7 +69,7 @@ async fn absent() {
 #[tokio::test]
 async fn binaire_qui_echoue() {
     let _serial = SERIAL.lock().await;
-    let (_, exe) = install("echoue", Some("broken"));
+    let (_dir, exe) = install("echoue", Some("broken"));
     let d = probe(&exe, PROBE_TIMEOUT).await;
     let Detection::Broken { program, reason } = &d else {
         panic!("attendu Broken, obtenu {d:?}")
@@ -84,7 +82,7 @@ async fn binaire_qui_echoue() {
 #[tokio::test]
 async fn binaire_qui_ne_repond_pas() {
     let _serial = SERIAL.lock().await;
-    let (_, exe) = install("bloque", Some("hang"));
+    let (_dir, exe) = install("bloque", Some("hang"));
     let d = probe(&exe, Duration::from_millis(500)).await;
     assert!(
         matches!(&d, Detection::Broken { reason, .. } if reason.contains("pas de réponse")),
@@ -95,7 +93,7 @@ async fn binaire_qui_ne_repond_pas() {
 #[tokio::test]
 async fn installe_mais_pas_connecte() {
     let _serial = SERIAL.lock().await;
-    let (_, exe) = install("deconnecte", Some("logged-out"));
+    let (_dir, exe) = install("deconnecte", Some("logged-out"));
     let d = probe(&exe, PROBE_TIMEOUT).await;
     assert!(
         matches!(&d, Detection::NotLoggedIn(i) if i.program == exe),
@@ -107,7 +105,7 @@ async fn installe_mais_pas_connecte() {
 #[tokio::test]
 async fn ancienne_version_sans_auth_status() {
     let _serial = SERIAL.lock().await;
-    let (_, exe) = install("ancienne", Some("old"));
+    let (_dir, exe) = install("ancienne", Some("old"));
     let d = probe(&exe, PROBE_TIMEOUT).await;
     assert!(
         matches!(
@@ -125,14 +123,14 @@ async fn ancienne_version_sans_auth_status() {
 async fn le_premier_du_path_gagne() {
     let _serial = SERIAL.lock().await;
     let (a, exe_a) = install("ordre-a", None);
-    let (b, _) = install("ordre-b", Some("broken"));
+    let (b, _exe_b) = install("ordre-b", Some("broken"));
     assert_eq!(find_in(Some(&path_of(&[&a, &b])), &[])[0], exe_a);
 }
 
 #[tokio::test]
 async fn auth_status_bloque_connexion_inconnue() {
     let _serial = SERIAL.lock().await;
-    let (_, exe) = install("auth-bloque", Some("auth-hang"));
+    let (_dir, exe) = install("auth-bloque", Some("auth-hang"));
     let d = probe(&exe, Duration::from_millis(500)).await;
     assert!(
         matches!(

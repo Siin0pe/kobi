@@ -11,6 +11,8 @@
 pub mod actions;
 pub mod brain;
 pub mod claude_code;
+#[cfg(test)]
+mod dossier_test;
 pub mod fake;
 pub mod outils;
 pub mod transcript;
