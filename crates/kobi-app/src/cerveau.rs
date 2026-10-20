@@ -151,6 +151,10 @@ pub enum Demande {
     /// réserve) sont rouvertes ; la question suivante les utilise. Les tours
     /// détachés finissent sur leur session.
     Renouveler,
+    /// Une réunion commence (KOB-252) : la session des notes repart à neuf,
+    /// rien de la réunion précédente ne passe dans ses notes ni son compte
+    /// rendu.
+    NouvelleReunion,
 }
 
 /// Ce que le cerveau renvoie.
@@ -1241,7 +1245,7 @@ async fn prise_de_notes(
 ) {
     let mut session: Option<Session> = None;
     while let Some(demande) = rx.recv().await {
-        if demande == Demande::Renouveler {
+        if matches!(demande, Demande::Renouveler | Demande::NouvelleReunion) {
             session = None;
             continue;
         }
@@ -2288,6 +2292,52 @@ mod tests {
             Retour::Activite { demande, .. }
                 if demande.action == Action::LireFichier { chemin: "C:/k/chef.rs".into() }
         )));
+    }
+
+    /// KOB-252 : chaque réunion a sa propre session de notes ; le compte
+    /// rendu d'une réunion vide ne reprend pas la précédente.
+    #[tokio::test]
+    async fn chaque_reunion_sa_session_de_notes() {
+        let (s, recus) = sortie();
+        let ouvertes = Arc::new(Mutex::new(0));
+        let o = ouvertes.clone();
+        let fabrique: Fabrique = Arc::new(move |role| {
+            let n = match role {
+                Role::Notes => {
+                    let mut o = o.lock().unwrap();
+                    *o += 1;
+                    *o
+                }
+                Role::Conversation => 0,
+            };
+            Box::pin(async move {
+                let b = FakeBrain::new().then(vec![Step::Text(format!("session {n}"))]);
+                Ok(Box::new(b) as Session)
+            })
+        });
+        let c = Cerveau::lancer(fabrique, s);
+        c.demander(Demande::Notes {
+            transcript: "[00:10 moi] budget".into(),
+            notes: String::new(),
+        });
+        attendre(&recus, |r| matches!(r, Retour::Notes(Ok(_)))).await;
+        c.demander(Demande::NouvelleReunion);
+        c.demander(Demande::CompteRendu {
+            transcript: String::new(),
+            notes: String::new(),
+        });
+        attendre(&recus, |r| matches!(r, Retour::CompteRendu(Ok(_)))).await;
+        let textes: Vec<_> = recus
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|(_, r)| match r {
+                Retour::Notes(Ok(t)) | Retour::CompteRendu(Ok(t)) => Some(t.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(textes, ["session 1", "session 2"]);
+        assert_eq!(*ouvertes.lock().unwrap(), 2);
     }
 
     #[tokio::test]
