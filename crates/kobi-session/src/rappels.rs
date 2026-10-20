@@ -720,7 +720,7 @@ mod tests {
         for phrase in [
             "rappelle-moi dans 99999999 jours d'appeler Léa",
             "rappelle-moi dans 9223372036854775807 minutes d'appeler Léa",
-            "rappelle-moi dans 99999999999 secondes d'appeler Léa",
+            "rappelle-moi dans 9999999999999 secondes d'appeler Léa",
             "rappelle-moi dans 99999999 heures d'appeler Léa",
             "rappelle-moi dans 1 h 99999999999 d'appeler Léa",
             "rappelle-moi dans 7000000 jours d'appeler Léa",

@@ -927,6 +927,7 @@ mod tests {
             parleur: None,
             config: Some(chemin.clone()),
             recent: Mutex::default(),
+            verbosite: Mutex::new(Verbosite::default()),
         });
         let etat = regler(app.handle(), Some(false), Some(true));
         assert!(
