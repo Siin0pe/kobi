@@ -185,6 +185,9 @@ pub struct AudioConfig {
     /// signale un fichier d'avant KOB-164 (voir [`AudioConfig::migrer`]).
     #[serde(default, serialize_with = "sortie_vers_texte")]
     pub sortie: Option<String>,
+    /// La voix de Kobi est retirée du micro (KOB-248) ; `false` pour comparer
+    /// sans. Prise à la phrase suivante de Kobi.
+    pub annulation_echo: bool,
     #[serde(flatten)]
     pub extra: toml::Table,
 }
@@ -194,6 +197,7 @@ impl Default for AudioConfig {
         Self {
             sources: AudioSources::default(),
             sortie: Some(String::new()),
+            annulation_echo: true,
             extra: toml::Table::new(),
         }
     }

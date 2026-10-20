@@ -218,6 +218,19 @@ fn raccourci_enregistrement() -> String {
         .unwrap_or_else(|| kobi_session::config::Config::default().hotkey_record)
 }
 
+/// Annulation de l'écho réglée (KOB-248) : relue à chaque voix de Kobi.
+fn annulation_echo_reglee() -> bool {
+    kobi_session::config::default_path()
+        .filter(|p| p.exists())
+        .map(|p| {
+            kobi_session::config::load_or_create(&p)
+                .config
+                .audio
+                .annulation_echo
+        })
+        .unwrap_or(true)
+}
+
 /// D'où vient l'audio.
 enum Entree {
     Micro(Porteur),
@@ -893,6 +906,8 @@ struct Fil<R: Runtime> {
     decalage: f64,
     /// Dernière trame reçue du micro ouvert (KOB-280).
     derniere_trame: Instant,
+    /// La voix de Kobi retirée du micro (KOB-248).
+    echo: crate::echo::AnnulationEcho,
 }
 
 impl<R: Runtime> Fil<R> {
@@ -925,6 +940,7 @@ impl<R: Runtime> Fil<R> {
             pause_reunion: None,
             decalage: 0.0,
             derniere_trame: Instant::now(),
+            echo: Default::default(),
         }
     }
 
@@ -1366,7 +1382,12 @@ impl<R: Runtime> Fil<R> {
                 return;
             }
         };
-        for frame in arrivees {
+        for mut frame in arrivees {
+            // À l'arrivée, en temps réel : la référence du haut-parleur est
+            // alignée sur le micro, même quand la transcription a du retard.
+            frame.samples =
+                self.echo
+                    .traiter(&frame.samples, Instant::now(), annulation_echo_reglee);
             self.veiller(&frame);
             self.file.push_back(frame);
         }
@@ -1495,10 +1516,13 @@ impl<R: Runtime> Fil<R> {
                 audio_s = self.audio as u64,
                 calcul_s = self.calcul.as_secs_f64() as u64,
                 rtf = format!("{:.3}", self.calcul.as_secs_f64() / self.audio.max(1.0)),
+                // Annulation de l'écho (KOB-248), seulement pendant la voix de Kobi.
+                echo_ms = self.echo.calcul.as_millis() as u64,
                 "écoute continue : charge"
             );
             self.audio = 0.0;
             self.calcul = Duration::ZERO;
+            self.echo.calcul = Duration::ZERO;
             self.bilan = Instant::now();
         }
     }
