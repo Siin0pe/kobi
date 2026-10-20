@@ -123,8 +123,12 @@ test('import depuis Claude Code : déjà connecté grisé, secrets signalés', a
   await expect(deja).toContainText('linear');
   await expect(deja.locator('input')).toBeDisabled();
   await expect(page.locator('.mcp-candidat', { hasText: 'treg' }).locator('.puce')).toHaveText('secret');
-  // On ne garde que treg.
-  await page.locator('.mcp-candidat input[data-nom="notes"]').uncheck();
+  // Rien n'est coché d'office (KOB-239) : pas d'import sans choix.
+  await expect(page.locator('.mcp-candidat input:not([disabled])')).toHaveCount(2);
+  for (const c of await page.locator('.mcp-candidat input:not([disabled])').all()) await expect(c).not.toBeChecked();
+  await expect(page.getByRole('button', { name: 'Importer', exact: true })).toBeDisabled();
+  // On ne prend que treg.
+  await page.locator('.mcp-candidat input[data-nom="treg"]').check();
   await page.getByRole('button', { name: 'Importer 1 serveur' }).click();
   expect(await appels(page)).toContainEqual(['mcp_importer', { noms: ['treg'] }]);
   await expect(carte(page, 'treg')).toBeVisible();
@@ -138,7 +142,7 @@ test('import refusé par le gestionnaire d’identifiants : message lisible sous
   const refus =
     "Rien n'est importé : le secret Authorization de « treg » n'a pas pu être rangé. Le gestionnaire d'identifiants du système refuse l'accès : lance Kobi depuis ta session de bureau, puis réessaie.";
   await page.evaluate((r) => ((window as unknown as Record<string, unknown>).__refus = r), refus);
-  await page.locator('.mcp-candidat input[data-nom="notes"]').uncheck();
+  await page.locator('.mcp-candidat input[data-nom="treg"]').check();
   await page.getByRole('button', { name: 'Importer 1 serveur' }).click();
   const echec = page.locator('.mcp-import-resultat .etat[data-statut="erreur"]');
   await expect(echec).toHaveText(refus);
@@ -157,6 +161,7 @@ test('import refusé par le gestionnaire d’identifiants : message lisible sous
 
 test('serveur protégé : Kobi demande sa propre autorisation', async ({ page }) => {
   const errors = await ouvrir(page);
+  await page.locator('.mcp-candidat input[data-nom="treg"]').check();
   await page.getByRole('button', { name: /Importer/ }).click();
   await carte(page, 'treg').getByRole('button', { name: 'Tester' }).click();
   await expect(carte(page, 'treg').locator('.etat[data-statut="attention"]')).toContainText('demande une connexion');

@@ -285,3 +285,11 @@ invoke<string | null>('app_section_demandee').then(
   () => {},
 );
 if (!disponible()) notifier('Ouvrez l’app depuis Kobi.', 'erreur');
+// Serveurs MCP importés de Claude Code sans choix, désactivés au démarrage
+// (KOB-239) : l'app le dit une fois, discrètement.
+invoke<boolean>('mcp_choix_a_proposer').then(
+  (proposer) => {
+    if (proposer) notifier('Kobi n’utilise plus d’office tes serveurs MCP de Claude Code : choisis les tiens dans Réglages → Outils MCP.');
+  },
+  () => {},
+);
