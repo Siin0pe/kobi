@@ -16,7 +16,8 @@ use std::time::Duration;
 
 pub use align::{Placement, TrackAligner};
 pub use capture::{
-    list_devices, Capture, CaptureOptions, DeviceInfo, DeviceList, SourceInfo, StreamError,
+    default_output_name, list_devices, Capture, CaptureOptions, DeviceInfo, DeviceList, SourceInfo,
+    StreamError,
 };
 pub use convert::Converter;
 pub use file::{FileInput, FileOptions};
