@@ -1244,5 +1244,13 @@
   "perms.action.modifieDansService": "Je modifie dans {service}",
   "perms.action.supprimeDansService": "Je supprime dans {service}",
   "perms.action.appelleService": "J'appelle {service}",
-  "perms.action.avecComplement": "{debut} : {complement}"
+  "perms.action.avecComplement": "{debut} : {complement}",
+  "coque.latence.titre": "Latence de Kobi",
+  "coque.latence.interpellations": {
+    "one": "{n} interpellation mesurée, depuis la question envoyée.",
+    "other": "{n} interpellations mesurées, depuis la question envoyée."
+  },
+  "coque.latence.premierMot": "Premier mot : médiane {mediane}, 90e centile {p90}",
+  "coque.latence.total": "Réponse complète : médiane {mediane}, 90e centile {p90}",
+  "coque.latence.secondes": "{s} s"
 }

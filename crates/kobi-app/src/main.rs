@@ -24,6 +24,7 @@ mod instance;
 mod intentions;
 mod interpellation;
 mod langue;
+mod latence;
 mod lecture;
 mod mcp;
 mod mcp_config;
