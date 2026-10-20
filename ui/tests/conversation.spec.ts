@@ -184,7 +184,11 @@ for (const moment of ['tapée', 'en cours de frappe'] as const) {
     else await expect(text.locator('li')).toHaveCount(1, { timeout: 15_000 });
     await page.keyboard.press('Escape');
     expect(await calls(page)).toContainEqual(['interrompre', null]);
-    const avant = await text.innerHTML();
+    // Texte et structure (balises), sans les classes : le mot en cours de
+    // frappe se ferme juste après Échap et peut prendre `hl` (chiffre,
+    // chemin), et les classes d'animation des mots (`w-in`) suivent le temps.
+    const forme = () => text.evaluate((n) => n.innerHTML.replace(/ class="[^"]*"/g, ''));
+    const avant = await forme();
     // Le texte ne doit jamais repartir de zéro (ni s'aplatir) après Échap.
     await page.evaluate(() => {
       const w = window as unknown as { min: number };
@@ -196,7 +200,7 @@ for (const moment of ['tapée', 'en cours de frappe'] as const) {
     await emit(page, 'answer', `${md} Un ticket ouvert en parle déjà.`);
     // Contrôle négatif : 800 ms laissés au texte pour se retaper.
     await page.waitForTimeout(800);
-    expect(await text.innerHTML()).toBe(avant);
+    expect(await forme()).toBe(avant);
     await expect(text.locator('strong')).toHaveText('Deux pistes :');
     expect(await page.evaluate(() => (window as unknown as { min: number }).min)).toBe((await text.textContent())!.length);
     await expectNoErrors(errors);
