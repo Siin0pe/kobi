@@ -2542,6 +2542,9 @@ mod tests {
             transcript_du_compte_rendu(Some("[00:10 eux] Bloc envoyé.\n"), "[03:05 moi] Fin.\n"),
             "[00:10 eux] Bloc envoyé.\n[03:05 moi] Fin.\n"
         );
-        assert_eq!(transcript_du_compte_rendu(None, "[00:01 moi] Seul.\n"), "[00:01 moi] Seul.\n");
+        assert_eq!(
+            transcript_du_compte_rendu(None, "[00:01 moi] Seul.\n"),
+            "[00:01 moi] Seul.\n"
+        );
     }
 }
