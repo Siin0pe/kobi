@@ -545,6 +545,11 @@ mod tests {
                 json!({"key": "voice.assistant", "value": true})
             )
         );
+        // KOB-256 : `null` remet le réglage par défaut.
+        assert_eq!(
+            params("config set ui.language null"),
+            ("config.set", json!({"key": "ui.language", "value": null}))
+        );
         assert_eq!(params("meeting start"), ("meeting.start", json!({})));
         assert_eq!(
             params("notes last --format md"),
