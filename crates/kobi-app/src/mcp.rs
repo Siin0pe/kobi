@@ -84,25 +84,22 @@ impl Coffre for CoffreSysteme {
 fn erreur_coffre(e: keyring::Error) -> String {
     tracing::warn!(erreur = %e, "gestionnaire d'identifiants");
     match e {
-        keyring::Error::PlatformFailure(_) | keyring::Error::NoStorageAccess(_) => format!(
-            "Le gestionnaire d'identifiants du système refuse l'accès : Kobi ne peut pas \
-             y ranger ce secret, et ne l'écrit jamais en clair sur le disque. {}",
-            MARCHE_A_SUIVRE
-        ),
-        e => format!("gestionnaire d'identifiants : {e}"),
+        keyring::Error::PlatformFailure(_) | keyring::Error::NoStorageAccess(_) => {
+            kobi_i18n::tr("coque.mcp.coffreRefuse", &[("marche", &marche_a_suivre())])
+        }
+        e => kobi_i18n::tr("coque.mcp.coffreErreur", &[("erreur", &e.to_string())]),
     }
 }
 
 /// Que faire quand le gestionnaire d'identifiants refuse l'accès.
-#[cfg(target_os = "linux")]
-const MARCHE_A_SUIVRE: &str = "Sous Linux, Kobi passe par Secret Service : démarre le \
-    trousseau de ta session (gnome-keyring ou KWallet) et déverrouille-le, puis réessaie.";
-#[cfg(target_os = "macos")]
-const MARCHE_A_SUIVRE: &str =
-    "Déverrouille ton trousseau de session (app Trousseaux d'accès), puis réessaie.";
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-const MARCHE_A_SUIVRE: &str = "Vérifie que le Gestionnaire d'identifiants de Windows \
-    fonctionne (service « Gestionnaire d'informations d'identification »), puis réessaie.";
+fn marche_a_suivre() -> String {
+    #[cfg(target_os = "linux")]
+    return kobi_i18n::tr("coque.mcp.coffreLinux", &[]);
+    #[cfg(target_os = "macos")]
+    return kobi_i18n::tr("coque.mcp.coffreMacos", &[]);
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    return kobi_i18n::tr("coque.mcp.coffreWindows", &[]);
+}
 
 /// Variable d'environnement qui porte un secret jusqu'à la session :
 /// `KOBI_MCP_<SERVEUR>_<NOM>`, en majuscules, `_` pour le reste.
@@ -309,7 +306,7 @@ pub fn session_claude(
     let role = format!("{role:?}").to_lowercase();
     let args = kobi_brain::ArgsWithPerms(Arc::new(move |perms: &Value| {
         let dossier = config::kobi_dir()
-            .ok_or("dossier personnel introuvable")?
+            .ok_or_else(|| kobi_i18n::tr("coque.commun.dossierPersoIntrouvable", &[]))?
             .join("mcp");
         nettoyer(&dossier);
         let port = perms["url"]
@@ -332,7 +329,7 @@ pub fn session_claude(
             outils_autorises: Vec::new(),
         });
         let mut mcp = crate::mcp_config::assembler(&fichier, utilisateur)
-            .map_err(|e| format!("config MCP de la session : {e}"))?;
+            .map_err(|e| kobi_i18n::tr("coque.mcp.configSession", &[("erreur", &e.to_string())]))?;
         mcp.permission_prompt_tool = Some(kobi_perms::PERMISSION_PROMPT_TOOL.into());
         mcp.prompt = prompt.clone();
         // Commandes validées par le hook de Kobi (KOB-154).
@@ -576,12 +573,12 @@ fn importer(
     coffre: &dyn Coffre,
 ) -> Result<(), String> {
     let (s, secrets) = depuis_claude(&candidat.brut, &candidat.portee)
-        .ok_or_else(|| format!("{} : config illisible", candidat.nom))?;
+        .ok_or_else(|| kobi_i18n::tr("coque.mcp.configIllisible", &[("nom", &candidat.nom)]))?;
     for (cle, valeur) in &secrets {
         coffre.ecrire(&candidat.nom, cle, valeur).map_err(|e| {
-            format!(
-                "Rien n'est importé : le secret {cle} de « {} » n'a pas pu être rangé. {e}",
-                candidat.nom
+            kobi_i18n::tr(
+                "coque.mcp.secretNonRange",
+                &[("cle", cle), ("nom", &candidat.nom), ("erreur", &e)],
             )
         })?;
     }
@@ -651,7 +648,12 @@ async fn lister(nom: &str, s: &Serveur, coffre: Arc<dyn Coffre>) -> Result<Vec<V
             let (transport, _) = rmcp::transport::TokioChildProcess::builder(cmd)
                 .stderr(std::process::Stdio::null())
                 .spawn()
-                .map_err(|e| Echec::Autre(format!("lancement de « {} » : {e}", s.commande)))?;
+                .map_err(|e| {
+                    Echec::Autre(kobi_i18n::tr(
+                        "coque.mcp.lancement",
+                        &[("commande", &s.commande), ("erreur", &e.to_string())],
+                    ))
+                })?;
             let client = ().serve(transport).await.map_err(|e| Echec::Autre(e.to_string()))?;
             let outils = client.list_all_tools().await;
             let _ = client.cancel().await;
@@ -671,7 +673,10 @@ async fn lister(nom: &str, s: &Serveur, coffre: Arc<dyn Coffre>) -> Result<Vec<V
                     reqwest::header::HeaderName::from_bytes(k.as_bytes()),
                     reqwest::header::HeaderValue::from_str(v.as_str().unwrap_or_default()),
                 ) else {
-                    return Err(Echec::Autre(format!("en-tête invalide : {k}")));
+                    return Err(Echec::Autre(kobi_i18n::tr(
+                        "coque.mcp.enteteInvalide",
+                        &[("entete", k)],
+                    )));
                 };
                 entetes.insert(k, v);
             }
@@ -679,12 +684,17 @@ async fn lister(nom: &str, s: &Serveur, coffre: Arc<dyn Coffre>) -> Result<Vec<V
                 .custom_headers(entetes);
             let client = match autorisation_existante(nom, &s.url, coffre.clone()).await {
                 Some(manager) => {
-                    let http = rmcp::transport::auth::AuthClient::new(reqwest::Client::new(), manager);
+                    let http =
+                        rmcp::transport::auth::AuthClient::new(reqwest::Client::new(), manager);
                     ().serve(StreamableHttpClientTransport::with_client(http, conf))
                         .await
                         .map_err(Echec::from)?
                 }
-                None => ().serve(StreamableHttpClientTransport::with_client(reqwest::Client::new(), conf))
+                None => ()
+                    .serve(StreamableHttpClientTransport::with_client(
+                        reqwest::Client::new(),
+                        conf,
+                    ))
                     .await
                     .map_err(Echec::from)?,
             };
@@ -692,12 +702,7 @@ async fn lister(nom: &str, s: &Serveur, coffre: Arc<dyn Coffre>) -> Result<Vec<V
             let _ = client.cancel().await;
             outils?
         }
-        Transport::Sse => {
-            return Err(Echec::Autre(
-                "Kobi ne sait pas encore tester un serveur SSE : ses outils restent classés en écriture."
-                    .into(),
-            ))
-        }
+        Transport::Sse => return Err(Echec::Autre(kobi_i18n::tr("coque.mcp.sseNonTestable", &[]))),
     };
     Ok(outils
         .iter()
@@ -709,13 +714,13 @@ async fn lister(nom: &str, s: &Serveur, coffre: Arc<dyn Coffre>) -> Result<Vec<V
 pub async fn tester(nom: &str, s: &Serveur, coffre: Arc<dyn Coffre>) -> Test {
     match tokio::time::timeout(DELAI_TEST, lister(nom, s, coffre)).await {
         Err(_) => Test::Erreur {
-            message: format!("pas de réponse en {} s", DELAI_TEST.as_secs()),
+            message: kobi_i18n::tr(
+                "coque.mcp.pasDeReponse",
+                &[("s", &DELAI_TEST.as_secs().to_string())],
+            ),
         },
         Ok(Err(Echec::Autorisation)) => Test::Autorisation {
-            message: "Ce serveur demande une connexion. Claude Code peut l'avoir déjà ; pour lire \
-                      la liste des outils et savoir lesquels ne font que lire, Kobi a besoin de sa \
-                      propre autorisation."
-                .into(),
+            message: kobi_i18n::tr("coque.mcp.autorisationDemandee", &[]),
         },
         Ok(Err(Echec::Autre(message))) => Test::Erreur { message },
         Ok(Ok(outils)) => {
@@ -813,9 +818,14 @@ async fn autorisation_existante(
 const DELAI_AUTORISATION: Duration = Duration::from_secs(300);
 
 /// Page montrée dans le navigateur à la fin de l'autorisation.
-const PAGE_FIN: &str = "<!doctype html><meta charset=utf-8><title>Kobi</title>\
+fn page_fin() -> String {
+    format!(
+        "<!doctype html><meta charset=utf-8><title>Kobi</title>\
 <body style=\"font-family:system-ui;background:#f6f1e7;color:#2b2622;display:grid;place-items:center;height:90vh\">\
-<p>C'est bon, Kobi peut lire les outils de ce serveur. Tu peux fermer cet onglet.</p>";
+<p>{}</p>",
+        kobi_i18n::tr("coque.mcp.pageFin", &[])
+    )
+}
 
 /// Autorisation OAuth de Kobi : ouvre la page du serveur dans le
 /// navigateur, attend le retour sur la boucle locale, garde le jeton dans
@@ -833,7 +843,12 @@ pub async fn autoriser(nom: &str, url: &str, coffre: Arc<dyn Coffre>) -> Result<
         rmcp::transport::auth::AuthorizationRequest::new(&retour).with_client_name("Kobi"),
     )
     .await
-    .map_err(|e| format!("autorisation impossible : {e}"))?;
+    .map_err(|e| {
+        kobi_i18n::tr(
+            "coque.mcp.autorisationImpossible",
+            &[("erreur", &e.to_string())],
+        )
+    })?;
     let page = etat
         .get_authorization_url()
         .await
@@ -857,9 +872,10 @@ pub async fn autoriser(nom: &str, url: &str, coffre: Arc<dyn Coffre>) -> Result<
                     .await;
                 continue;
             }
+            let page = page_fin();
             let reponse = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{PAGE_FIN}",
-                PAGE_FIN.len()
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{page}",
+                page.len()
             );
             let _ = flux.write_all(reponse.as_bytes()).await;
             return Ok::<String, String>(format!("http://127.0.0.1:{port}{chemin}"));
@@ -867,10 +883,13 @@ pub async fn autoriser(nom: &str, url: &str, coffre: Arc<dyn Coffre>) -> Result<
     };
     let retour = tokio::time::timeout(DELAI_AUTORISATION, attente)
         .await
-        .map_err(|_| "pas de connexion dans le navigateur en 5 min".to_owned())??;
-    etat.handle_callback_url(&retour)
-        .await
-        .map_err(|e| format!("autorisation refusée : {e}"))?;
+        .map_err(|_| kobi_i18n::tr("coque.mcp.pasDeConnexion", &[]))??;
+    etat.handle_callback_url(&retour).await.map_err(|e| {
+        kobi_i18n::tr(
+            "coque.mcp.autorisationRefusee",
+            &[("erreur", &e.to_string())],
+        )
+    })?;
     Ok(())
 }
 
@@ -885,7 +904,7 @@ fn page_web(url: &str) -> bool {
 fn ouvrir_navigateur(url: &str) -> Result<(), String> {
     if !page_web(url) {
         tracing::warn!("autorisation MCP : adresse qui n'est pas une page web, refusée");
-        return Err("adresse d'autorisation refusée : ce n'est pas une page web".into());
+        return Err(kobi_i18n::tr("coque.mcp.pasUnePageWeb", &[]));
     }
     #[cfg(windows)]
     let mut cmd = {
@@ -906,9 +925,12 @@ fn ouvrir_navigateur(url: &str) -> Result<(), String> {
         c.arg(url);
         c
     };
-    let mut enfant = cmd
-        .spawn()
-        .map_err(|e| format!("navigateur introuvable : {e}"))?;
+    let mut enfant = cmd.spawn().map_err(|e| {
+        kobi_i18n::tr(
+            "coque.mcp.navigateurIntrouvable",
+            &[("erreur", &e.to_string())],
+        )
+    })?;
     // Attendu à part : sinon le lanceur reste zombie jusqu'à la sortie de Kobi.
     std::thread::spawn(move || {
         let _ = enfant.wait();
@@ -1007,7 +1029,7 @@ pub struct Changement {
 }
 
 fn config_path() -> Result<PathBuf, String> {
-    config::default_path().ok_or_else(|| "dossier personnel introuvable".to_owned())
+    config::default_path().ok_or_else(|| kobi_i18n::tr("coque.commun.dossierPersoIntrouvable", &[]))
 }
 
 /// Lit la config, applique `f`, l'enregistre.
@@ -1017,7 +1039,10 @@ fn modifier_config<T>(
 ) -> Result<T, String> {
     let mut loaded = config::load_or_create(path);
     if let Some(problem) = loaded.problem {
-        return Err(format!("réglage non enregistré : {problem}"));
+        return Err(kobi_i18n::tr(
+            "coque.commun.reglageNonEnregistre",
+            &[("probleme", &problem.to_string())],
+        ));
     }
     let r = f(&mut loaded.config)?;
     config::save(&loaded.config, path).map_err(|e| e.to_string())?;
@@ -1041,14 +1066,14 @@ fn ajouter(path: &Path, n: NouveauServeur, coffre: &dyn Coffre) -> Result<(), St
     let mut s = match n.transport {
         Transport::Stdio => {
             if n.commande.trim().is_empty() {
-                return Err("indique la commande qui lance le serveur".into());
+                return Err(kobi_i18n::tr("coque.mcp.commandeVide", &[]));
             }
             Serveur::stdio(n.commande.trim(), n.args)
         }
         Transport::Http | Transport::Sse => {
             let url = n.url.trim();
             if !(url.starts_with("https://") || url.starts_with("http://")) {
-                return Err("l'adresse commence par https://".into());
+                return Err(kobi_i18n::tr("coque.mcp.adresseHttps", &[]));
             }
             let mut s = Serveur::http(url);
             s.transport = n.transport;
@@ -1060,7 +1085,7 @@ fn ajouter(path: &Path, n: NouveauServeur, coffre: &dyn Coffre) -> Result<(), St
     s.origine = Some("ajouté dans Kobi".into());
     modifier_config(path, |c| {
         if c.mcp.serveurs.contains_key(&nom) {
-            return Err(format!("« {nom} » existe déjà"));
+            return Err(kobi_i18n::tr("coque.mcp.existeDeja", &[("nom", &nom)]));
         }
         for (cle, valeur) in n.secrets.iter().filter(|(_, v)| !v.is_empty()) {
             coffre.ecrire(&nom, cle, valeur)?;
@@ -1077,7 +1102,7 @@ fn supprimer(path: &Path, nom: &str, coffre: &dyn Coffre) -> Result<(), String> 
             .mcp
             .serveurs
             .remove(nom)
-            .ok_or_else(|| format!("serveur inconnu : {nom}"))?;
+            .ok_or_else(|| kobi_i18n::tr("coque.mcp.serveurInconnu", &[("nom", nom)]))?;
         for cle in s.secrets.iter().map(String::as_str).chain([OAUTH]) {
             coffre.effacer(nom, cle)?;
         }
@@ -1091,7 +1116,7 @@ fn changer(path: &Path, nom: &str, ch: Changement) -> Result<(), String> {
             .mcp
             .serveurs
             .get_mut(nom)
-            .ok_or_else(|| format!("serveur inconnu : {nom}"))?;
+            .ok_or_else(|| kobi_i18n::tr("coque.mcp.serveurInconnu", &[("nom", nom)]))?;
         if let Some(actif) = ch.actif {
             s.actif = actif;
         }
@@ -1123,7 +1148,7 @@ fn serveur(path: &Path, nom: &str) -> Result<Serveur, String> {
         .serveurs
         .get(nom)
         .cloned()
-        .ok_or_else(|| format!("serveur inconnu : {nom}"))
+        .ok_or_else(|| kobi_i18n::tr("coque.mcp.serveurInconnu", &[("nom", nom)]))
 }
 
 #[tauri::command]
@@ -1211,7 +1236,7 @@ pub async fn mcp_importer(noms: Vec<String>) -> Result<Vec<ServeurUi>, String> {
             let candidat = liste
                 .iter()
                 .find(|k| &k.nom == nom)
-                .ok_or_else(|| format!("{nom} : introuvable dans Claude Code"))?;
+                .ok_or_else(|| kobi_i18n::tr("coque.mcp.introuvableClaude", &[("nom", nom)]))?;
             importer(&mut c.mcp, candidat, &coffre)?;
         }
         // Serveurs cochés un à un : c'est le choix de l'utilisateur.

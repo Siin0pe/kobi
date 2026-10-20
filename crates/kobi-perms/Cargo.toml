@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+kobi-i18n = { path = "../kobi-i18n" }
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 rmcp = { version = "3.5", features = ["server", "macros", "transport-streamable-http-server"] }
 serde = { version = "1", features = ["derive"] }

@@ -97,22 +97,10 @@ impl Entree {
         }
     }
 
-    /// Libellé du menu natif, qui ne suit pas l'état (celui de l'interface, si).
-    pub fn libelle(self) -> &'static str {
-        match self {
-            Entree::Parler => "Parler à Kobi",
-            Entree::Ecrire => "Écrire à Kobi",
-            Entree::Enregistrer => "Enregistrer / arrêter la réunion",
-            Entree::Pause => "Pause / reprendre l'écoute",
-            Entree::App => "Ouvrir Kobi",
-            Entree::Carnet => "Ouvrir le Carnet",
-            Entree::Reglages => "Réglages",
-            Entree::Voix => "Réponse à voix haute / en texte",
-            Entree::Discret => "Mode discret",
-            Entree::Afficher => "Afficher/masquer Kobi",
-            Entree::Quitter => "Quitter Kobi",
-            Entree::QuitterConfirme => "Arrêter la réunion et quitter",
-        }
+    /// Libellé du menu natif, qui ne suit pas l'état (celui de l'interface,
+    /// si), dans la langue de l'interface (`barre.<id>`, KOB-210).
+    pub fn libelle(self) -> String {
+        kobi_i18n::tr(&format!("barre.{}", self.id()), &[])
     }
 
     pub fn depuis_id(id: &str) -> Option<Entree> {
@@ -402,6 +390,21 @@ mod tests {
             .unwrap();
         app.manage(EcouteEnPause::default());
         app
+    }
+
+    /// Chaque entrée du menu natif a son libellé dans chaque langue (KOB-210).
+    #[test]
+    fn libelles_traduits() {
+        for e in Entree::TOUTES {
+            let cle = format!("barre.{}", e.id());
+            for l in kobi_i18n::Langue::TOUTES {
+                assert_ne!(kobi_i18n::t(l, &cle, &[]), cle, "{} : {cle}", l.code());
+            }
+        }
+        assert_eq!(
+            kobi_i18n::t(kobi_i18n::Langue::En, "barre.quitter", &[]),
+            "Quit Kobi"
+        );
     }
 
     fn ecouter(app: &App<MockRuntime>, nom: &str) -> Arc<Mutex<Vec<String>>> {

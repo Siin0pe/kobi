@@ -33,7 +33,11 @@ pub fn default_path() -> Option<PathBuf> {
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error(
-        "{path} : erreur de syntaxe ou valeur invalide, valeurs par défaut utilisées. {source}"
+        "{}",
+        kobi_i18n::tr(
+            "session.config.syntaxe",
+            &[("chemin", &.path.display().to_string()), ("erreur", &.source.to_string())]
+        )
     )]
     Parse {
         path: PathBuf,
@@ -41,21 +45,39 @@ pub enum ConfigError {
         source: Box<toml::de::Error>,
     },
     #[error(
-        "{path} : {field} = {value} n'est pas accepté ({expected}), valeurs par défaut utilisées"
+        "{}",
+        kobi_i18n::tr(
+            "session.config.refusee",
+            &[
+                ("chemin", &.path.display().to_string()),
+                ("champ", .field),
+                ("valeur", .value),
+                ("attendu", .expected),
+            ]
+        )
     )]
     Invalid {
         path: PathBuf,
         field: &'static str,
         value: String,
-        expected: &'static str,
+        expected: String,
     },
-    #[error("{path} : lecture ou écriture impossible : {source}")]
+    #[error(
+        "{}",
+        kobi_i18n::tr(
+            "session.config.io",
+            &[("chemin", &.path.display().to_string()), ("erreur", &.source.to_string())]
+        )
+    )]
     Io {
         path: PathBuf,
         #[source]
         source: io::Error,
     },
-    #[error("réglages impossibles à écrire en TOML : {0}")]
+    #[error(
+        "{}",
+        kobi_i18n::tr("session.config.serialiser", &[("erreur", &.0.to_string())])
+    )]
     Serialize(#[from] toml::ser::Error),
 }
 
@@ -138,13 +160,15 @@ impl<'de> Deserialize<'de> for Retention {
                 .filter(|d| Self::ALLOWED_DAYS.contains(d))
                 .map(Retention::Days)
                 .ok_or_else(|| {
-                    serde::de::Error::custom(format!(
-                        "retention_days = {days} : attendu 30, 90, 365 ou \"unlimited\""
+                    serde::de::Error::custom(kobi_i18n::tr(
+                        "session.config.retention",
+                        &[("valeur", &days.to_string())],
                     ))
                 }),
             Raw::Text(text) if text == Self::UNLIMITED => Ok(Retention::Unlimited),
-            Raw::Text(text) => Err(serde::de::Error::custom(format!(
-                "retention_days = \"{text}\" : attendu 30, 90, 365 ou \"unlimited\""
+            Raw::Text(text) => Err(serde::de::Error::custom(kobi_i18n::tr(
+                "session.config.retention",
+                &[("valeur", &format!("\"{text}\""))],
             ))),
         }
     }
@@ -446,41 +470,23 @@ impl<'de> Deserialize<'de> for Fps {
             Mot(String),
         }
         match Brut::deserialize(d)? {
-            Brut::Nombre(n) => u32::try_from(n)
-                .map(Fps::Valeur)
-                .map_err(|_| serde::de::Error::custom(format!("{n} images par seconde"))),
+            Brut::Nombre(n) => u32::try_from(n).map(Fps::Valeur).map_err(|_| {
+                serde::de::Error::custom(kobi_i18n::tr(
+                    "session.config.fpsNombre",
+                    &[("n", &n.to_string())],
+                ))
+            }),
             Brut::Mot(m) if m == "ecran" => Ok(Fps::Ecran),
-            Brut::Mot(m) => Err(serde::de::Error::custom(format!(
-                "« {m} » : un nombre d'images par seconde ou \"ecran\""
+            Brut::Mot(m) => Err(serde::de::Error::custom(kobi_i18n::tr(
+                "session.config.fpsMot",
+                &[("mot", &m)],
             ))),
         }
     }
 }
 
-/// Langue de l'interface (KOB-207).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Langue {
-    Fr,
-    En,
-}
-
-impl Langue {
-    /// Les langues proposées, dans l'ordre du choix.
-    pub const TOUTES: [Langue; 2] = [Langue::Fr, Langue::En];
-
-    /// Code de la langue (`fr`, `en`), celui des fichiers de traduction.
-    pub fn code(self) -> &'static str {
-        match self {
-            Langue::Fr => "fr",
-            Langue::En => "en",
-        }
-    }
-
-    pub fn depuis_code(code: &str) -> Option<Langue> {
-        Self::TOUTES.into_iter().find(|l| l.code() == code)
-    }
-}
+/// Langue de l'interface (KOB-207), définie avec les traductions.
+pub use kobi_i18n::Langue;
 
 /// `[ui]` (KOB-207) : la langue de l'interface ; absente, celle du système.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -595,7 +601,7 @@ impl Config {
     }
 
     fn validate(&self, path: &Path) -> Result<(), ConfigError> {
-        let invalid = |field, value: &dyn fmt::Display, expected| ConfigError::Invalid {
+        let invalid = |field, value: &dyn fmt::Display, expected: String| ConfigError::Invalid {
             path: path.to_owned(),
             field,
             value: value.to_string(),
@@ -605,21 +611,21 @@ impl Config {
             return Err(invalid(
                 "taches.abandon_s",
                 &self.taches.abandon_s,
-                "de 30 à 3600 secondes",
+                kobi_i18n::tr("session.config.abandonPlage", &[]),
             ));
         }
         if !TachesConfig::DUREE_MAX_RANGE.contains(&self.taches.duree_max_s) {
             return Err(invalid(
                 "taches.duree_max_s",
                 &self.taches.duree_max_s,
-                "de 60 à 7200 secondes",
+                kobi_i18n::tr("session.config.dureeMaxPlage", &[]),
             ));
         }
         if !NotesConfig::INTERVAL_RANGE.contains(&self.notes.interval_min) {
             return Err(invalid(
                 "notes.interval_min",
                 &self.notes.interval_min,
-                "de 1 à 10",
+                kobi_i18n::tr("session.config.intervallePlage", &[]),
             ));
         }
         if let Fps::Valeur(n) = self.animations.fps {
@@ -627,12 +633,16 @@ impl Config {
                 return Err(invalid(
                     "animations.fps",
                     &n,
-                    "5, 15, 30, 60, 120 ou \"ecran\"",
+                    kobi_i18n::tr("session.config.fpsValeurs", &[]),
                 ));
             }
         }
         if self.wake_word.trim().is_empty() {
-            return Err(invalid("wake_word", &"\"\"", "un mot non vide"));
+            return Err(invalid(
+                "wake_word",
+                &"\"\"",
+                kobi_i18n::tr("session.config.motNonVide", &[]),
+            ));
         }
         Ok(())
     }

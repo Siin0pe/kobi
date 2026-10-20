@@ -80,7 +80,7 @@ pub fn installer<R: Runtime>(app: &AppHandle<R>) {
 
 fn courant<R: Runtime>(app: &AppHandle<R>) -> Result<tauri::State<'_, Demarrage>, String> {
     app.try_state::<Demarrage>()
-        .ok_or_else(|| "démarrage avec le système indisponible".to_owned())
+        .ok_or_else(|| kobi_i18n::tr("coque.demarrage.indisponible", &[]))
 }
 
 /// Kobi démarre-t-il avec le système ?
@@ -147,7 +147,8 @@ pub fn regler_demarrage_systeme<R: Runtime>(
 #[tauri::command]
 pub fn demarrage_par_defaut<R: Runtime>(app: AppHandle<R>) -> Result<bool, String> {
     let d = courant(&app)?;
-    let dir = dossier_du_choix(&app).ok_or("dossier personnel introuvable")?;
+    let dir = dossier_du_choix(&app)
+        .ok_or_else(|| kobi_i18n::tr("coque.commun.dossierPersoIntrouvable", &[]))?;
     par_defaut(&d, &dir).map_err(|e| e.to_string())
 }
 
@@ -203,9 +204,12 @@ mod systeme {
     use std::io;
 
     fn fichier(d: &Demarrage) -> io::Result<&std::path::Path> {
-        d.fichier
-            .as_deref()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "dossier personnel introuvable"))
+        d.fichier.as_deref().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                kobi_i18n::tr("coque.commun.dossierPersoIntrouvable", &[]),
+            )
+        })
     }
 
     pub fn est_actif(d: &Demarrage) -> io::Result<bool> {

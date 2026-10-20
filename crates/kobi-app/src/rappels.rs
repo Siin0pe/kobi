@@ -17,6 +17,8 @@ use kobi_session::stockage::{maintenant_ms, Rappel, Stockage};
 use serde::Serialize;
 use tauri::{AppHandle, Manager, Runtime};
 
+use kobi_i18n::tr;
+
 use crate::chef::{publier, Message};
 
 /// Rappel arrivé à échéance, pour l'interface.
@@ -119,19 +121,32 @@ pub fn traiter(
     Some(match demande {
         Demande::Liste => match st.rappels() {
             Ok(liste) => rappels::resume(&liste, maintenant),
-            Err(e) => format!("Je n'arrive pas à lire ta liste : {e}"),
+            Err(e) => tr(
+                "coque.rappels.listeIllisible",
+                &[("erreur", &e.to_string())],
+            ),
         },
         Demande::Rappel { texte, echeance } => match st.ajouter_rappel(&texte, echeance_ms, source)
         {
-            Ok(_) => format!(
-                "C'est noté : je te rappelle {} de {texte}.",
-                rappels::quand(&echeance, maintenant)
+            // Le texte dicté en dernier : ses accolades ne sont pas des variables.
+            Ok(_) => tr(
+                "coque.rappels.rappelNote",
+                &[
+                    ("quand", &rappels::quand(&echeance, maintenant)),
+                    ("texte", &texte),
+                ],
             ),
-            Err(e) => format!("Je n'arrive pas à ranger ce rappel : {e}"),
+            Err(e) => tr(
+                "coque.rappels.rappelImpossible",
+                &[("erreur", &e.to_string())],
+            ),
         },
         Demande::Tache { texte } => match st.ajouter_rappel(&texte, None, source) {
-            Ok(_) => format!("C'est ajouté à ta liste : {texte}."),
-            Err(e) => format!("Je n'arrive pas à ranger cette tâche : {e}"),
+            Ok(_) => tr("coque.rappels.tacheAjoutee", &[("texte", &texte)]),
+            Err(e) => tr(
+                "coque.rappels.tacheImpossible",
+                &[("erreur", &e.to_string())],
+            ),
         },
     })
 }

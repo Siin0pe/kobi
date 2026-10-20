@@ -65,7 +65,7 @@ pub fn installer<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         return Ok(());
     }
     WebviewWindowBuilder::new(app, FENETRE, WebviewUrl::App("menu.html".into()))
-        .title("Menu de Kobi")
+        .title(kobi_i18n::tr("coque.menuSouris.titre", &[]))
         .inner_size(TAILLE.0, TAILLE.1)
         // Redimensionnable : sous GTK, une fenêtre qui ne l'est pas garde sa
         // taille de création (`resize` est ignoré). Sans bordure, elle n'offre
@@ -111,7 +111,7 @@ pub fn ouvrir_menu<R: Runtime>(
     clavier: bool,
 ) -> Result<(), String> {
     if app.get_webview_window(FENETRE).is_none() {
-        return Err("fenêtre du menu indisponible".into());
+        return Err(kobi_i18n::tr("coque.menuSouris.indisponible", &[]));
     }
     let pointeur = point(&app, clavier)?;
     // L'écran du pointeur ; à défaut (pointeur entre deux écrans), le principal.
@@ -120,7 +120,7 @@ pub fn ouvrir_menu<R: Runtime>(
         .ok()
         .flatten()
         .or_else(|| app.primary_monitor().ok().flatten())
-        .ok_or("aucun écran")?;
+        .ok_or_else(|| kobi_i18n::tr("coque.menuSouris.aucunEcran", &[]))?;
     let zone = ecran.work_area();
     let ouverture = Ouverture {
         pointeur,
@@ -155,7 +155,7 @@ pub fn montrer_menu<R: Runtime>(
 ) -> Result<(), String> {
     let w = app
         .get_webview_window(FENETRE)
-        .ok_or("fenêtre du menu indisponible")?;
+        .ok_or_else(|| kobi_i18n::tr("coque.menuSouris.indisponible", &[]))?;
     // La position d'abord : l'échelle de la fenêtre suit l'écran où elle est.
     w.set_position(PhysicalPosition::new(x, y))
         .map_err(|e| e.to_string())?;

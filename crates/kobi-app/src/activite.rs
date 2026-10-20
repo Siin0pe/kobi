@@ -14,6 +14,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use kobi_i18n::tr;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Listener, Manager, Runtime};
@@ -193,7 +194,7 @@ fn traduire(
                 sortie.push((
                     Genre::Question,
                     question,
-                    clavier.then(|| "au clavier".to_owned()),
+                    clavier.then(|| tr("coque.activite.auClavier", &[])),
                 ));
             }
         }
@@ -204,28 +205,37 @@ fn traduire(
             let avant = etat.reunion;
             etat.reunion = actif.then_some((actif, pause));
             match (avant, actif, pause) {
-                (None, true, _) => sortie.push((Genre::Reunion, "Réunion commencée".into(), titre)),
+                (None, true, _) => sortie.push((
+                    Genre::Reunion,
+                    tr("coque.activite.reunionCommencee", &[]),
+                    titre,
+                )),
                 (Some(_), false, _) => {
                     let notes = charge.get("notes").and_then(Value::as_u64).unwrap_or(0);
                     let detail = match notes {
                         0 => titre,
-                        1 => Some(format!(
-                            "{}1 ligne de notes",
-                            titre.map_or(String::new(), |t| format!("{t} · "))
-                        )),
                         n => Some(format!(
-                            "{}{n} lignes de notes",
-                            titre.map_or(String::new(), |t| format!("{t} · "))
+                            "{}{}",
+                            titre.map_or(String::new(), |t| format!("{t} · ")),
+                            tr("coque.activite.lignesDeNotes", &[("n", &n.to_string())])
                         )),
                     };
-                    sortie.push((Genre::Reunion, "Réunion terminée".into(), detail));
+                    sortie.push((
+                        Genre::Reunion,
+                        tr("coque.activite.reunionTerminee", &[]),
+                        detail,
+                    ));
                 }
-                (Some((_, false)), true, true) => {
-                    sortie.push((Genre::Reunion, "Réunion en pause".into(), titre))
-                }
-                (Some((_, true)), true, false) => {
-                    sortie.push((Genre::Reunion, "Réunion reprise".into(), titre))
-                }
+                (Some((_, false)), true, true) => sortie.push((
+                    Genre::Reunion,
+                    tr("coque.activite.reunionEnPause", &[]),
+                    titre,
+                )),
+                (Some((_, true)), true, false) => sortie.push((
+                    Genre::Reunion,
+                    tr("coque.activite.reunionReprise", &[]),
+                    titre,
+                )),
                 _ => {}
             }
         }
@@ -234,15 +244,21 @@ fn traduire(
             let genre = texte(charge, "kicker");
             let detail = Some(genre).filter(|g| !g.is_empty());
             match charge.get("status").and_then(Value::as_str) {
-                Some("pending") => {
-                    sortie.push((Genre::Action, format!("Proposé : {titre}"), detail))
-                }
-                Some("confirmed") => {
-                    sortie.push((Genre::Validation, format!("Accepté : {titre}"), detail))
-                }
-                Some("dismissed") => {
-                    sortie.push((Genre::Validation, format!("Refusé : {titre}"), detail))
-                }
+                Some("pending") => sortie.push((
+                    Genre::Action,
+                    tr("coque.activite.propose", &[("titre", &titre)]),
+                    detail,
+                )),
+                Some("confirmed") => sortie.push((
+                    Genre::Validation,
+                    tr("coque.activite.accepte", &[("titre", &titre)]),
+                    detail,
+                )),
+                Some("dismissed") => sortie.push((
+                    Genre::Validation,
+                    tr("coque.activite.refuse", &[("titre", &titre)]),
+                    detail,
+                )),
                 _ => {}
             }
         }
@@ -252,7 +268,7 @@ fn traduire(
             sortie.push((
                 Genre::Erreur,
                 if titre.is_empty() {
-                    "Erreur".into()
+                    tr("app.sections.genre.erreur", &[])
                 } else {
                     titre
                 },

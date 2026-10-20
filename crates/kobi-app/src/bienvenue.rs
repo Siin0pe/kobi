@@ -116,7 +116,8 @@ fn marquer_fait(kobi_dir: &Path) -> io::Result<()> {
 /// aux notes (côté interface).
 #[tauri::command]
 pub fn terminer_bienvenue() -> Result<(), String> {
-    let dir = config::kobi_dir().ok_or("dossier personnel introuvable")?;
+    let dir = config::kobi_dir()
+        .ok_or_else(|| kobi_i18n::tr("coque.commun.dossierPersoIntrouvable", &[]))?;
     marquer_fait(&dir).map_err(|e| format!("{} : {e}", dir.display()))?;
     tracing::info!("premier lancement terminé");
     Ok(())
@@ -205,7 +206,10 @@ pub fn micro_choisi() -> Option<String> {
 pub fn regler_micro(chemin: &Path, nom: Option<&str>) -> Result<(), String> {
     let mut lu = config::load_or_create(chemin);
     if let Some(probleme) = lu.problem {
-        return Err(format!("réglage non enregistré : {probleme}"));
+        return Err(kobi_i18n::tr(
+            "coque.commun.reglageNonEnregistre",
+            &[("probleme", &probleme.to_string())],
+        ));
     }
     match nom.map(str::trim).filter(|n| !n.is_empty()) {
         Some(n) => {
@@ -261,7 +265,8 @@ pub fn micros() -> Micros {
 
 #[tauri::command]
 pub fn choisir_micro(nom: Option<String>) -> Result<(), String> {
-    let chemin = config::default_path().ok_or("dossier personnel introuvable")?;
+    let chemin = config::default_path()
+        .ok_or_else(|| kobi_i18n::tr("coque.commun.dossierPersoIntrouvable", &[]))?;
     regler_micro(&chemin, nom.as_deref())?;
     tracing::info!(micro = ?nom, "micro choisi");
     Ok(())
@@ -420,10 +425,10 @@ pub fn extraire(
         .filter(|p| p.is_dir());
     let paquet = paquets
         .next()
-        .ok_or_else(|| io::Error::other("archive vide"))?;
-    let nom = paquet
-        .file_name()
-        .ok_or_else(|| io::Error::other("archive sans dossier"))?;
+        .ok_or_else(|| io::Error::other(kobi_i18n::tr("coque.bienvenue.archiveVide", &[])))?;
+    let nom = paquet.file_name().ok_or_else(|| {
+        io::Error::other(kobi_i18n::tr("coque.bienvenue.archiveSansDossier", &[]))
+    })?;
     let final_ = models.join(nom);
     let _ = fs::remove_dir_all(&final_);
     fs::rename(&paquet, &final_)?;
@@ -454,7 +459,8 @@ fn installer_paquet<R: Runtime>(
     annule: &AtomicBool,
     modele: &Modele,
 ) -> Result<PathBuf, String> {
-    let models = modeles::default_dir().ok_or("dossier personnel introuvable")?;
+    let models = modeles::default_dir()
+        .ok_or_else(|| kobi_i18n::tr("coque.commun.dossierPersoIntrouvable", &[]))?;
     let mut envoye = 0u64;
     let fait = modeles::telecharger(&Http::default(), modele, &models, &mut |p: Progression| {
         if annule.load(Ordering::SeqCst) {
@@ -485,7 +491,7 @@ fn installer_paquet<R: Runtime>(
             },
         );
     })
-    .map_err(|e| format!("extraction : {e}"))?;
+    .map_err(|e| kobi_i18n::tr("coque.bienvenue.extraction", &[("erreur", &e.to_string())]))?;
     let _ = fs::remove_file(&archive);
     Ok(dossier)
 }
@@ -496,7 +502,7 @@ fn installer_paquet<R: Runtime>(
 pub fn telecharger_modele<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     let etat = app
         .try_state::<Telechargement>()
-        .ok_or("téléchargement indisponible")?;
+        .ok_or_else(|| kobi_i18n::tr("coque.bienvenue.telechargementIndisponible", &[]))?;
     if etat.en_cours.swap(true, Ordering::SeqCst) {
         return Ok(());
     }

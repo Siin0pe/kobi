@@ -247,12 +247,12 @@ fn resume(action: &Action, ctx: &Contexte) -> String {
     match action {
         Action::EcrireFichier { chemin, avant, .. } => {
             let relatif = kobi_perms::action::relatif(chemin, &ctx.dossiers);
-            let verbe = match avant {
-                Some(_) => "Modifier",
-                None if chemin.exists() => "Réécrire",
-                None => "Créer",
-            };
-            format!("{verbe} {relatif}")
+            let vars = [("chemin", relatif.as_str())];
+            match avant {
+                Some(_) => kobi_i18n::tr("coque.commandes.modifier", &vars),
+                None if chemin.exists() => kobi_i18n::tr("coque.commandes.reecrire", &vars),
+                None => kobi_i18n::tr("coque.commandes.creer", &vars),
+            }
         }
         _ => String::new(),
     }

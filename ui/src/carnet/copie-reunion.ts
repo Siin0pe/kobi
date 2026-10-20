@@ -24,7 +24,8 @@ type Segment = ReunionLue['segments'][number];
 
 /** Une ligne de transcription, au format de l'export (stockage.rs, document_reunion). */
 export function ligneMd(s: Segment): string {
-  return `- \`${horodatage(s.start)}\` **${s.source === 'moi' ? 'Moi' : 'Eux'}** : ${s.text.trim()}`;
+  const qui = s.source === 'moi' ? t('session.export.moi') : t('session.export.eux');
+  return `- \`${horodatage(s.start)}\` **${qui}** : ${s.text.trim()}`;
 }
 
 /**
@@ -44,10 +45,18 @@ export function compteRenduMd(r: ReunionLue): string {
   const cr = r.compte_rendu;
   if (!cr) return '';
   if (cr.brut.trim()) return cr.brut.trim();
-  const parties: Array<[string, string]> = [['Résumé', cr.resume], ['Décisions', cr.decisions], ['Actions', cr.actions], ['Questions ouvertes', cr.questions], ...cr.autres];
+  // Titres dans la langue de l'interface (mêmes clés que l'export Rust) ;
+  // les « autres » parties gardent le titre lu dans le fichier.
+  const parties: Array<[string, string]> = [
+    [t('session.export.resume'), cr.resume],
+    [t('session.export.decisions'), cr.decisions],
+    [t('session.export.actions'), cr.actions],
+    [t('session.export.questions'), cr.questions],
+    ...cr.autres,
+  ];
   return parties
-    .filter(([, t]) => t.trim())
-    .map(([titre, t]) => `## ${titre}\n\n${t.trim()}`)
+    .filter(([, texte]) => texte.trim())
+    .map(([titre, texte]) => `## ${titre}\n\n${texte.trim()}`)
     .join('\n\n');
 }
 

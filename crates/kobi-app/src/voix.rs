@@ -653,30 +653,36 @@ fn reglage_de_la_voix(q: &str) -> Option<CommandeVoix> {
 
 /// Exécute une commande vocale ; renvoie la phrase de confirmation à
 /// afficher (et à dire, pour « parle »), ou rien pour « stop ».
-pub fn executer<R: Runtime>(app: &AppHandle<R>, commande: CommandeVoix) -> Option<&'static str> {
+pub fn executer<R: Runtime>(app: &AppHandle<R>, commande: CommandeVoix) -> Option<String> {
     let reunion = en_reunion(app);
     match commande {
         CommandeVoix::Parle => {
             regler_contexte(app, true);
-            Some(if reunion {
-                "D'accord, je réponds à voix haute pendant la réunion."
-            } else {
-                "D'accord, je réponds à voix haute."
-            })
+            Some(confirmation(true, reunion))
         }
         CommandeVoix::Silence => {
             regler_contexte(app, false);
-            Some(if reunion {
-                "D'accord, en réunion je réponds par écrit."
-            } else {
-                "D'accord, je réponds par écrit."
-            })
+            Some(confirmation(false, reunion))
         }
         CommandeVoix::Stop => {
             taire(app, "stop");
             None
         }
     }
+}
+
+/// Phrase de confirmation de « parle » (`voix`) ou « en silence », dans la
+/// langue de l'interface.
+fn confirmation(voix: bool, reunion: bool) -> String {
+    kobi_i18n::tr(
+        match (voix, reunion) {
+            (true, true) => "coque.voix.parleReunion",
+            (true, false) => "coque.voix.parle",
+            (false, true) => "coque.voix.ecritReunion",
+            (false, false) => "coque.voix.ecrit",
+        },
+        &[],
+    )
 }
 
 /// Le segment entendu est-il l'écho de ce que dit Kobi ? Oui si la plupart
@@ -838,7 +844,7 @@ mod tests {
         assert_eq!((e.quotidien, e.reunion, e.actif), (true, false, true));
 
         assert_eq!(
-            executer(h, CommandeVoix::Silence),
+            executer(h, CommandeVoix::Silence).as_deref(),
             Some("D'accord, je réponds par écrit.")
         );
         assert!(!etat_voix(h).actif);

@@ -387,8 +387,13 @@ test('langue (KOB-207) : choisir English traduit l’accueil et le panneau Langu
   const errors = await ouvrir(page, { dependances: true });
   await page.getByRole('button', { name: 'On y va' }).click();
   await expect(page.locator('.titre')).toHaveText('Langue');
+  // Le résumé d'une étape vérifiée d'emblée suit aussi la langue (KOB-210).
+  const resume = etape(page, 'demarrage').locator('.etape-resume');
+  await expect(resume).not.toHaveText('');
+  const enFrancais = await resume.textContent();
   await page.getByRole('radio', { name: 'English', exact: true }).click();
   expect(await appels(page)).toContainEqual(['regler_langue_ui', { langue: 'en' }]);
+  await expect(resume).not.toHaveText(enFrancais!);
   await expect(page.locator('.titre')).toHaveText('Language');
   await expect(page.locator('.surtitre')).toHaveText('Step 1 of 10');
   await expect(page.getByRole('radio', { name: 'English', exact: true })).toHaveAttribute('aria-checked', 'true');
@@ -403,6 +408,7 @@ test('langue (KOB-207) : choisir English traduit l’accueil et le panneau Langu
   await page.getByRole('radio', { name: 'Français', exact: true }).click();
   await expect(page.locator('.titre')).toHaveText('Langue');
   await expect(page.locator('.surtitre')).toHaveText('Étape 1 sur 10');
+  await expect(resume).toHaveText(enFrancais!);
   await expectNoErrors(errors);
 });
 

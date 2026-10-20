@@ -36,7 +36,10 @@ pub fn lire(chemin: &Path) -> Permissions {
 pub fn regler(chemin: &Path, genre: &str, sans_demander: bool) -> Result<Permissions, String> {
     let mut lu = config::load_or_create(chemin);
     if let Some(probleme) = lu.problem {
-        return Err(format!("réglage non enregistré : {probleme}"));
+        return Err(kobi_i18n::tr(
+            "coque.commun.reglageNonEnregistre",
+            &[("probleme", &probleme.to_string())],
+        ));
     }
     let p = &mut lu.config.permissions;
     let cible = match genre {
@@ -45,7 +48,12 @@ pub fn regler(chemin: &Path, genre: &str, sans_demander: bool) -> Result<Permiss
         "reglage" => &mut p.reglage,
         // La suppression, un service (MCP, réglé par serveur) ou autre chose :
         // pas de réglage ici.
-        _ => return Err(format!("« {genre} » se demande toujours")),
+        _ => {
+            return Err(kobi_i18n::tr(
+                "coque.permissions.toujoursDemande",
+                &[("genre", genre)],
+            ))
+        }
     };
     *cible = if sans_demander {
         Politique::SansDemander
@@ -58,7 +66,8 @@ pub fn regler(chemin: &Path, genre: &str, sans_demander: bool) -> Result<Permiss
 
 #[tauri::command]
 pub fn permissions() -> Result<Permissions, String> {
-    let chemin = config::default_path().ok_or("dossier personnel introuvable")?;
+    let chemin = config::default_path()
+        .ok_or_else(|| kobi_i18n::tr("coque.commun.dossierPersoIntrouvable", &[]))?;
     Ok(lire(&chemin))
 }
 
@@ -70,7 +79,8 @@ pub fn regler_permission<R: Runtime>(
     genre: String,
     sans_demander: bool,
 ) -> Result<Permissions, String> {
-    let chemin = config::default_path().ok_or("dossier personnel introuvable")?;
+    let chemin = config::default_path()
+        .ok_or_else(|| kobi_i18n::tr("coque.commun.dossierPersoIntrouvable", &[]))?;
     let p = regler(&chemin, &genre, sans_demander)?;
     tracing::info!(%genre, sans_demander, "permission réglée depuis l'interface");
     Ok(p)

@@ -17,7 +17,7 @@ const CANAL_OCCUPE: Duration = Duration::from_secs(3);
 fn pas_lance(detail: impl std::fmt::Display) -> Erreur {
     Erreur::new(
         Code::NotRunning,
-        format!("Kobi ne tourne pas, lancez l'app Kobi ({detail})"),
+        kobi_i18n::tr("ctl.client.pasLance", &[("detail", &detail.to_string())]),
     )
 }
 
@@ -73,7 +73,10 @@ pub fn appeler(
     ligne.push('\n');
     let mut flux = connecter(&point.adresse)?;
     let coupe = |e: std::io::Error| {
-        Erreur::new(Code::NotRunning, format!("liaison avec Kobi coupée : {e}"))
+        Erreur::new(
+            Code::NotRunning,
+            kobi_i18n::tr("ctl.client.liaisonCoupee", &[("erreur", &e.to_string())]),
+        )
     };
     flux.write_all(ligne.as_bytes()).map_err(coupe)?;
     flux.flush().map_err(coupe)?;
@@ -82,7 +85,10 @@ pub fn appeler(
         .read_line(&mut reponse)
         .map_err(coupe)?;
     if reponse.trim().is_empty() {
-        return Err(Erreur::new(Code::NotRunning, "Kobi n'a pas répondu"));
+        return Err(Erreur::new(
+            Code::NotRunning,
+            kobi_i18n::tr("ctl.client.pasRepondu", &[]),
+        ));
     }
     serde_json::from_str::<Reponse>(&reponse)
         .map_err(|e| Erreur::new(Code::Internal, format!("réponse illisible : {e}")))?

@@ -8,6 +8,7 @@
 
 use std::path::{Component, Path, PathBuf};
 
+use kobi_i18n::tr;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -112,53 +113,62 @@ impl Action {
         let (resume, chemin) = match self {
             Action::LireFichier { chemin } => {
                 let r = rel(chemin);
-                (format!("Je lis {r}"), Some(r))
+                (tr("perms.action.lis", &[("chemin", &r)]), Some(r))
             }
             Action::Chercher { motif, dossier } => {
                 let motif = court(&masquer(motif), COURT);
                 match dossier {
                     Some(d) => {
                         let r = rel(d);
-                        (format!("Je cherche « {motif} » dans {r}"), Some(r))
+                        let texte = tr(
+                            "perms.action.chercheDans",
+                            &[("motif", &motif), ("dossier", &r)],
+                        );
+                        (texte, Some(r))
                     }
-                    None => (format!("Je cherche « {motif} »"), None),
+                    None => (tr("perms.action.cherche", &[("motif", &motif)]), None),
                 }
             }
             Action::Lister { dossier } => {
                 let r = rel(dossier);
-                (format!("Je parcours {r}"), Some(r))
+                (tr("perms.action.parcours", &[("dossier", &r)]), Some(r))
             }
             Action::Commande { ligne, dossier, .. } => {
                 let ligne = court(&masquer(ligne.lines().next().unwrap_or_default()), COURT);
-                (format!("Je lance {ligne}"), dossier.as_deref().map(&rel))
+                (
+                    tr("perms.action.lance", &[("commande", &ligne)]),
+                    dossier.as_deref().map(&rel),
+                )
             }
             Action::EcrireFichier { chemin, avant, .. } => {
                 let r = rel(chemin);
-                let verbe = if avant.is_some() {
-                    "Je modifie"
+                let texte = if avant.is_some() {
+                    tr("perms.action.modifie", &[("chemin", &r)])
                 } else {
-                    "J'écris"
+                    tr("perms.action.ecris", &[("chemin", &r)])
                 };
-                (format!("{verbe} {r}"), Some(r))
+                (texte, Some(r))
             }
             Action::SupprimerFichier { chemin } => {
                 let r = rel(chemin);
-                (format!("Je supprime {r}"), Some(r))
+                (tr("perms.action.supprime", &[("chemin", &r)]), Some(r))
             }
             // Les outils de réunion de Kobi disent ce qu'ils font (KOB-245) ;
             // la refonte des autres libellés MCP est celle de KOB-242.
             Action::Mcp { serveur, outil, .. }
                 if serveur == "kobi" && reunion_kobi(outil).is_some() =>
             {
-                (reunion_kobi(outil).unwrap_or_default().to_owned(), None)
+                (reunion_kobi(outil).unwrap_or_default(), None)
             }
             Action::Mcp {
                 serveur,
                 outil,
                 params,
             } => (resume_mcp(serveur, outil, params), None),
-            Action::Reglage { cle, .. } => (format!("Je change le réglage {cle}"), None),
-            Action::Autre { nom, .. } => (format!("J'utilise {nom}"), None),
+            Action::Reglage { cle, .. } => {
+                (tr("perms.action.changeReglage", &[("cle", cle)]), None)
+            }
+            Action::Autre { nom, .. } => (tr("perms.action.utilise", &[("nom", nom)]), None),
         };
         Etape {
             famille: self.famille(),
@@ -169,12 +179,12 @@ impl Action {
 }
 
 /// Libellé d'un outil de réunion du MCP de Kobi.
-fn reunion_kobi(outil: &str) -> Option<&'static str> {
+fn reunion_kobi(outil: &str) -> Option<String> {
     Some(match outil {
-        "meeting_start" => "Je démarre la réunion",
-        "meeting_stop" => "Je termine la réunion",
-        "meeting_pause" => "Je mets la réunion en pause",
-        "meeting_resume" => "Je reprends la réunion",
+        "meeting_start" => tr("perms.action.demarreReunion", &[]),
+        "meeting_stop" => tr("perms.action.termineReunion", &[]),
+        "meeting_pause" => tr("perms.action.pauseReunion", &[]),
+        "meeting_resume" => tr("perms.action.reprendReunion", &[]),
         _ => return None,
     })
 }
@@ -375,26 +385,33 @@ fn resume_mcp(serveur: &str, outil: &str, params: &Value) -> String {
         .find(|(nom, _)| nom.eq_ignore_ascii_case(serveur))
         .map_or(serveur, |(_, beau)| beau);
     let Some(verbe) = verbe_mcp(outil) else {
-        return format!("J'utilise {service} · {outil}");
+        return tr(
+            "perms.action.utiliseOutil",
+            &[("service", service), ("outil", outil)],
+        );
     };
     let verbe = match verbe {
         VerbeMcp::Enregistrer if a_un_identifiant(params) => VerbeMcp::Modifier,
         VerbeMcp::Enregistrer => VerbeMcp::Creer,
         v => v,
     };
+    let service = [("service", service)];
     let debut = match verbe {
-        VerbeMcp::Chercher => format!("Je cherche dans {service}"),
-        VerbeMcp::Lire => format!("Je lis dans {service}"),
-        VerbeMcp::Creer | VerbeMcp::Enregistrer => format!("Je crée dans {service}"),
-        VerbeMcp::Modifier => format!("Je modifie dans {service}"),
-        VerbeMcp::Supprimer => format!("Je supprime dans {service}"),
-        VerbeMcp::Appeler => format!("J'appelle {service}"),
+        VerbeMcp::Chercher => tr("perms.action.chercheDansService", &service),
+        VerbeMcp::Lire => tr("perms.action.lisDansService", &service),
+        VerbeMcp::Creer | VerbeMcp::Enregistrer => tr("perms.action.creeDansService", &service),
+        VerbeMcp::Modifier => tr("perms.action.modifieDansService", &service),
+        VerbeMcp::Supprimer => tr("perms.action.supprimeDansService", &service),
+        VerbeMcp::Appeler => tr("perms.action.appelleService", &service),
     };
     let complement = complement_mcp(params);
     if complement.is_empty() {
         debut
     } else {
-        format!("{debut} : {complement}")
+        tr(
+            "perms.action.avecComplement",
+            &[("debut", &debut), ("complement", &complement)],
+        )
     }
 }
 
@@ -636,6 +653,34 @@ mod tests {
         }
         .etape(&[])
         .resume
+    }
+
+    /// KOB-210 : les libellés des cartes et du fil d'activité existent en
+    /// anglais (la langue courante n'est jamais réglée dans un test).
+    #[test]
+    fn libelles_anglais() {
+        use kobi_i18n::{t, Langue};
+        assert_eq!(
+            t(Langue::En, "perms.action.lis", &[("chemin", "src/main.rs")]),
+            "Reading src/main.rs"
+        );
+        let debut = t(
+            Langue::En,
+            "perms.action.chercheDansService",
+            &[("service", "Linear")],
+        );
+        assert_eq!(
+            t(
+                Langue::En,
+                "perms.action.avecComplement",
+                &[("debut", &debut), ("complement", "rafale")]
+            ),
+            "Searching Linear: rafale"
+        );
+        assert_eq!(
+            t(Langue::En, "perms.action.termineReunion", &[]),
+            "Ending the meeting"
+        );
     }
 
     /// KOB-242 : les quatre appels du journal du 20/10, et des outils réels.

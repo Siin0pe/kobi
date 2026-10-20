@@ -155,7 +155,10 @@ pub fn ouvrir<R: Runtime>(app: &AppHandle<R>, section: Option<Section>) -> tauri
 #[tauri::command(async)]
 pub fn ouvrir_app<R: Runtime>(app: AppHandle<R>, section: Option<String>) -> Result<(), String> {
     let section = match section.as_deref() {
-        Some(a) => Some(Section::lire(a).ok_or_else(|| format!("section inconnue : {a}"))?),
+        Some(a) => Some(
+            Section::lire(a)
+                .ok_or_else(|| kobi_i18n::tr("coque.app.sectionInconnue", &[("section", a)]))?,
+        ),
         None => None,
     };
     ouvrir(&app, section).map_err(|e| e.to_string())

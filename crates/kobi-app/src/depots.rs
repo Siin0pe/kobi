@@ -227,7 +227,10 @@ pub fn carte(dossiers: &[PathBuf]) -> String {
 pub async fn lister_depots(dossier: String) -> Result<Vec<Depot>, String> {
     let dossier = PathBuf::from(dossier.trim());
     if !dossier.is_dir() {
-        return Err(format!("dossier introuvable : {}", dossier.display()));
+        return Err(kobi_i18n::tr(
+            "coque.commun.dossierIntrouvable",
+            &[("chemin", &dossier.display().to_string())],
+        ));
     }
     tauri::async_runtime::spawn_blocking(move || lister(&dossier))
         .await

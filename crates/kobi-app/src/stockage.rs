@@ -125,7 +125,10 @@ pub fn appliquer(config: &mut Config, changement: Changement) -> Result<(), Stri
         } else {
             let p = PathBuf::from(dossier);
             if !p.is_absolute() {
-                return Err(format!("« {dossier} » : il faut un chemin complet (C:\\…)"));
+                return Err(kobi_i18n::tr(
+                    "coque.stockage.cheminComplet",
+                    &[("dossier", dossier)],
+                ));
             }
             Some(p)
         };
@@ -166,10 +169,11 @@ pub fn regler_stockage<R: Runtime>(
 ) -> Result<Reglages, String> {
     let partage = app
         .try_state::<StockagePartage>()
-        .ok_or("stockage indisponible")?;
+        .ok_or_else(|| kobi_i18n::tr("coque.stockage.indisponible", &[]))?;
     let mut config = lire_config(partage.config.as_deref());
     appliquer(&mut config, changement)?;
-    let nouveau = Stockage::depuis_config(&config).ok_or("dossier personnel introuvable")?;
+    let nouveau = Stockage::depuis_config(&config)
+        .ok_or_else(|| kobi_i18n::tr("coque.commun.dossierPersoIntrouvable", &[]))?;
     nouveau
         .preparer()
         .map_err(|e| format!("{} : {e}", nouveau.racine().display()))?;
@@ -186,8 +190,9 @@ pub fn regler_stockage<R: Runtime>(
 pub fn basculer<R: Runtime>(app: &AppHandle<R>, config: &Config) -> Result<(), String> {
     let partage = app
         .try_state::<StockagePartage>()
-        .ok_or("stockage indisponible")?;
-    let nouveau = Stockage::depuis_config(config).ok_or("dossier personnel introuvable")?;
+        .ok_or_else(|| kobi_i18n::tr("coque.stockage.indisponible", &[]))?;
+    let nouveau = Stockage::depuis_config(config)
+        .ok_or_else(|| kobi_i18n::tr("coque.commun.dossierPersoIntrouvable", &[]))?;
     nouveau
         .preparer()
         .map_err(|e| format!("{} : {e}", nouveau.racine().display()))?;

@@ -3099,6 +3099,7 @@ dependencies = [
  "kobi-audio",
  "kobi-brain",
  "kobi-ctl",
+ "kobi-i18n",
  "kobi-perms",
  "kobi-session",
  "kobi-stt",
@@ -3169,10 +3170,21 @@ name = "kobi-ctl"
 version = "0.1.0"
 dependencies = [
  "getrandom 0.3.4",
+ "kobi-i18n",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "kobi-i18n"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "toml 0.9.12+spec-1.1.0",
+ "winreg",
 ]
 
 [[package]]
@@ -3181,6 +3193,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "kobi-brain",
+ "kobi-i18n",
  "rmcp",
  "serde",
  "serde_json",
@@ -3193,6 +3206,7 @@ name = "kobi-session"
 version = "0.1.0"
 dependencies = [
  "jiff",
+ "kobi-i18n",
  "kobi-stt",
  "serde",
  "serde_json",

@@ -20,7 +20,6 @@ mod ecoute;
 mod ecrivain;
 #[cfg(test)]
 mod essai_pilotage;
-mod i18n;
 mod instance;
 mod intentions;
 mod interpellation;
@@ -222,6 +221,9 @@ fn main() {
             if let Some(problem) = &config.problem {
                 tracing::warn!(%problem, "config.toml");
             }
+            // Langue des textes de la coque (KOB-210) : barre système,
+            // notifications, annonces ; suivie à chaud par `langue::annoncer`.
+            kobi_i18n::regler(config.config.ui.language);
             app.manage(menu::EcouteEnPause::default());
             demarrage::installer(app.handle());
             // Interface de contrôle (KOB-161) : `kobi <commande>`, `kobi mcp`.
