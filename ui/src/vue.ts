@@ -60,6 +60,9 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, t
   return node;
 }
 
+/** Deux réponses à moins de cet écart font une rafale : rien ne s'ouvre seul (KOB-238). */
+const RAFALE_MS = 10_000;
+
 export class Vue {
   readonly root: HTMLElement;
   private readonly liste: HTMLElement;
@@ -79,6 +82,16 @@ export class Vue {
   private verifie = false;
   /** Rangée pendant cette réponse : elle ne se rouvre pas seule avant la suivante. */
   private rangeeIci = false;
+  /**
+   * Ouverture seule déjà faite dans cette conversation : pas une seconde
+   * sans que l'utilisateur la demande (KOB-238). Remis à zéro quand la
+   * coque clôt la conversation (`fin_conversation`).
+   */
+  private ouverteSeule = false;
+  /** Moment de la réponse précédente : deux réponses rapprochées font une rafale. */
+  private reponsePrecedente = -Infinity;
+  private derniereReponse = -Infinity;
+  private etatPrecedent: MascotState | null = null;
 
   constructor(private readonly stage: Stage) {
     this.root = el('section', 'lecture');
@@ -127,6 +140,12 @@ export class Vue {
     this.appliquerReglages(this.reglages);
     suivreAffichage((a) => this.appliquerReglages(a));
 
+    // Conversation close par la coque (pas chaque retour en veille, qui suit
+    // chaque réponse) : la prochaine pourra s'ouvrir seule une fois.
+    void tauri()?.event.listen('fin_conversation', () => {
+      this.ouverteSeule = false;
+    });
+
     const previous = stage.onRender;
     stage.onRender = (state, data) => {
       previous?.(state, data);
@@ -160,10 +179,22 @@ export class Vue {
     else void this.ouvrir('demande');
   }
 
+  /**
+   * L'ouverture seule est permise : pas pendant une rafale (deux réponses à
+   * moins de 10 s), et une fois au plus par conversation (KOB-238).
+   */
+  private ouvertureSeulePermise(): boolean {
+    return !this.ouverteSeule && this.derniereReponse - this.reponsePrecedente > RAFALE_MS;
+  }
+
   /** Ouvre la vue (ou la garde ouverte) : la fenêtre s'agrandit d'abord. */
   async ouvrir(raison = 'clic'): Promise<void> {
     window.clearTimeout(this.timer);
     if (this.ouverte) return;
+    if (raison === 'auto' || raison === 'réponse longue') {
+      if (!this.ouvertureSeulePermise()) return;
+      this.ouverteSeule = true;
+    }
     await this.enCours;
     this.ouverte = true;
     this.stage.root.classList.add('vue-ouverte');
@@ -210,6 +241,11 @@ export class Vue {
   }
 
   private surRendu(state: MascotState, question: string | undefined, reponse: string | undefined): void {
+    if (state === 'answer' && this.etatPrecedent !== 'answer') {
+      this.reponsePrecedente = this.derniereReponse;
+      this.derniereReponse = performance.now();
+    }
+    this.etatPrecedent = state;
     if (state === 'answer' || state === 'listen' || state === 'think') {
       if (question) this.direct = { question, reponse: reponse ?? '' };
       else if (this.direct && reponse !== undefined) this.direct.reponse = reponse;
