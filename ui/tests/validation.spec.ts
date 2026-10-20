@@ -233,15 +233,26 @@ test('résumé sur une ligne, déplié d’un clic, sans valider', async ({ page
   await carte(page, LONGUE);
   const titre = dialog(page).locator('.title');
   const haut = async () => (await titre.boundingBox())!.height;
-  const uneLigne = await haut();
+  // Hauteur posée : la carte entre, puis se déplie et se replie en s'animant ;
+  // une mesure en plein mouvement faussait la comparaison (KOB-195).
+  const posee = async (): Promise<number> => {
+    let avant = await haut();
+    for (;;) {
+      await page.waitForTimeout(120);
+      const apres = await haut();
+      if (Math.abs(apres - avant) < 0.01) return apres;
+      avant = apres;
+    }
+  };
+  const uneLigne = await posee();
   expect(await titre.evaluate((n) => n.scrollWidth > n.clientWidth)).toBe(true);
   await expect(titre).toHaveAttribute('title', LONGUE.resume);
   // Le nom accessible de la carte reste le résumé entier.
   await expect(dialog(page)).toHaveAccessibleName(LONGUE.resume);
   await titre.click();
-  expect(await haut()).toBeGreaterThan(uneLigne * 1.5);
+  expect(await posee()).toBeGreaterThan(uneLigne * 1.5);
   await titre.click();
-  expect(await haut()).toBeLessThan(uneLigne * 1.2);
+  expect(await posee()).toBeLessThan(uneLigne * 1.2);
   expect(await decisions(page)).toEqual([]);
   await expectNoErrors(errors);
 });

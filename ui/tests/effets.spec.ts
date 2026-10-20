@@ -9,6 +9,26 @@ import { emit, expectNoErrors, mockTauri, openUi } from './helpers';
 const web = (page: Page, sel: string) =>
   page.locator(sel).first().evaluate((n) => n.getAnimations().filter((a) => !(a instanceof CSSAnimation) && a.playState !== 'finished').length);
 
+/**
+ * Animations Web lancées sur chaque élément, comptées à leur départ : sous
+ * charge, une animation courte peut être finie avant qu'on la regarde.
+ */
+async function compterLancees(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const compte = new WeakMap<Element, number>();
+    (window as unknown as { lancees: WeakMap<Element, number> }).lancees = compte;
+    const animate = Element.prototype.animate;
+    Element.prototype.animate = function (this: Element, ...args: Parameters<Element['animate']>) {
+      compte.set(this, (compte.get(this) ?? 0) + 1);
+      return animate.apply(this, args);
+    };
+  });
+}
+
+/** Animations Web lancées sur un élément depuis l'ouverture. */
+const lancees = (page: Page, sel: string) =>
+  page.locator(sel).first().evaluate((n) => (window as unknown as { lancees: WeakMap<Element, number> }).lancees.get(n) ?? 0);
+
 /** Boîte d'un élément relevée plusieurs fois. */
 async function boxes(page: Page, sel: string): Promise<unknown[]> {
   const out = [];
@@ -68,9 +88,15 @@ test('prise de notes : les lettres volent de Kobi vers la fiche, le crayon gratt
 });
 
 test('REC : les chiffres roulent, le texte reste « 12:34 », le point pulse, l’étiquette cliquable ne bouge pas', async ({ page }) => {
-  await page.clock.install();
+  await compterLancees(page);
+  await page.clock.install({ time: new Date('2026-10-20T10:00:00') });
   const errors = await openUi(page, '');
-  await page.evaluate(() => window.kobi.recording({ actif: true, pause: false, debut_ms: Date.now() - 754_000, notes: 2, titre: null }));
+  // Horloge arrêtée : sous charge, aucune seconde réelle ne passe entre deux
+  // relevés ; seul `runFor` la fait avancer.
+  await page.clock.pauseAt(new Date('2026-10-20T10:00:05'));
+  // Au milieu de la seconde 12:34 : le passage suivant du compteur (à la
+  // seconde ronde, + 5 ms) tombe dans le `runFor(1_000)` qui suit.
+  await page.evaluate(() => window.kobi.recording({ actif: true, pause: false, debut_ms: Date.now() - 754_500, notes: 2, titre: null }));
   const time = page.locator('.rec-time');
   await expect(time).toHaveText('12:34');
   expect(await time.locator('.chiffre').count()).toBe(5);
@@ -78,8 +104,11 @@ test('REC : les chiffres roulent, le texte reste « 12:34 », le point pulse, l�
   // Une seconde plus tard, seul le dernier chiffre change et roule.
   await page.clock.runFor(1_000);
   await expect(time).toHaveText('12:35');
-  const rolling = await time.locator('.chiffre').evaluateAll((spans) => spans.map((s) => s.getAnimations().length));
-  // Sous charge, le roulement précédent peut ne pas être fini (KOB-172).
+  // Roulements lancés, pas ceux qui tournent encore : sous charge, celui du
+  // dernier chiffre (340 ms) peut être fini avant le relevé.
+  const rolling = await time
+    .locator('.chiffre')
+    .evaluateAll((spans) => spans.map((s) => (window as unknown as { lancees: WeakMap<Element, number> }).lancees.get(s) ?? 0));
   expect(rolling.slice(0, 4)).toEqual([0, 0, 0, 0]);
   expect(rolling[4]).toBeGreaterThanOrEqual(1);
   // Le point pulse (onde), l'étiquette elle-même ne bouge pas.
@@ -89,13 +118,16 @@ test('REC : les chiffres roulent, le texte reste « 12:34 », le point pulse, l�
 });
 
 test('notifications : elles partent de Kobi et y retournent ; l’historique sort de Kobi en cascade et y retourne', async ({ page }) => {
+  await compterLancees(page);
   await mockTauri(page);
   const errors = await openUi(page, '');
   const bulle = (tour: number, statut: string, reponse = '') => ({ tour, question: `question ${tour}`, reponse, statut, clavier: false });
   await emit(page, 'conversation', [bulle(1, 'tache')]);
   const notif = page.locator('.notif[data-kind=running]');
   await expect(notif).toBeVisible();
-  expect(await web(page, '.notif')).toBe(1);
+  // Arrivée lancée (et pas forcément encore en cours : sous charge, elle peut
+  // être finie quand on la regarde).
+  expect(await lancees(page, '.notif')).toBe(1);
   await emit(page, 'conversation', [bulle(1, 'fini', 'Résultat.')]);
   // L'annonce retourne dans Kobi pendant que la livraison en sort.
   await expect(page.locator('.notif.leaving')).toHaveCount(1);
@@ -107,8 +139,12 @@ test('notifications : elles partent de Kobi et y retournent ; l’historique sor
   await page.mouse.wheel(0, -300);
   const history = page.getByRole('log', { name: 'Échanges récents avec Kobi' });
   await expect(history).toBeVisible();
-  expect(await web(page, '.card-history')).toBe(1);
-  expect(await page.locator('.card-history .ex').evaluateAll((items) => items.filter((i) => i.getAnimations().length > 0).length)).toBe(3);
+  expect(await lancees(page, '.card-history')).toBe(1);
+  expect(
+    await page
+      .locator('.card-history .ex')
+      .evaluateAll((items) => items.filter((i) => ((window as unknown as { lancees: WeakMap<Element, number> }).lancees.get(i) ?? 0) > 0).length),
+  ).toBe(3);
   await page.keyboard.press('Escape');
   await expect(history).toBeHidden();
   await expectNoErrors(errors);

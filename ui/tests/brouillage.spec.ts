@@ -75,26 +75,33 @@ test('au changement d’état, yeux et mot sont brouillés puis posés lettre pa
   await expectNoErrors(errors);
 });
 
-/** Journal des yeux affichés : chaque remplacement du texte, avec l'heure (horloge simulée). */
+/**
+ * Journal des yeux affichés : chaque texte posé sur le premier œil, avec
+ * l'heure (horloge simulée) prise à l'instant même où il est écrit. Un
+ * MutationObserver la prenait à son rappel : sous charge, la fermeture était
+ * datée en retard et un clignement de 120 ms semblait n'en durer que 70
+ * (KOB-195).
+ */
 async function watchEyes(page: import('@playwright/test').Page): Promise<void> {
   await page.evaluate(() => {
     const log: Array<{ t: number; eye: string; state: string }> = [];
     const kobi = document.querySelector<HTMLElement>('.kobi')!;
+    const oeil = document.querySelector<HTMLElement>('.kobi .g')!;
+    const texte = Object.getOwnPropertyDescriptor(Node.prototype, 'textContent')!;
     // L'état est noté avec chaque changement : l'horloge simulée continue
     // d'avancer entre deux appels du test, un clignement d'Écoute peut donc
     // tomber juste avant le passage en Réfléchit.
-    const record = (records: MutationRecord[]) => {
-      for (const r of records)
-        for (const n of r.addedNodes) log.push({ t: performance.now(), eye: n.textContent ?? '', state: kobi.dataset.state ?? '' });
-    };
-    const observer = new MutationObserver(record);
-    observer.observe(document.querySelector('.kobi .g')!, { childList: true });
-    // Les enregistrements en attente sont vidés avant chaque lecture : sinon un
-    // clignement de fin de phase serait compté dans la suivante.
-    (window as unknown as { eyeLog: () => typeof log }).eyeLog = () => {
-      record(observer.takeRecords());
-      return log.splice(0);
-    };
+    Object.defineProperty(oeil, 'textContent', {
+      configurable: true,
+      get() {
+        return texte.get!.call(this);
+      },
+      set(v: string) {
+        texte.set!.call(this, v);
+        log.push({ t: performance.now(), eye: v ?? '', state: kobi.dataset.state ?? '' });
+      },
+    });
+    (window as unknown as { eyeLog: () => typeof log }).eyeLog = () => log.splice(0);
   });
 }
 

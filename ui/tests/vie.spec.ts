@@ -119,17 +119,23 @@ test('fenêtre masquée : aucune scène de veille ne se lance', async ({ page })
 test('la frappe passe par un symbole brouillé en tête, puis le texte est exact', async ({ page }) => {
   const errors = await openUi(page, 'backdrop=1');
   const answer = 'Le fichier refresh.ts appelle la route /auth/refresh toutes les 15 minutes.';
+  // Tête de frappe relevée à chaque changement du texte, dans la page : un
+  // relevé toutes les 25 ms depuis le test ratait les symboles sous charge
+  // (KOB-195).
+  await page.evaluate((longueur) => {
+    const w = window as unknown as { tetes: string[] };
+    w.tetes = [];
+    new MutationObserver(() => {
+      const t = document.querySelector('[data-card=answer] .text')?.textContent ?? '';
+      if (t.length > 0 && t.length < longueur) w.tetes.push(t.slice(-1));
+    }).observe(document.body, { subtree: true, childList: true, characterData: true });
+  }, answer.length);
   await page.evaluate((a) => window.kobi.setState('answer', { question: 'Où est le rafraîchissement ?', answer: a }), answer);
   const text = page.locator('[data-card=answer] .text');
+  await expect(text).toHaveText(answer);
   // Pendant la frappe, le dernier caractère affiché est souvent un symbole.
-  const heads = new Set<string>();
-  for (let i = 0; i < 40; i++) {
-    const t = (await text.textContent()) ?? '';
-    if (t.length > 0 && t.length < answer.length) heads.add(t.slice(-1));
-    // Échantillonnage de la tête de frappe toutes les 25 ms.
-    await page.waitForTimeout(25);
-  }
-  expect([...heads].some((c) => '#%&@*?!/<>{}=+$'.includes(c))).toBe(true);
+  const heads = await page.evaluate(() => (window as unknown as { tetes: string[] }).tetes);
+  expect(heads.some((c) => '#%&@*?!/<>{}=+$'.includes(c))).toBe(true);
   await expect(text).toHaveText(answer);
   await expectNoErrors(errors);
 });
