@@ -11,11 +11,8 @@ use serde_json::{json, Map};
 const FAKE_CLAUDE: &str = env!("CARGO_BIN_EXE_fake-claude");
 const FAKE_MCP: &str = env!("CARGO_BIN_EXE_fake-mcp");
 
-fn work_dir(test: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("kobi-perms-{}-{test}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+fn work_dir(test: &str) -> kobi_testkit::DossierTemp {
+    kobi_testkit::DossierTemp::nouveau("perms", test)
 }
 
 async fn start(dir: &Path, timeout: Duration) -> ClaudeCodeBrain {

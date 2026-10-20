@@ -21,11 +21,8 @@ fn scenario(name: &str) -> String {
 }
 
 /// Dossier vide propre au test.
-fn work_dir(test: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("kobi-testkit-{}-{test}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+fn work_dir(test: &str) -> kobi_testkit::DossierTemp {
+    kobi_testkit::DossierTemp::nouveau("testkit", test)
 }
 
 /// Options du faux `claude` : scénario, serveur de notes et, si fourni,

@@ -197,16 +197,16 @@ mod tests {
 
     use super::*;
 
-    fn temp(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("kobi-actions-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir.join("actions.json")
+    /// `actions.json` dans un dossier supprimé à la fin du test.
+    fn temp(name: &str) -> (crate::dossier_test::DossierTemp, PathBuf) {
+        let dir = crate::dossier_test::DossierTemp::nouveau("actions", name);
+        let path = dir.join("actions.json");
+        (dir, path)
     }
 
     #[test]
     fn ecriture_puis_relecture() {
-        let path = temp("relecture");
+        let (_dir, path) = temp("relecture");
         let mut log = ActionLog::open(&path).unwrap();
         assert!(log.actions().is_empty());
         let a = log
@@ -254,7 +254,7 @@ mod tests {
 
     #[test]
     fn format_du_fichier() {
-        let path = temp("format");
+        let (_dir, path) = temp("format");
         let mut log = ActionLog::open(&path).unwrap();
         let id = log
             .propose(1.0, "mcp__linear__save_issue", json!({ "title": "A" }))
@@ -271,7 +271,7 @@ mod tests {
 
     #[test]
     fn actions_non_faites_dans_le_compte_rendu() {
-        let path = temp("compte-rendu");
+        let (_dir, path) = temp("compte-rendu");
         let mut log = ActionLog::open(&path).unwrap();
         let a = log
             .propose(1.0, "mcp__linear__save_issue", json!({ "title": "A" }))
@@ -291,13 +291,14 @@ mod tests {
 
     #[test]
     fn fichier_illisible_et_action_inconnue() {
-        let path = temp("illisible");
+        let (_dir, path) = temp("illisible");
         std::fs::write(&path, "{ pas du json").unwrap();
         assert_eq!(
             ActionLog::open(&path).unwrap_err().kind(),
             io::ErrorKind::InvalidData
         );
-        let mut log = ActionLog::open(temp("inconnue")).unwrap();
+        let (_dir, path) = temp("inconnue");
+        let mut log = ActionLog::open(path).unwrap();
         assert_eq!(
             log.done(42, "").unwrap_err().kind(),
             io::ErrorKind::NotFound

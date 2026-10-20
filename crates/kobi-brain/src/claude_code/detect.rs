@@ -232,11 +232,8 @@ async fn run(program: &Path, args: &[&str], timeout: Duration) -> Result<(bool, 
 mod tests {
     use super::*;
 
-    fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("kobi-detect-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn temp_dir(name: &str) -> crate::dossier_test::DossierTemp {
+        crate::dossier_test::DossierTemp::nouveau("detect", name)
     }
 
     fn touch_exe(dir: &Path) -> PathBuf {
@@ -274,7 +271,7 @@ mod tests {
     fn ignore_un_fichier_non_executable() {
         let dir = temp_dir("non-exe");
         std::fs::write(dir.join("claude"), b"").unwrap();
-        assert!(find_in(None, &[dir]).is_empty());
+        assert!(find_in(None, &[dir.to_path_buf()]).is_empty());
     }
 
     #[tokio::test]
