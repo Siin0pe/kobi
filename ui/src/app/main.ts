@@ -22,6 +22,7 @@ import { animationsReduites, h } from '../dom';
 import { Metronome } from '../econome';
 import { disponible, ecouter, invoke } from '../ipc';
 import { creerNotifieur } from '../notif';
+import { initLangue } from '../i18n';
 import { vivreTitres } from '../titre';
 import { monterNotesEnDirect, type VueDirect } from '../notes/direct';
 import { ajouterPanneau } from '../reglages/panneaux';
@@ -119,6 +120,8 @@ document.addEventListener('visibilitychange', masquer);
 masquer();
 // Titres vivants : une lettre d'un titre visible se brouille de temps en temps.
 vivreTitres(contenu, '.titre, .marque-mot');
+// Langue de l'interface (KOB-207) : celle de la config, suivie à chaud.
+void initLangue();
 
 const vues = new Map<IdSection, HTMLElement>();
 for (const s of SECTIONS) {

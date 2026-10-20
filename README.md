@@ -39,3 +39,12 @@ claude mcp add kobi -- kobi mcp
 ```
 
 Avec le chemin complet si `kobi` n'est pas dans le `PATH`, par exemple `claude mcp add kobi -- "%LOCALAPPDATA%\Kobi\bin\kobi.exe" mcp`. Les outils (`status`, `notes_last`, `meetings_get`, `meeting_start`, `config_set`…) annoncent chacun s'ils lisent (`readOnlyHint`) ou modifient. Kobi branche ce même MCP dans ses propres sessions, en lecture seule tant que la validation à la voix ou par carte n'est pas en place.
+
+## Ajouter une langue
+
+L'interface de Kobi se traduit à chaud. La langue suit celle du système, ou le réglage `ui.language` (Réglages › Langue, ou `kobi config set ui.language en`).
+
+1. Copier `ui/src/i18n/fr.json` en `ui/src/i18n/xx.json` (`xx` : le code de la langue, par exemple `de`) et traduire chaque valeur. Les clés restent les mêmes, et les variables `{nom}` gardent leur nom. Un pluriel s'écrit `{ "one": "…", "other": "…" }`, avec les catégories de `Intl.PluralRules` de la langue.
+2. Ajouter la langue à `LANGUES` dans `ui/src/i18n/index.ts` (son nom écrit dans sa propre langue, par exemple « Deutsch »).
+3. Côté Rust : ajouter la variante à `Langue` (`crates/kobi-session/src/config.rs`) et le fichier à `source()` (`crates/kobi-app/src/i18n.rs`).
+4. `cargo test -p kobi-app i18n` vérifie que chaque langue a toutes les clés, avec les mêmes variables.

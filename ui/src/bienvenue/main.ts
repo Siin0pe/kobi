@@ -8,6 +8,7 @@
 
 import './bienvenue.css';
 import { animationsReduites, h } from '../dom';
+import { surLangue, t } from '../i18n';
 import { disponible, invoke, message } from '../ipc';
 import { Blinker, Scrambler } from '../mascotte/glyphs';
 import type { Panneau, Statut, Ton } from '../reglages/panneau';
@@ -51,8 +52,8 @@ export function monterAccueil(
   const titre = h('h1', { class: 'titre' });
   const sousTitre = h('p', { class: 'sous-titre' });
   const corps = h('div', { class: 'panneau' });
-  const retour = h('button', { type: 'button', class: 'bouton', 'data-action': 'retour', onclick: () => aller(courant - 1) }, 'Retour');
-  const suivant = h('button', { type: 'button', class: 'bouton plein', 'data-action': 'suivant' }, 'Suivant');
+  const retour = h('button', { type: 'button', class: 'bouton', 'data-action': 'retour', onclick: () => aller(courant - 1) }, t('nav.retour'));
+  const suivant = h('button', { type: 'button', class: 'bouton plein', 'data-action': 'suivant' }, t('nav.suivant'));
   const scene = h('main', { class: 'scene' }, h('article', { class: 'feuille' }, h('header', { class: 'entete' }, surtitre, titre, sousTitre), corps), h('footer', { class: 'pied' }, retour, suivant));
 
   racine.append(
@@ -115,10 +116,11 @@ export function monterAccueil(
     const p = ETAPES[n - 1]!;
     const [oeil, m] = VISAGES[p.id] ?? ['o', p.id];
     brouilleur.show(oeil, m);
-    surtitre.textContent = `Étape ${n} sur ${ETAPES.length}`;
+    surtitre.textContent = t('accueil.etape', { n, total: ETAPES.length });
     poserTitre(titre, p.titre);
     sousTitre.textContent = p.sousTitre;
-    suivant.textContent = n === ETAPES.length ? 'Terminer' : 'Suivant';
+    retour.textContent = t('nav.retour');
+    suivant.textContent = t(n === ETAPES.length ? 'nav.terminer' : 'nav.suivant');
     suivant.dataset.action = 'suivant';
     corps.dataset.panneau = p.id;
     // Un hôte neuf par étape : une étape lente (micros, raccourcis…) qui
@@ -128,17 +130,29 @@ export function monterAccueil(
     demonter = p.monter(hote, { notifier, signaler: (s, r) => signaler(p.id, s, r), parcours: true });
   }
 
+  // Langue changée (KOB-207) : les titres des étapes et la page ouverte se
+  // traduisent, sans relancer.
+  surLangue(() => {
+    ETAPES.forEach((p) => {
+      const tt = liste.querySelector(`[data-etape="${p.id}"] .etape-titre`);
+      if (tt) tt.textContent = p.titre;
+    });
+    const n = courant;
+    courant = -1;
+    aller(n);
+  });
+
   function presentation(): void {
     brouilleur.show(...VISAGES.intro!);
-    surtitre.textContent = 'Premier lancement';
-    poserTitre(titre, 'Salut, moi c’est Kobi.');
+    surtitre.textContent = t('accueil.premierLancement');
+    poserTitre(titre, t('accueil.salut'));
     sousTitre.textContent = '';
     corps.dataset.panneau = 'intro';
     corps.replaceChildren(
-      h('div', { class: 'bulle' }, 'Je t’écoute sur cet ordinateur, je réponds avec ton Claude Code, et pour l’instant je ne fais que lire ton code.'),
-      h('p', { class: 'intro' }, `On règle ${ETAPES.length} petites choses ensemble, ça prend deux minutes. Tout se retrouve ensuite dans les réglages.`),
+      h('div', { class: 'bulle' }, t('accueil.bulle')),
+      h('p', { class: 'intro' }, t('accueil.intro', { n: ETAPES.length })),
     );
-    suivant.textContent = 'On y va';
+    suivant.textContent = t('accueil.onYVa');
     suivant.dataset.action = 'commencer';
   }
 

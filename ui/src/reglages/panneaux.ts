@@ -9,6 +9,7 @@
 import { AFFICHAGE } from './affichage';
 import { ANIMATIONS } from './animations';
 import { DEMARRAGE } from './demarrage';
+import { LANGUE } from './langue';
 import { CLAUDE, DOSSIERS, ESSAI, MICRO, MODELE, PARCOURS, RACCOURCIS } from './etapes';
 import { MCP, OUTILS } from './mcp';
 import type { Panneau } from './panneau';
@@ -16,13 +17,13 @@ import { PERMISSIONS } from './permissions';
 import { SON_ORDI } from './son-ordi';
 import { STOCKAGE } from './stockage';
 
-const liste: Panneau[] = [STOCKAGE, DOSSIERS, MCP, PERMISSIONS, MICRO, SON_ORDI, MODELE, CLAUDE, DEMARRAGE, ANIMATIONS, AFFICHAGE, RACCOURCIS, PARCOURS];
+const liste: Panneau[] = [STOCKAGE, DOSSIERS, MCP, PERMISSIONS, MICRO, SON_ORDI, MODELE, CLAUDE, DEMARRAGE, LANGUE, ANIMATIONS, AFFICHAGE, RACCOURCIS, PARCOURS];
 
 /** Panneaux de la section Réglages, dans l'ordre du menu. */
 export const PANNEAUX: readonly Panneau[] = liste;
 
 /** Le premier lancement, dans l'ordre du parcours UX (section 1). */
-export const ETAPES: readonly Panneau[] = [CLAUDE, MICRO, SON_ORDI, MODELE, DOSSIERS, OUTILS, DEMARRAGE, ESSAI, RACCOURCIS];
+export const ETAPES: readonly Panneau[] = [LANGUE, CLAUDE, MICRO, SON_ORDI, MODELE, DOSSIERS, OUTILS, DEMARRAGE, ESSAI, RACCOURCIS];
 
 export function panneau(id: string | null | undefined): Panneau | undefined {
   return PANNEAUX.find((p) => p.id === id);

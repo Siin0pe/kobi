@@ -2,7 +2,8 @@
 // dans la langue choisie (`ui.language` de la config), le français en repli.
 //
 // Un fichier par langue (`fr.json`, `en.json`), mêmes clés partout ; une clé
-// qui manque dans une langue fait échouer `tests/i18n.spec.ts`.
+// qui manque dans une langue (ou une variable qui diffère) fait échouer le
+// test Rust `i18n::tests::memes_cles_et_variables_dans_chaque_langue`.
 //   - Variables : `{nom}` dans le texte, remplacée par `vars.nom`.
 //   - Pluriels : une valeur objet `{ "one": "…", "other": "…" }` (catégories
 //     de `Intl.PluralRules`), choisie selon `vars.n`.
@@ -10,7 +11,7 @@
 // Ajouter une langue : copier `fr.json` en `xx.json`, le traduire, l'ajouter
 // à `LANGUES` ci-dessous (voir le README, « Ajouter une langue »).
 
-import { ecouter, invoke } from '../ipc';
+import { disponible, ecouter, invoke } from '../ipc';
 import en from './en.json';
 import fr from './fr.json';
 
@@ -94,15 +95,25 @@ export function surLangue(f: (l: Langue) => void): () => void {
  */
 export async function initLangue(): Promise<Langue> {
   document.documentElement.lang = courante;
-  ecouter<string>('langue', (l) => estLangue(l) && appliquerLangue(l));
-  const l = await invoke<string>('langue_ui').catch(() => langueDuSysteme());
-  appliquerLangue(estLangue(l) ? l : REPLI);
+  // `null` : la langue du système.
+  ecouter<string | null>('langue', (l) => appliquerLangue(estLangue(l) ? l : langueDuSysteme()));
+  const l = await reglee().catch(() => null);
+  appliquerLangue(l ?? langueDuSysteme());
   return courante;
 }
 
-/** Enregistre la langue dans la config ; Kobi prévient toutes les fenêtres. */
-export async function choisirLangue(l: Langue): Promise<Langue> {
-  const retenue = await invoke<string>('regler_langue_ui', { langue: l });
-  appliquerLangue(estLangue(retenue) ? retenue : l);
+/** La langue réglée dans Kobi, `null` pour celle du système. */
+export async function reglee(): Promise<Langue | null> {
+  const l = await invoke<string | null>('langue_ui');
+  return estLangue(l) ? l : null;
+}
+
+/**
+ * Enregistre la langue dans la config (`null` : celle du système) ; Kobi
+ * prévient toutes les fenêtres. Hors de Kobi, seule cette fenêtre change.
+ */
+export async function choisirLangue(l: Langue | null): Promise<Langue> {
+  const retenue = disponible() ? await invoke<string | null>('regler_langue_ui', { langue: l }) : l;
+  appliquerLangue(estLangue(retenue) ? retenue : langueDuSysteme());
   return courante;
 }

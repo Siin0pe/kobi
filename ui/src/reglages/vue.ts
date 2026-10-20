@@ -4,6 +4,7 @@
 // à l'app (voir `ajouterPanneau`).
 
 import { h } from '../dom';
+import { surLangue } from '../i18n';
 import type { Ton } from './panneau';
 import { PANNEAUX, panneau } from './panneaux';
 import { poserTitre } from '../titre';
@@ -56,6 +57,18 @@ export function monterReglages(racine: HTMLElement, notifier: (texte: string, to
     corps.replaceChildren(hote);
     demonter = p.monter(hote, { notifier });
   }
+
+  // Langue changée (KOB-207) : la liste et l'en-tête se traduisent ; le
+  // panneau ouvert se redessine lui-même.
+  surLangue(() => {
+    nav.replaceChildren();
+    dessinerListe();
+    const p = panneau(courant);
+    if (!p) return;
+    sousTitre.textContent = p.sousTitre;
+    poserTitre(titre, p.titre);
+    for (const b of nav.children) b.setAttribute('aria-current', String(b.getAttribute('data-panneau') === p.id));
+  });
 
   function dessinerListe(): void {
     if (nav.children.length === PANNEAUX.length) return;

@@ -44,14 +44,23 @@ pub fn langue_ui() -> Option<&'static str> {
         .map(Langue::code)
 }
 
-/// Choix de la langue dans une fenêtre : enregistrée, puis annoncée à toutes.
+/// Choix de la langue dans une fenêtre (`null` : celle du système) :
+/// enregistrée, puis annoncée à toutes. Rend la langue retenue.
 #[tauri::command]
-pub fn regler_langue_ui<R: Runtime>(app: AppHandle<R>, langue: String) -> Result<String, String> {
-    let l = Langue::depuis_code(&langue).ok_or_else(|| format!("langue inconnue : {langue}"))?;
+pub fn regler_langue_ui<R: Runtime>(
+    app: AppHandle<R>,
+    langue: Option<String>,
+) -> Result<Option<&'static str>, String> {
+    let l = match langue.as_deref() {
+        None => None,
+        Some(code) => {
+            Some(Langue::depuis_code(code).ok_or_else(|| format!("langue inconnue : {code}"))?)
+        }
+    };
     let chemin = config::default_path().ok_or("dossier personnel introuvable")?;
-    ecrire(&chemin, Some(l))?;
-    annoncer(&app, Some(l));
-    Ok(l.code().to_owned())
+    ecrire(&chemin, l)?;
+    annoncer(&app, l);
+    Ok(l.map(Langue::code))
 }
 
 #[cfg(test)]
