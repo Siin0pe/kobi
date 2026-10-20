@@ -1238,6 +1238,25 @@ fn carte(tour: u64, demande: ApprovalRequest, sortie: &Sortie, cartes: &Cartes) 
     });
 }
 
+/// Notes ou compte rendu sans le bloc de code qui les entoure parfois
+/// (« ```markdown … ``` », KOB-254) : sinon la clôture s'affiche dans le
+/// Carnet. Un bloc de code à l'intérieur du texte reste tel quel.
+fn sans_cloture(texte: &str) -> &str {
+    let t = texte.trim();
+    let Some((ouverture, reste)) = t.split_once('\n') else {
+        return texte;
+    };
+    let langue = ouverture.trim().strip_prefix("```").map(str::trim);
+    if !matches!(langue, Some("" | "markdown" | "md")) {
+        return texte;
+    }
+    match reste.trim_end().strip_suffix("```") {
+        // Une seule clôture à la fin : pas un bloc intérieur qui finit le texte.
+        Some(corps) if !corps.contains("\n```") && !corps.starts_with("```") => corps.trim(),
+        _ => texte,
+    }
+}
+
 async fn prise_de_notes(
     fabrique: Fabrique,
     mut rx: mpsc::UnboundedReceiver<Demande>,
@@ -1303,7 +1322,9 @@ async fn prise_de_notes(
         ) {
             session = None;
         }
-        let resultat = resultat.map(|r| r.text).map_err(|e| e.to_string());
+        let resultat = resultat
+            .map(|r| sans_cloture(&r.text).to_owned())
+            .map_err(|e| e.to_string());
         sortie(if compte_rendu {
             Retour::CompteRendu(resultat)
         } else {
@@ -2292,6 +2313,22 @@ mod tests {
             Retour::Activite { demande, .. }
                 if demande.action == Action::LireFichier { chemin: "C:/k/chef.rs".into() }
         )));
+    }
+
+    #[test]
+    fn notes_sans_cloture_markdown() {
+        assert_eq!(
+            sans_cloture("```markdown\n# Notes\n- budget\n```"),
+            "# Notes\n- budget"
+        );
+        assert_eq!(sans_cloture("```md\n# CR\n```\n"), "# CR");
+        assert_eq!(sans_cloture("```\n- a\n- b\n```"), "- a\n- b");
+        // Sans clôture, ou avec un bloc de code intérieur : inchangé.
+        assert_eq!(sans_cloture("# Notes\n- a"), "# Notes\n- a");
+        let interieur = "```rust\nfn main() {}\n```";
+        assert_eq!(sans_cloture(interieur), interieur);
+        let deux = "```markdown\n# A\n```\ntexte\n```\nb\n```";
+        assert_eq!(sans_cloture(deux), deux);
     }
 
     /// KOB-252 : chaque réunion a sa propre session de notes ; le compte

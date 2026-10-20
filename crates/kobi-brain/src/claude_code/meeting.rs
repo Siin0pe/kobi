@@ -318,13 +318,14 @@ impl Brain for ClaudeCodeBrain {
             "notes",
             &update.transcript,
             &update.notes,
-            "Mets les notes à jour et renvoie-les en entier, en markdown.",
+            "Mets les notes à jour et renvoie-les en entier, en markdown brut, sans bloc de code autour.",
         ))
     }
 
     fn final_report(&mut self, report: ReportRequest) -> Turn {
         let mut body =
-            "La réunion est terminée. Écris le compte rendu complet, en markdown.".to_owned();
+            "La réunion est terminée. Écris le compte rendu complet, en markdown brut, sans bloc de code autour."
+                .to_owned();
         if !report.pending_actions.is_empty() {
             body.push_str("\n\n## Actions non faites ou échouées\n");
             for action in &report.pending_actions {
