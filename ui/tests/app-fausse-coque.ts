@@ -12,7 +12,7 @@ export function fakeTauri(): void {
   const rappels = [{ id: 'r1', texte: 'Appeler Léa', echeance_ms: debut + 86_400_000, cree_ms: debut, fait: false, source: null }];
   w.__TAURI__ = {
     core: {
-      invoke: async (cmd: string) => {
+      invoke: async (cmd: string, args?: Record<string, unknown>) => {
         switch (cmd) {
           case 'carnet_index':
             return { racine: '/home/test/Kobi', reunions, conversations: [], rappels };
@@ -40,6 +40,12 @@ export function fakeTauri(): void {
             return [{ quand_ms: Date.now(), genre: 'question', texte: 'Quelle heure est-il ?' }];
           case 'notes_en_cours':
             return null;
+          case 'langue_ui':
+            return (w.__langue as string | undefined) ?? null;
+          case 'regler_langue_ui':
+            w.__langue = (args?.langue as string | null) ?? null;
+            (listeners.langue ?? []).forEach((h) => h({ payload: w.__langue }));
+            return w.__langue;
           default:
             throw `Command ${cmd} not found`;
         }

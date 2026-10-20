@@ -4,7 +4,7 @@
 // à l'app (voir `ajouterPanneau`).
 
 import { h } from '../dom';
-import { surLangue } from '../i18n';
+import { surLangue, t } from '../i18n';
 import type { Ton } from './panneau';
 import { PANNEAUX, panneau } from './panneaux';
 import { poserTitre } from '../titre';
@@ -16,10 +16,17 @@ export interface VueReglages {
 
 /** Monte la section dans `racine`. `notifier` affiche les messages courts de l'app. */
 export function monterReglages(racine: HTMLElement, notifier: (texte: string, ton?: Ton) => void): VueReglages {
-  const nav = h('nav', { class: 'menu', 'aria-label': 'Réglages' });
+  const nav = h('nav', { class: 'menu', 'aria-label': t('reglages.vue.titre') });
   const titre = h('h1', { class: 'titre' });
   const sousTitre = h('p', { class: 'surtitre' });
   const corps = h('div', { class: 'panneau' });
+  const marque = h('span', { class: 'marque-mot' });
+  const traduireHote = (): void => {
+    nav.setAttribute('aria-label', t('reglages.vue.titre'));
+    marque.setAttribute('aria-label', t('reglages.vue.marque'));
+    marque.textContent = t('reglages.vue.marque');
+  };
+  traduireHote();
 
   racine.append(
     h(
@@ -28,7 +35,7 @@ export function monterReglages(racine: HTMLElement, notifier: (texte: string, to
       h(
         'aside',
         { class: 'cote' },
-        h('header', { class: 'marque' }, h('span', { class: 'marque-mot', 'aria-label': 'réglages' }, 'réglages')),
+        h('header', { class: 'marque' }, marque),
         nav,
       ),
       h('div', { class: 'page' }, h('article', { class: 'feuille' }, h('header', { class: 'entete' }, sousTitre, titre), corps)),
@@ -58,16 +65,15 @@ export function monterReglages(racine: HTMLElement, notifier: (texte: string, to
     demonter = p.monter(hote, { notifier });
   }
 
-  // Langue changée (KOB-207) : la liste et l'en-tête se traduisent ; le
-  // panneau ouvert se redessine lui-même.
+  // Langue changée (KOB-207, KOB-208) : la liste, l'en-tête et le panneau
+  // ouvert se traduisent ; le panneau est remonté, ses textes passent par
+  // `t()` au rendu.
   surLangue(() => {
+    traduireHote();
     nav.replaceChildren();
-    dessinerListe();
-    const p = panneau(courant);
-    if (!p) return;
-    sousTitre.textContent = p.sousTitre;
-    poserTitre(titre, p.titre);
-    for (const b of nav.children) b.setAttribute('aria-current', String(b.getAttribute('data-panneau') === p.id));
+    const id = courant;
+    courant = null;
+    montrer(id);
   });
 
   function dessinerListe(): void {

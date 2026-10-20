@@ -10,6 +10,7 @@
 // brouillée, avec une petite icône animée selon l'outil, et la mascotte prend
 // le geste de l'outil. « Réduire les animations » : même texte, sans mouvement.
 
+import { t } from './i18n';
 import { tauri } from './native';
 import { scramble, settleStep } from './mascotte/glyphs';
 import type { Stage } from './stage';
@@ -70,7 +71,7 @@ export function etapeLigne(e: Etape, className = 'step'): HTMLElement {
   icon.setAttribute('aria-hidden', 'true');
   const text = el('span', 'step-text', e.resume);
   line.append(icon, text);
-  if (e.classe === 'refus') line.title = 'Refusé : Kobi ne fait que lire pour l’instant.';
+  if (e.classe === 'refus') line.title = t('activite.refus');
   return line;
 }
 

@@ -4,6 +4,8 @@
 // premières lignes. Partagée par le Carnet, la bulle et la vue agrandie (et
 // le « Copier » du menu, KOB-217).
 
+import { t } from './i18n';
+
 /** Ce qu'on copie : sert au libellé du bouton et au retour. */
 export type Quoi =
   | 'compte-rendu'
@@ -30,39 +32,60 @@ export type Format = 'markdown' | 'texte';
  * Textes de la copie, en un seul endroit pour l'i18n (KOB-207) : le libellé
  * du bouton et le début du retour.
  */
-export const TEXTES: Record<Quoi, { bouton: string; copie: string }> = {
-  'compte-rendu': { bouton: 'Copier le compte rendu', copie: 'Compte rendu copié' },
-  transcription: { bouton: 'Copier la transcription', copie: 'Transcription copiée' },
-  notes: { bouton: 'Copier les notes', copie: 'Notes copiées' },
-  tout: { bouton: 'Copier tout', copie: 'Réunion copiée en entier' },
-  conversation: { bouton: 'Copier la conversation', copie: 'Conversation copiée' },
-  reponse: { bouton: 'Copier la réponse', copie: 'Réponse copiée' },
-  resume: { bouton: 'Copier le résumé', copie: 'Résumé copié' },
-  decisions: { bouton: 'Copier les décisions', copie: 'Décisions copiées' },
-  actions: { bouton: 'Copier les actions', copie: 'Actions copiées' },
-  questions: { bouton: 'Copier les questions', copie: 'Questions copiées' },
-  section: { bouton: 'Copier cette partie', copie: 'Partie copiée' },
-  decision: { bouton: 'Copier cette décision', copie: 'Décision copiée' },
-  action: { bouton: 'Copier cette action', copie: 'Action copiée' },
-  question: { bouton: 'Copier cette question', copie: 'Question copiée' },
-  ligne: { bouton: 'Copier cette ligne', copie: 'Ligne copiée' },
-  note: { bouton: 'Copier cette note', copie: 'Note copiée' },
-  selection: { bouton: 'Copier', copie: 'Sélection copiée' },
+export const TEXTES = Object.fromEntries(
+  (
+    [
+      'compte-rendu',
+      'transcription',
+      'notes',
+      'tout',
+      'conversation',
+      'reponse',
+      'resume',
+      'decisions',
+      'actions',
+      'questions',
+      'section',
+      'decision',
+      'action',
+      'question',
+      'ligne',
+      'note',
+      'selection',
+    ] as const satisfies readonly Quoi[]
+  ).map((q) => {
+    // Clés `copie.<quoi>.bouton` et `copie.<quoi>.copie`, lues au rendu.
+    const cle = q === 'compte-rendu' ? 'compteRendu' : q;
+    return [
+      q,
+      {
+        get bouton() {
+          return t(`copie.${cle}.bouton`);
+        },
+        get copie() {
+          return t(`copie.${cle}.copie`);
+        },
+      },
+    ];
+  }),
+) as Record<Quoi, { readonly bouton: string; readonly copie: string }>;
+
+/** Nom de chaque format, lu au rendu. */
+export const FORMATS: Record<Format, string> = {
+  markdown: 'markdown',
+  get texte() {
+    return t('copie.format.texte');
+  },
 };
-
-export const FORMATS: Record<Format, string> = { markdown: 'markdown', texte: 'texte brut' };
-
-const nombre = new Intl.NumberFormat('fr-FR');
 
 /** « 1 240 caractères », « 1 caractère ». */
 export function caracteres(texte: string): string {
-  const n = [...texte].length;
-  return `${nombre.format(n)} caractère${n > 1 ? 's' : ''}`;
+  return t('copie.caracteres', { n: [...texte].length });
 }
 
 /** « 42 lignes », « 1 ligne ». */
 export function lignes(n: number): string {
-  return `${nombre.format(n)} ligne${n > 1 ? 's' : ''}`;
+  return t('copie.lignes', { n });
 }
 
 /** Markdown → texte brut lisible : sans dièses, astérisques ni accents graves ; puces en « • ». */
@@ -86,7 +109,7 @@ export function retour(quoi: Quoi, texte: string, format: Format): { message: st
     .slice(0, 2)
     .join('\n');
   return {
-    message: `${TEXTES[quoi].copie} · ${caracteres(texte)} · ${FORMATS[format]}`,
+    message: t('copie.retour', { quoi: TEXTES[quoi].copie, taille: caracteres(texte), format: FORMATS[format] }),
     apercu: [...debut].length > 160 ? `${[...debut].slice(0, 159).join('')}…` : debut,
   };
 }
@@ -107,7 +130,7 @@ export async function ecrire(texte: string): Promise<void> {
     zone.select();
     const ok = document.execCommand('copy');
     zone.remove();
-    if (!ok) throw new Error('Copie refusée par le système.');
+    if (!ok) throw new Error(t('copie.refusee'));
   }
 }
 
@@ -157,9 +180,8 @@ export function boutonCopierDedans(quoi: Quoi, texte: () => string, classe: stri
   b.type = 'button';
   b.className = classe;
   b.dataset.quoi = quoi;
-  const libelle = TEXTES[quoi].bouton;
-  b.textContent = libelle;
-  b.title = libelle;
+  b.textContent = TEXTES[quoi].bouton;
+  b.title = TEXTES[quoi].bouton;
   let minuterie = 0;
   b.addEventListener('click', async (e) => {
     // Ni la bulle autour (qui ouvre la vue agrandie) ni un clic à côté.
@@ -172,13 +194,13 @@ export function boutonCopierDedans(quoi: Quoi, texte: () => string, classe: stri
       b.title = `${r.message}\n${r.apercu}`;
       b.dataset.etat = 'copie';
     } catch {
-      b.textContent = 'Copie impossible';
-      b.title = 'Le système a refusé la copie.';
+      b.textContent = t('copie.impossible');
+      b.title = t('copie.impossibleAide');
       b.dataset.etat = 'erreur';
     }
     minuterie = window.setTimeout(() => {
-      b.textContent = libelle;
-      b.title = libelle;
+      b.textContent = TEXTES[quoi].bouton;
+      b.title = TEXTES[quoi].bouton;
       delete b.dataset.etat;
     }, RETOUR_MS);
   });

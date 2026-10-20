@@ -5,6 +5,7 @@
 // Réglages › Outils MCP.
 
 import { h } from '../dom';
+import { t } from '../i18n';
 import { invoke, message } from '../ipc';
 import type { Panneau } from './panneau';
 
@@ -14,23 +15,30 @@ interface Permissions {
   reglage: boolean;
 }
 
-const GENRES: Array<{ genre: keyof Permissions; titre: string; aide: string }> = [
-  { genre: 'fichier', titre: 'Écrire des fichiers', aide: 'Créer ou modifier un fichier dans tes dossiers de code.' },
-  { genre: 'commande', titre: 'Lancer des commandes', aide: 'Tests, compilation, scripts… dans tes dossiers de code.' },
-  { genre: 'reglage', titre: 'Changer ses réglages', aide: 'Quand tu le lui demandes, ou un agent que tu as branché.' },
-];
+/** Libellés évalués au rendu : la langue change à chaud. */
+function genres(): Array<{ genre: keyof Permissions; titre: string; aide: string }> {
+  return [
+    { genre: 'fichier', titre: t('reglages.permissions.fichier.titre'), aide: t('reglages.permissions.fichier.aide') },
+    { genre: 'commande', titre: t('reglages.permissions.commande.titre'), aide: t('reglages.permissions.commande.aide') },
+    { genre: 'reglage', titre: t('reglages.permissions.reglage.titre'), aide: t('reglages.permissions.reglage.aide') },
+  ];
+}
 
 export const PERMISSIONS: Panneau = {
   id: 'permissions',
-  titre: 'Permissions',
-  sousTitre: 'Ce que Kobi fait sans demander',
+  get titre() {
+    return t('reglages.permissions.titre');
+  },
+  get sousTitre() {
+    return t('reglages.permissions.sousTitre');
+  },
   monter(el, ctx) {
     const zone = h('div', { class: 'reglage' });
     el.replaceChildren(zone);
     const dessiner = (p: Permissions) => {
       zone.replaceChildren(
-        h('p', { class: 'aide' }, 'Par défaut, Kobi te montre une carte avant tout ce qui écrit. Une suppression est toujours demandée.'),
-        ...GENRES.map(({ genre, titre, aide }) =>
+        h('p', { class: 'aide' }, t('reglages.permissions.intro')),
+        ...genres().map(({ genre, titre, aide }) =>
           h(
             'div',
             { class: 'ligne-interrupteur', 'data-genre': genre },
@@ -41,12 +49,12 @@ export const PERMISSIONS: Panneau = {
                 role: 'switch',
                 class: 'interrupteur',
                 'aria-checked': String(p[genre]),
-                'aria-label': `${titre} sans demander`,
+                'aria-label': t('reglages.permissions.libelle', { titre }),
                 onclick: async () => {
                   try {
                     const relu = await invoke<Permissions>('regler_permission', { genre, sansDemander: !p[genre] });
                     dessiner(relu);
-                    ctx.notifier(relu[genre] ? `${titre} : sans demander.` : `${titre} : Kobi demandera.`);
+                    ctx.notifier(relu[genre] ? t('reglages.permissions.sansDemanderFait', { titre }) : t('reglages.permissions.demanderFait', { titre }));
                   } catch (e) {
                     ctx.notifier(message(e), 'erreur');
                   }
@@ -54,7 +62,7 @@ export const PERMISSIONS: Panneau = {
               },
               h('span', { class: 'interrupteur-rond', 'aria-hidden': 'true' }),
             ),
-            h('span', {}, h('strong', {}, titre), ` · ${p[genre] ? 'sans demander' : 'demander'}`, h('br'), h('small', { class: 'aide' }, aide)),
+            h('span', {}, h('strong', {}, titre), ` · ${p[genre] ? t('reglages.permissions.sansDemander') : t('reglages.permissions.demander')}`, h('br'), h('small', { class: 'aide' }, aide)),
           ),
         ),
       );

@@ -22,7 +22,7 @@ import { animationsReduites, h } from '../dom';
 import { Metronome } from '../econome';
 import { disponible, ecouter, invoke } from '../ipc';
 import { creerNotifieur } from '../notif';
-import { initLangue } from '../i18n';
+import { initLangue, surLangue, t } from '../i18n';
 import { vivreTitres } from '../titre';
 import { monterNotesEnDirect, type VueDirect } from '../notes/direct';
 import { ajouterPanneau } from '../reglages/panneaux';
@@ -35,23 +35,40 @@ export type IdSection = 'direct' | 'notes' | 'rappels' | 'activite' | 'reglages'
 
 interface Entree {
   id: IdSection;
-  titre: string;
+  /** Lu au rendu : la langue change à chaud (KOB-208). */
+  readonly titre: string;
   /** Glyphe de la navigation (Recursive). */
   glyphe: string;
-  /** Mot de Kobi quand on arrive sur la section. */
-  mot: string;
+  /** Mot de Kobi quand on arrive sur la section (lu au rendu, lui aussi). */
+  readonly mot: string;
   /** Dans la navigation seulement pendant une réunion. */
   reunion?: boolean;
 }
 
+/** Entrée de la navigation : titre `app.main.section.<id>`, mot `app.main.mot.<id>`. */
+function entree(id: IdSection, glyphe: string, reunion = false): Entree {
+  const cle = id === 'a-propos' ? 'aPropos' : id;
+  return {
+    id,
+    glyphe,
+    ...(reunion ? { reunion } : {}),
+    get titre() {
+      return t(`app.main.section.${cle}`);
+    },
+    get mot() {
+      return t(`app.main.mot.${cle}`);
+    },
+  };
+}
+
 /** Sections de la navigation, dans l'ordre. */
 export const SECTIONS: readonly Entree[] = [
-  { id: 'direct', titre: 'En direct', glyphe: '●', mot: 'noté', reunion: true },
-  { id: 'notes', titre: 'Notes et réunions', glyphe: '✎', mot: 'notes' },
-  { id: 'rappels', titre: 'Rappels et tâches', glyphe: '◷', mot: 'rappels' },
-  { id: 'activite', titre: 'Activité', glyphe: '≡', mot: 'journal' },
-  { id: 'reglages', titre: 'Réglages', glyphe: '⚙', mot: 'réglages' },
-  { id: 'a-propos', titre: 'À propos', glyphe: '?', mot: 'kobi' },
+  entree('direct', '●', true),
+  entree('notes', '✎'),
+  entree('rappels', '◷'),
+  entree('activite', '≡'),
+  entree('reglages', '⚙'),
+  entree('a-propos', '?'),
 ];
 
 const notifierBase = creerNotifieur(document.body);
@@ -65,7 +82,7 @@ const notifier: typeof notifierBase = (texte, ton, plus) => {
 
 const yeux = [h('span', { class: 'g' }, '*'), h('span', { class: 'g' }, '*')];
 const mot = h('span', { class: 'mot', 'aria-hidden': 'true' });
-const nav = h('nav', { class: 'nav-sections', 'aria-label': 'Sections de Kobi' });
+const nav = h('nav', { class: 'nav-sections', 'aria-label': t('app.main.nav') });
 const contenu = h('main', { class: 'contenu' });
 const bandeau = monterBandeauRec(
   () => aller('direct'),
@@ -137,6 +154,23 @@ for (const s of SECTIONS) {
   vues.set(s.id, vue);
   pile.append(vue);
 }
+
+// Langue changée (KOB-208) : la navigation, les noms des sections, le titre
+// de la fenêtre et le mot du petit Kobi se redisent.
+surLangue(() => {
+  nav.setAttribute('aria-label', t('app.main.nav'));
+  for (const s of SECTIONS) {
+    const b = nav.querySelector(`[data-section="${s.id}"] .nav-titre`);
+    if (b) b.textContent = s.titre;
+    vues.get(s.id)?.setAttribute('aria-label', s.titre);
+  }
+  if (!accueil.hidden) document.title = t('app.main.titreAccueil');
+  const s = SECTIONS.find((x) => x.id === courante);
+  if (s) {
+    miniKobi.section(s.mot);
+    if (accueil.hidden) document.title = `Kobi · ${s.titre}`;
+  }
+});
 
 // ----- Sections, montées à la première visite -----
 
@@ -242,7 +276,7 @@ function montrerAccueil(): void {
   monterAccueil(accueil, { fini: () => aller('notes'), notifier });
   accueil.hidden = false;
   app.dataset.accueil = 'true';
-  document.title = 'Bienvenue — Kobi';
+  document.title = t('app.main.titreAccueil');
   if (location.hash !== '#accueil') history.replaceState(null, '', '#accueil');
 }
 
@@ -287,12 +321,12 @@ invoke<string | null>('app_section_demandee').then(
   },
   () => {},
 );
-if (!disponible()) notifier('Ouvrez l’app depuis Kobi.', 'erreur');
+if (!disponible()) notifier(t('app.main.horsKobi'), 'erreur');
 // Serveurs MCP importés de Claude Code sans choix, désactivés au démarrage
 // (KOB-239) : l'app le dit une fois, discrètement.
 invoke<boolean>('mcp_choix_a_proposer').then(
   (proposer) => {
-    if (proposer) notifier('Kobi n’utilise plus d’office tes serveurs MCP de Claude Code : choisis les tiens dans Réglages → Outils MCP.');
+    if (proposer) notifier(t('app.main.mcpAChoisir'));
   },
   () => {},
 );

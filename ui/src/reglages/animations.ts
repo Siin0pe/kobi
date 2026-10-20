@@ -7,26 +7,28 @@
 import { choisirAnimations, modeAnimations, systemeReduit, type ModeAnimations } from '../animations';
 import { CHOIX_FPS, poserReglageAnimations, reglageAnimations, suivreReglageAnimations, type Fps } from '../cadence';
 import { h } from '../dom';
+import { t } from '../i18n';
 import { disponible, invoke, message } from '../ipc';
 import type { Contexte, Panneau } from './panneau';
 
-const OPTIONS: ReadonlyArray<{ mode: ModeAnimations; titre: string; detail: () => string }> = [
-  { mode: 'toujours', titre: 'Toujours', detail: () => 'Kobi bouge en permanence, quel que soit le réglage de Windows.' },
+// Textes lus au rendu : la langue change à chaud (KOB-208).
+const options = (): ReadonlyArray<{ mode: ModeAnimations; titre: string; detail: () => string }> => [
+  { mode: 'toujours', titre: t('reglages.animations.toujours'), detail: () => t('reglages.animations.toujoursDetail') },
   {
     mode: 'systeme',
-    titre: 'Comme Windows',
-    detail: () => (systemeReduit() ? 'Windows a coupé ses effets d’animation : Kobi resterait immobile.' : 'Windows anime ses fenêtres : Kobi aussi.'),
+    titre: t('reglages.animations.systeme'),
+    detail: () => (systemeReduit() ? t('reglages.animations.systemeDetailReduit') : t('reglages.animations.systemeDetail')),
   },
-  { mode: 'reduites', titre: 'Réduites', detail: () => 'Kobi garde ses expressions, sans mouvement.' },
+  { mode: 'reduites', titre: t('reglages.animations.reduites'), detail: () => t('reglages.animations.reduitesDetail') },
 ];
 
 const DETAIL_FPS: Record<string, string> = {
-  '5': 'Le plus sobre : le mouvement avance par petits pas.',
-  '15': 'Sobre, encore lisible.',
-  '30': 'Fluide, moitié moins d’images.',
-  '60': 'Fluide (par défaut).',
-  '120': 'Pour les écrans à 120 Hz et plus.',
-  ecran: 'Autant d’images que l’écran en affiche.',
+  '5': 'reglages.animations.fps5',
+  '15': 'reglages.animations.fps15',
+  '30': 'reglages.animations.fps30',
+  '60': 'reglages.animations.fps60',
+  '120': 'reglages.animations.fps120',
+  ecran: 'reglages.animations.fpsEcran',
 };
 
 /** Change un réglage d'animation dans config.toml (hors de Kobi : cette fenêtre seulement). */
@@ -37,15 +39,15 @@ function regler(cle: 'fps' | 'economie', valeur: Fps | boolean, ctx: Contexte): 
   }
   invoke<{ fps: Fps; economie: boolean }>('regler_animations', { cle, valeur }).then(
     (r) => poserReglageAnimations(r),
-    (e) => ctx.notifier(`Réglage non changé : ${message(e)}`, 'erreur'),
+    (e) => ctx.notifier(t('reglages.animations.erreur', { erreur: message(e) }), 'erreur'),
   );
 }
 
 /** « Images par seconde » et « Économie d'énergie » (KOB-200). */
 function blocCadence(ctx: Contexte): HTMLElement {
-  const choix = h('div', { class: 'choix', role: 'radiogroup', 'aria-label': 'Images par seconde' });
+  const choix = h('div', { class: 'choix', role: 'radiogroup', 'aria-label': t('reglages.animations.fpsTitre') });
   for (const fps of CHOIX_FPS) {
-    const titre = fps === 'ecran' ? 'Suivre l’écran' : `${fps} images/s`;
+    const titre = fps === 'ecran' ? t('reglages.animations.fpsSuivreEcran') : t('reglages.animations.fpsOption', { fps });
     choix.append(
       h(
         'button',
@@ -56,11 +58,11 @@ function blocCadence(ctx: Contexte): HTMLElement {
           'data-fps': String(fps),
           onclick: () => {
             regler('fps', fps, ctx);
-            ctx.notifier(`Images par seconde : ${titre.toLowerCase()}`);
+            ctx.notifier(t('reglages.animations.fpsNotif', { choix: titre.toLowerCase() }));
           },
         },
         h('span', { class: 'option-rond', 'aria-hidden': 'true' }),
-        h('span', { class: 'option-corps' }, h('span', { class: 'option-titre' }, titre), h('span', { class: 'option-detail' }, DETAIL_FPS[String(fps)]!)),
+        h('span', { class: 'option-corps' }, h('span', { class: 'option-titre' }, titre), h('span', { class: 'option-detail' }, t(DETAIL_FPS[String(fps)]!))),
       ),
     );
   }
@@ -70,7 +72,7 @@ function blocCadence(ctx: Contexte): HTMLElement {
       type: 'button',
       role: 'switch',
       class: 'interrupteur',
-      'aria-label': 'Économie d’énergie',
+      'aria-label': t('reglages.animations.economieTitre'),
       onclick: () => regler('economie', !reglageAnimations().economie, ctx),
     },
     h('span', { class: 'interrupteur-rond', 'aria-hidden': 'true' }),
@@ -80,7 +82,7 @@ function blocCadence(ctx: Contexte): HTMLElement {
     const r = reglageAnimations();
     for (const b of choix.children) b.setAttribute('aria-checked', String(b.getAttribute('data-fps') === String(r.fps)));
     interrupteur.setAttribute('aria-checked', String(r.economie));
-    etat.textContent = r.economie ? 'Activée' : 'Désactivée';
+    etat.textContent = r.economie ? t('reglages.animations.economieActivee') : t('reglages.animations.economieDesactivee');
   };
   afficher();
   // Le panneau est monté une fois pour la vie de la fenêtre : il suit le réglage, d'où qu'il change.
@@ -91,15 +93,15 @@ function blocCadence(ctx: Contexte): HTMLElement {
     h(
       'div',
       { class: 'reglage', 'data-reglage': 'fps' },
-      h('div', { class: 'reglage-titre' }, 'Images par seconde'),
-      h('p', { class: 'aide' }, 'Tout ce qui bouge suit ce nombre : la mascotte, ses bulles, la conversation en grand et l’app.'),
+      h('div', { class: 'reglage-titre' }, t('reglages.animations.fpsTitre')),
+      h('p', { class: 'aide' }, t('reglages.animations.fpsAide')),
       choix,
     ),
     h(
       'div',
       { class: 'reglage', 'data-reglage': 'economie' },
-      h('div', { class: 'reglage-titre' }, 'Économie d’énergie'),
-      h('p', { class: 'aide' }, 'Au repos prolongé, Kobi ralentit à 3 puis 2 images par seconde pour ménager la batterie. Le mouvement devient saccadé.'),
+      h('div', { class: 'reglage-titre' }, t('reglages.animations.economieTitre')),
+      h('p', { class: 'aide' }, t('reglages.animations.economieAide')),
       h('div', { class: 'ligne-interrupteur' }, interrupteur, etat),
     ),
   );
@@ -107,10 +109,15 @@ function blocCadence(ctx: Contexte): HTMLElement {
 
 export const ANIMATIONS: Panneau = {
   id: 'animations',
-  titre: 'Animations',
-  sousTitre: 'Kobi qui bouge, ou immobile',
+  get titre() {
+    return t('reglages.animations.titre');
+  },
+  get sousTitre() {
+    return t('reglages.animations.sousTitre');
+  },
   monter(el, ctx) {
-    const choix = h('div', { class: 'choix', role: 'radiogroup', 'aria-label': 'Animations de Kobi' });
+    const OPTIONS = options();
+    const choix = h('div', { class: 'choix', role: 'radiogroup', 'aria-label': t('reglages.animations.modeTitre') });
     const selection = (mode: ModeAnimations) => {
       for (const b of choix.children) b.setAttribute('aria-checked', String(b.getAttribute('data-mode') === mode));
       ctx.signaler?.('ok', OPTIONS.find((o) => o.mode === mode)!.titre.toLowerCase());
@@ -127,7 +134,7 @@ export const ANIMATIONS: Panneau = {
             onclick: () => {
               choisirAnimations(o.mode);
               selection(o.mode);
-              ctx.notifier(`Animations : ${o.titre.toLowerCase()}`);
+              ctx.notifier(t('reglages.animations.modeNotif', { mode: o.titre.toLowerCase() }));
             },
           },
           h('span', { class: 'option-rond', 'aria-hidden': 'true' }),
@@ -139,8 +146,8 @@ export const ANIMATIONS: Panneau = {
       h(
         'div',
         { class: 'reglage', 'data-reglage': 'animations' },
-        h('div', { class: 'reglage-titre' }, 'Animations de Kobi'),
-        h('p', { class: 'aide' }, 'La mascotte, ses bulles et le texte. Le changement vaut tout de suite, dans toutes les fenêtres.'),
+        h('div', { class: 'reglage-titre' }, t('reglages.animations.modeTitre')),
+        h('p', { class: 'aide' }, t('reglages.animations.modeAide')),
         choix,
       ),
       blocCadence(ctx),

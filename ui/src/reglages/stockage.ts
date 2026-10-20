@@ -3,6 +3,7 @@
 // lecture seule tant que Kobi ne fait que lire, KOB-138).
 
 import { h } from '../dom';
+import { t } from '../i18n';
 import { invoke, message } from '../ipc';
 import type { Contexte, Panneau } from './panneau';
 
@@ -27,12 +28,15 @@ export interface ChangementStockage {
   retention_conversations?: Retention;
 }
 
-export const DUREES: ReadonlyArray<{ valeur: Retention; libelle: string }> = [
-  { valeur: 30, libelle: '30 jours' },
-  { valeur: 90, libelle: '90 jours' },
-  { valeur: 365, libelle: '1 an' },
-  { valeur: 'unlimited', libelle: 'Toujours' },
-];
+/** Durées proposées, libellées au rendu (la langue change à chaud). */
+export function durees(): ReadonlyArray<{ valeur: Retention; libelle: string }> {
+  return [
+    { valeur: 30, libelle: t('reglages.stockage.jours', { n: 30 }) },
+    { valeur: 90, libelle: t('reglages.stockage.jours', { n: 90 }) },
+    { valeur: 365, libelle: t('reglages.stockage.ans', { n: 1 }) },
+    { valeur: 'unlimited', libelle: t('reglages.stockage.toujours') },
+  ];
+}
 
 function regler(changement: ChangementStockage): Promise<ReglagesStockage> {
   return invoke<ReglagesStockage>('regler_stockage', { changement });
@@ -46,7 +50,7 @@ function choixDuree(
   changer: (v: Retention) => void,
 ): HTMLElement {
   const groupe = h('div', { class: 'segments', role: 'radiogroup', 'aria-label': legende });
-  for (const d of DUREES) {
+  for (const d of durees()) {
     const bouton = h(
       'button',
       {
@@ -71,16 +75,16 @@ function choixDuree(
 function publication(titre: string, etat: EtatPublication): HTMLElement {
   const corps =
     etat.etat === 'aucune'
-      ? h('span', {}, 'Aucune destination : tout reste sur cet ordinateur.')
+      ? h('span', {}, t('reglages.stockage.aucuneDestination'))
       : h(
           'span',
           {},
           h('b', {}, etat.mcp),
           ' → ',
           h('b', {}, etat.destination),
-          h('span', { class: 'puce' }, 'en attente'),
+          h('span', { class: 'puce' }, t('reglages.stockage.enAttente')),
           h('br'),
-          'Kobi ne fait que lire pour l’instant : rien n’est envoyé.',
+          t('reglages.stockage.lectureSeule'),
         );
   return h('li', { class: 'publication', 'data-etat': etat.etat }, h('span', { class: 'publication-titre' }, titre), corps);
 }
@@ -100,7 +104,7 @@ function dessiner(el: HTMLElement, r: ReglagesStockage, ctx: Contexte, recharger
   const choisir = async () => {
     try {
       const dossier = await invoke<string | null>('choisir_dossier');
-      if (dossier) await appliquer({ dossier }, 'Dossier changé : la prochaine réunion y sera rangée.');
+      if (dossier) await appliquer({ dossier }, t('reglages.stockage.dossierChange'));
     } catch (e) {
       ctx.notifier(message(e), 'erreur');
     }
@@ -109,18 +113,18 @@ function dessiner(el: HTMLElement, r: ReglagesStockage, ctx: Contexte, recharger
     h(
       'div',
       { class: 'reglage', 'data-reglage': 'dossier' },
-      h('div', { class: 'reglage-titre' }, 'Dossier de Kobi'),
-      h('p', { class: 'aide' }, 'Réunions, conversations et rappels sont rangés ici, en fichiers lisibles. Un changement vaut pour la prochaine réunion.'),
+      h('div', { class: 'reglage-titre' }, t('reglages.stockage.dossierTitre')),
+      h('p', { class: 'aide' }, t('reglages.stockage.dossierAide')),
       h(
         'div',
         { class: 'dossier' },
-        h('code', { class: 'chemin', title: r.dossier ?? '' }, r.dossier ?? 'aucun dossier personnel'),
-        r.par_defaut && h('span', { class: 'puce' }, 'par défaut'),
+        h('code', { class: 'chemin', title: r.dossier ?? '' }, r.dossier ?? t('reglages.stockage.aucunDossier')),
+        r.par_defaut && h('span', { class: 'puce' }, t('reglages.stockage.parDefaut')),
       ),
       h(
         'div',
         { class: 'boutons' },
-        h('button', { type: 'button', class: 'bouton plein', 'data-action': 'choisir', onclick: () => void choisir() }, 'Choisir un dossier…'),
+        h('button', { type: 'button', class: 'bouton plein', 'data-action': 'choisir', onclick: () => void choisir() }, t('reglages.stockage.choisir')),
         h(
           'button',
           {
@@ -129,7 +133,7 @@ function dessiner(el: HTMLElement, r: ReglagesStockage, ctx: Contexte, recharger
             'data-action': 'ouvrir',
             onclick: () => invoke('carnet_ouvrir_dossier').catch((e) => ctx.notifier(message(e), 'erreur')),
           },
-          'Ouvrir',
+          t('reglages.stockage.ouvrir'),
         ),
         !r.par_defaut &&
           h(
@@ -138,42 +142,46 @@ function dessiner(el: HTMLElement, r: ReglagesStockage, ctx: Contexte, recharger
               type: 'button',
               class: 'bouton discret',
               'data-action': 'defaut',
-              onclick: () => void appliquer({ dossier: '' }, 'Retour au dossier par défaut.'),
+              onclick: () => void appliquer({ dossier: '' }, t('reglages.stockage.retourDefaut')),
             },
-            'Revenir au dossier par défaut',
+            t('reglages.stockage.revenirDefaut'),
           ),
       ),
     ),
     choixDuree(
       'retention-reunions',
-      'Garder les réunions',
-      'Au-delà, transcription, notes et compte rendu sont supprimés au démarrage de Kobi.',
+      t('reglages.stockage.garderReunions'),
+      t('reglages.stockage.garderReunionsAide'),
       r.retention_reunions,
-      (v) => void appliquer({ retention_reunions: v }, 'Conservation des réunions enregistrée.'),
+      (v) => void appliquer({ retention_reunions: v }, t('reglages.stockage.reunionsEnregistre')),
     ),
     choixDuree(
       'retention-conversations',
-      'Garder les conversations',
-      'Les échanges du quotidien avec Kobi, rangés à part des réunions.',
+      t('reglages.stockage.garderConversations'),
+      t('reglages.stockage.garderConversationsAide'),
       r.retention_conversations,
-      (v) => void appliquer({ retention_conversations: v }, 'Conservation des conversations enregistrée.'),
+      (v) => void appliquer({ retention_conversations: v }, t('reglages.stockage.conversationsEnregistre')),
     ),
     h(
       'div',
       { class: 'reglage', 'data-reglage': 'publication' },
-      h('div', { class: 'reglage-titre' }, 'Publication par MCP'),
-      h('p', { class: 'aide' }, 'Copie d’un compte rendu vers un outil (Linear, Notion…). Prête, active quand Kobi pourra écrire.'),
-      h('ul', { class: 'publications' }, publication('Réunions', r.publication_reunions), publication('Conversations', r.publication_conversations)),
+      h('div', { class: 'reglage-titre' }, t('reglages.stockage.publicationTitre')),
+      h('p', { class: 'aide' }, t('reglages.stockage.publicationAide')),
+      h('ul', { class: 'publications' }, publication(t('reglages.stockage.reunions'), r.publication_reunions), publication(t('reglages.stockage.conversations'), r.publication_conversations)),
     ),
   );
 }
 
 export const STOCKAGE: Panneau = {
   id: 'stockage',
-  titre: 'Stockage',
-  sousTitre: 'Dossier, conservation, publication',
+  get titre() {
+    return t('reglages.stockage.titre');
+  },
+  get sousTitre() {
+    return t('reglages.stockage.sousTitre');
+  },
   monter(el, ctx) {
-    el.replaceChildren(h('p', { class: 'chargement' }, 'Lecture des réglages…'));
+    el.replaceChildren(h('p', { class: 'chargement' }, t('reglages.stockage.chargement')));
     const recharger = (r: ReglagesStockage) => dessiner(el, r, ctx, recharger);
     invoke<ReglagesStockage>('reglages_stockage').then(recharger, (e) => {
       el.replaceChildren(h('p', { class: 'erreur' }, message(e)));

@@ -7,6 +7,7 @@ import { h } from '../dom';
 import { caracteres, copier, FORMATS, formatCopie, lignes, poserFormatCopie, TEXTES, type Format, type Quoi } from '../copie';
 import type { ReunionLue } from './donnees';
 import { horodatage } from './format';
+import { t } from '../i18n';
 
 /** Une chose à copier : ce que c'est, sa taille (ou son contenu), son texte markdown. */
 export interface Partie {
@@ -58,12 +59,19 @@ export function partiesReunion(r: ReunionLue, tout: () => Promise<string>): Part
   const cr = compteRenduMd(r);
   const notes = r.notes.trim();
   const transcription = r.segments.map(ligneMd).join('\n');
-  const contenu = [cr ? 'compte rendu' : notes ? 'notes' : null, r.segments.length ? 'transcription' : null].filter(Boolean);
+  const corps = cr ? t('carnet.copieReunion.contenuCompteRendu') : notes ? t('carnet.copieReunion.contenuNotes') : null;
+  const avecTranscription = r.segments.length > 0;
+  const contenu =
+    corps && avecTranscription
+      ? t('carnet.copieReunion.toutAvecDeux', { corps, transcription: t('carnet.copieReunion.contenuTranscription') })
+      : corps || avecTranscription
+        ? t('carnet.copieReunion.toutAvecUn', { contenu: corps ?? t('carnet.copieReunion.contenuTranscription') })
+        : t('carnet.copieReunion.toutTitre');
   return [
-    { quoi: 'compte-rendu', detail: cr ? caracteres(cr) : 'pas encore écrit', texte: async () => cr, vide: !cr },
-    { quoi: 'transcription', detail: r.segments.length ? lignes(r.segments.length) : 'vide', texte: async () => transcription, vide: !r.segments.length },
-    { quoi: 'notes', detail: notes ? caracteres(notes) : 'aucune', texte: async () => notes, vide: !notes },
-    { quoi: 'tout', detail: `markdown : titre${contenu.length ? `, ${contenu.join(' et ')}` : ''}`, texte: tout },
+    { quoi: 'compte-rendu', detail: cr ? caracteres(cr) : t('carnet.copieReunion.pasEncoreEcrit'), texte: async () => cr, vide: !cr },
+    { quoi: 'transcription', detail: r.segments.length ? lignes(r.segments.length) : t('carnet.copieReunion.transcriptionVide'), texte: async () => transcription, vide: !r.segments.length },
+    { quoi: 'notes', detail: notes ? caracteres(notes) : t('carnet.copieReunion.notesAucune'), texte: async () => notes, vide: !notes },
+    { quoi: 'tout', detail: contenu, texte: tout },
   ];
 }
 
@@ -80,8 +88,8 @@ async function lancer(p: Partie, format: Format, quand: QuandCopie): Promise<voi
  * nom, sa taille), et le format (markdown ou texte brut), retenu.
  */
 export function menuCopier(parties: Partie[], quand: QuandCopie): HTMLElement {
-  const bouton = h('button', { type: 'button', class: 'bouton', 'data-action': 'copier', 'aria-haspopup': 'menu', 'aria-expanded': 'false' }, 'Copier', h('span', { class: 'chevron', 'aria-hidden': 'true' }, '▾'));
-  const menu = h('div', { class: 'menu-copie', role: 'menu', 'aria-label': 'Que copier ?', hidden: true });
+  const bouton = h('button', { type: 'button', class: 'bouton', 'data-action': 'copier', 'aria-haspopup': 'menu', 'aria-expanded': 'false' }, t('carnet.copieReunion.copier'), h('span', { class: 'chevron', 'aria-hidden': 'true' }, '▾'));
+  const menu = h('div', { class: 'menu-copie', role: 'menu', 'aria-label': t('carnet.copieReunion.queCopier'), hidden: true });
   const entrees: HTMLButtonElement[] = [];
   for (const p of parties) {
     const e = h(
@@ -97,7 +105,7 @@ export function menuCopier(parties: Partie[], quand: QuandCopie): HTMLElement {
     entrees.push(e);
     menu.append(e);
   }
-  const formats = h('div', { class: 'menu-copie-formats', role: 'group', 'aria-label': 'Format de la copie' }, h('span', { class: 'menu-copie-titre' }, 'Format'));
+  const formats = h('div', { class: 'menu-copie-formats', role: 'group', 'aria-label': t('carnet.copieReunion.formatDeLaCopie') }, h('span', { class: 'menu-copie-titre' }, t('carnet.copieReunion.format')));
   const choix = (Object.keys(FORMATS) as Format[]).map((f) => {
     const c = h('button', { type: 'button', role: 'menuitemradio', class: 'menu-copie-format', 'data-format': f, tabindex: '-1' }, FORMATS[f]);
     c.addEventListener('click', () => {

@@ -5,24 +5,25 @@
 
 import { affichage, changerAffichage, type Affichage } from '../affichage';
 import { h } from '../dom';
+import { t } from '../i18n';
 import { invoke, message } from '../ipc';
 import type { Panneau } from './panneau';
 
 type Verbosite = 'bavard' | 'normal' | 'discret';
 
 /** Combien Kobi parle (KOB-215) : réglage de la coque (`voice.verbosite`), appliqué à chaud. */
-const VERBOSITES: ReadonlyArray<{ valeur: Verbosite; titre: string; detail: string }> = [
-  { valeur: 'normal', titre: 'Normal', detail: 'Une ou deux phrases, le détail quand tu le demandes.' },
-  { valeur: 'discret', titre: 'Discret', detail: 'Une phrase, et rien d’annoncé quand une tâche est longue.' },
-  { valeur: 'bavard', titre: 'Bavard', detail: 'Des réponses plus complètes, et la voix en lit davantage.' },
+const verbosites = (): ReadonlyArray<{ valeur: Verbosite; titre: string; detail: string }> => [
+  { valeur: 'normal', titre: t('reglages.affichage.verbositeNormal'), detail: t('reglages.affichage.verbositeNormalDetail') },
+  { valeur: 'discret', titre: t('reglages.affichage.verbositeDiscret'), detail: t('reglages.affichage.verbositeDiscretDetail') },
+  { valeur: 'bavard', titre: t('reglages.affichage.verbositeBavard'), detail: t('reglages.affichage.verbositeBavardDetail') },
 ];
 
 function blocVerbosite(notifier: (texte: string, ton?: 'ok' | 'erreur') => void): HTMLElement {
-  const choix = h('div', { class: 'choix', role: 'radiogroup', 'aria-label': 'Kobi parle' });
+  const choix = h('div', { class: 'choix', role: 'radiogroup', 'aria-label': t('reglages.affichage.verbositeTitre') });
   const marquer = (v: Verbosite): void => {
     for (const b of choix.children) b.setAttribute('aria-checked', String(b.getAttribute('data-valeur') === v));
   };
-  for (const o of VERBOSITES) {
+  for (const o of verbosites()) {
     choix.append(
       h(
         'button',
@@ -35,7 +36,7 @@ function blocVerbosite(notifier: (texte: string, ton?: 'ok' | 'erreur') => void)
           onclick: async () => {
             try {
               marquer(await invoke<Verbosite>('regler_verbosite_ui', { verbosite: o.valeur }));
-              notifier(`Kobi parle : ${o.titre.toLowerCase()}`);
+              notifier(t('reglages.affichage.verbositeNotif', { choix: o.titre.toLowerCase() }));
             } catch (e) {
               notifier(message(e), 'erreur');
             }
@@ -50,8 +51,8 @@ function blocVerbosite(notifier: (texte: string, ton?: 'ok' | 'erreur') => void)
   return h(
     'div',
     { class: 'reglage', 'data-reglage': 'verbosite' },
-    h('div', { class: 'reglage-titre' }, 'Kobi parle'),
-    h('p', { class: 'aide' }, 'La longueur de ses réponses, ce que la voix en dit, et ses annonces.'),
+    h('div', { class: 'reglage-titre' }, t('reglages.affichage.verbositeTitre')),
+    h('p', { class: 'aide' }, t('reglages.affichage.verbositeAide')),
     choix,
   );
 }
@@ -63,7 +64,8 @@ interface Groupe<K extends keyof Affichage> {
   options: ReadonlyArray<{ valeur: Affichage[K]; titre: string; detail: string }>;
 }
 
-const GROUPES: [
+// Textes lus au rendu : la langue change à chaud (KOB-208).
+const groupes = (): [
   Groupe<'mode'>,
   Groupe<'auto'>,
   Groupe<'taille'>,
@@ -71,84 +73,88 @@ const GROUPES: [
   Groupe<'texte'>,
   Groupe<'delai'>,
   Groupe<'etat'>,
-] = [
+] => [
   {
     cle: 'mode',
-    titre: 'Widget de Kobi',
-    aide: 'Ce que Kobi montre à côté de lui sur le bureau.',
+    titre: t('reglages.affichage.modeTitre'),
+    aide: t('reglages.affichage.modeAide'),
     options: [
-      { valeur: 'simple', titre: 'Simple', detail: 'Kobi et une courte bulle de trois lignes au plus ; le reste se lit en grand.' },
-      { valeur: 'detaille', titre: 'Bulle détaillée', detail: 'La bulle grandit avec la réponse et défile.' },
+      { valeur: 'simple', titre: t('reglages.affichage.modeSimple'), detail: t('reglages.affichage.modeSimpleDetail') },
+      { valeur: 'detaille', titre: t('reglages.affichage.modeDetaille'), detail: t('reglages.affichage.modeDetailleDetail') },
     ],
   },
   {
     cle: 'auto',
-    titre: 'Ouvrir la conversation en grand',
-    aide: 'On peut aussi l’ouvrir d’un clic sur la bulle, en disant « Kobi, montre en grand » ou avec Ctrl+Alt+G.',
+    titre: t('reglages.affichage.autoTitre'),
+    aide: t('reglages.affichage.autoAide'),
     options: [
-      { valeur: 'jamais', titre: 'À la demande', detail: 'Seulement quand je le demande : rien ne s’ouvre pendant que tu fais autre chose.' },
-      { valeur: 'longues', titre: 'Pour les réponses longues', detail: 'Dès que la bulle ne peut plus tout montrer.' },
-      { valeur: 'toujours', titre: 'Toujours', detail: 'À chaque réponse.' },
+      { valeur: 'jamais', titre: t('reglages.affichage.autoJamais'), detail: t('reglages.affichage.autoJamaisDetail') },
+      { valeur: 'longues', titre: t('reglages.affichage.autoLongues'), detail: t('reglages.affichage.autoLonguesDetail') },
+      { valeur: 'toujours', titre: t('reglages.affichage.autoToujours'), detail: t('reglages.affichage.autoToujoursDetail') },
     ],
   },
   {
     cle: 'taille',
-    titre: 'Taille de la vue',
-    aide: 'La largeur et la hauteur du panneau de lecture.',
+    titre: t('reglages.affichage.tailleTitre'),
+    aide: t('reglages.affichage.tailleAide'),
     options: [
-      { valeur: 'petite', titre: 'Petite', detail: '480 × 420' },
-      { valeur: 'moyenne', titre: 'Moyenne', detail: '640 × 560' },
-      { valeur: 'grande', titre: 'Grande', detail: '860 × 720' },
+      { valeur: 'petite', titre: t('reglages.affichage.taillePetite'), detail: '480 × 420' },
+      { valeur: 'moyenne', titre: t('reglages.affichage.tailleMoyenne'), detail: '640 × 560' },
+      { valeur: 'grande', titre: t('reglages.affichage.tailleGrande'), detail: '860 × 720' },
     ],
   },
   {
     cle: 'position',
-    titre: 'Place de la vue',
-    aide: 'Kobi reste toujours visible à côté.',
+    titre: t('reglages.affichage.positionTitre'),
+    aide: t('reglages.affichage.positionAide'),
     options: [
-      { valeur: 'a-cote', titre: 'À côté de Kobi', detail: 'Du côté où il y a la place.' },
-      { valeur: 'centre', titre: 'Au centre de l’écran', detail: 'Pour lire de loin.' },
-      { valeur: 'moitie-droite', titre: 'Moitié droite de l’écran', detail: 'Toute la hauteur.' },
+      { valeur: 'a-cote', titre: t('reglages.affichage.positionACote'), detail: t('reglages.affichage.positionACoteDetail') },
+      { valeur: 'centre', titre: t('reglages.affichage.positionCentre'), detail: t('reglages.affichage.positionCentreDetail') },
+      { valeur: 'moitie-droite', titre: t('reglages.affichage.positionMoitieDroite'), detail: t('reglages.affichage.positionMoitieDroiteDetail') },
     ],
   },
   {
     cle: 'texte',
-    titre: 'Taille du texte',
-    aide: 'Dans la vue agrandie.',
+    titre: t('reglages.affichage.texteTitre'),
+    aide: t('reglages.affichage.texteAide'),
     options: [
-      { valeur: 'petit', titre: 'Petit', detail: '15 px' },
-      { valeur: 'moyen', titre: 'Moyen', detail: '18 px' },
-      { valeur: 'grand', titre: 'Grand', detail: '22 px' },
+      { valeur: 'petit', titre: t('reglages.affichage.textePetit'), detail: '15 px' },
+      { valeur: 'moyen', titre: t('reglages.affichage.texteMoyen'), detail: '18 px' },
+      { valeur: 'grand', titre: t('reglages.affichage.texteGrand'), detail: '22 px' },
     ],
   },
   {
     cle: 'delai',
-    titre: 'Ranger la vue',
-    aide: 'Une fois la réponse finie ; Échap ou un clic à côté la rangent tout de suite.',
+    titre: t('reglages.affichage.delaiTitre'),
+    aide: t('reglages.affichage.delaiAide'),
     options: [
-      { valeur: 10, titre: 'Après 10 s', detail: '' },
-      { valeur: 30, titre: 'Après 30 s', detail: '' },
-      { valeur: 60, titre: 'Après 1 min', detail: '' },
-      { valeur: 0, titre: 'Jamais toute seule', detail: '' },
+      { valeur: 10, titre: t('reglages.affichage.delai10'), detail: '' },
+      { valeur: 30, titre: t('reglages.affichage.delai30'), detail: '' },
+      { valeur: 60, titre: t('reglages.affichage.delai60'), detail: '' },
+      { valeur: 0, titre: t('reglages.affichage.delaiJamais'), detail: '' },
     ],
   },
   {
     cle: 'etat',
-    titre: 'Afficher l’état en texte',
-    aide: 'Le petit mot sous Kobi quand il travaille ; au repos et en réunion, il n’y en a pas.',
+    titre: t('reglages.affichage.etatTitre'),
+    aide: t('reglages.affichage.etatAide'),
     options: [
-      { valeur: 'texte', titre: 'Oui', detail: '« j’écoute… », « je réfléchis… », « je rédige… »' },
-      { valeur: 'aucun', titre: 'Non', detail: 'Kobi seul, son visage dit tout.' },
+      { valeur: 'texte', titre: t('reglages.affichage.etatOui'), detail: t('reglages.affichage.etatOuiDetail') },
+      { valeur: 'aucun', titre: t('reglages.affichage.etatNon'), detail: t('reglages.affichage.etatNonDetail') },
     ],
   },
 ];
 
 export const AFFICHAGE: Panneau = {
   id: 'affichage',
-  titre: 'Affichage',
-  sousTitre: 'Widget simple, conversation en grand',
+  get titre() {
+    return t('reglages.affichage.titre');
+  },
+  get sousTitre() {
+    return t('reglages.affichage.sousTitre');
+  },
   monter(el, ctx) {
-    const blocs = GROUPES.map((g) => {
+    const blocs = groupes().map((g) => {
       const choix = h('div', { class: 'choix', role: 'radiogroup', 'aria-label': g.titre });
       const marquer = (valeur: unknown): void => {
         for (const b of choix.children) b.setAttribute('aria-checked', String(b.getAttribute('data-valeur') === String(valeur)));
@@ -165,7 +171,7 @@ export const AFFICHAGE: Panneau = {
               onclick: () => {
                 changerAffichage({ [g.cle]: o.valeur } as Partial<Affichage>);
                 marquer(o.valeur);
-                ctx.notifier(`${g.titre} : ${o.titre.toLowerCase()}`);
+                ctx.notifier(t('reglages.affichage.notif', { reglage: g.titre, choix: o.titre.toLowerCase() }));
               },
             },
             h('span', { class: 'option-rond', 'aria-hidden': 'true' }),
@@ -177,6 +183,6 @@ export const AFFICHAGE: Panneau = {
       return h('div', { class: 'reglage', 'data-reglage': g.cle }, h('div', { class: 'reglage-titre' }, g.titre), h('p', { class: 'aide' }, g.aide), choix);
     });
     el.replaceChildren(blocVerbosite(ctx.notifier), ...blocs);
-    ctx.signaler?.('ok', affichage().mode === 'simple' ? 'widget simple' : 'bulle détaillée');
+    ctx.signaler?.('ok', affichage().mode === 'simple' ? t('reglages.affichage.resumeSimple') : t('reglages.affichage.resumeDetaille'));
   },
 };

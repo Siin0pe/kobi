@@ -1,8 +1,10 @@
-// Touches d'un raccourci, en français : partagé par les réglages et le badge
+// Touches d'un raccourci, dans la langue de l'interface : partagé par les réglages et le badge
 // REC (KOB-250).
 
-/** Touches d'un raccourci Tauri (`Ctrl+Shift+Space`), en français. */
+import { t } from './i18n';
+
+/** Touches d'un raccourci Tauri (`Ctrl+Shift+Space`), dans la langue de l'interface. */
 export function touches(accelerateur: string): string[] {
-  const noms: Record<string, string> = { space: 'Espace', control: 'Ctrl', ctrl: 'Ctrl', commandorcontrol: 'Ctrl', shift: 'Maj', alt: 'Alt', super: 'Win', enter: 'Entrée' };
-  return accelerateur.split('+').map((t) => noms[t.trim().toLowerCase()] ?? t.trim().toUpperCase());
+  const noms: Record<string, string> = { space: t('touches.espace'), control: 'Ctrl', ctrl: 'Ctrl', commandorcontrol: 'Ctrl', shift: t('touches.maj'), alt: 'Alt', super: 'Win', enter: t('touches.entree') };
+  return accelerateur.split('+').map((k) => noms[k.trim().toLowerCase()] ?? k.trim().toUpperCase());
 }

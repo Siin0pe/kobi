@@ -9,6 +9,7 @@
 
 import './mcp.css';
 import { h } from '../dom';
+import { t } from '../i18n';
 import { absente, invoke, message } from '../ipc';
 import type { Contexte, Panneau } from './panneau';
 
@@ -58,19 +59,22 @@ export interface NouveauServeur {
   secrets: Record<string, string>;
 }
 
-const NATURES: Record<Nature, string> = { lecture: 'lit', ecriture: 'écrit', suppression: 'supprime' };
+/** « lit », « écrit », « supprime », au rendu (la langue change à chaud). */
+function nature(n: Nature): string {
+  return { lecture: t('reglages.mcp.nature.lecture'), ecriture: t('reglages.mcp.nature.ecriture'), suppression: t('reglages.mcp.nature.suppression') }[n];
+}
 
 /** « 12 outils · 8 lisent · 3 écrivent · 1 supprime ». */
 export function compte(outils: ReadonlyArray<{ nature: Nature }>): string {
-  if (!outils.length) return 'pas encore testé';
+  if (!outils.length) return t('reglages.mcp.pasTeste');
   const n = (nature: Nature) => outils.filter((o) => o.nature === nature).length;
-  const parties = [`${outils.length} outil${outils.length > 1 ? 's' : ''}`];
+  const parties = [t('reglages.mcp.outils', { n: outils.length })];
   const l = n('lecture');
   const e = n('ecriture');
   const s = n('suppression');
-  if (l) parties.push(`${l} ${l > 1 ? 'lisent' : 'lit'}`);
-  if (e) parties.push(`${e} ${e > 1 ? 'écrivent' : 'écrit'}`);
-  if (s) parties.push(`${s} ${s > 1 ? 'suppriment' : 'supprime'}`);
+  if (l) parties.push(t('reglages.mcp.lisent', { n: l }));
+  if (e) parties.push(t('reglages.mcp.ecrivent', { n: e }));
+  if (s) parties.push(t('reglages.mcp.suppriment', { n: s }));
   return parties.join(' · ');
 }
 
@@ -127,26 +131,26 @@ function segments<T extends string>(legende: string, choix: ReadonlyArray<{ vale
 function blocImport(ctx: Contexte, apres: (serveurs: ServeurMcp[]) => void): HTMLElement {
   const zone = h('div', { class: 'mcp-import' });
   const charger = async () => {
-    zone.replaceChildren(etat('cours', 'Je regarde les serveurs MCP de Claude Code…'));
+    zone.replaceChildren(etat('cours', t('reglages.mcp.importChargement')));
     let candidats: Candidat[];
     try {
       candidats = await invoke<Candidat[]>('mcp_candidats');
     } catch (e) {
-      zone.replaceChildren(etat(absente(e) ? 'attente' : 'erreur', absente(e) ? 'L’import arrive avec la prochaine version de Kobi.' : message(e)));
+      zone.replaceChildren(etat(absente(e) ? 'attente' : 'erreur', absente(e) ? t('reglages.mcp.importBientot') : message(e)));
       return;
     }
     const nouveaux = candidats.filter((c) => !c.deja);
     if (!candidats.length) {
-      zone.replaceChildren(etat('attention', 'Aucun serveur MCP dans Claude Code.', h('p', { class: 'aide' }, 'Ajoute-les ici à la main, ou dans Claude Code avec ', h('code', {}, 'claude mcp add'), '.')));
+      zone.replaceChildren(etat('attention', t('reglages.mcp.importAucun'), h('p', { class: 'aide' }, t('reglages.mcp.importAucunAide'), h('code', {}, 'claude mcp add'), t('reglages.mcp.importAucunAideFin'))));
       return;
     }
     // Rien n'est coché d'office (KOB-239) : Kobi n'utilise que les serveurs
     // choisis un à un, et chaque serveur alourdit ses sessions.
     const coches = new Set<string>();
-    const importer = bouton('Importer', 'importer', () => void lancer(), 'plein');
+    const importer = bouton(t('reglages.mcp.importer'), 'importer', () => void lancer(), 'plein');
     const majBouton = () => {
       importer.disabled = coches.size === 0;
-      importer.textContent = coches.size ? `Importer ${coches.size} serveur${coches.size > 1 ? 's' : ''}` : 'Importer';
+      importer.textContent = coches.size ? t('reglages.mcp.importerN', { n: coches.size }) : t('reglages.mcp.importer');
     };
     // Échec de l'import : affiché sous le bouton jusqu'au prochain essai,
     // le temps de lire la marche à suivre (KOB-185).
@@ -154,11 +158,11 @@ function blocImport(ctx: Contexte, apres: (serveurs: ServeurMcp[]) => void): HTM
     const lancer = async () => {
       const noms = [...coches];
       importer.disabled = true;
-      importer.textContent = 'Import et test…';
+      importer.textContent = t('reglages.mcp.importEnCours');
       resultat.replaceChildren();
       try {
         const serveurs = await invoke<ServeurMcp[]>('mcp_importer', { noms });
-        ctx.notifier(`${noms.length} serveur${noms.length > 1 ? 's' : ''} importé${noms.length > 1 ? 's' : ''} : ils servent dès la prochaine conversation.`);
+        ctx.notifier(t('reglages.mcp.importes', { n: noms.length }));
         apres(serveurs);
         void charger();
       } catch (e) {
@@ -191,13 +195,13 @@ function blocImport(ctx: Contexte, apres: (serveurs: ServeurMcp[]) => void): HTM
               case_,
               h('span', { class: 'mcp-nom' }, c.nom),
               h('span', { class: 'mcp-resume', title: c.resume }, c.resume),
-              h('span', { class: 'mcp-portee' }, c.deja ? 'déjà connecté' : c.portee),
-              c.secrets.length > 0 && h('span', { class: 'puce', title: `${c.secrets.join(', ')} : rangé dans le gestionnaire d’identifiants` }, 'secret'),
+              h('span', { class: 'mcp-portee' }, c.deja ? t('reglages.mcp.dejaConnecte') : c.portee),
+              c.secrets.length > 0 && h('span', { class: 'puce', title: t('reglages.mcp.secretRange', { noms: c.secrets.join(', ') }) }, t('reglages.mcp.secret')),
             ),
           );
         }),
       ),
-      nouveaux.length ? h('div', { class: 'boutons' }, importer) : h('p', { class: 'aide' }, 'Tous les serveurs de Claude Code sont déjà connectés.'),
+      nouveaux.length ? h('div', { class: 'boutons' }, importer) : h('p', { class: 'aide' }, t('reglages.mcp.tousConnectes')),
       resultat,
     );
     majBouton();
@@ -221,26 +225,26 @@ function carteServeur(s: ServeurMcp, ctx: Contexte, recharger: (serveurs: Serveu
       ctx.notifier(message(e), 'erreur');
     }
   };
-  const montrerTest = (t: Test) => {
-    if (t.etat === 'ok') {
+  const montrerTest = (test: Test) => {
+    if (test.etat === 'ok') {
       resultat.replaceChildren(
-        etat('ok', `Connecté : ${compte(t.outils)}.`),
+        etat('ok', t('reglages.mcp.connecte', { outils: compte(test.outils) })),
         h(
           'ul',
           { class: 'mcp-outils' },
-          ...t.outils.map((o) => h('li', { class: 'mcp-outil', 'data-nature': o.nature, title: o.description }, h('code', {}, o.nom), h('span', { class: 'mcp-nature' }, NATURES[o.nature]))),
+          ...test.outils.map((o) => h('li', { class: 'mcp-outil', 'data-nature': o.nature, title: o.description }, h('code', {}, o.nom), h('span', { class: 'mcp-nature' }, nature(o.nature)))),
         ),
       );
-    } else if (t.etat === 'autorisation') {
-      resultat.replaceChildren(etat('attention', t.message, h('div', { class: 'boutons' }, bouton('Autoriser Kobi', 'autoriser', () => void autoriser(), 'plein'))));
+    } else if (test.etat === 'autorisation') {
+      resultat.replaceChildren(etat('attention', test.message, h('div', { class: 'boutons' }, bouton(t('reglages.mcp.autoriser'), 'autoriser', () => void autoriser(), 'plein'))));
     } else {
-      resultat.replaceChildren(etat('erreur', t.message));
+      resultat.replaceChildren(etat('erreur', test.message));
     }
   };
-  const apresTest = async (t: Test) => {
-    tests.set(s.nom, t);
-    montrerTest(t);
-    if (t.etat === 'ok') {
+  const apresTest = async (test: Test) => {
+    tests.set(s.nom, test);
+    montrerTest(test);
+    if (test.etat === 'ok') {
       try {
         recharger(await invoke<ServeurMcp[]>('mcp_serveurs'));
       } catch {
@@ -249,7 +253,7 @@ function carteServeur(s: ServeurMcp, ctx: Contexte, recharger: (serveurs: Serveu
     }
   };
   const tester = async () => {
-    resultat.replaceChildren(etat('cours', 'Je me connecte et je liste les outils…'));
+    resultat.replaceChildren(etat('cours', t('reglages.mcp.testEnCours')));
     try {
       await apresTest(await invoke<Test>('mcp_tester', { nom: s.nom }));
     } catch (e) {
@@ -257,7 +261,7 @@ function carteServeur(s: ServeurMcp, ctx: Contexte, recharger: (serveurs: Serveu
     }
   };
   const autoriser = async () => {
-    resultat.replaceChildren(etat('cours', 'Connecte-toi dans la page qui vient de s’ouvrir dans ton navigateur…'));
+    resultat.replaceChildren(etat('cours', t('reglages.mcp.autorisationEnCours')));
     try {
       await apresTest(await invoke<Test>('mcp_autoriser', { nom: s.nom }));
     } catch (e) {
@@ -267,7 +271,7 @@ function carteServeur(s: ServeurMcp, ctx: Contexte, recharger: (serveurs: Serveu
   const supprimer = async () => {
     try {
       recharger(await invoke<ServeurMcp[]>('mcp_supprimer', { nom: s.nom }));
-      ctx.notifier(`${s.nom} retiré, secrets effacés.`);
+      ctx.notifier(t('reglages.mcp.retire', { nom: s.nom }));
     } catch (e) {
       ctx.notifier(message(e), 'erreur');
     }
@@ -279,8 +283,8 @@ function carteServeur(s: ServeurMcp, ctx: Contexte, recharger: (serveurs: Serveu
       role: 'switch',
       class: 'interrupteur',
       'aria-checked': String(s.actif),
-      'aria-label': `Utiliser ${s.nom}`,
-      onclick: () => void regler({ actif: !s.actif }, s.actif ? `${s.nom} désactivé.` : `${s.nom} activé : il sert dès la prochaine conversation.`),
+      'aria-label': t('reglages.mcp.utiliser', { nom: s.nom }),
+      onclick: () => void regler({ actif: !s.actif }, s.actif ? t('reglages.mcp.desactive', { nom: s.nom }) : t('reglages.mcp.active', { nom: s.nom })),
     },
     h('span', { class: 'interrupteur-rond', 'aria-hidden': 'true' }),
   );
@@ -290,8 +294,8 @@ function carteServeur(s: ServeurMcp, ctx: Contexte, recharger: (serveurs: Serveu
     ? h(
         'p',
         { class: 'aide mcp-secrets' },
-        'Secrets dans le gestionnaire d’identifiants : ',
-        ...s.secrets.flatMap((x, i) => [i ? ', ' : '', h('code', { 'data-present': String(x.present) }, x.nom), x.present ? '' : ' (absent)']),
+        t('reglages.mcp.secrets'),
+        ...s.secrets.flatMap((x, i) => [i ? ', ' : '', h('code', { 'data-present': String(x.present) }, x.nom), x.present ? '' : t('reglages.mcp.absent')]),
       )
     : null;
   return h(
@@ -301,8 +305,8 @@ function carteServeur(s: ServeurMcp, ctx: Contexte, recharger: (serveurs: Serveu
       'div',
       { class: 'mcp-entete' },
       interrupteur,
-      h('div', { class: 'mcp-titre' }, h('span', { class: 'mcp-nom' }, s.nom), h('span', { class: 'puce' }, s.transport === 'stdio' ? 'local' : s.transport.toUpperCase())),
-      h('div', { class: 'boutons' }, bouton('Tester', 'tester', () => void tester()), bouton('Retirer', 'retirer', () => void supprimer(), 'discret')),
+      h('div', { class: 'mcp-titre' }, h('span', { class: 'mcp-nom' }, s.nom), h('span', { class: 'puce' }, s.transport === 'stdio' ? t('reglages.mcp.local') : s.transport.toUpperCase())),
+      h('div', { class: 'boutons' }, bouton(t('reglages.mcp.tester'), 'tester', () => void tester()), bouton(t('reglages.mcp.retirer'), 'retirer', () => void supprimer(), 'discret')),
     ),
     h('p', { class: 'mcp-resume', title: s.resume }, s.resume),
     h('p', { class: 'aide' }, compte(s.outils), s.origine ? ` · ${s.origine}` : ''),
@@ -310,15 +314,15 @@ function carteServeur(s: ServeurMcp, ctx: Contexte, recharger: (serveurs: Serveu
     h(
       'div',
       { class: 'mcp-ecriture' },
-      h('span', { class: 'mcp-ecriture-titre' }, 'Quand il modifie ou envoie quelque chose'),
+      h('span', { class: 'mcp-ecriture-titre' }, t('reglages.mcp.ecritureTitre')),
       segments<Ecriture>(
-        `Écriture pour ${s.nom}`,
+        t('reglages.mcp.ecriturePour', { nom: s.nom }),
         [
-          { valeur: 'demander', libelle: 'Toujours demander' },
-          { valeur: 'sans_demander', libelle: 'Faire sans demander' },
+          { valeur: 'demander', libelle: t('reglages.mcp.toujoursDemander') },
+          { valeur: 'sans_demander', libelle: t('reglages.mcp.sansDemander') },
         ],
         s.ecriture,
-        (v) => void regler({ ecriture: v }, v === 'demander' ? `${s.nom} : Kobi te demandera avant d’agir.` : `${s.nom} : Kobi agira sans demander (sauf suppression).`),
+        (v) => void regler({ ecriture: v }, v === 'demander' ? t('reglages.mcp.demandera', { nom: s.nom }) : t('reglages.mcp.agiraSansDemander', { nom: s.nom })),
       ),
     ),
     resultat,
@@ -337,13 +341,13 @@ function formulaireAjout(ctx: Contexte, recharger: (serveurs: ServeurMcp[]) => v
     const input = h('textarea', { name: nom, rows: '2', spellcheck: 'false', placeholder: aide });
     return { input, el: h('label', { class: 'mcp-champ', 'data-champ': nom }, h('span', {}, libelle), input) };
   };
-  const nom = champ('nom', 'Nom', { placeholder: 'linear' });
-  const url = champ('url', 'Adresse', { placeholder: 'https://mcp.exemple.com/mcp' });
-  const entetes = zone('entetes', 'En-têtes secrets', 'Authorization: Bearer …');
-  const commande = champ('commande', 'Commande', { placeholder: 'npx' });
-  const args = zone('args', 'Arguments, un par ligne', '-y\nnom-du-serveur');
-  const env = zone('env', 'Variables, une par ligne', 'NOTES_DIR=C:/notes');
-  const secrets = zone('secrets', 'Variables secrètes, une par ligne', 'API_KEY=…');
+  const nom = champ('nom', t('reglages.mcp.champNom'), { placeholder: 'linear' });
+  const url = champ('url', t('reglages.mcp.champAdresse'), { placeholder: t('reglages.mcp.champAdresseExemple') });
+  const entetes = zone('entetes', t('reglages.mcp.champEntetes'), 'Authorization: Bearer …');
+  const commande = champ('commande', t('reglages.mcp.champCommande'), { placeholder: 'npx' });
+  const args = zone('args', t('reglages.mcp.champArgs'), t('reglages.mcp.champArgsExemple'));
+  const env = zone('env', t('reglages.mcp.champEnv'), 'NOTES_DIR=C:/notes');
+  const secrets = zone('secrets', t('reglages.mcp.champSecrets'), 'API_KEY=…');
   const champs = h('div', { class: 'mcp-champs' });
   const dessinerChamps = () => {
     champs.replaceChildren(nom.el, ...(transport === 'stdio' ? [commande.el, args.el, env.el, secrets.el] : [url.el, entetes.el]));
@@ -364,7 +368,7 @@ function formulaireAjout(ctx: Contexte, recharger: (serveurs: ServeurMcp[]) => v
         : { nom: nom.input.value.trim(), transport, commande: '', args: [], url: url.input.value.trim(), env: {}, entetes: {}, secrets: paires(entetes.input.value, ':') };
     try {
       recharger(await invoke<ServeurMcp[]>('mcp_ajouter', { serveur }));
-      ctx.notifier(`${serveur.nom} ajouté. Teste-le pour classer ses outils.`);
+      ctx.notifier(t('reglages.mcp.ajoute', { nom: serveur.nom }));
       for (const c of [nom, url, entetes, commande, args, env, secrets]) c.input.value = '';
     } catch (e) {
       ctx.notifier(message(e), 'erreur');
@@ -374,23 +378,23 @@ function formulaireAjout(ctx: Contexte, recharger: (serveurs: ServeurMcp[]) => v
   return h(
     'details',
     { class: 'mcp-ajout' },
-    h('summary', {}, 'Ajouter un serveur à la main'),
+    h('summary', {}, t('reglages.mcp.ajouterMain')),
     segments<Transport>(
-      'Type de serveur',
+      t('reglages.mcp.typeServeur'),
       [
         { valeur: 'http', libelle: 'HTTP' },
         { valeur: 'sse', libelle: 'SSE' },
-        { valeur: 'stdio', libelle: 'Commande locale' },
+        { valeur: 'stdio', libelle: t('reglages.mcp.commandeLocale') },
       ],
       transport,
-      (t) => {
-        transport = t;
+      (v) => {
+        transport = v;
         dessinerChamps();
       },
     ),
     champs,
-    h('p', { class: 'aide' }, 'Les secrets vont dans le gestionnaire d’identifiants de Windows, jamais dans le fichier de réglages.'),
-    h('div', { class: 'boutons' }, bouton('Ajouter', 'ajouter', () => void ajouter(), 'plein')),
+    h('p', { class: 'aide' }, t('reglages.mcp.secretsAide')),
+    h('div', { class: 'boutons' }, bouton(t('reglages.mcp.ajouter'), 'ajouter', () => void ajouter(), 'plein')),
   );
 }
 
@@ -398,28 +402,32 @@ function formulaireAjout(ctx: Contexte, recharger: (serveurs: ServeurMcp[]) => v
 
 export const MCP: Panneau = {
   id: 'mcp',
-  titre: 'Outils MCP',
-  sousTitre: 'Linear, Notion… : lire et agir',
+  get titre() {
+    return t('reglages.mcp.titre');
+  },
+  get sousTitre() {
+    return t('reglages.mcp.sousTitre');
+  },
   monter(el, ctx) {
     const liste = h('ul', { class: 'mcp-serveurs' });
     const tests: Tests = new Map();
     const recharger = (serveurs: ServeurMcp[]) => {
       liste.replaceChildren(
-        ...(serveurs.length ? serveurs.map((s) => carteServeur(s, ctx, recharger, tests)) : [h('li', { class: 'aide' }, 'Aucun serveur connecté : Kobi ne lit que ton code.')]),
+        ...(serveurs.length ? serveurs.map((s) => carteServeur(s, ctx, recharger, tests)) : [h('li', { class: 'aide' }, t('reglages.mcp.aucunServeur'))]),
       );
       const actifs = serveurs.filter((s) => s.actif).length;
-      ctx.signaler?.(actifs ? 'ok' : 'attente', actifs ? `${actifs} connecté${actifs > 1 ? 's' : ''}` : 'aucun');
+      ctx.signaler?.(actifs ? 'ok' : 'attente', actifs ? t('reglages.mcp.connectes', { n: actifs }) : t('reglages.mcp.resumeAucun'));
     };
     el.replaceChildren(
-      h('p', { class: 'intro' }, 'Kobi utilise ces serveurs pour lire et agir dans tes outils. Il lit sans demander ; ce qui modifie ou envoie quelque chose passe par une carte de confirmation, sauf si tu choisis « Faire sans demander ». Une suppression est toujours demandée.'),
-      h('div', { class: 'reglage', 'data-reglage': 'serveurs' }, h('div', { class: 'reglage-titre' }, 'Serveurs connectés'), liste),
-      h('div', { class: 'reglage', 'data-reglage': 'import' }, h('div', { class: 'reglage-titre' }, 'Importer depuis Claude Code'), h('p', { class: 'aide' }, 'Coche ceux que Kobi doit utiliser : aucun n’est activé sans ton choix. Ceux qui se connectent par ton compte (Linear…) gardent la connexion de Claude Code.'), blocImport(ctx, recharger)),
+      h('p', { class: 'intro' }, t('reglages.mcp.intro')),
+      h('div', { class: 'reglage', 'data-reglage': 'serveurs' }, h('div', { class: 'reglage-titre' }, t('reglages.mcp.serveursConnectes')), liste),
+      h('div', { class: 'reglage', 'data-reglage': 'import' }, h('div', { class: 'reglage-titre' }, t('reglages.mcp.importTitre')), h('p', { class: 'aide' }, t('reglages.mcp.importAide')), blocImport(ctx, recharger)),
       h('div', { class: 'reglage', 'data-reglage': 'ajout' }, formulaireAjout(ctx, recharger)),
     );
-    liste.replaceChildren(h('li', { class: 'chargement' }, 'Lecture des serveurs…'));
+    liste.replaceChildren(h('li', { class: 'chargement' }, t('reglages.mcp.chargement')));
     invoke<ServeurMcp[]>('mcp_serveurs').then(recharger, (e) => {
-      liste.replaceChildren(h('li', { class: absente(e) ? 'aide' : 'erreur' }, absente(e) ? 'Les outils MCP arrivent avec la prochaine version de Kobi.' : message(e)));
-      ctx.signaler?.(absente(e) ? 'attente' : 'erreur', absente(e) ? 'bientôt' : 'erreur');
+      liste.replaceChildren(h('li', { class: absente(e) ? 'aide' : 'erreur' }, absente(e) ? t('reglages.mcp.bientot') : message(e)));
+      ctx.signaler?.(absente(e) ? 'attente' : 'erreur', absente(e) ? t('reglages.mcp.resumeBientot') : t('reglages.mcp.resumeErreur'));
     });
   },
 };
@@ -427,18 +435,22 @@ export const MCP: Panneau = {
 /** Étape facultative du premier lancement : l'import seul. */
 export const OUTILS: Panneau = {
   id: 'outils',
-  titre: 'Connecter tes outils',
-  sousTitre: 'Facultatif',
+  get titre() {
+    return t('reglages.mcp.outilsTitre');
+  },
+  get sousTitre() {
+    return t('reglages.mcp.outilsSousTitre');
+  },
   monter(el, ctx) {
     const signaler = (serveurs: ServeurMcp[]) => {
       const n = serveurs.filter((s) => s.actif).length;
-      ctx.signaler?.(n ? 'ok' : 'attente', n ? `${n} connecté${n > 1 ? 's' : ''}` : 'facultatif');
+      ctx.signaler?.(n ? 'ok' : 'attente', n ? t('reglages.mcp.connectes', { n }) : t('reglages.mcp.resumeFacultatif'));
     };
     el.replaceChildren(
-      h('p', { class: 'intro' }, 'Kobi peut lire et agir dans tes outils (tickets, notes, agenda) par les serveurs MCP. Prends ceux que tu as déjà dans Claude Code ; il te demandera toujours avant de modifier quoi que ce soit.'),
+      h('p', { class: 'intro' }, t('reglages.mcp.outilsIntro')),
       blocImport(ctx, signaler),
-      h('p', { class: 'aide' }, 'Tu pourras en ajouter ou en retirer dans Réglages → Outils MCP.'),
+      h('p', { class: 'aide' }, t('reglages.mcp.outilsAide')),
     );
-    invoke<ServeurMcp[]>('mcp_serveurs').then(signaler, () => ctx.signaler?.('attente', 'facultatif'));
+    invoke<ServeurMcp[]>('mcp_serveurs').then(signaler, () => ctx.signaler?.('attente', t('reglages.mcp.resumeFacultatif')));
   },
 };

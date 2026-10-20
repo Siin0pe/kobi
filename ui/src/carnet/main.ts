@@ -15,6 +15,7 @@ import { STOCKAGE } from '../reglages/stockage';
 import { poserTitre } from '../titre';
 import { carnet, type ConversationLue, type Genre, type Index, type ResumeReunion, type ReunionLue, type Trouve } from './donnees';
 import { cleDuJour, duree, echeance, heure, horodatage, libelleDuJour, markdown } from './format';
+import { surLangue, t } from '../i18n';
 
 type Filtre = 'tout' | Genre;
 type Onglet = 'compte-rendu' | 'transcription' | 'notes';
@@ -55,14 +56,14 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
   const recherche = h('input', {
     type: 'search',
     class: 'champ',
-    placeholder: 'Chercher un mot…',
-    'aria-label': 'Chercher dans les réunions et conversations',
     spellcheck: 'false',
     autocomplete: 'off',
   });
-  const filtres = h('div', { class: 'filtres', role: 'group', 'aria-label': 'Afficher' });
-  const rappels = h('section', { class: 'rappels', 'aria-label': 'Rappels à venir' });
-  const liste = h('nav', { class: 'liste', 'aria-label': 'Réunions et conversations' });
+  const filtres = h('div', { class: 'filtres', role: 'group' });
+  const rappels = h('section', { class: 'rappels' });
+  const liste = h('nav', { class: 'liste' });
+  const marque = h('h1', { class: 'marque-mot' });
+  const libelleStockage = h('span', {});
   const racine = h('code', { class: 'racine' });
   const page = h('main', { class: 'page', 'aria-live': 'polite' });
   const app = h(
@@ -71,14 +72,14 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
     h(
       'aside',
       { class: 'index' },
-      h('header', { class: 'marque' }, h('h1', { class: 'marque-mot', 'aria-label': 'carnet' }, 'carnet')),
+      h('header', { class: 'marque' }, marque),
       h('div', { class: 'recherche' }, h('span', { class: 'loupe', 'aria-hidden': 'true' }, '?'), recherche),
       filtres,
       h('div', { class: 'defile' }, rappels, liste),
       h(
         'footer',
         { class: 'pied' },
-        h('button', { type: 'button', class: 'bouton-pied', 'data-action': 'stockage', onclick: () => ouvrirStockage() }, h('span', { 'aria-hidden': 'true' }, '⚙'), ' Stockage'),
+        h('button', { type: 'button', class: 'bouton-pied', 'data-action': 'stockage', onclick: () => ouvrirStockage() }, h('span', { 'aria-hidden': 'true' }, '⚙'), libelleStockage),
         racine,
       ),
     ),
@@ -88,11 +89,29 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
   const notifier = creerNotifieur(document.body);
 
 
-  for (const [valeur, libelle] of [
-    ['tout', 'Tout'],
-    ['reunion', 'Réunions'],
-    ['conversation', 'Conversations'],
-  ] as const) {
+  const FILTRES: Array<[Filtre, string]> = [
+    ['tout', 'filtreTout'],
+    ['reunion', 'filtreReunions'],
+    ['conversation', 'filtreConversations'],
+  ];
+
+  /** Textes du squelette (redits au changement de langue). */
+  function textesSquelette(): void {
+    recherche.placeholder = t('carnet.main.recherchePlaceholder');
+    recherche.setAttribute('aria-label', t('carnet.main.rechercheAria'));
+    filtres.setAttribute('aria-label', t('carnet.main.filtresAria'));
+    rappels.setAttribute('aria-label', t('carnet.main.rappelsAria'));
+    liste.setAttribute('aria-label', t('carnet.main.listeAria'));
+    marque.textContent = t('carnet.main.marque');
+    marque.setAttribute('aria-label', t('carnet.main.marque'));
+    libelleStockage.textContent = ` ${t('carnet.main.stockage')}`;
+    for (const b of filtres.children) {
+      const cle = FILTRES.find(([v]) => v === b.getAttribute('data-filtre'))?.[1];
+      if (cle) b.textContent = t(`carnet.main.${cle}`);
+    }
+  }
+
+  for (const [valeur] of FILTRES) {
     filtres.append(
       h(
         'button',
@@ -107,23 +126,23 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
             dessinerListe();
           },
         },
-        libelle,
       ),
     );
   }
+  textesSquelette();
 
   // ----- Index -----
 
   function titreReunion(r: { titre: string | null; debut_ms: number | null; date: string | null }): string {
     if (r.titre) return r.titre;
     const cle = r.debut_ms !== null ? cleDuJour(r.debut_ms) : r.date;
-    return cle ? `Réunion ${libelleDuJour(cle).toLowerCase()}` : 'Réunion';
+    return cle ? t('carnet.main.reunionDu', { jour: libelleDuJour(cle, Date.now(), true) }) : t('carnet.main.reunion');
   }
 
   function titreConversation(apercu: string, titre?: string | null): string {
     if (titre) return titre;
-    const t = apercu.trim();
-    return t ? (t.length > 70 ? `${t.slice(0, 68)}…` : t) : 'Conversation';
+    const a = apercu.trim();
+    return a ? (a.length > 70 ? `${a.slice(0, 68)}…` : a) : t('carnet.main.conversation');
   }
 
   interface Entree {
@@ -150,7 +169,7 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
   function surtitreReunion(r: ResumeReunion): string {
     const jour = r.debut_ms !== null ? cleDuJour(r.debut_ms) : r.date;
     return [
-      'Réunion',
+      t('carnet.main.reunion'),
       jour ? libelleDuJour(jour) : null,
       r.debut_ms !== null ? heure(r.debut_ms) + (r.fin_ms !== null ? `–${heure(r.fin_ms)}` : '') : null,
       dureeReunion(r),
@@ -160,7 +179,7 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
   }
 
   function metaReunion(r: ResumeReunion): string {
-    return [r.debut_ms !== null ? heure(r.debut_ms) : null, dureeReunion(r), r.a_compte_rendu ? 'compte rendu' : null].filter(Boolean).join(' · ');
+    return [r.debut_ms !== null ? heure(r.debut_ms) : null, dureeReunion(r), r.a_compte_rendu ? t('carnet.main.metaCompteRendu') : null].filter(Boolean).join(' · ');
   }
 
   function entrees(index: Index): Entree[] {
@@ -188,7 +207,7 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
           jour: c.debut_ms !== null ? cleDuJour(c.debut_ms) : c.date,
           ms: c.debut_ms ?? 0,
           titre: titreConversation(c.apercu, c.titre),
-          meta: [c.debut_ms !== null ? heure(c.debut_ms) : null, `${c.tours} ${c.tours > 1 ? 'échanges' : 'échange'}`].filter(Boolean).join(' · '),
+          meta: [c.debut_ms !== null ? heure(c.debut_ms) : null, t('carnet.main.echanges', { n: c.tours })].filter(Boolean).join(' · '),
           apercu: '',
           enCours: false,
         });
@@ -230,7 +249,7 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
         'span',
         { class: 'element-corps' },
         h('span', { class: 'element-titre' }, e.titre, e.enCours && h('span', { class: 'rec' }, 'REC')),
-        h('span', { class: 'element-meta' }, e.genre === 'reunion' ? 'Réunion' : 'Conversation', e.meta ? ` · ${e.meta}` : ''),
+        h('span', { class: 'element-meta' }, e.genre === 'reunion' ? t('carnet.main.reunion') : t('carnet.main.conversation'), e.meta ? ` · ${e.meta}` : ''),
         e.apercu && h('span', { class: 'element-apercu' }, e.apercu),
       ),
     );
@@ -253,7 +272,7 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
         h(
           'p',
           { class: 'vide' },
-          rien ? 'Rien encore. Dis « Kobi, enregistre la réunion » ou parle-lui : tout arrivera ici.' : 'Rien dans cette catégorie.',
+          rien ? t('carnet.main.listeRien') : t('carnet.main.listeRienCategorie'),
         ),
       );
       return;
@@ -281,7 +300,7 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
     }
     rappels.hidden = false;
     rappels.replaceChildren(
-      h('h2', { class: 'jour-titre' }, 'À venir'),
+      h('h2', { class: 'jour-titre' }, t('carnet.main.aVenir')),
       ...avenir.map((r) => {
         const e = echeance(r.echeance_ms);
         return h(
@@ -290,13 +309,13 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
           h('button', {
             type: 'button',
             class: 'coche',
-            'aria-label': `Marquer « ${r.texte} » comme fait`,
+            'aria-label': t('carnet.main.marquerFait', { texte: r.texte }),
             onclick: async (ev: Event) => {
               const ligne = (ev.currentTarget as HTMLElement).parentElement!;
               try {
                 await carnet.rappelFait(r.id);
                 ligne.classList.add('fait');
-                notifier('Rappel fait.');
+                notifier(t('carnet.main.rappelFait'));
                 reagir('fait');
                 window.setTimeout(() => void rafraichir(), animationsReduites() ? 0 : 450);
               } catch (err) {
@@ -304,7 +323,7 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
               }
             },
           }),
-          h('span', { class: 'rappel-corps' }, h('span', { class: 'rappel-texte' }, r.texte), h('span', { class: 'rappel-quand' }, e.retard ? `En retard · ${e.texte}` : e.texte)),
+          h('span', { class: 'rappel-corps' }, h('span', { class: 'rappel-texte' }, r.texte), h('span', { class: 'rappel-quand' }, e.retard ? t('carnet.main.enRetard', { quand: e.texte }) : e.texte)),
         );
       }),
     );
@@ -314,34 +333,34 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
 
   function dessinerResultats(resultats: Trouve[]): void {
     if (resultats.length === 0) {
-      liste.replaceChildren(h('p', { class: 'vide' }, `Aucune trace de « ${etat.requete.trim()} ».`));
+      liste.replaceChildren(h('p', { class: 'vide' }, t('carnet.main.aucuneTrace', { requete: etat.requete.trim() })));
       return;
     }
     const index = etat.index;
     const groupes = new Map<string, { genre: Genre; id: string; titre: string; jour: string | null; trouves: Trouve[] }>();
-    for (const t of resultats) {
-      const genre: Genre = t.type;
-      const id = t.type === 'reunion' ? t.nom : t.id;
+    for (const tr of resultats) {
+      const genre: Genre = tr.type;
+      const id = tr.type === 'reunion' ? tr.nom : tr.id;
       const cle = `${genre}:${id}`;
       if (!groupes.has(cle)) {
-        let titre = 'Conversation';
+        let titre = t('carnet.main.conversation');
         let jour: string | null = null;
-        if (t.type === 'reunion') {
-          const r = index?.reunions.find((x) => x.nom === t.nom);
-          titre = r ? titreReunion(r) : (t.titre ?? t.nom);
+        if (tr.type === 'reunion') {
+          const r = index?.reunions.find((x) => x.nom === tr.nom);
+          titre = r ? titreReunion(r) : (tr.titre ?? tr.nom);
           jour = r?.debut_ms != null ? cleDuJour(r.debut_ms) : (r?.date ?? null);
         } else {
-          const c = index?.conversations.find((x) => x.id === t.id);
+          const c = index?.conversations.find((x) => x.id === tr.id);
           titre = titreConversation(c?.apercu ?? '', c?.titre);
           jour = c?.date ?? null;
         }
         groupes.set(cle, { genre, id, titre, jour, trouves: [] });
       }
-      groupes.get(cle)!.trouves.push(t);
+      groupes.get(cle)!.trouves.push(tr);
     }
     const n = resultats.length;
     liste.replaceChildren(
-      h('p', { class: 'compte' }, `${n} ${n > 1 ? 'passages' : 'passage'} · ${groupes.size} ${groupes.size > 1 ? 'éléments' : 'élément'}`),
+      h('p', { class: 'compte' }, `${t('carnet.main.passages', { n })} · ${t('carnet.main.elements', { n: groupes.size })}`),
       ...[...groupes.values()].map((g, i) =>
         h(
           'section',
@@ -353,7 +372,7 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
             g.titre,
             g.jour && h('span', { class: 'resultat-jour' }, libelleDuJour(g.jour)),
           ),
-          ...g.trouves.slice(0, 4).map((t) =>
+          ...g.trouves.slice(0, 4).map((tr) =>
             h(
               'button',
               {
@@ -363,18 +382,18 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
                   void ouvrir(
                     g.genre,
                     g.id,
-                    t.type === 'reunion' ? { onglet: t.partie, start: t.start } : { at_ms: t.at_ms },
+                    tr.type === 'reunion' ? { onglet: tr.partie, start: tr.start } : { at_ms: tr.at_ms },
                   ),
               },
               h(
                 'span',
                 { class: 'extrait-ou' },
-                t.type === 'reunion' ? (t.partie === 'transcription' ? horodatage(t.start ?? 0) : t.partie === 'notes' ? 'notes' : 'compte rendu') : heure(t.at_ms),
+                tr.type === 'reunion' ? (tr.partie === 'transcription' ? horodatage(tr.start ?? 0) : tr.partie === 'notes' ? t('carnet.main.extraitNotes') : t('carnet.main.extraitCompteRendu')) : heure(tr.at_ms),
               ),
-              h('span', { class: 'extrait-texte' }, ...surligner(sansMarque(t.extrait), etat.requete)),
+              h('span', { class: 'extrait-texte' }, ...surligner(sansMarque(tr.extrait), etat.requete)),
             ),
           ),
-          g.trouves.length > 4 && h('p', { class: 'encore' }, `+ ${g.trouves.length - 4} autres`),
+          g.trouves.length > 4 && h('p', { class: 'encore' }, t('carnet.main.autres', { n: g.trouves.length - 4 })),
         ),
       ),
     );
@@ -465,10 +484,10 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
         'div',
         { class: 'feuille vide-page' },
         grand,
-        h('p', { class: 'vide-aide' }, vide ? 'Les réunions enregistrées et les conversations avec Kobi apparaîtront ici.' : 'Choisis une réunion ou une conversation à gauche, ou cherche un mot.'),
+        h('p', { class: 'vide-aide' }, vide ? t('carnet.main.videAideRien') : t('carnet.main.videAide')),
       ),
     );
-    poserTitre(grand, vide ? 'rien encore' : 'à relire');
+    poserTitre(grand, vide ? t('carnet.main.videTitreRien') : t('carnet.main.videTitre'));
     pageVideRien = vide;
   }
 
@@ -503,9 +522,9 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
 
   /** Ce que contient le markdown d'export (stockage.rs, document_reunion). */
   function contenuExport(genre: Genre, r?: ReunionLue): string {
-    if (genre === 'conversation' || !r) return 'la conversation entière';
-    const corps = r.compte_rendu ? 'compte rendu' : r.notes.trim() ? 'notes' : null;
-    return ['titre', corps, 'transcription'].filter(Boolean).join(', ').replace(/, ([^,]*)$/, ' et $1');
+    if (genre === 'conversation' || !r) return t('carnet.main.exportConversation');
+    const corps = r.compte_rendu ? t('carnet.main.exportCompteRendu') : r.notes.trim() ? t('carnet.main.exportNotes') : null;
+    return corps ? t('carnet.main.exportReunionAvec', { corps }) : t('carnet.main.exportReunion');
   }
 
   function actions(genre: Genre, id: string, nom: string, r?: ReunionLue): HTMLElement {
@@ -531,7 +550,7 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
                 }
               },
             },
-            'Copier la conversation',
+            t('carnet.main.copierConversation'),
           );
     const boutons = h(
       'div',
@@ -544,7 +563,7 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
           'data-action': 'dossier',
           onclick: () => carnet.ouvrirDossier(genre, id).catch((e) => notifier(message(e), 'erreur')),
         },
-        'Ouvrir le dossier',
+        t('carnet.main.ouvrirDossier'),
       ),
       copie,
       h(
@@ -553,37 +572,37 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
           type: 'button',
           class: 'bouton',
           'data-action': 'exporter',
-          title: `Enregistre un fichier markdown (.md) : ${contenuExport(genre, r)}`,
+          title: t('carnet.main.exporterAide', { contenu: contenuExport(genre, r) }),
           onclick: async () => {
             try {
               const chemin = await carnet.exporter(genre, id);
               if (!chemin) return;
               const fichier = chemin.split(/[\\/]/).pop() ?? chemin;
               const dossier = chemin.slice(0, chemin.length - fichier.length);
-              notifier(`Exporté en markdown : ${fichier}`, 'ok', {
-                apercu: `${contenuExport(genre, r)}\ndans ${dossier}`,
-                action: { libelle: 'Ouvrir', faire: () => void carnet.ouvrirExport().catch((e) => notifier(message(e), 'erreur')) },
+              notifier(t('carnet.main.exporte', { fichier }), 'ok', {
+                apercu: t('carnet.main.exporteApercu', { contenu: contenuExport(genre, r), dossier }),
+                action: { libelle: t('carnet.main.ouvrir'), faire: () => void carnet.ouvrirExport().catch((e) => notifier(message(e), 'erreur')) },
               });
             } catch (e) {
               notifier(message(e), 'erreur');
             }
           },
         },
-        'Exporter…',
+        t('carnet.main.exporter'),
       ),
-      h('button', { type: 'button', class: 'bouton danger', 'data-action': 'supprimer', onclick: () => confirmer() }, 'Supprimer'),
+      h('button', { type: 'button', class: 'bouton danger', 'data-action': 'supprimer', onclick: () => confirmer() }, t('carnet.main.supprimer')),
     );
     const confirmer = () => {
-      const annuler = h('button', { type: 'button', class: 'bouton', 'data-action': 'annuler', onclick: () => fermer() }, 'Annuler');
+      const annuler = h('button', { type: 'button', class: 'bouton', 'data-action': 'annuler', onclick: () => fermer() }, t('carnet.main.annuler'));
       const confirmation = h(
         'div',
-        { class: 'confirmation', role: 'alertdialog', 'aria-label': 'Confirmer la suppression' },
+        { class: 'confirmation', role: 'alertdialog', 'aria-label': t('carnet.main.confirmerSuppression') },
         h(
           'p',
           {},
-          h('strong', {}, `Supprimer « ${nom} » ?`),
+          h('strong', {}, t('carnet.main.supprimerQuestion', { nom })),
           ' ',
-          genre === 'reunion' ? 'Transcription, notes et compte rendu seront effacés du disque.' : 'Cette conversation sera effacée du disque.',
+          genre === 'reunion' ? t('carnet.main.supprimerReunionAide') : t('carnet.main.supprimerConversationAide'),
         ),
         h(
           'div',
@@ -598,7 +617,7 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
               onclick: async () => {
                 try {
                   await carnet.supprimer(genre, id);
-                  notifier(genre === 'reunion' ? 'Réunion supprimée.' : 'Conversation supprimée.');
+                  notifier(genre === 'reunion' ? t('carnet.main.reunionSupprimee') : t('carnet.main.conversationSupprimee'));
                   reagir('supprime');
                   pageVide();
                   await rafraichir();
@@ -608,7 +627,7 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
                 }
               },
             },
-            'Supprimer définitivement',
+            t('carnet.main.supprimerDefinitivement'),
           ),
         ),
       );
@@ -634,7 +653,7 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
   }
 
   function entete(surtitre: string, titre: string, genre: Genre, id: string, animer: boolean, enCours = false, r?: ReunionLue): HTMLElement {
-    const h1 = h('h1', { class: 'titre', title: 'Renommer' });
+    const h1 = h('h1', { class: 'titre', title: t('carnet.main.renommer') });
     if (animer) poserTitre(h1, titre);
     else {
       h1.textContent = titre;
@@ -653,7 +672,7 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
 
   /** Petit bouton « Renommer » (crayon dessiné, pas d'emoji). */
   function crayon(titre: string, editer: () => void): HTMLElement {
-    const b = h('button', { type: 'button', class: 'crayon', 'aria-label': `Renommer « ${titre} »`, title: 'Renommer' });
+    const b = h('button', { type: 'button', class: 'crayon', 'aria-label': t('carnet.main.renommerAria', { titre }), title: t('carnet.main.renommer') });
     b.innerHTML =
       '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3 13l1-3.5 7-7 2.5 2.5-7 7zM9.5 4l2.5 2.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>';
     b.addEventListener('click', (ev) => {
@@ -676,7 +695,7 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
       class: 'titre-champ',
       value: actuel,
       maxlength: '120',
-      'aria-label': genre === 'reunion' ? 'Titre de la réunion' : 'Titre de la conversation',
+      'aria-label': genre === 'reunion' ? t('carnet.main.titreReunion') : t('carnet.main.titreConversation'),
       spellcheck: 'true',
     }) as HTMLInputElement;
     cible.replaceChildren(champ);
@@ -702,7 +721,7 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
       const ouverte = estSelectionne(genre, id);
       try {
         const nouveau = await carnet.renommer(genre, id, titre);
-        notifier('Titre enregistré.');
+        notifier(t('carnet.main.titreEnregistre'));
         // Le dossier a pu changer de nom : la vue ouverte le suit.
         if (ouverte) etat.selection = { genre, id: nouveau };
         await rafraichir();
@@ -748,12 +767,12 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
     const surtitre = surtitreReunion(r.resume);
 
     const contenu = h('div', { class: 'contenu' });
-    const onglets = h('div', { class: 'onglets', role: 'tablist', 'aria-label': 'Parties de la réunion' });
+    const onglets = h('div', { class: 'onglets', role: 'tablist', 'aria-label': t('carnet.main.partiesReunion') });
     const indicateur = h('span', { class: 'onglet-indicateur', 'aria-hidden': 'true' });
     const liste: Array<[Onglet, string, number | null]> = [
-      ['compte-rendu', 'Compte rendu', null],
-      ['transcription', 'Transcription', r.segments.length],
-      ['notes', 'Notes', null],
+      ['compte-rendu', t('carnet.main.ongletCompteRendu'), null],
+      ['transcription', t('carnet.main.ongletTranscription'), r.segments.length],
+      ['notes', t('carnet.main.ongletNotes'), null],
     ];
     const montrer = (o: Onglet, defiler?: Cible) => {
       etat.onglet = o;
@@ -801,16 +820,16 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
       return h(
         'div',
         { class: 'vide-onglet' },
-        h('p', {}, r.resume.en_cours ? 'La réunion est en cours : le compte rendu sera écrit à la fin.' : 'Pas de compte rendu pour cette réunion.'),
-        r.segments.length > 0 && h('p', {}, 'La transcription est complète, dans l’onglet voisin.'),
+        h('p', {}, r.resume.en_cours ? t('carnet.main.compteRenduEnCours') : t('carnet.main.compteRenduAucun')),
+        r.segments.length > 0 && h('p', {}, t('carnet.main.transcriptionVoisine')),
       );
     }
     const blocs = [
-      section('Résumé', 'resume', cr.resume, mot),
-      section('Décisions', 'decisions', cr.decisions, mot),
-      section('Actions à faire', 'actions', cr.actions, mot),
-      section('Questions ouvertes', 'questions', cr.questions, mot),
-      ...cr.autres.map(([t, texte]) => section(t, 'autre', texte, mot)),
+      section(t('carnet.main.resume'), 'resume', cr.resume, mot),
+      section(t('carnet.main.decisions'), 'decisions', cr.decisions, mot),
+      section(t('carnet.main.actionsAFaire'), 'actions', cr.actions, mot),
+      section(t('carnet.main.questionsOuvertes'), 'questions', cr.questions, mot),
+      ...cr.autres.map(([titre, texte]) => section(titre, 'autre', texte, mot)),
     ].filter((b): b is HTMLElement => b !== null);
     if (blocs.length === 0) blocs.push(h('section', { class: 'bloc' }, markdown(cr.brut, mot)));
     blocs.forEach((b, i) => b.style.setProperty('--i', String(i)));
@@ -818,7 +837,7 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
   }
 
   function transcription(r: ReunionLue, mot: string): HTMLElement {
-    if (r.segments.length === 0) return h('div', { class: 'vide-onglet' }, h('p', {}, 'Aucune parole transcrite.'));
+    if (r.segments.length === 0) return h('div', { class: 'vide-onglet' }, h('p', {}, t('carnet.main.aucuneParole')));
     return h(
       'ol',
       { class: 'transcription' },
@@ -827,7 +846,7 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
           'li',
           { class: 'parole', 'data-source': s.source, 'data-start': String(s.start), style: `--i:${Math.min(i, 30)}` },
           h('span', { class: 'temps' }, horodatage(s.start)),
-          h('span', { class: 'qui' }, s.source === 'moi' ? 'Moi' : 'Eux'),
+          h('span', { class: 'qui' }, s.source === 'moi' ? t('carnet.main.moi') : t('carnet.main.eux')),
           h('span', { class: 'dit' }, ...surligner(s.text, mot)),
           boutonCopie('ligne', () => ligneMd(s), quandCopie),
         ),
@@ -836,7 +855,7 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
   }
 
   function notes(r: ReunionLue, mot: string): HTMLElement {
-    if (!r.notes.trim()) return h('div', { class: 'vide-onglet' }, h('p', {}, 'Pas de notes pour cette réunion.'));
+    if (!r.notes.trim()) return h('div', { class: 'vide-onglet' }, h('p', {}, t('carnet.main.notesAucune')));
     const bloc = h('div', { class: 'notes bloc' }, markdown(r.notes, mot));
     copierPuces(bloc, r.notes, 'note', quandCopie);
     return bloc;
@@ -845,18 +864,18 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
   function pageConversation(c: ConversationLue, cible: Cible, animer: boolean): void {
     const mot = etat.resultats !== null ? etat.requete : '';
     const jour = c.resume.debut_ms !== null ? cleDuJour(c.resume.debut_ms) : c.resume.date;
-    const surtitre = ['Conversation', libelleDuJour(jour), c.resume.debut_ms !== null ? heure(c.resume.debut_ms) : null, `${c.resume.tours} ${c.resume.tours > 1 ? 'échanges' : 'échange'}`]
+    const surtitre = [t('carnet.main.conversation'), libelleDuJour(jour), c.resume.debut_ms !== null ? heure(c.resume.debut_ms) : null, t('carnet.main.echanges', { n: c.resume.tours })]
       .filter(Boolean)
       .join(' · ');
     const contenu = h(
       'ol',
       { class: 'tours' },
-      ...c.tours.map((t, i) =>
+      ...c.tours.map((tour, i) =>
         h(
           'li',
-          { class: 'tour', 'data-qui': t.qui, 'data-at': String(t.at_ms), style: `--i:${Math.min(i, 30)}` },
-          h('span', { class: 'tour-tete' }, t.qui === 'moi' ? 'Moi' : 'Kobi', ` · ${heure(t.at_ms)}`, t.voix && h('span', { class: 'voix', title: 'À la voix' }, ' · à la voix')),
-          t.qui === 'kobi' ? h('div', { class: 'tour-texte' }, markdown(t.texte, mot)) : h('p', { class: 'tour-texte' }, ...surligner(t.texte, mot)),
+          { class: 'tour', 'data-qui': tour.qui, 'data-at': String(tour.at_ms), style: `--i:${Math.min(i, 30)}` },
+          h('span', { class: 'tour-tete' }, tour.qui === 'moi' ? t('carnet.main.moi') : 'Kobi', ` · ${heure(tour.at_ms)}`, tour.voix && h('span', { class: 'voix', title: t('carnet.main.alaVoixTitre') }, ` · ${t('carnet.main.alaVoix')}`)),
+          tour.qui === 'kobi' ? h('div', { class: 'tour-texte' }, markdown(tour.texte, mot)) : h('p', { class: 'tour-texte' }, ...surligner(tour.texte, mot)),
         ),
       ),
     );
@@ -896,7 +915,7 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
       h(
         'article',
         { class: 'feuille' },
-        h('header', { class: 'entete' }, h('p', { class: 'surtitre' }, 'Réglages · ', STOCKAGE.sousTitre), titre),
+        h('header', { class: 'entete' }, h('p', { class: 'surtitre' }, `${t('carnet.main.reglages')} · `, STOCKAGE.sousTitre), titre),
         corps,
       ),
     );
@@ -955,17 +974,30 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
       if (!r.en_cours) continue;
       const nom = CSS.escape(r.nom);
       const meta = hote.querySelector<HTMLElement>(`.element[data-genre="reunion"][data-id="${nom}"] .element-meta`);
-      if (meta) meta.textContent = `Réunion · ${metaReunion(r)}`;
+      if (meta) meta.textContent = `${t('carnet.main.reunion')} · ${metaReunion(r)}`;
       const sur = hote.querySelector<HTMLElement>(`.feuille[data-genre="reunion"][data-id="${nom}"] .surtitre`)?.lastChild;
       if (sur?.nodeType === Node.TEXT_NODE) sur.textContent = surtitreReunion(r);
     }
   }, 60_000);
 
+  // Changement de langue (KOB-208) : squelette, rappels, liste et vue
+  // ouverte redessinés, la sélection (et l'onglet) gardée.
+  surLangue(() => {
+    textesSquelette();
+    dessinerRappels();
+    dessinerListe();
+    marquerSelection();
+    const s = etat.selection;
+    if (s === null) pageVide();
+    else if ('panneau' in s) ouvrirStockage();
+    else void ouvrir(s.genre, s.id);
+  });
+
   window.carnet = { rafraichir, ouvrir, normaliser };
 
   pageVide();
   if (disponible()) void rafraichir();
-  else notifier('Ouvrez le Carnet depuis Kobi.', 'erreur');
+  else notifier(t('carnet.main.horsKobi'), 'erreur');
   return {
     rafraichir,
     ouvrir,
