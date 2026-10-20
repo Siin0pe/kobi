@@ -233,8 +233,15 @@ pub(crate) fn ecrire_atomique(chemin: &Path, contenu: &[u8]) -> io::Result<()> {
     let mut tmp = chemin.as_os_str().to_owned();
     tmp.push(".tmp");
     let tmp = PathBuf::from(tmp);
-    fs::write(&tmp, contenu)?;
-    fs::rename(&tmp, chemin)
+    let mut f = File::create(&tmp)?;
+    let ecrit = f.write_all(contenu).and_then(|()| f.sync_all());
+    // Fichier fermé avant le renommage (exigé sous Windows).
+    drop(f);
+    let ecrit = ecrit.and_then(|()| fs::rename(&tmp, chemin));
+    if ecrit.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    ecrit
 }
 
 impl Reunion {

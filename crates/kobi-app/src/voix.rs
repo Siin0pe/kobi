@@ -288,10 +288,16 @@ pub fn regler<R: Runtime>(
     };
     if let Some(chemin) = &v.config {
         let mut lu = kobi_session::config::load_or_create(chemin);
-        lu.config.voice.assistant = q;
-        lu.config.voice.meeting = r;
-        if let Err(e) = kobi_session::config::save(&lu.config, chemin) {
-            tracing::warn!(erreur = %e, "voix : réglage non enregistré");
+        if let Some(probleme) = lu.problem {
+            // Config illisible : la réécrire avec les défauts effacerait
+            // les autres réglages de l'utilisateur.
+            tracing::warn!(%probleme, "voix : réglage non enregistré");
+        } else {
+            lu.config.voice.assistant = q;
+            lu.config.voice.meeting = r;
+            if let Err(e) = kobi_session::config::save(&lu.config, chemin) {
+                tracing::warn!(erreur = %e, "voix : réglage non enregistré");
+            }
         }
     }
     let etat = etat_voix(app);
@@ -905,5 +911,29 @@ mod tests {
         assert!(!lu.voice.assistant);
         assert!(lu.voice.meeting);
         assert_eq!(lu.hotkey, "Alt+K", "le reste de la config est gardé");
+    }
+
+    #[test]
+    fn config_illisible_pas_ecrasee() {
+        let dir = tempfile::tempdir().unwrap();
+        let chemin = dir.path().join("config.toml");
+        let illisible = "hotkey = \"Alt+K\"\n[voice\nassistant = true\n";
+        std::fs::write(&chemin, illisible).unwrap();
+        let app = session::installer(mock_builder())
+            .build(mock_context(noop_assets()))
+            .unwrap();
+        app.manage(Voix {
+            reglage: Mutex::new((true, false)),
+            parleur: None,
+            config: Some(chemin.clone()),
+            recent: Mutex::default(),
+            verbosite: Mutex::new(Verbosite::default()),
+        });
+        let etat = regler(app.handle(), Some(false), Some(true));
+        assert!(
+            !etat.quotidien && etat.reunion,
+            "réglage appliqué en mémoire"
+        );
+        assert_eq!(std::fs::read_to_string(&chemin).unwrap(), illisible);
     }
 }
