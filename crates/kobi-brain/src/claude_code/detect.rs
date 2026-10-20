@@ -271,7 +271,7 @@ mod tests {
     fn ignore_un_fichier_non_executable() {
         let dir = temp_dir("non-exe");
         std::fs::write(dir.join("claude"), b"").unwrap();
-        assert!(find_in(None, &[dir.to_path_buf()]).is_empty());
+        assert!(find_in(None, std::slice::from_ref(&*dir)).is_empty());
     }
 
     #[tokio::test]
