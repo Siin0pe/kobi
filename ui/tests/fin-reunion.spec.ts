@@ -131,6 +131,20 @@ test('fin annulable : Ctrl+Z annule ; sans rien, « Annuler » disparaît à la 
   await reunionPuisFinAnnulable(page, Date.now() - 7 * 60_000);
   const rec = page.locator('.rec');
   await expect(rec.getByRole('button', { name: 'Annuler' })).toBeVisible();
+  // Dans un champ (bulle d'écriture), Ctrl+Z annule la frappe, pas la fin (KOB-264).
+  await page.evaluate(() => {
+    const champ = document.createElement('textarea');
+    champ.className = 'essai-champ';
+    document.body.append(champ);
+    champ.focus();
+  });
+  await page.keyboard.press('Control+z');
+  expect((await calls(page)).filter(([c]) => c === 'reprendre')).toHaveLength(0);
+  await page.evaluate(() => {
+    const champ = document.querySelector<HTMLTextAreaElement>('.essai-champ')!;
+    champ.blur();
+    champ.remove();
+  });
   await page.keyboard.press('Control+z');
   expect((await calls(page)).filter(([c]) => c === 'reprendre')).toHaveLength(1);
 

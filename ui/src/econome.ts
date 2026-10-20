@@ -70,8 +70,9 @@ export class Metronome {
   private suspended = false;
   private fps = ECONOMY_FPS;
   private readonly onStart = (): void => {
-    // Animations remplacées (changement d'état) : oubliées.
-    for (const a of [...this.held.keys()]) if (a.playState === 'idle') this.held.delete(a);
+    // Animations remplacées (changement d'état) ou finies : oubliées, avec
+    // leurs nœuds (KOB-264).
+    for (const a of [...this.held.keys()]) if (a.playState === 'idle' || a.playState === 'finished') this.held.delete(a);
     if (!this.rate || this.geste()) return;
     // Une animation ou une transition qui démarre (fiche, « z », couche d'une
     // lettre, regard) suit le métronome.
