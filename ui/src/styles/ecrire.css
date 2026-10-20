@@ -171,3 +171,16 @@
   animation: none !important;
   transition: none !important;
 }
+
+/* Écrire pendant la vue agrandie (KOB-255) : la bulle sort de la scène, qui
+   peut chevaucher le panneau de lecture quand l'écran est petit. Le temps
+   d'écrire, la scène passe au-dessus du panneau ; elle ne prend les clics que
+   sur Kobi et sur la bulle, le reste du panneau reste cliquable. */
+.stage.vue-ouverte.ecrire-open .scene {
+  z-index: 21;
+  pointer-events: none;
+}
+.stage.vue-ouverte.ecrire-open .scene .ecrire,
+.stage.vue-ouverte.ecrire-open .scene .kobi {
+  pointer-events: auto;
+}
