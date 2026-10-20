@@ -341,8 +341,6 @@
   },
   "reglages.stockage.toujours": "Forever",
   "reglages.stockage.aucuneDestination": "No destination: everything stays on this computer.",
-  "reglages.stockage.enAttente": "pending",
-  "reglages.stockage.lectureSeule": "Kobi only reads for now: nothing is sent.",
   "reglages.stockage.dossierChange": "Folder changed: the next meeting will be saved there.",
   "reglages.stockage.dossierTitre": "Kobi folder",
   "reglages.stockage.dossierAide": "Meetings, conversations and reminders are saved here, as readable files. A change applies from the next meeting.",
@@ -359,7 +357,7 @@
   "reglages.stockage.garderConversationsAide": "Your everyday chats with Kobi, kept apart from meetings.",
   "reglages.stockage.conversationsEnregistre": "Conversation retention saved.",
   "reglages.stockage.publicationTitre": "Publishing via MCP",
-  "reglages.stockage.publicationAide": "Copies a summary to a tool (Linear, Notion…). Ready, active once Kobi can write.",
+  "reglages.stockage.publicationAide": "Copies a summary to a tool (Linear, Notion…), with the Notebook’s “Publish” button.",
   "reglages.stockage.reunions": "Meetings",
   "reglages.stockage.conversations": "Conversations",
   "reglages.stockage.chargement": "Reading settings…",
@@ -1255,5 +1253,14 @@
   },
   "coque.latence.premierMot": "First word: median {mediane}, 90th percentile {p90}",
   "coque.latence.total": "Full answer: median {mediane}, 90th percentile {p90}",
-  "coque.latence.secondes": "{s} s"
+  "coque.latence.secondes": "{s} s",
+  "coque.carnet.publicationNonReglee": "No publishing destination: choose one in Settings › Storage.",
+  "coque.carnet.publierQuestion": "Publish the summary “{titre}” to {mcp}.",
+  "carnet.main.publier": "Publish",
+  "carnet.main.publierAide": "Publish the summary to {mcp} ({destination}). Kobi asks you before writing.",
+  "carnet.main.publierNonRegle": "First choose where to publish: Settings › Storage.",
+  "carnet.main.publierApercu": "Kobi is on it: confirm on its card before it writes.",
+  "carnet.main.regler": "Set up",
+  "reglages.stockage.publierReunions": "“Publish” button in the Notebook; Kobi asks you before writing.",
+  "reglages.stockage.publierConversations": "No “Publish” button for conversations yet."
 }

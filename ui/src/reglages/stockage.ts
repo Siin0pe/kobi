@@ -9,7 +9,7 @@ import type { Contexte, Panneau } from './panneau';
 
 export type Retention = number | 'unlimited';
 
-export type EtatPublication = { etat: 'aucune' } | { etat: 'lecture-seule'; mcp: string; destination: string };
+export type EtatPublication = { etat: 'aucune' } | { etat: 'reglee'; mcp: string; destination: string };
 
 /** Réglages renvoyés par `reglages_stockage` et `regler_stockage`. */
 export interface ReglagesStockage {
@@ -72,7 +72,8 @@ function choixDuree(
   return h('div', { class: 'reglage', 'data-reglage': nom }, h('div', { class: 'reglage-titre' }, legende), h('p', { class: 'aide' }, aide), groupe);
 }
 
-function publication(titre: string, etat: EtatPublication): HTMLElement {
+/** `reunions` : le Carnet a un bouton « Publier » pour elles (KOB-75). */
+function publication(titre: string, etat: EtatPublication, reunions: boolean): HTMLElement {
   const corps =
     etat.etat === 'aucune'
       ? h('span', {}, t('reglages.stockage.aucuneDestination'))
@@ -82,9 +83,8 @@ function publication(titre: string, etat: EtatPublication): HTMLElement {
           h('b', {}, etat.mcp),
           ' → ',
           h('b', {}, etat.destination),
-          h('span', { class: 'puce' }, t('reglages.stockage.enAttente')),
           h('br'),
-          t('reglages.stockage.lectureSeule'),
+          t(reunions ? 'reglages.stockage.publierReunions' : 'reglages.stockage.publierConversations'),
         );
   return h('li', { class: 'publication', 'data-etat': etat.etat }, h('span', { class: 'publication-titre' }, titre), corps);
 }
@@ -167,7 +167,7 @@ function dessiner(el: HTMLElement, r: ReglagesStockage, ctx: Contexte, recharger
       { class: 'reglage', 'data-reglage': 'publication' },
       h('div', { class: 'reglage-titre' }, t('reglages.stockage.publicationTitre')),
       h('p', { class: 'aide' }, t('reglages.stockage.publicationAide')),
-      h('ul', { class: 'publications' }, publication(t('reglages.stockage.reunions'), r.publication_reunions), publication(t('reglages.stockage.conversations'), r.publication_conversations)),
+      h('ul', { class: 'publications' }, publication(t('reglages.stockage.reunions'), r.publication_reunions, true), publication(t('reglages.stockage.conversations'), r.publication_conversations, false)),
     ),
   );
 }

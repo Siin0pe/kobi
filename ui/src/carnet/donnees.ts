@@ -108,4 +108,11 @@ export const carnet = {
   /** Titre édité sur place (KOB-223) ; rend l'identifiant à jour. */
   renommer: (genre: Genre, id: string, titre: string) => invoke<string>('carnet_renommer', { genre, id, titre }),
   rappelFait: (id: string) => invoke<boolean>('carnet_rappel_fait', { id }),
+  /** Publie le compte rendu par le MCP réglé (KOB-75) ; rend la phrase de la bulle. */
+  publier: (nom: string) => invoke<string>('carnet_publier', { nom }),
+  /** Destination de publication des comptes rendus, si elle est réglée. */
+  publication: () =>
+    invoke<{ publication_reunions: { etat: 'aucune' } | { etat: 'reglee'; mcp: string; destination: string } }>('reglages_stockage').then((r) =>
+      r.publication_reunions.etat === 'reglee' ? r.publication_reunions : null,
+    ),
 };

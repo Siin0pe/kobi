@@ -265,7 +265,7 @@ mod tests {
         .unwrap();
         assert_eq!(r["dossier"], ailleurs.to_str().unwrap());
         assert_eq!(r["retention_conversations"], 30);
-        assert_eq!(r["publication_reunions"]["etat"], "lecture-seule");
+        assert_eq!(r["publication_reunions"]["etat"], "reglee");
         assert_eq!(r["publication_conversations"]["etat"], "aucune");
 
         let apres = actuel(app.handle()).unwrap();

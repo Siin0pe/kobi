@@ -119,6 +119,13 @@ pub enum Message {
         texte: String,
         voix: bool,
     },
+    /// Bouton « Publier » du Carnet (KOB-75) : la bulle montre `affiche`,
+    /// Claude reçoit `consigne` (le document et où le publier). L'écriture
+    /// par le MCP passe par la carte de confirmation.
+    Publier {
+        affiche: String,
+        consigne: String,
+    },
     /// Phrase dite qui cite Kobi sans qu'on sache si elle lui parle
     /// (KOB-168) : Claude peut ne rien répondre, Kobi reste alors silencieux.
     QuestionPeutEtre(String),
@@ -731,6 +738,12 @@ impl<R: Runtime> Chef<R> {
                 self.fermer_conversation();
             }
             Message::Question { texte, voix } => self.question(texte, voix),
+            Message::Publier { affiche, consigne } => {
+                tracing::info!("publication demandée depuis le Carnet");
+                self.transition(&[Evenement::Interpellation]);
+                let _ = self.app.emit(EVENEMENT_QUESTION, &affiche);
+                self.envoyer(affiche, Some(consigne), false);
+            }
             Message::QuestionPeutEtre(texte) => {
                 self.peut_etre = true;
                 self.question(texte, true);
@@ -913,6 +926,12 @@ impl<R: Runtime> Chef<R> {
             });
             return;
         }
+        self.envoyer(texte, consigne, voix);
+    }
+
+    /// Envoie une question à Claude : `texte` est montré et rangé, Claude
+    /// reçoit `consigne` à la place s'il y en a une.
+    fn envoyer(&mut self, texte: String, mut consigne: Option<String>, voix: bool) {
         self.tour += 1;
         self.dernier = self.tour;
         self.calme_a = None;
@@ -2590,6 +2609,27 @@ mod tests {
         );
         assert!(cr.contains("1 interpellation mesurée"), "{cr}");
         assert!(cr.contains("- Premier mot : médiane 3,0 s"), "{cr}");
+    }
+
+    /// KOB-75 : « Publier » du Carnet : la bulle montre la phrase courte, la
+    /// demande part à Claude comme une question tapée.
+    #[test]
+    fn publier_depuis_le_carnet() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.recevoir(Message::Publier {
+                affiche: "Publie le compte rendu « Point budget » dans linear.".into(),
+                consigne: "Publie le compte rendu ci-dessous…".into(),
+            })
+        });
+        let h = avec_chef(&app, |c| c.historique());
+        let b = h.last().expect("une bulle");
+        assert_eq!(
+            b.question,
+            "Publie le compte rendu « Point budget » dans linear."
+        );
+        assert_eq!(b.statut, "attente");
+        assert!(b.clavier);
     }
 
     fn dit(texte: &str) -> Segment {

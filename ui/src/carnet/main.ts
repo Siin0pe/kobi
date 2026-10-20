@@ -527,6 +527,45 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
     return corps ? t('carnet.main.exportReunionAvec', { corps }) : t('carnet.main.exportReunion');
   }
 
+  /**
+   * « Publier » (KOB-75) : le compte rendu part vers la destination réglée
+   * (Réglages › Stockage), par Kobi et le MCP, après sa carte de
+   * confirmation. Sans destination, le clic propose de la régler.
+   */
+  function boutonPublier(nom: string): HTMLElement {
+    let destination: { mcp: string; destination: string } | null = null;
+    const bouton = h(
+      'button',
+      {
+        type: 'button',
+        class: 'bouton',
+        'data-action': 'publier',
+        title: t('carnet.main.publierNonRegle'),
+        onclick: async () => {
+          if (!destination) {
+            notifier(t('carnet.main.publierNonRegle'), 'ok', { action: { libelle: t('carnet.main.regler'), faire: () => ouvrirStockage() } });
+            return;
+          }
+          try {
+            notifier(await carnet.publier(nom), 'ok', { apercu: t('carnet.main.publierApercu') });
+          } catch (e) {
+            notifier(message(e), 'erreur');
+          }
+        },
+      },
+      t('carnet.main.publier'),
+    );
+    void carnet
+      .publication()
+      .then((d) => {
+        destination = d;
+        bouton.dataset.reglee = String(Boolean(d));
+        if (d) bouton.title = t('carnet.main.publierAide', { mcp: d.mcp, destination: d.destination || d.mcp });
+      })
+      .catch(() => {});
+    return bouton;
+  }
+
   function actions(genre: Genre, id: string, nom: string, r?: ReunionLue): HTMLElement {
     const barre = h('div', { class: 'actions' });
     const copie =
@@ -590,6 +629,7 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
         },
         t('carnet.main.exporter'),
       ),
+      genre === 'reunion' ? boutonPublier(id) : null,
       h('button', { type: 'button', class: 'bouton danger', 'data-action': 'supprimer', onclick: () => confirmer() }, t('carnet.main.supprimer')),
     );
     const confirmer = () => {

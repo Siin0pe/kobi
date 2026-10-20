@@ -69,7 +69,7 @@ function fakeTauri(): void {
     par_defaut: true,
     retention_reunions: 'unlimited',
     retention_conversations: 'unlimited',
-    publication_reunions: { etat: 'lecture-seule', mcp: 'linear', destination: 'Projet Kobi' },
+    publication_reunions: { etat: 'reglee', mcp: 'linear', destination: 'Projet Kobi' },
     publication_conversations: { etat: 'aucune' },
   };
   let demarrage = false;
@@ -133,7 +133,10 @@ function fakeTauri(): void {
             rappels.find((r) => r.id === args.id)!.fait = true;
             return true;
           case 'reglages_stockage':
-            return reglages;
+            // Sans destination de publication (KOB-75).
+            return w.__sansPublication ? { ...reglages, publication_reunions: { etat: 'aucune' } } : reglages;
+          case 'carnet_publier':
+            return 'Publie le compte rendu « Point budget » dans linear.';
           case 'choisir_dossier':
             return '/home/test/Ailleurs';
           case 'demarrage_systeme':
@@ -284,6 +287,37 @@ test('copier, exporter, ouvrir le dossier', async ({ page }) => {
   await expect(page.locator('.notif:not(.sort)')).toHaveCount(0);
   await page.getByRole('button', { name: 'Ouvrir le dossier' }).click();
   expect(await appels(page)).toContainEqual(['carnet_ouvrir_dossier', { genre: 'reunion', id: '2026-10-18_point-budget' }]);
+  await expectNoErrors(errors);
+});
+
+test('« Publier » (KOB-75) : le compte rendu part vers la destination réglée, après la carte de Kobi', async ({ page }) => {
+  const errors = await ouvrirCarnet(page);
+  await page.locator('.element[data-genre="reunion"]').click();
+  const publier = page.locator('.actions [data-action="publier"]');
+  await expect(publier).toHaveText('Publier');
+  await expect(publier).toHaveAttribute('data-reglee', 'true');
+  await expect(publier).toHaveAttribute('title', /linear \(Projet Kobi\)/);
+  await publier.click();
+  expect(await appels(page)).toContainEqual(['carnet_publier', { nom: '2026-10-18_point-budget' }]);
+  await expect(page.locator('.notif').last()).toContainText('Publie le compte rendu « Point budget » dans linear.');
+  await expect(page.locator('.notif').last()).toContainText('confirmez sur sa carte');
+  // Pas de bouton pour une conversation.
+  await page.locator('.element[data-genre="conversation"]').first().click();
+  await expect(page.locator('.actions [data-action="publier"]')).toHaveCount(0);
+  await expectNoErrors(errors);
+});
+
+test('« Publier » sans destination (KOB-75) : rien ne part, le Carnet propose de la régler', async ({ page }) => {
+  await page.addInitScript(() => ((window as unknown as Record<string, unknown>).__sansPublication = true));
+  const errors = await ouvrirCarnet(page);
+  await page.locator('.element[data-genre="reunion"]').click();
+  const publier = page.locator('.actions [data-action="publier"]');
+  await expect(publier).toHaveAttribute('data-reglee', 'false');
+  await publier.click();
+  await expect(page.locator('.notif').last()).toContainText('Choisissez d’abord où publier');
+  expect((await appels(page)).some(([c]) => c === 'carnet_publier')).toBe(false);
+  await page.locator('.notif').last().getByRole('button', { name: 'Régler' }).click();
+  await expect(page).toHaveURL(/#reglages\/stockage$/);
   await expectNoErrors(errors);
 });
 
@@ -449,9 +483,9 @@ test('panneau Stockage : dossier, sélecteur, conservation, publication en lectu
   expect(await appels(page)).toContainEqual(['regler_stockage', { changement: { retention_reunions: 90 } }]);
   await expect(reunions.getByRole('radio', { name: '90 jours' })).toHaveAttribute('aria-checked', 'true');
 
-  // Publication : montrée, pas modifiable.
-  await expect(page.locator('.publication[data-etat="lecture-seule"]')).toContainText('linear → Projet Kobi');
-  await expect(page.locator('.publication[data-etat="lecture-seule"]')).toContainText('rien n’est envoyé');
+  // Publication : montrée, pas modifiable ici ; les réunions ont le bouton « Publier » du Carnet (KOB-75).
+  await expect(page.locator('.publication[data-etat="reglee"]')).toContainText('linear → Projet Kobi');
+  await expect(page.locator('.publication[data-etat="reglee"]')).toContainText('Bouton « Publier » du Carnet');
   await expect(page.locator('.publications input')).toHaveCount(0);
 
   // Sélecteur natif, puis le dossier change et l'index suit.
