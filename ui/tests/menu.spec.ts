@@ -57,18 +57,31 @@ test('clic droit près du bord : le menu reste dans la fenêtre', async ({ page 
   await expectNoErrors(errors);
 });
 
-test('le texte de Kobi et des bulles ne se sélectionne pas, le champ de saisie si', async ({ page }) => {
+// KOB-217 : le texte des bulles se sélectionne (et se copie), pas Kobi
+// lui-même. Ce test exigeait l'inverse pour la bulle (KOB-139) : il échouait
+// dès que le glisser tombait sur le texte de la réponse (KOB-195).
+test('Kobi ne se sélectionne pas ; le texte de la bulle et le champ de saisie si', async ({ page }) => {
   const errors = await openUi(page, 'state=answer');
   const card = page.locator('[data-card=answer]');
   await expect(card).toBeVisible();
-  const box = (await card.boundingBox())!;
-  await page.mouse.move(box.x + 10, box.y + 12);
+  // Glisser sur la tête de Kobi : rien n'est sélectionné.
+  const tete = (await page.locator('.kobi .pill').boundingBox())!;
+  await page.mouse.move(tete.x + 20, tete.y + tete.height / 2);
   await page.mouse.down();
-  await page.mouse.move(box.x + box.width - 10, box.y + box.height - 10, { steps: 8 });
+  await page.mouse.move(tete.x + tete.width - 20, tete.y + tete.height / 2, { steps: 8 });
   await page.mouse.up();
-  await page.keyboard.press('Control+A');
   expect(await page.evaluate(() => getSelection()?.toString() ?? '')).toBe('');
-  expect(await card.evaluate((n) => getComputedStyle(n).userSelect)).toBe('none');
+  expect(await page.locator('.kobi .pill').evaluate((n) => getComputedStyle(n).userSelect)).toBe('none');
+  // Le texte de la réponse, lui, se sélectionne.
+  const texte = card.locator('.text');
+  await expect(texte).toHaveCSS('user-select', 'text');
+  const t = (await texte.boundingBox())!;
+  await page.mouse.move(t.x + 2, t.y + 8);
+  await page.mouse.down();
+  await page.mouse.move(t.x + t.width - 4, t.y + 8, { steps: 8 });
+  await page.mouse.up();
+  expect((await page.evaluate(() => getSelection()?.toString() ?? '')).length).toBeGreaterThan(3);
+  await page.evaluate(() => getSelection()?.removeAllRanges());
 
   // La bulle d'écriture (KOB-147), ouverte par le menu, garde sélection et menu natif.
   await rightClickKobi(page);
