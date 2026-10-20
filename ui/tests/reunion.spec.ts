@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { expectNoErrors, openUi } from './helpers';
+import { emit, expectNoErrors, mockTauri, openUi } from './helpers';
 
 const STATES = ['idle', 'listen', 'think', 'write', 'answer', 'suggest', 'done', 'error', 'work'] as const;
 
@@ -73,5 +73,27 @@ test('pause : REC devient PAUSE ; en mode discret, la pastille porte le point ro
   await expect(page.locator('.rec')).toHaveClass(/is-paused/);
   await expect(page.locator('.rec-label')).toHaveText('PAUSE');
   await expect(page.locator('.stage > [role=status]')).toHaveText('Transcription en pause.');
+  await expectNoErrors(errors);
+});
+
+test('transcription en retard : REC le dit, avec le raccourci réel pour arrêter, puis l’efface au rattrapage (KOB-250)', async ({ page }) => {
+  await mockTauri(page);
+  const errors = await openUi(page, '');
+  await emit(page, 'state', { etat: 'reunion', activite: 'calme', mascotte: 'idle', transcrit: true });
+  await emit(page, 'enregistrement', { actif: true, pause: false, debut_ms: Date.now() - 20 * 60_000, notes: 4, titre: null });
+  const rec = page.locator('.rec');
+  const retard = rec.locator('.rec-retard');
+  await expect(retard).toBeHidden();
+  await emit(page, 'transcription_retard', { secondes: 125, raccourci: 'Ctrl+Alt+Q' });
+  await expect(retard).toHaveText('retard 2 min');
+  await expect(retard).toHaveAttribute('title', 'La transcription a 2 min de retard. Pour arrêter tout de suite : Ctrl+Alt+Q.');
+  // Une note arrive : le retard reste affiché.
+  await emit(page, 'enregistrement', { actif: true, pause: false, debut_ms: Date.now() - 20 * 60_000, notes: 5, titre: null });
+  await expect(retard).toHaveText('retard 2 min');
+  await emit(page, 'transcription_retard', { secondes: 20, raccourci: 'Ctrl+Shift+R' });
+  await expect(retard).toHaveText('retard 20 s');
+  await expect(retard).toHaveAttribute('title', /Ctrl\+Maj\+R\.$/);
+  await emit(page, 'transcription_retard', null);
+  await expect(retard).toBeHidden();
   await expectNoErrors(errors);
 });

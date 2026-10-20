@@ -91,6 +91,11 @@ export function followRecording(stage: Stage): void {
     e.preventDefault();
     annuler();
   });
+  // Retard de la transcription (KOB-250) : affiché sur REC, avec le raccourci.
+  void api.event.listen<{ secondes: number; raccourci: string } | null>('transcription_retard', (e) => {
+    const r = e.payload;
+    stage.updateMeeting({ late: r ? { seconds: r.secondes, shortcut: r.raccourci } : undefined });
+  });
   void api.event.listen<RecordingState>('enregistrement', (e) => {
     explicit = true;
     applyRecording(stage, e.payload);
