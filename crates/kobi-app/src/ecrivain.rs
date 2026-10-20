@@ -138,18 +138,25 @@ impl Ecrivain {
                 ));
                 return;
             };
-            if let Err(e) = r.ecrire_compte_rendu(&compte_rendu) {
+            let chemin = r.dossier().join("compte-rendu.md");
+            let ecrit = r.ecrire_compte_rendu(&compte_rendu);
+            if let Err(e) = &ecrit {
                 tracing::warn!(erreur = %e, "compte-rendu.md");
             }
+            // Notes et fin de réunion tentées même sans compte rendu.
             if let Err(e) = r.ecrire_notes(&notes) {
                 tracing::warn!(erreur = %e, "notes.md");
             }
             if let Err(e) = r.terminer(fin_ms) {
                 tracing::warn!(erreur = %e, "reunion.json");
             }
-            d.compter(Nouvelle::CompteRenduEcrit(
-                r.dossier().join("compte-rendu.md"),
-            ));
+            d.compter(match ecrit {
+                Ok(()) => Nouvelle::CompteRenduEcrit(chemin),
+                Err(e) => Nouvelle::Erreur(format!(
+                    "Compte rendu non écrit dans {} : {e}",
+                    chemin.display()
+                )),
+            });
         });
     }
 
@@ -226,6 +233,43 @@ mod tests {
             comptes[2],
             Nouvelle::CompteRenduEcrit(dossier.join("compte-rendu.md"))
         );
+        let lue = stockage
+            .lire_reunion(&stockage.reunions().unwrap()[0].nom)
+            .unwrap();
+        assert_eq!(lue.resume.fin_ms, Some(2_000));
+        assert_eq!(lue.notes.trim(), "- budget");
+    }
+
+    #[test]
+    fn compte_rendu_non_ecrit_signale() {
+        let dir = tempfile::tempdir().unwrap();
+        let stockage = Stockage::new(dir.path());
+        let comptes = Arc::new(Mutex::new(Vec::new()));
+        let c = comptes.clone();
+        let e = Ecrivain::lancer(move |compte| c.lock().unwrap().push(compte));
+        e.ouvrir_reunion(stockage.clone(), 1_000);
+        e.attendre();
+        let Some(Nouvelle::ReunionOuverte(dossier)) = comptes.lock().unwrap().first().cloned()
+        else {
+            panic!("{:?}", comptes.lock().unwrap());
+        };
+        // Un dossier à la place du fichier : le renommage échoue.
+        std::fs::create_dir(dossier.join("compte-rendu.md")).unwrap();
+        e.terminer_reunion("## Résumé".into(), "- budget".into(), 2_000);
+        e.attendre();
+        let comptes = comptes.lock().unwrap();
+        match &comptes[1] {
+            Nouvelle::Erreur(message) => {
+                assert!(
+                    message.starts_with("Compte rendu non écrit dans "),
+                    "{message}"
+                );
+                assert!(message.contains("compte-rendu.md"), "{message}");
+            }
+            autre => panic!("{autre:?}"),
+        }
+        assert_eq!(comptes.len(), 2, "{comptes:?}");
+        // Notes et fin de réunion écrites quand même.
         let lue = stockage
             .lire_reunion(&stockage.reunions().unwrap()[0].nom)
             .unwrap();

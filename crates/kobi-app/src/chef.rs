@@ -452,6 +452,15 @@ pub fn avancer<R: Runtime>(app: &AppHandle<R>, source: kobi_stt::Source, jusqu_a
     }
 }
 
+/// Transcription confiée au compte rendu : le bloc parti à la prise de notes
+/// (sans réponse encore) précède ce qui reste à noter ; sans lui, sa
+/// transcription manquerait au compte rendu (KOB-228).
+fn transcript_du_compte_rendu(envoye: Option<&str>, reste: &str) -> String {
+    let mut transcript = envoye.unwrap_or_default().to_owned();
+    transcript.push_str(reste);
+    transcript
+}
+
 /// Envoie un message au chef.
 pub fn publier<R: Runtime>(app: &AppHandle<R>, message: Message) {
     if let Some(bus) = app.try_state::<Bus>() {
@@ -1280,8 +1289,11 @@ impl<R: Runtime> Chef<R> {
     fn demander_compte_rendu(&mut self) {
         let Some(r) = &mut self.reunion else { return };
         r.compte_rendu_demande = true;
-        let transcript = std::mem::take(&mut r.a_noter);
-        r.pour_compte_rendu = transcript.clone();
+        let reste = std::mem::take(&mut r.a_noter);
+        // Rendu à la réunion si la fin est annulée (KOB-245) ; le bloc parti à
+        // la prise de notes y revient de lui-même s'il échoue.
+        r.pour_compte_rendu = reste.clone();
+        let transcript = transcript_du_compte_rendu(r.envoye.as_deref(), &reste);
         let notes = r.notes.clone();
         self.cerveau
             .demander(Demande::CompteRendu { transcript, notes });
@@ -2520,5 +2532,19 @@ mod tests {
             .as_ref()
             .unwrap()
             .compte_rendu_demande));
+    }
+
+    /// KOB-228 : un compte rendu demandé pendant qu'un bloc est à la prise
+    /// de notes reprend ce bloc, avant ce qui reste à noter.
+    #[test]
+    fn compte_rendu_avec_le_bloc_en_cours() {
+        assert_eq!(
+            transcript_du_compte_rendu(Some("[00:10 eux] Bloc envoyé.\n"), "[03:05 moi] Fin.\n"),
+            "[00:10 eux] Bloc envoyé.\n[03:05 moi] Fin.\n"
+        );
+        assert_eq!(
+            transcript_du_compte_rendu(None, "[00:01 moi] Seul.\n"),
+            "[00:01 moi] Seul.\n"
+        );
     }
 }
