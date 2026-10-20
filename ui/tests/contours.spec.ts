@@ -59,7 +59,17 @@ async function rognes(page: Page): Promise<string[]> {
       if (r.width === 0 || r.height === 0) continue;
       const b = { l: r.left - deb.l, t: r.top - deb.t, r: r.right + deb.r, b: r.bottom + deb.b };
       const pb: string[] = [];
-      if (b.l < -0.5 || b.t < -0.5 || b.r > innerWidth + 0.5 || b.b > innerHeight + 0.5) pb.push(`fenêtre (${Math.round(b.l)},${Math.round(b.t)},${Math.round(b.r)},${Math.round(b.b)} / ${innerWidth}×${innerHeight})`);
+      // Face à la fenêtre, seule compte la partie visible dans la zone qui
+      // défile (KOB-224 : la vue agrandie défile, la question du haut en sort
+      // en partie) ; la zone elle-même est vérifiée contre la fenêtre.
+      let f = b;
+      for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+        const ps = getComputedStyle(p);
+        if (!/auto|scroll/.test(`${ps.overflowX} ${ps.overflowY}`)) continue;
+        const q = p.getBoundingClientRect();
+        f = { l: Math.max(f.l, q.left), t: Math.max(f.t, q.top), r: Math.min(f.r, q.right), b: Math.min(f.b, q.bottom) };
+      }
+      if (f.l < -0.5 || f.t < -0.5 || f.r > innerWidth + 0.5 || f.b > innerHeight + 0.5) pb.push(`fenêtre (${Math.round(b.l)},${Math.round(b.t)},${Math.round(b.r)},${Math.round(b.b)} / ${innerWidth}×${innerHeight})`);
       for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
         const ps = getComputedStyle(p);
         if (ps.overflow === 'visible' && ps.overflowX === 'visible' && ps.overflowY === 'visible' && ps.clipPath === 'none') continue;
