@@ -1247,5 +1247,13 @@
   "perms.action.modifieDansService": "Editing in {service}",
   "perms.action.supprimeDansService": "Deleting in {service}",
   "perms.action.appelleService": "Calling {service}",
-  "perms.action.avecComplement": "{debut}: {complement}"
+  "perms.action.avecComplement": "{debut}: {complement}",
+  "coque.latence.titre": "Kobi's latency",
+  "coque.latence.interpellations": {
+    "one": "{n} question measured, from when it was sent.",
+    "other": "{n} questions measured, from when they were sent."
+  },
+  "coque.latence.premierMot": "First word: median {mediane}, 90th percentile {p90}",
+  "coque.latence.total": "Full answer: median {mediane}, 90th percentile {p90}",
+  "coque.latence.secondes": "{s} s"
 }

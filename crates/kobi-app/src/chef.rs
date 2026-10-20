@@ -345,6 +345,9 @@ struct EnCours {
     /// Demandes sans titre exploitable (« — ») : Kobi réessaie avec plus de
     /// parole, au plus [`TITRE_ESSAIS`] fois.
     titre_essais: u8,
+    /// Latence de chaque interpellation, résumée à la fin du compte rendu
+    /// (KOB-85).
+    latences: crate::latence::Latences,
 }
 
 /// Le chef, partagé entre son fil et les commandes de l'interface.
@@ -925,6 +928,9 @@ impl<R: Runtime> Chef<R> {
             consigne = Some(format!("{CONSIGNE_PEUT_ETRE}{texte}"));
             self.tour_peut_etre = Some(self.tour);
         }
+        if let Some(r) = &mut self.reunion {
+            r.latences.question(self.tour, Instant::now());
+        }
         self.cerveau.demander(Demande::Question {
             tour: self.tour,
             question: self.avec_contexte(consigne.unwrap_or_else(|| texte.clone())),
@@ -1128,6 +1134,7 @@ impl<R: Runtime> Chef<R> {
             debut_parole: String::new(),
             titre_demande: false,
             titre_essais: 0,
+            latences: Default::default(),
         });
         kobi_i18n::tr("coque.chef.reunionCommencee", &[])
     }
@@ -1550,6 +1557,9 @@ impl<R: Runtime> Chef<R> {
             {
                 tracing::info!(tour, "phrase qui ne s'adressait pas à Kobi : silence");
                 self.tour_peut_etre = None;
+                if let Some(r) = &mut self.reunion {
+                    r.latences.abandon(tour);
+                }
                 self.historique.retain(|b| b.tour != tour);
                 if self.voix.as_ref().is_some_and(|(t, _)| *t == tour) {
                     self.voix = None;
@@ -1562,6 +1572,9 @@ impl<R: Runtime> Chef<R> {
                 self.emettre_historique();
             }
             Retour::Texte { tour, texte } => {
+                if let Some(r) = &mut self.reunion {
+                    r.latences.premier_mot(tour, Instant::now());
+                }
                 if let Some(b) = self.bulle(tour) {
                     b.reponse.clone_from(&texte);
                     b.statut = "reponse";
@@ -1579,6 +1592,9 @@ impl<R: Runtime> Chef<R> {
             }
             Retour::Fin { tour, texte } => {
                 tracing::info!(tour, "réponse terminée");
+                if let Some(r) = &mut self.reunion {
+                    r.latences.fin(tour, Instant::now());
+                }
                 if self.tour_peut_etre == Some(tour) {
                     self.tour_peut_etre = None;
                 }
@@ -1633,6 +1649,9 @@ impl<R: Runtime> Chef<R> {
             }
             Retour::Resultat { tour, texte } => {
                 tracing::info!(tour, "résultat livré");
+                if let Some(r) = &mut self.reunion {
+                    r.latences.fin(tour, Instant::now());
+                }
                 self.taches.remove(&tour);
                 self.retenir(tour, &texte);
                 self.ranger(Qui::Kobi, &texte, false);
@@ -1649,6 +1668,9 @@ impl<R: Runtime> Chef<R> {
             }
             Retour::Erreur { tour, message } => {
                 tracing::warn!(tour, %message, "tour en erreur");
+                if let Some(r) = &mut self.reunion {
+                    r.latences.abandon(tour);
+                }
                 if self.voix.as_ref().is_some_and(|(t, _)| *t == tour) {
                     self.voix = None;
                 }
@@ -1805,6 +1827,11 @@ impl<R: Runtime> Chef<R> {
                     &[("erreur", &cause), ("notes", &r.notes)],
                 )
             }
+        };
+        // Latence de Kobi pendant la réunion, en fin de compte rendu (KOB-85).
+        let texte = match r.latences.resume() {
+            Some(resume) => format!("{}\n\n{resume}", texte.trim_end()),
+            None => texte,
         };
         self.compte_rendu_a_ecrire = true;
         self.ecrivain
@@ -2519,6 +2546,50 @@ mod tests {
             avec_chef(&app, |c| c.commande(Intention::Reprendre)),
             "Aucune réunion en cours."
         );
+    }
+
+    /// KOB-85 : une interpellation pendant la réunion est mesurée, et le
+    /// compte rendu écrit se termine par la latence de Kobi.
+    #[test]
+    fn latence_en_fin_de_compte_rendu() {
+        let (app, dir) = chef_en_essai();
+        avec_chef(&app, |c| c.commande(Intention::DemarrerReunion));
+        avec_chef(&app, |c| {
+            let r = c.reunion.as_mut().unwrap();
+            r.latences
+                .question(9, Instant::now() - Duration::from_secs(3));
+            c.recevoir(Message::Cerveau(Retour::Texte {
+                tour: 9,
+                texte: "Il est".into(),
+            }));
+            c.recevoir(Message::Cerveau(Retour::Fin {
+                tour: 9,
+                texte: "Il est 10 h.".into(),
+            }));
+            assert_eq!(c.reunion.as_ref().unwrap().latences.mesures().len(), 1);
+            c.commande(Intention::TerminerReunion);
+            c.recevoir(Message::Cerveau(Retour::CompteRendu(Ok(
+                "# Compte rendu\n\n## Résumé\nPoint budget.\n".into(),
+            ))));
+            c.reunion.as_mut().unwrap().annulable_jusqu = Some(Instant::now());
+            c.tick();
+        });
+        // L'écrivain range le fichier sur son propre fil.
+        let lu = (0..100).find_map(|_| {
+            std::thread::sleep(Duration::from_millis(50));
+            let reunions = dir.path().join("donnees").join("reunions");
+            std::fs::read_dir(reunions)
+                .ok()?
+                .flatten()
+                .find_map(|d| std::fs::read_to_string(d.path().join("compte-rendu.md")).ok())
+        });
+        let cr = lu.expect("compte rendu écrit");
+        assert!(
+            cr.starts_with("# Compte rendu\n\n## Résumé\nPoint budget.\n\n## Latence de Kobi\n"),
+            "{cr}"
+        );
+        assert!(cr.contains("1 interpellation mesurée"), "{cr}");
+        assert!(cr.contains("- Premier mot : médiane 3,0 s"), "{cr}");
     }
 
     fn dit(texte: &str) -> Segment {
