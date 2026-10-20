@@ -177,6 +177,18 @@ async fn boucle(
         tokio::select! {
             r = serveur.connect() => if let Err(e) = r {
                 eprintln!("contrôle : connexion refusée : {e}");
+                // Un client parti aussitôt connecté laisse l'instance inutilisable
+                // (ERROR_NO_DATA à chaque appel) : une neuve la remplace, sinon la
+                // boucle tourne à vide et plus rien n'est accepté (KOB-234). La
+                // pause évite une rafale si l'erreur persiste.
+                serveur = match creer(false) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("contrôle : canal fermé : {e}");
+                        return;
+                    }
+                };
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
                 continue;
             },
             _ = &mut arret => return,
