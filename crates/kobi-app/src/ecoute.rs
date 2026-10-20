@@ -25,6 +25,7 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::chef::{publier, Message};
 use crate::diag::Diag;
+use crate::intentions::Intention;
 use crate::interpellation::{charger_stt, erreur};
 use crate::mot_cle::{Action, Ecouteur};
 use crate::porte::Porte;
@@ -42,6 +43,36 @@ pub const EVENEMENT_RETARD: &str = "transcription_retard";
 const SEUIL_RETARD: f64 = 15.0;
 /// Le retard est signalé de nouveau à chaque palier de ce nombre de secondes.
 const PALIER_RETARD: f64 = 30.0;
+
+/// Début de phrase transcrit à l'avance quand la transcription est en
+/// retard, en secondes : assez pour « Kobi, arrête l'enregistrement »
+/// (KOB-250).
+const EXTRAIT_ANTICIPE: f64 = 2.5;
+
+/// Un ordre de fin de réunion dans une phrase qui appelle Kobi (« Kobi,
+/// arrête l'enregistrement », « Kobi, la réunion est terminée »).
+fn ordre_de_fin(texte: &str) -> bool {
+    crate::mot_cle::reperer(texte).is_some_and(|q| {
+        crate::intentions::fin_de_reunion_dite(q)
+            || crate::intentions::intention(q) == Some(Intention::TerminerReunion)
+    })
+}
+
+/// Écoute anticipée (KOB-250) : quand la transcription est en retard, le
+/// début de chaque phrase qui vient d'être dite est transcrit à part, pour
+/// qu'un ordre de fin de réunion n'attende pas son tour dans la file.
+#[derive(Default)]
+struct Veille {
+    porte: Option<Porte>,
+    /// Début de la phrase en cours, à transcrire.
+    extrait: Vec<f32>,
+    debut: Option<f64>,
+    /// Le début de cette phrase a déjà été transcrit.
+    faite: bool,
+    /// Instant (audio) des ordres déjà exécutés à l'avance : la transcription
+    /// en retard ne les rejoue pas en arrivant à leur phrase.
+    ordres: Vec<f64>,
+}
 
 /// Charge de [`EVENEMENT_RETARD`].
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -393,6 +424,9 @@ struct Fil<R: Runtime> {
     bilan: Instant,
     /// Dernier retard de la transcription signalé (KOB-250).
     retard: Option<u64>,
+    /// Audio reçu, pas encore transcrit : la veille voit le plus récent.
+    file: std::collections::VecDeque<AudioFrame>,
+    veille: Veille,
     /// Une réunion est ouverte : pas de mode conversation, et la transcription
     /// n'est jamais remise à zéro.
     en_reunion: bool,
@@ -417,6 +451,8 @@ impl<R: Runtime> Fil<R> {
             calcul: Duration::ZERO,
             bilan: Instant::now(),
             retard: None,
+            file: Default::default(),
+            veille: Veille::default(),
             en_reunion: false,
             niveau: (0.0, 0),
         }
@@ -497,6 +533,8 @@ impl<R: Runtime> Fil<R> {
     fn fermer_micro(&mut self) {
         crate::chef::avancer(&self.app, kobi_stt::Source::Moi, None);
         self.signaler_retard(0.0);
+        self.file.clear();
+        self.veille = Veille::default();
         if self.entree.take().is_some() {
             tracing::info!("écoute continue : micro fermé");
             self.note("micro fermé");
@@ -572,16 +610,29 @@ impl<R: Runtime> Fil<R> {
 
     fn trame(&mut self) {
         let Some(entree) = &self.entree else { return };
-        let frame = match entree.frames().recv_timeout(Duration::from_millis(200)) {
-            Ok(frame) => frame,
-            Err(RecvTimeoutError::Timeout) => return,
-            Err(RecvTimeoutError::Disconnected) => {
-                tracing::warn!("écoute continue : le micro s'est arrêté");
-                self.note("le micro s'est arrêté");
-                self.entree = None;
-                crate::chef::avancer(&self.app, kobi_stt::Source::Moi, None);
-                return;
+        let mut arrivees = Vec::new();
+        if self.file.is_empty() {
+            match entree.frames().recv_timeout(Duration::from_millis(200)) {
+                Ok(frame) => arrivees.push(frame),
+                Err(RecvTimeoutError::Timeout) => return,
+                Err(RecvTimeoutError::Disconnected) => {
+                    tracing::warn!("écoute continue : le micro s'est arrêté");
+                    self.note("le micro s'est arrêté");
+                    self.entree = None;
+                    crate::chef::avancer(&self.app, kobi_stt::Source::Moi, None);
+                    return;
+                }
             }
+        }
+        // Tout ce qui est arrivé entre-temps : la veille voit la parole la
+        // plus récente, même quand la transcription est en retard (KOB-250).
+        arrivees.extend(entree.frames().try_iter());
+        for frame in arrivees {
+            self.veiller(&frame);
+            self.file.push_back(frame);
+        }
+        let Some(frame) = self.file.pop_front() else {
+            return;
         };
         self.niveau(&frame.samples);
         let Ok(stt) = self.stt.as_mut() else { return };
@@ -643,6 +694,77 @@ impl<R: Runtime> Fil<R> {
         }
     }
 
+    /// Écoute anticipée (KOB-250) : en réunion, quand la transcription est en
+    /// retard, le début de chaque phrase qui vient d'arriver est transcrit à
+    /// part ; un ordre de fin de réunion part tout de suite.
+    fn veiller(&mut self, frame: &AudioFrame) {
+        if !self.en_reunion || self.retard.is_none() {
+            if self.veille.porte.is_some() {
+                self.veille = Veille {
+                    ordres: std::mem::take(&mut self.veille.ordres),
+                    ..Veille::default()
+                };
+            }
+            return;
+        }
+        let v = &mut self.veille;
+        let porte = v
+            .porte
+            .get_or_insert_with(|| Porte::new(kobi_stt::SAMPLE_RATE));
+        for (debut, morceau) in porte.trame(frame.t.as_secs_f64(), frame.samples.clone()) {
+            if !v.faite {
+                v.debut.get_or_insert(debut);
+                v.extrait.extend(morceau);
+            }
+        }
+        let ouverte = porte.ouverte();
+        let pret = v.extrait.len() as f64 >= EXTRAIT_ANTICIPE * kobi_stt::SAMPLE_RATE as f64;
+        if !v.faite && (pret || (!ouverte && !v.extrait.is_empty())) {
+            v.faite = true;
+            let debut = v.debut.unwrap_or_default();
+            let texte = self
+                .stt
+                .as_mut()
+                .ok()
+                .and_then(|stt| stt.transcrire_extrait(&self.veille.extrait));
+            if texte.as_deref().is_some_and(ordre_de_fin) {
+                tracing::info!(
+                    retard_s = self.retard.unwrap_or_default(),
+                    "écoute anticipée : fin de réunion entendue avant son tour"
+                );
+                self.veille.ordres.push(debut);
+                publier(&self.app, Message::Commande(Intention::TerminerReunion));
+            }
+        }
+        let v = &mut self.veille;
+        if !v.porte.as_ref().is_some_and(Porte::ouverte) {
+            // Phrase finie : la suivante sera écoutée à son tour.
+            v.extrait.clear();
+            v.debut = None;
+            v.faite = false;
+        }
+    }
+
+    /// La transcription arrive à un ordre de fin déjà exécuté à l'avance
+    /// (même phrase, à quelques secondes près) : il ne repart pas.
+    fn deja_execute(&mut self, question: &str) -> bool {
+        let t = self.t;
+        let Some(i) = self
+            .veille
+            .ordres
+            .iter()
+            .position(|&d| (d - 2.0..=d + 20.0).contains(&t))
+        else {
+            return false;
+        };
+        if !ordre_de_fin(&format!("Kobi, {question}")) && !ordre_de_fin(question) {
+            return false;
+        }
+        self.veille.ordres.remove(i);
+        tracing::info!("écoute anticipée : ordre de fin déjà exécuté, pas rejoué");
+        true
+    }
+
     /// Signale le retard de la transcription quand il franchit un palier, et
     /// son rattrapage.
     fn signaler_retard(&mut self, retard: f64) {
@@ -693,6 +815,7 @@ impl<R: Runtime> Fil<R> {
                     Message::Interpelle
                 }
                 Action::Question(q) => Message::QuestionPartielle(q),
+                Action::Envoyer(q) if self.deja_execute(&q) => continue,
                 Action::Envoyer(q) => {
                     tracing::info!(longueur = q.len(), "question transcrite");
                     Message::Question {
@@ -740,6 +863,27 @@ mod tests {
     use super::*;
     use crate::interpellation::modele_nemotron;
     use std::path::Path;
+
+    /// KOB-250 : seuls les ordres de fin de réunion adressés à Kobi partent
+    /// en avance ; une mention ou une autre question attend son tour.
+    #[test]
+    fn ordres_de_fin_anticipes() {
+        for oui in [
+            "Kobi, arrête l'enregistrement.",
+            "Kobi, la réunion est terminée",
+            "Koby, fin de la réunion",
+        ] {
+            assert!(ordre_de_fin(oui), "{oui}");
+        }
+        for non in [
+            "on arrête l'enregistrement du client demain",
+            "Kobi, quelle heure est-il ?",
+            "Kobi, mets en pause",
+            "la réunion est terminée pour eux",
+        ] {
+            assert!(!ordre_de_fin(non), "{non}");
+        }
+    }
 
     /// KOB-250 : le retard est signalé au-delà du seuil, puis à chaque
     /// palier, et son rattrapage une seule fois.

@@ -294,6 +294,28 @@ impl SttEngine for NemotronEngine {
     /// redoublé (« oui… oui »), il sort (« Oui, oui »). Flux à part, mot
     /// répété deux fois (trois si rien ne sort), silence autour ; le flux de
     /// l'écoute n'est pas touché.
+    fn transcrire_extrait(&mut self, samples: &[f32]) -> Option<String> {
+        let silence = |s: f64| vec![0.0f32; (s * SAMPLE_RATE as f64) as usize];
+        let stream = self.recognizer.create_stream();
+        stream.set_option(
+            "language",
+            self.config.language.as_deref().unwrap_or("auto"),
+        );
+        stream.accept_waveform(SAMPLE_RATE as i32, &silence(0.3));
+        stream.accept_waveform(SAMPLE_RATE as i32, samples);
+        stream.accept_waveform(SAMPLE_RATE as i32, &silence(1.0));
+        stream.input_finished();
+        while self.recognizer.is_ready(&stream) {
+            self.recognizer.decode(&stream);
+        }
+        let text = self
+            .recognizer
+            .get_result(&stream)
+            .map(|r| clean_text(&r.text))
+            .unwrap_or_default();
+        (!text.is_empty()).then_some(text)
+    }
+
     fn transcrire_court(&mut self, samples: &[f32]) -> Option<String> {
         let silence = |s: f64| vec![0.0f32; (s * SAMPLE_RATE as f64) as usize];
         // Redoublé d'abord ; triplé si rien ne sort (certaines voix).
