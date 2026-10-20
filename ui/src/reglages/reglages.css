@@ -618,5 +618,6 @@ kbd {
 .choix {
   max-height: 300px;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 4px 8px 8px 4px;
 }

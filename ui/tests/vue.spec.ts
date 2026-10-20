@@ -345,3 +345,20 @@ test('rafale : deux réponses à moins de 10 s, la seconde n’ouvre rien (KOB-2
   expect((await calls(page)).filter(([c, a]) => c === 'agrandir_kobi' && (a as { grand?: boolean } | null)?.grand && (a as { appliquer?: boolean }).appliquer)).toHaveLength(1);
   await expectNoErrors(errors);
 });
+
+test('KOB-246 : la molette vers le haut sur la vue agrandie ne fait pas surgir l’historique caché dessous', async ({ page }) => {
+  const errors = await kobi(page, { auto: 'toujours', delai: 0 });
+  await repond(page, 'q1', 'Première réponse.');
+  await repond(page, 'q2', `Deuxième réponse. ${'Une phrase pour remplir la vue. '.repeat(40)}`);
+  await expect(vue(page)).toBeVisible();
+  const box = (await vue(page).boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.wheel(0, -300);
+  await page.waitForTimeout(500);
+  await expect(page.getByRole('log', { name: 'Échanges récents avec Kobi' })).toBeHidden();
+  await page.keyboard.press('Escape');
+  await expect(vue(page)).toBeHidden();
+  await page.waitForTimeout(500);
+  await expect(page.getByRole('log', { name: 'Échanges récents avec Kobi' })).toBeHidden();
+  await expectNoErrors(errors);
+});

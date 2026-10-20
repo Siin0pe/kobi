@@ -28,6 +28,13 @@
 .history-open .fil {
   visibility: hidden;
 }
+/* Fil caché (hors de son tour, sous l'historique ou la vue) : ses icônes
+   cessent de s'animer en boucle (KOB-246). */
+.fil:not(.shown) .step-icon,
+.history-open .fil .step-icon,
+.vue-ouverte .fil .step-icon {
+  animation-play-state: paused;
+}
 
 .fil-list {
   position: relative;

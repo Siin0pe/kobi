@@ -63,6 +63,9 @@ async function rognes(page: Page): Promise<string[]> {
       for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
         const ps = getComputedStyle(p);
         if (ps.overflow === 'visible' && ps.overflowX === 'visible' && ps.overflowY === 'visible' && ps.clipPath === 'none') continue;
+        // Une zone qui défile cache ce qui dépasse par construction : ce qui
+        // en sort se lit en défilant, ce n'est pas un contour coupé.
+        if (/auto|scroll/.test(`${ps.overflowX} ${ps.overflowY}`)) continue;
         const q = p.getBoundingClientRect();
         const marge = (b.l < q.left - 0.5 ? 'g' : '') + (b.t < q.top - 0.5 ? 'h' : '') + (b.r > q.right + 0.5 ? 'd' : '') + (b.b > q.bottom + 0.5 ? 'b' : '');
         if (marge) pb.push(`rogné par ${nom(p)} [${marge}] (overflow ${ps.overflow}${ps.clipPath !== 'none' ? ', clip-path' : ''}, rayon ${ps.borderRadius})`);

@@ -188,3 +188,29 @@ test('réduire les animations : pas de glissement ni de dégradé animé, le tex
   expect(live).toBe(0);
   await expectNoErrors(errors);
 });
+
+test('KOB-246 : remonter de 2 px depuis le bas arrête le suivi ; un glisser pour défiler n’ouvre pas la vue', async ({ page }) => {
+  const errors = await openUi(page, '');
+  const full = mots(300);
+  await answer(page, full);
+  await typed(page);
+  await page.waitForTimeout(600);
+  // En bas, on remonte à peine (barre, pavé tactile) : le suivi s'arrête quand même.
+  const haut = await zone(page).evaluate((n) => {
+    n.scrollTop = n.scrollHeight - n.clientHeight - 2;
+    return n.scrollTop;
+  });
+  await page.waitForTimeout(200);
+  await page.evaluate((t) => window.kobi.update({ answer: t }), `${full}\n\nUne phrase de plus, puis une autre encore, qui allongent la réponse.`);
+  await page.waitForTimeout(800);
+  expect(await zone(page).evaluate((n) => n.scrollTop)).toBeLessThanOrEqual(haut + 1);
+  // Glisser dans la bulle pour la faire défiler : au relâchement, rien ne s'ouvre.
+  const box = (await zone(page).boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2 + 60, { steps: 6 });
+  await page.mouse.up();
+  await page.waitForTimeout(500);
+  await expect(page.getByRole('dialog', { name: 'Conversation avec Kobi' })).toBeHidden();
+  await expectNoErrors(errors);
+});
