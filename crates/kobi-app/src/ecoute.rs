@@ -1385,9 +1385,10 @@ impl<R: Runtime> Fil<R> {
         for mut frame in arrivees {
             // À l'arrivée, en temps réel : la référence du haut-parleur est
             // alignée sur le micro, même quand la transcription a du retard.
-            frame.samples =
-                self.echo
-                    .traiter(&frame.samples, Instant::now(), annulation_echo_reglee);
+            let capte = self.origine + frame.t;
+            frame.samples = self
+                .echo
+                .traiter(&frame.samples, capte, annulation_echo_reglee);
             self.veiller(&frame);
             self.file.push_back(frame);
         }

@@ -341,8 +341,9 @@ mod haut_parleur {
                         *x = T::from_sample(v);
                     }
                     drop(file);
-                    // Ce qui part vers la carte son, silences compris (KOB-248).
-                    crate::reference::deposer(&joue, frequence);
+                    // Ce qui part vers la carte son, silences compris, et quand
+                    // (KOB-248).
+                    crate::reference::deposer(&joue, frequence, std::time::Instant::now());
                 },
                 move |e| {
                     use std::sync::atomic::Ordering;

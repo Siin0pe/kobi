@@ -35,6 +35,22 @@ pub struct AnnulationEcho {
     hors_service: bool,
     /// Temps passé dans l'AEC3, pour le bilan de charge.
     pub calcul: Duration,
+    /// Diagnostic (`KOBI_ECHO_BRUT=<dossier>`) : référence, micro et sortie
+    /// de chaque bloc, en f32 bruts, pour mesurer l'alignement hors ligne.
+    brut: Option<Vec<std::io::BufWriter<std::fs::File>>>,
+}
+
+fn ouvrir_brut() -> Option<Vec<std::io::BufWriter<std::fs::File>>> {
+    let dossier = std::path::PathBuf::from(std::env::var_os("KOBI_ECHO_BRUT")?);
+    let _ = std::fs::create_dir_all(&dossier);
+    ["reference.f32", "micro.f32", "sortie.f32"]
+        .iter()
+        .map(|nom| {
+            std::fs::File::create(dossier.join(nom))
+                .ok()
+                .map(std::io::BufWriter::new)
+        })
+        .collect()
 }
 
 impl Default for AnnulationEcho {
@@ -46,29 +62,38 @@ impl Default for AnnulationEcho {
             active: false,
             hors_service: false,
             calcul: Duration::ZERO,
+            brut: ouvrir_brut(),
         }
     }
 }
 
 impl AnnulationEcho {
-    /// Micro 16 kHz mono : le même nombre d'échantillons, sans la voix de
-    /// Kobi (au plus un bloc de 10 ms passe à la trame suivante).
-    /// `reglage` n'est lu qu'au début d'une voix.
+    /// Micro 16 kHz mono capté à partir de `capte` : le même nombre
+    /// d'échantillons, sans la voix de Kobi (au plus un bloc de 10 ms passe à
+    /// la trame suivante). `reglage` n'est lu qu'au début d'une voix.
     pub fn traiter(
         &mut self,
         micro: &[f32],
-        maintenant: Instant,
+        capte: Instant,
         reglage: impl Fn() -> bool,
     ) -> Vec<f32> {
+        let maintenant = Instant::now();
+        // Le reste de la trame précédente a été capté juste avant celle-ci.
+        let debut = capte
+            .checked_sub(Duration::from_secs_f64(
+                self.reste.len() as f64 / FREQUENCE as f64,
+            ))
+            .unwrap_or(capte);
         let mut reste = std::mem::take(&mut self.reste);
         reste.extend_from_slice(micro);
         let blocs = reste.len() / BLOC;
         let mut sortie = Vec::with_capacity(blocs * BLOC);
         for i in 0..blocs {
             let bloc = &reste[i * BLOC..(i + 1) * BLOC];
-            // La référence est toujours reprise, même au repos : elle reste
-            // alignée sur le micro.
-            let reference = kobi_tts::reference::prendre(BLOC, FREQUENCE);
+            // Ce que le haut-parleur jouait quand ce bloc a été capté ; repris
+            // même au repos, le tampon ne garde que le récent.
+            let instant = debut + Duration::from_millis(10 * i as u64);
+            let reference = kobi_tts::reference::prendre(instant, BLOC, FREQUENCE);
             if reference.iter().any(|x| x.abs() > SEUIL) {
                 if self.voix.is_none() {
                     self.active = reglage();
@@ -81,14 +106,23 @@ impl AnnulationEcho {
             if !en_voix {
                 self.voix = None;
             }
-            if !(en_voix && self.active && !self.hors_service) {
-                sortie.extend_from_slice(bloc);
-                continue;
+            let propre = if en_voix && self.active && !self.hors_service {
+                let chrono = Instant::now();
+                let propre = self.annuler(&reference, bloc);
+                self.calcul += chrono.elapsed();
+                propre
+            } else {
+                None
+            };
+            let sorti = propre.as_deref().unwrap_or(bloc);
+            if let Some(f) = &mut self.brut {
+                use std::io::Write;
+                for (f, x) in f.iter_mut().zip([&reference[..], bloc, sorti]) {
+                    let octets: Vec<u8> = x.iter().flat_map(|v| v.to_le_bytes()).collect();
+                    let _ = f.write_all(&octets);
+                }
             }
-            let debut = Instant::now();
-            let propre = self.annuler(&reference, bloc);
-            self.calcul += debut.elapsed();
-            sortie.extend_from_slice(propre.as_deref().unwrap_or(bloc));
+            sortie.extend_from_slice(sorti);
         }
         reste.drain(..blocs * BLOC);
         self.reste = reste;
@@ -145,9 +179,14 @@ mod tests {
             lu.set(lu.get() + 1);
             true
         };
-        let a = e.traiter(&micro, Instant::now(), reglage);
+        // Une heure plus tôt : avant tout ce que l'autre test joue en même
+        // temps dans la référence globale, qui reste donc muette ici.
+        let avant = Instant::now()
+            .checked_sub(Duration::from_secs(3600))
+            .unwrap_or_else(Instant::now);
+        let a = e.traiter(&micro, avant, reglage);
         assert_eq!(a, micro[..160]);
-        let b = e.traiter(&micro[..70], Instant::now(), reglage);
+        let b = e.traiter(&micro[..70], avant + Duration::from_millis(16), reglage);
         assert_eq!(b[..90], micro[160..]);
         assert_eq!(b[90..], micro[..70]);
         assert!(e.aec.is_none(), "aucun calcul au repos");
@@ -171,7 +210,7 @@ mod tests {
 
     /// Le micro entend la voix de Kobi atténuée et retardée de 80 ms : après
     /// convergence, l'écho perd plus de 10 dB. Réglage coupé : rien n'est
-    /// retiré. Un seul test touche la référence globale.
+    /// retiré. Seul test qui joue dans la référence globale.
     #[test]
     fn la_voix_de_kobi_est_retiree_du_micro() {
         let n = 6 * FREQUENCE as usize;
@@ -186,13 +225,22 @@ mod tests {
                 }
             })
             .collect();
+        // Le haut-parleur joue par blocs de 30 ms, le micro livre par 20 ms :
+        // des à-coups différents, sur une même horloge.
+        let t0 = Instant::now();
+        let a = |s: usize| t0 + Duration::from_secs_f64(s as f64 / FREQUENCE as f64);
         let jouer = |active: bool| {
             let mut e = AnnulationEcho::default();
             let mut sortie = Vec::new();
-            for k in 0..n / BLOC {
-                let r = k * BLOC..(k + 1) * BLOC;
-                kobi_tts::reference::deposer(&voix[r.clone()], FREQUENCE);
-                sortie.extend(e.traiter(&micro[r], Instant::now(), || active));
+            let (mut joue, mut capte) = (0, 0);
+            while capte + 320 <= n {
+                while joue < (capte + 320 + 480).min(n) {
+                    let fin = (joue + 480).min(n);
+                    kobi_tts::reference::deposer(&voix[joue..fin], FREQUENCE, a(joue));
+                    joue = fin;
+                }
+                sortie.extend(e.traiter(&micro[capte..capte + 320], a(capte), || active));
+                capte += 320;
             }
             sortie
         };
