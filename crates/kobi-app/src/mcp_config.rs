@@ -38,8 +38,9 @@ pub const PROMPT_PILOTAGE_REUNION: &str = "\
 
 C'est toi qui démarres, mets en pause, reprends et arrêtes l'enregistrement de la réunion, \
 avec `mcp__kobi__meeting_start`, `mcp__kobi__meeting_pause`, `mcp__kobi__meeting_resume` et \
-`mcp__kobi__meeting_stop`. Pas de confirmation : Kobi agit tout de suite, l'annonce, et un \
-arrêt s'annule pendant 30 secondes avec « reprends ».
+`mcp__kobi__meeting_stop`. Pas de confirmation : Kobi agit tout de suite et l'annonce. La fin \
+est immédiate (le compte rendu se prépare) et s'annule pendant 10 secondes avec « Annuler » ou \
+« reprends » (`meeting_resume`).
 
 - Appelle l'outil dès que la question te le demande, quelle que soit la formulation. \
 La question vient de la reconnaissance vocale, qui écorche les mots (« mais faire \

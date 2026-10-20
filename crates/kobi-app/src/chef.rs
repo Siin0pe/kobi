@@ -62,9 +62,10 @@ const ETAPES: usize = 24;
 /// nouveau tour : lecture de la réponse (25 s au plus) et suite possible
 /// sans redire « Kobi » (20 s, KOB-133).
 const FIN_CONVERSATION: Duration = Duration::from_secs(45);
-/// Un arrêt de la réunion à la voix ou par Claude s'annule pendant ce temps
-/// (« reprends », KOB-165) : le compte rendu attend jusque-là.
-pub const ANNULATION: Duration = Duration::from_secs(30);
+/// La fin d'une réunion s'annule pendant ce temps (« Annuler », Ctrl+Z,
+/// « reprends », KOB-245) : la fin est immédiate, le compte rendu part tout de
+/// suite, mais n'est écrit qu'à la fin de ce délai.
+pub const ANNULATION: Duration = Duration::from_secs(10);
 
 /// Ce qui arrive au chef.
 #[derive(Debug, Clone, PartialEq)]
@@ -130,8 +131,8 @@ pub struct Enregistrement {
     pub titre: Option<String>,
     /// Dernière note ajoutée, pour la fiche de prise de notes.
     pub derniere_note: Option<String>,
-    /// Arrêt encore annulable par « reprends » (KOB-165, KOB-174) : REC en
-    /// pause, rien n'est rédigé avant la confirmation.
+    /// Réunion terminée, fin encore annulable (KOB-245) : REC éteint, le
+    /// bandeau « Réunion terminée · Annuler » s'affiche.
     pub annulable: bool,
 }
 
@@ -276,9 +277,13 @@ struct EnCours {
     envoye: Option<String>,
     prochain_bloc: Instant,
     fin_demandee: bool,
-    /// Arrêt annulable (KOB-165) : le compte rendu est demandé à cet
-    /// instant, sauf « reprends » d'ici là.
-    fin_differee: Option<Instant>,
+    /// Fin encore annulable jusqu'à cet instant (KOB-245).
+    annulable_jusqu: Option<Instant>,
+    /// Transcription confiée au compte rendu : rendue à la réunion si la fin
+    /// est annulée.
+    pour_compte_rendu: String,
+    /// Compte rendu revenu pendant « Annuler » : écrit à la fin du délai.
+    compte_rendu_garde: Option<Result<String, String>>,
 }
 
 /// Le chef, partagé entre son fil et les commandes de l'interface.
@@ -332,6 +337,9 @@ pub struct Chef<R: Runtime> {
     /// Compte rendu remis à l'écrivain, pas encore sur le disque : quitter
     /// l'attend encore (KOB-226).
     compte_rendu_a_ecrire: bool,
+    /// Comptes rendus demandés puis abandonnés par « Annuler » (KOB-245) :
+    /// leurs réponses sont ignorées.
+    comptes_rendus_abandonnes: u32,
 }
 
 /// Consigne jointe à une phrase qui cite Kobi sans lui parler à coup sûr
@@ -529,6 +537,7 @@ impl<R: Runtime> Chef<R> {
             peut_etre: false,
             tour_peut_etre: None,
             compte_rendu_a_ecrire: false,
+            comptes_rendus_abandonnes: 0,
         }
     }
 
@@ -539,15 +548,19 @@ impl<R: Runtime> Chef<R> {
     pub fn enregistrement(&self) -> Enregistrement {
         match &self.reunion {
             None => Enregistrement::default(),
-            Some(r) if r.fin_demandee && r.fin_differee.is_none() => Enregistrement::default(),
+            // REC éteint dès la fin, « Annuler » encore possible (KOB-245).
+            Some(r) if r.fin_demandee => Enregistrement {
+                annulable: r.annulable_jusqu.is_some(),
+                ..Enregistrement::default()
+            },
             Some(r) => Enregistrement {
                 actif: true,
-                pause: r.pause || r.fin_differee.is_some(),
+                pause: r.pause,
                 debut_ms: r.debut_ms,
                 notes: compter_notes(&r.notes),
                 titre: None,
                 derniere_note: r.derniere_note.clone(),
-                annulable: r.fin_differee.is_some(),
+                annulable: false,
             },
         }
     }
@@ -873,15 +886,11 @@ impl<R: Runtime> Chef<R> {
     }
 
     /// Ordre de réunion entendu (chemin rapide) ou décidé par Claude avec le
-    /// MCP de Kobi (KOB-165) : pas de carte, Kobi agit tout de suite, et un
-    /// arrêt s'annule pendant [`ANNULATION`]. `annoncer` : Kobi affiche et
-    /// dit la confirmation (Claude, lui, l'annonce dans sa réponse).
+    /// MCP de Kobi (KOB-165) : pas de carte, Kobi agit tout de suite.
+    /// `annoncer` : Kobi affiche et dit la confirmation (Claude, lui,
+    /// l'annonce dans sa réponse).
     pub fn piloter(&mut self, intention: Intention, annoncer: bool) -> String {
-        let reponse = match intention {
-            Intention::TerminerReunion => Some(self.arreter_annulable()),
-            i => self.executer(i),
-        };
-        let Some(reponse) = reponse else {
+        let Some(reponse) = self.executer(intention) else {
             return String::new();
         };
         self.emettre_enregistrement();
@@ -900,11 +909,11 @@ impl<R: Runtime> Chef<R> {
         self.reunion.is_some() || self.compte_rendu_a_ecrire
     }
 
-    /// Un arrêt de la réunion peut-il encore s'annuler ?
+    /// La fin de la réunion peut-elle encore s'annuler ?
     pub fn fin_annulable(&self) -> bool {
         self.reunion
             .as_ref()
-            .is_some_and(|r| r.fin_differee.is_some())
+            .is_some_and(|r| r.annulable_jusqu.is_some())
     }
 
     fn executer(&mut self, intention: Intention) -> Option<String> {
@@ -986,73 +995,72 @@ impl<R: Runtime> Chef<R> {
             envoye: None,
             prochain_bloc: debut + PREMIER_BLOC,
             fin_demandee: false,
-            fin_differee: None,
+            annulable_jusqu: None,
+            pour_compte_rendu: String::new(),
+            compte_rendu_garde: None,
         });
         "C'est parti : j'enregistre la réunion et je prends des notes.".into()
     }
 
+    /// Fin de la réunion, la même par la voix, Claude, le raccourci, le menu
+    /// ou `kobi meeting stop` (KOB-245) : REC s'éteint, Kobi passe en fin
+    /// (rédaction) et le compte rendu part tout de suite. « Annuler »
+    /// reprend la même réunion pendant [`ANNULATION`].
     fn terminer(&mut self) -> String {
         let Some(r) = &mut self.reunion else {
             return "Aucune réunion en cours.".into();
         };
         if r.fin_demandee {
-            // Arrêt annulable en cours : le raccourci ou le menu le confirment.
-            if r.fin_differee.is_some() {
-                self.confirmer_fin();
-                return "Réunion terminée : j'écris le compte rendu.".into();
+            // Redemandée pendant « Annuler » : la fin devient définitive.
+            if r.annulable_jusqu.is_some() {
+                self.clore_annulation();
             }
             return "J'écris déjà le compte rendu.".into();
         }
         r.fin_demandee = true;
+        r.annulable_jusqu = Some(Instant::now() + ANNULATION);
         self.transition(&[Evenement::TerminerReunion]);
         self.emettre_enregistrement();
         self.demander_compte_rendu();
-        "Réunion terminée : j'écris le compte rendu.".into()
-    }
-
-    /// Arrêt à la voix ou par Claude (KOB-165) : l'enregistrement s'arrête
-    /// tout de suite, le compte rendu attend [`ANNULATION`] ; « reprends »
-    /// d'ici là reprend la même réunion.
-    fn arreter_annulable(&mut self) -> String {
-        let Some(r) = &mut self.reunion else {
-            return "Aucune réunion en cours.".into();
-        };
-        if r.fin_demandee {
-            return "J'ai déjà arrêté l'enregistrement.".into();
-        }
-        r.fin_demandee = true;
-        r.fin_differee = Some(Instant::now() + ANNULATION);
-        // Pendant l'annulation, la session reste en réunion (KOB-174) : le
-        // micro reste ouvert pour entendre « reprends » (en pause, il est
-        // coupé), et rien n'est rédigé. Les segments ne sont plus notés, et
-        // l'enregistrement est annoncé arrêté et annulable.
-        // « Reprends » s'entend sans redire « Kobi » pendant l'annulation.
+        // « Reprends » s'entend sans redire « Kobi » pendant « Annuler ».
         let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::Annulable);
-        tracing::info!("réunion arrêtée, annulable");
-        "J'ai arrêté l'enregistrement. Dis « reprends » si c'était une erreur.".into()
+        tracing::info!("réunion terminée, annulable");
+        "Réunion terminée, je prépare le compte rendu.".into()
     }
 
-    /// Fin confirmée après un arrêt annulable (délai écoulé, raccourci ou
-    /// menu) : la réunion passe en fin, et le compte rendu part.
-    fn confirmer_fin(&mut self) {
+    /// Fin de « Annuler » (délai écoulé, fin redemandée, quitter) : la fin est
+    /// définitive, le compte rendu déjà revenu est écrit.
+    pub fn clore_annulation(&mut self) {
         let Some(r) = &mut self.reunion else { return };
-        r.fin_differee = None;
-        self.transition(&[Evenement::TerminerReunion]);
-        self.emettre_enregistrement();
-        self.demander_compte_rendu();
+        if r.annulable_jusqu.take().is_none() {
+            return;
+        }
+        tracing::info!("fin de la réunion confirmée");
+        match r.compte_rendu_garde.take() {
+            Some(resultat) => self.compte_rendu(resultat),
+            None => self.emettre_enregistrement(),
+        }
     }
 
-    /// « Reprends » pendant l'annulation : la réunion continue, rien n'est
-    /// perdu de ce qui restait à noter.
+    /// « Annuler » : la même réunion reprend (même dossier, compteur
+    /// continu, rien de perdu de ce qui restait à noter) ; le compte rendu
+    /// demandé est abandonné.
     fn annuler_fin(&mut self) -> String {
         let Some(r) = &mut self.reunion else {
             return "Aucune réunion en cours.".into();
         };
         r.fin_demandee = false;
-        r.fin_differee = None;
-        // La session n'a pas quitté la réunion (ni sa pause) : rien à changer
-        // côté état.
-        tracing::info!("arrêt de la réunion annulé");
+        r.annulable_jusqu = None;
+        r.pause = false;
+        let reste = std::mem::take(&mut r.a_noter);
+        r.a_noter = std::mem::take(&mut r.pour_compte_rendu) + &reste;
+        if r.compte_rendu_garde.take().is_none() {
+            // Encore chez Claude : sa réponse sera ignorée.
+            self.comptes_rendus_abandonnes += 1;
+        }
+        self.transition(&[Evenement::Reprendre]);
+        self.emettre_enregistrement();
+        tracing::info!("fin de la réunion annulée");
         "J'enregistre de nouveau : la réunion continue.".into()
     }
 
@@ -1060,6 +1068,7 @@ impl<R: Runtime> Chef<R> {
     fn demander_compte_rendu(&mut self) {
         let Some(r) = &mut self.reunion else { return };
         let transcript = std::mem::take(&mut r.a_noter);
+        r.pour_compte_rendu = transcript.clone();
         let notes = r.notes.clone();
         self.cerveau
             .demander(Demande::CompteRendu { transcript, notes });
@@ -1492,6 +1501,17 @@ impl<R: Runtime> Chef<R> {
     }
 
     fn compte_rendu(&mut self, resultat: Result<String, String>) {
+        if self.comptes_rendus_abandonnes > 0 {
+            // Demandé avant un « Annuler » : la réunion a repris.
+            self.comptes_rendus_abandonnes -= 1;
+            tracing::info!("compte rendu abandonné ignoré");
+            return;
+        }
+        if let Some(r) = self.reunion.as_mut().filter(|r| r.annulable_jusqu.is_some()) {
+            // « Annuler » encore possible : écrit à la fin du délai.
+            r.compte_rendu_garde = Some(resultat);
+            return;
+        }
         let Some(r) = self.reunion.take() else {
             return;
         };
@@ -1735,10 +1755,9 @@ impl<R: Runtime> Chef<R> {
             self.fermer_conversation();
         }
         let Some(r) = &mut self.reunion else { return };
-        // Arrêt annulable : sans « reprends » à temps, le compte rendu part.
-        if r.fin_differee.is_some_and(|quand| Instant::now() >= quand) {
-            tracing::info!("arrêt confirmé : compte rendu demandé");
-            self.confirmer_fin();
+        // « Annuler » n'a pas servi : la fin est définitive.
+        if r.annulable_jusqu.is_some_and(|quand| Instant::now() >= quand) {
+            self.clore_annulation();
             return;
         }
         if r.pause || r.fin_demandee || r.envoye.is_some() || Instant::now() < r.prochain_bloc {
@@ -1985,5 +2004,99 @@ mod tests {
         assert_eq!(c.title, "Relancer le devis");
         assert_eq!(c.status, "pending");
         assert!(c.meta.unwrap().contains("team : Kobi"));
+    }
+
+    /// Réunion menée par le vrai chef, avec un Claude qui ne répond jamais :
+    /// les comptes rendus sont injectés à la main.
+    fn chef_en_essai() -> (
+        tauri::App<tauri::test::MockRuntime>,
+        tempfile::TempDir,
+    ) {
+        use tauri::test::{mock_builder, mock_context, noop_assets};
+        let dir = tempfile::tempdir().unwrap();
+        let app = crate::session::installer(mock_builder())
+            .build(mock_context(noop_assets()))
+            .unwrap();
+        let mut cfg = kobi_session::config::Config::default();
+        cfg.stockage.dossier = Some(dir.path().join("donnees"));
+        crate::stockage::installer(app.handle(), &cfg, None);
+        let jamais: Fabrique = Arc::new(|_| Box::pin(std::future::pending()));
+        installer(app.handle(), jamais, 5);
+        (app, dir)
+    }
+
+    fn avec_chef<T>(
+        app: &tauri::App<tauri::test::MockRuntime>,
+        f: impl FnOnce(&mut Chef<tauri::test::MockRuntime>) -> T,
+    ) -> T {
+        let chef = app.state::<ChefPartage<tauri::test::MockRuntime>>();
+        let mut chef = chef.0.lock().unwrap();
+        f(&mut chef)
+    }
+
+    /// KOB-245 : la fin est immédiate (REC éteint, état « fin », compte rendu
+    /// demandé) et « Annuler » dans les 10 s reprend la même réunion.
+    #[test]
+    fn fin_immediate_puis_annuler() {
+        let (app, _dir) = chef_en_essai();
+        let h = app.handle();
+        avec_chef(&app, |c| c.commande(Intention::DemarrerReunion));
+        assert!(avec_chef(&app, |c| c.enregistrement().actif));
+        let debut_ms = avec_chef(&app, |c| c.enregistrement().debut_ms);
+        // Fin par Claude (pilotage), comme par la phrase ou le raccourci.
+        let depuis = Instant::now();
+        let dit = avec_chef(&app, |c| c.piloter(Intention::TerminerReunion, false));
+        assert!(depuis.elapsed() < Duration::from_millis(300));
+        assert_eq!(dit, "Réunion terminée, je prépare le compte rendu.");
+        let e = avec_chef(&app, |c| c.enregistrement());
+        assert!(!e.actif && e.annulable, "{e:?}");
+        assert_eq!(etat(h).etat, "fin");
+        // Le compte rendu revient pendant « Annuler » : gardé, pas écrit.
+        avec_chef(&app, |c| {
+            c.recevoir(Message::Cerveau(Retour::CompteRendu(Ok("# CR".into()))))
+        });
+        assert!(avec_chef(&app, |c| c.fin_annulable()));
+        // « Annuler » : la même réunion reprend.
+        avec_chef(&app, |c| c.commande(Intention::Reprendre));
+        let e = avec_chef(&app, |c| c.enregistrement());
+        assert!(e.actif && !e.pause && !e.annulable, "{e:?}");
+        assert_eq!(e.debut_ms, debut_ms, "même réunion, compteur continu");
+        assert_eq!(etat(h).etat, "reunion");
+        // Fin par le raccourci, annulée avant le retour du compte rendu : sa
+        // réponse tardive est ignorée, la réunion continue.
+        avec_chef(&app, |c| c.commande(Intention::TerminerReunion));
+        avec_chef(&app, |c| c.commande(Intention::Reprendre));
+        avec_chef(&app, |c| {
+            c.recevoir(Message::Cerveau(Retour::CompteRendu(Ok("# tard".into()))))
+        });
+        assert!(avec_chef(&app, |c| c.enregistrement().actif));
+        assert_eq!(etat(h).etat, "reunion");
+    }
+
+    /// KOB-245 : sans « Annuler », la fin devient définitive au bout du
+    /// délai et le compte rendu gardé s'écrit ; pause et fin restent
+    /// distinctes.
+    #[test]
+    fn fin_definitive_apres_le_delai() {
+        let (app, _dir) = chef_en_essai();
+        let h = app.handle();
+        avec_chef(&app, |c| c.commande(Intention::DemarrerReunion));
+        avec_chef(&app, |c| c.commande(Intention::Pause));
+        let e = avec_chef(&app, |c| c.enregistrement());
+        assert!(e.actif && e.pause && !e.annulable, "pause, pas fin : {e:?}");
+        assert_eq!(etat(h).etat, "pause");
+        avec_chef(&app, |c| c.commande(Intention::TerminerReunion));
+        avec_chef(&app, |c| {
+            c.recevoir(Message::Cerveau(Retour::CompteRendu(Ok("# CR".into()))));
+            // Délai écoulé.
+            c.reunion.as_mut().unwrap().annulable_jusqu = Some(Instant::now());
+            c.tick();
+        });
+        assert!(!avec_chef(&app, |c| c.fin_annulable()));
+        assert!(avec_chef(&app, |c| c.reunion.is_none()), "compte rendu écrit");
+        assert_eq!(
+            avec_chef(&app, |c| c.commande(Intention::Reprendre)),
+            "Aucune réunion en cours."
+        );
     }
 }
