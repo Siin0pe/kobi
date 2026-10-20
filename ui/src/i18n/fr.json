@@ -1120,6 +1120,7 @@
   "session.cles.hotkey_view": "Raccourci qui ouvre ou range la conversation en grand (Ctrl+Alt+G).",
   "session.cles.codebases": "Dossiers de code que Kobi peut lire (chemins complets).",
   "session.cles.audio.sources": "Son de l'ordinateur en réunion (la voix des autres en visio) : mic (micro seul, défaut) ou both.",
+  "session.cles.audio.annulation_echo": "Retire la voix de Kobi de ce qu'entend le micro (haut-parleurs sans casque) : true ou false (défaut), pris à la phrase suivante de Kobi.",
   "session.cles.audio.sortie": "Sortie audio captée pour le son de l'ordinateur ; vide : celle du système.",
   "session.cles.stt.engine": "Moteur de transcription : auto (le gagnant du benchmark) ou nemotron.",
   "session.cles.notes.mode": "Prise de notes : blocks, end ou continuous (expérimental : Kobi peut proposer une action, sur carte).",

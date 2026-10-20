@@ -1123,6 +1123,7 @@
   "session.cles.hotkey_view": "Shortcut that opens or tucks away the large conversation view (Ctrl+Alt+G).",
   "session.cles.codebases": "Code folders Kobi can read (full paths).",
   "session.cles.audio.sources": "Computer sound in meetings (other people's voices on video calls): mic (microphone only, default) or both.",
+  "session.cles.audio.annulation_echo": "Removes Kobi's voice from what the microphone hears (speakers without a headset): true or false (default), applied from Kobi's next sentence.",
   "session.cles.audio.sortie": "Audio output captured for the computer sound; empty: the system's.",
   "session.cles.stt.engine": "Transcription engine: auto (the benchmark winner) or nemotron.",
   "session.cles.notes.mode": "Note-taking: blocks, end or continuous (experimental: Kobi may propose an action, on a card).",
