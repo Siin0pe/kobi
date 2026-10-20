@@ -24,6 +24,11 @@ function fakeTauri(): void {
       apercu: 'Budget validé pour le prototype.',
     },
   ];
+  // Réunion encore en cours (KOB-251) : commencée il y a 12 min, transcription
+  // relue il y a 7 min (durée figée à 5 min).
+  if ((window as unknown as { __enCours?: boolean }).__enCours) {
+    Object.assign(reunions[0]!, { en_cours: true, debut_ms: Date.now() - 12 * 60_000, fin_ms: null, duree_s: 300, a_compte_rendu: false });
+  }
   const lue = {
     resume: reunions[0],
     dossier: '/home/test/Kobi/reunions/2026-10-18_point-budget',
@@ -552,5 +557,24 @@ test('KOB-223 : le titre d’une réunion s’édite sur place (en-tête et list
   await champListe.fill('Refresh token');
   await champListe.press('Enter');
   await expect(ligne.locator('.element-titre')).toHaveText('Refresh token');
+  await expectNoErrors(errors);
+});
+
+test('réunion en cours : la durée suit l’horloge dans la liste et dans l’en-tête, sans redessiner la liste (KOB-251)', async ({ page }) => {
+  await page.clock.install();
+  await page.addInitScript(() => ((window as unknown as { __enCours: boolean }).__enCours = true));
+  const errors = await ouvrirCarnet(page);
+  const ligne = page.locator('.element[data-genre="reunion"] .element-meta');
+  await expect(ligne).toContainText('12 min');
+  await page.locator('.element[data-genre="reunion"]').click();
+  const surtitre = page.locator('.feuille[data-genre="reunion"] .surtitre');
+  await expect(surtitre).toContainText('12 min');
+  // La liste n'est pas redessinée : la même ligne garde son nœud.
+  await page.evaluate(() => ((window as unknown as { __ligne: Element | null }).__ligne = document.querySelector('.element[data-genre="reunion"]')));
+  await page.clock.runFor(2 * 60_000);
+  await expect(ligne).toContainText('14 min');
+  await expect(surtitre).toContainText('14 min');
+  await expect(surtitre.locator('.rec')).toHaveText('REC');
+  expect(await page.evaluate(() => (window as unknown as { __ligne: Element | null }).__ligne === document.querySelector('.element[data-genre="reunion"]'))).toBe(true);
   await expectNoErrors(errors);
 });

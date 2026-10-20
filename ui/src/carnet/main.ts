@@ -13,7 +13,7 @@ import { copier, formatCopie, type Quoi } from '../copie';
 import { boutonCopie, copierPuces, ELEMENT, ligneMd, menuCopier, PARTIE, partiesReunion, type QuandCopie } from './copie-reunion';
 import { STOCKAGE } from '../reglages/stockage';
 import { poserTitre } from '../titre';
-import { carnet, type ConversationLue, type Genre, type Index, type ReunionLue, type Trouve } from './donnees';
+import { carnet, type ConversationLue, type Genre, type Index, type ResumeReunion, type ReunionLue, type Trouve } from './donnees';
 import { cleDuJour, duree, echeance, heure, horodatage, libelleDuJour, markdown } from './format';
 
 type Filtre = 'tout' | Genre;
@@ -137,6 +137,32 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
     enCours: boolean;
   }
 
+  /**
+   * Durée d'une réunion : celle de sa transcription, ou, en cours, depuis son
+   * début (KOB-251 : la liste ne se relit qu'au retour sur la fenêtre).
+   */
+  function dureeReunion(r: ResumeReunion): string | null {
+    if (r.en_cours && r.debut_ms !== null) return duree(Math.max(0, (Date.now() - r.debut_ms) / 1000));
+    return r.duree_s > 0 ? duree(r.duree_s) : null;
+  }
+
+  /** « Réunion · aujourd'hui · 06:57 · 12 min » (en-tête de la vue). */
+  function surtitreReunion(r: ResumeReunion): string {
+    const jour = r.debut_ms !== null ? cleDuJour(r.debut_ms) : r.date;
+    return [
+      'Réunion',
+      jour ? libelleDuJour(jour) : null,
+      r.debut_ms !== null ? heure(r.debut_ms) + (r.fin_ms !== null ? `–${heure(r.fin_ms)}` : '') : null,
+      dureeReunion(r),
+    ]
+      .filter(Boolean)
+      .join(' · ');
+  }
+
+  function metaReunion(r: ResumeReunion): string {
+    return [r.debut_ms !== null ? heure(r.debut_ms) : null, dureeReunion(r), r.a_compte_rendu ? 'compte rendu' : null].filter(Boolean).join(' · ');
+  }
+
   function entrees(index: Index): Entree[] {
     const out: Entree[] = [];
     if (etat.filtre !== 'conversation') {
@@ -148,9 +174,7 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
           jour: r.debut_ms !== null ? cleDuJour(r.debut_ms) : (r.date ?? '0000-00-00'),
           ms,
           titre: titreReunion(r),
-          meta: [r.debut_ms !== null ? heure(r.debut_ms) : null, r.duree_s > 0 ? duree(r.duree_s) : null, r.a_compte_rendu ? 'compte rendu' : null]
-            .filter(Boolean)
-            .join(' · '),
+          meta: metaReunion(r),
           apercu: r.apercu,
           enCours: r.en_cours,
         });
@@ -721,15 +745,7 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
   function pageReunion(r: ReunionLue, cible: Cible, animer: boolean): void {
     const mot = etat.resultats !== null ? etat.requete : '';
     const titre = titreReunion(r.resume);
-    const jour = r.resume.debut_ms !== null ? cleDuJour(r.resume.debut_ms) : r.resume.date;
-    const surtitre = [
-      'Réunion',
-      jour ? libelleDuJour(jour) : null,
-      r.resume.debut_ms !== null ? heure(r.resume.debut_ms) + (r.resume.fin_ms !== null ? `–${heure(r.resume.fin_ms)}` : '') : null,
-      r.resume.duree_s > 0 ? duree(r.resume.duree_s) : null,
-    ]
-      .filter(Boolean)
-      .join(' · ');
+    const surtitre = surtitreReunion(r.resume);
 
     const contenu = h('div', { class: 'contenu' });
     const onglets = h('div', { class: 'onglets', role: 'tablist', 'aria-label': 'Parties de la réunion' });
@@ -931,6 +947,19 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
     if (ouverte) etat.selection = { genre: 'reunion', id: n.reunion };
     void rafraichir().then(() => (ouverte ? ouvrir('reunion', n.reunion) : undefined));
   });
+
+  // Durée d'une réunion en cours (KOB-251) : une fois par minute, seul le
+  // texte de sa ligne et de son en-tête change, sans redessiner la liste.
+  window.setInterval(() => {
+    for (const r of etat.index?.reunions ?? []) {
+      if (!r.en_cours) continue;
+      const nom = CSS.escape(r.nom);
+      const meta = hote.querySelector<HTMLElement>(`.element[data-genre="reunion"][data-id="${nom}"] .element-meta`);
+      if (meta) meta.textContent = `Réunion · ${metaReunion(r)}`;
+      const sur = hote.querySelector<HTMLElement>(`.feuille[data-genre="reunion"][data-id="${nom}"] .surtitre`)?.lastChild;
+      if (sur?.nodeType === Node.TEXT_NODE) sur.textContent = surtitreReunion(r);
+    }
+  }, 60_000);
 
   window.carnet = { rafraichir, ouvrir, normaliser };
 
