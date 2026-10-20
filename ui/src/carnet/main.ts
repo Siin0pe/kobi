@@ -536,7 +536,10 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
               if (!chemin) return;
               const fichier = chemin.split(/[\\/]/).pop() ?? chemin;
               const dossier = chemin.slice(0, chemin.length - fichier.length);
-              notifier(`Exporté en markdown : ${fichier}`, 'ok', { apercu: `${contenuExport(genre, r)}\ndans ${dossier}` });
+              notifier(`Exporté en markdown : ${fichier}`, 'ok', {
+                apercu: `${contenuExport(genre, r)}\ndans ${dossier}`,
+                action: { libelle: 'Ouvrir', faire: () => void carnet.ouvrirExport().catch((e) => notifier(message(e), 'erreur')) },
+              });
             } catch (e) {
               notifier(message(e), 'erreur');
             }

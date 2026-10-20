@@ -6,6 +6,7 @@
 //! d'autre accès au disque que ces commandes.
 
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 
 use kobi_session::stockage::{
@@ -151,7 +152,35 @@ pub async fn carnet_exporter<R: Runtime>(
     let chemin = chemin.into_path().map_err(|e| e.to_string())?;
     std::fs::write(&chemin, doc.markdown).map_err(|e| format!("{} : {e}", chemin.display()))?;
     tracing::info!(fichier = %chemin.display(), "carnet : export");
+    retenir_export(&chemin);
     Ok(Some(chemin))
+}
+
+/// Dernier fichier exporté, celui qu'ouvre « Ouvrir » après l'export
+/// (KOB-224). Gardé côté coque : la fenêtre ne donne jamais de chemin à ouvrir.
+static DERNIER_EXPORT: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+fn retenir_export(chemin: &Path) {
+    *DERNIER_EXPORT.lock().unwrap_or_else(|e| e.into_inner()) = Some(chemin.to_owned());
+}
+
+/// Le dernier export, s'il existe encore sur le disque.
+fn dernier_export() -> Result<PathBuf, String> {
+    let chemin = DERNIER_EXPORT
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .ok_or("Aucun fichier exporté.")?;
+    if !chemin.is_file() {
+        return Err(format!("{} n'existe plus.", chemin.display()));
+    }
+    Ok(chemin)
+}
+
+/// Ouvre le dernier fichier exporté avec l'application du système.
+#[tauri::command]
+pub fn carnet_ouvrir_export() -> Result<(), String> {
+    montrer_dans_l_explorateur(&dernier_export()?)
 }
 
 /// Ouvre dans l'explorateur le dossier d'un élément, ou la racine.
@@ -178,6 +207,8 @@ pub fn carnet_ouvrir_dossier<R: Runtime>(
     montrer_dans_l_explorateur(&chemin)
 }
 
+/// Ouvre un dossier dans l'explorateur, ou un fichier avec l'application
+/// que le système lui associe.
 fn montrer_dans_l_explorateur(chemin: &Path) -> Result<(), String> {
     #[cfg(windows)]
     let programme = "explorer";
@@ -333,6 +364,18 @@ pub async fn choisir_dossier<R: Runtime>(
 mod tests {
     use super::*;
     use kobi_session::stockage::Qui;
+
+    #[test]
+    fn ouvrir_export_seulement_le_dernier_fichier_encore_la() {
+        let dir = tempfile::tempdir().unwrap();
+        let fichier = dir.path().join("point-budget.md");
+        std::fs::write(&fichier, "# Point budget\n").unwrap();
+        retenir_export(&fichier);
+        assert_eq!(dernier_export().unwrap(), fichier);
+        // Déplacé ou supprimé depuis : on le dit au lieu de lancer l'ouverture.
+        std::fs::remove_file(&fichier).unwrap();
+        assert!(dernier_export().unwrap_err().contains("n'existe plus"));
+    }
 
     #[test]
     fn reunion_active_seulement_si_recente_et_en_cours() {
