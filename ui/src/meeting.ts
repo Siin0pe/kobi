@@ -4,6 +4,7 @@
 // participants doivent savoir qu'ils sont transcrits).
 
 import { CONSENT_MESSAGES, type ConsentLang, type MeetingInfo } from './states';
+import { touches } from './touches';
 
 export interface ConsentEvent {
   /** `copy` : message copié ; `done` : l'utilisateur a prévenu les participants. */
@@ -56,6 +57,8 @@ export class RecIndicator {
   private readonly notes: HTMLElement;
   /** « son de l'ordi » : la piste « eux » est captée (KOB-164). */
   private readonly eux: HTMLElement;
+  /** Retard de la transcription (KOB-250) : un ordre dit maintenant attendra. */
+  private readonly retard: HTMLElement;
   /** « Annuler » après la fin (KOB-245) : la même réunion reprend. */
   private readonly undo: HTMLButtonElement;
   /** Fin encore annulable : l'étiquette reste, le bouton aussi. */
@@ -82,12 +85,14 @@ export class RecIndicator {
     this.eux = el('span', 'rec-eux', 'son de l’ordi');
     this.eux.title = 'Le son de l’ordinateur (la voix des autres en visio) est transcrit aussi.';
     this.eux.hidden = true;
+    this.retard = el('span', 'rec-retard');
+    this.retard.hidden = true;
     this.undo = el('button', 'rec-undo', 'Annuler');
     this.undo.type = 'button';
     this.undo.title = 'Reprendre la même réunion (Ctrl+Z)';
     this.undo.hidden = true;
     this.undo.addEventListener('click', () => this.onUndo?.());
-    this.root.append(el('span', 'rec-dot'), (this.label = el('span', 'rec-label')), this.time, this.notes, this.eux, this.undo);
+    this.root.append(el('span', 'rec-dot'), (this.label = el('span', 'rec-label')), this.time, this.notes, this.eux, this.retard, this.undo);
   }
 
   setReducedMotion(reduced: boolean): void {
@@ -120,6 +125,7 @@ export class RecIndicator {
       this.notes.hidden = n === 0;
       this.digits(this.notes, String(n), ` note${n > 1 ? 's' : ''}`);
       this.eux.hidden = !info.computerAudio || Boolean(info.paused);
+      this.montrerRetard(info.late);
       if (n > before && !this.reduced && !this.paused) this.bump(n - before);
     }
     this.tick();
@@ -152,6 +158,20 @@ export class RecIndicator {
       return;
     }
     this.fade();
+  }
+
+  /** « retard 2 min » : la transcription suit la parole avec retard ; le raccourci arrête tout de suite. */
+  private montrerRetard(late: MeetingInfo['late']): void {
+    this.retard.hidden = !late;
+    if (!late) {
+      this.retard.removeAttribute('title');
+      return;
+    }
+    const duree = late.seconds < 60 ? `${late.seconds} s` : `${Math.round(late.seconds / 60)} min`;
+    const arret = touches(late.shortcut).join('+');
+    this.retard.textContent = `retard ${duree}`;
+    this.retard.title = `La transcription a ${duree} de retard. Pour arrêter tout de suite : ${arret}.`;
+    this.retard.setAttribute('aria-label', this.retard.title);
   }
 
   /** Le délai d'« Annuler » est passé : l'étiquette s'efface. */

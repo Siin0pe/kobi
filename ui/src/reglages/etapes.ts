@@ -20,11 +20,9 @@ export function octets(n: number): string {
   return `${Math.round(mo)} Mo`;
 }
 
-/** Touches d'un raccourci Tauri (`Ctrl+Shift+Space`), en français. */
-export function touches(accelerateur: string): string[] {
-  const noms: Record<string, string> = { space: 'Espace', control: 'Ctrl', ctrl: 'Ctrl', commandorcontrol: 'Ctrl', shift: 'Maj', alt: 'Alt', super: 'Win', enter: 'Entrée' };
-  return accelerateur.split('+').map((t) => noms[t.trim().toLowerCase()] ?? t.trim().toUpperCase());
-}
+import { touches } from '../touches';
+
+export { touches };
 
 function clavier(accelerateur: string): HTMLElement {
   const t = touches(accelerateur);

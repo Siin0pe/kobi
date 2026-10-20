@@ -92,6 +92,11 @@ export interface MeetingInfo {
   lastNote?: string;
   /** Le son de l'ordinateur (piste « eux ») est capté (KOB-164). */
   computerAudio?: boolean;
+  /**
+   * Retard de la transcription sur la parole, en secondes, et le raccourci
+   * qui arrête la réunion tout de suite (KOB-250).
+   */
+  late?: { seconds: number; shortcut: string };
 }
 
 export type ConsentLang = 'fr' | 'en';

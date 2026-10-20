@@ -34,6 +34,39 @@ use crate::session::etat;
 const REESSAI_MICRO: Duration = Duration::from_secs(5);
 /// Période du bilan de charge dans le journal.
 const BILAN: Duration = Duration::from_secs(300);
+/// Événement du retard de la transcription sur la parole (KOB-250) :
+/// [`Retard`], ou `null` quand elle a rattrapé.
+pub const EVENEMENT_RETARD: &str = "transcription_retard";
+/// Au-delà de ce retard (s), Kobi le signale : un ordre dit maintenant ne
+/// sera entendu qu'après.
+const SEUIL_RETARD: f64 = 15.0;
+/// Le retard est signalé de nouveau à chaque palier de ce nombre de secondes.
+const PALIER_RETARD: f64 = 30.0;
+
+/// Charge de [`EVENEMENT_RETARD`].
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct Retard {
+    /// Retard de la transcription sur la parole, en secondes.
+    pub secondes: u64,
+    /// Raccourci de l'enregistrement (réglage `hotkey_record`) : il arrête la
+    /// réunion tout de suite, retard ou non.
+    pub raccourci: String,
+}
+
+/// Faut-il signaler le retard ? `Some(Some(s))` : signaler `s` secondes ;
+/// `Some(None)` : il est rattrapé ; `None` : rien de nouveau. `signale` est
+/// le dernier retard signalé.
+fn signal_retard(retard: f64, signale: Option<u64>) -> Option<Option<u64>> {
+    match signale {
+        _ if retard >= SEUIL_RETARD
+            && signale.is_none_or(|s| retard >= s as f64 + PALIER_RETARD) =>
+        {
+            Some(Some(retard as u64))
+        }
+        Some(_) if retard < SEUIL_RETARD / 3.0 => Some(None),
+        _ => None,
+    }
+}
 /// Événement du niveau du micro (0 à 1), pendant l'écoute.
 pub const EVENEMENT_NIVEAU: &str = "niveau";
 /// Période du niveau envoyé à l'interface (20 par seconde).
@@ -87,6 +120,18 @@ pub fn commander<R: Runtime>(app: &AppHandle<R>, commande: Commande) -> Result<(
         .map_err(|e| e.to_string())?
         .send(commande)
         .map_err(|e| e.to_string())
+}
+
+/// Raccourci de l'enregistrement tel que réglé (pris à chaud, KOB-214).
+fn raccourci_enregistrement() -> String {
+    kobi_session::config::default_path()
+        .filter(|p| p.exists())
+        .map(|p| {
+            kobi_session::config::load_or_create(&p)
+                .config
+                .hotkey_record
+        })
+        .unwrap_or_else(|| kobi_session::config::Config::default().hotkey_record)
 }
 
 /// D'où vient l'audio.
@@ -346,6 +391,8 @@ struct Fil<R: Runtime> {
     audio: f64,
     calcul: Duration,
     bilan: Instant,
+    /// Dernier retard de la transcription signalé (KOB-250).
+    retard: Option<u64>,
     /// Une réunion est ouverte : pas de mode conversation, et la transcription
     /// n'est jamais remise à zéro.
     en_reunion: bool,
@@ -369,6 +416,7 @@ impl<R: Runtime> Fil<R> {
             audio: 0.0,
             calcul: Duration::ZERO,
             bilan: Instant::now(),
+            retard: None,
             en_reunion: false,
             niveau: (0.0, 0),
         }
@@ -448,6 +496,7 @@ impl<R: Runtime> Fil<R> {
 
     fn fermer_micro(&mut self) {
         crate::chef::avancer(&self.app, kobi_stt::Source::Moi, None);
+        self.signaler_retard(0.0);
         if self.entree.take().is_some() {
             tracing::info!("écoute continue : micro fermé");
             self.note("micro fermé");
@@ -577,6 +626,9 @@ impl<R: Runtime> Fil<R> {
         let jusqu_a = self.origine + Duration::from_secs_f64(self.t.max(0.0));
         crate::chef::avancer(&self.app, kobi_stt::Source::Moi, Some(jusqu_a));
         self.executer(actions);
+        // Sous charge, la transcription peut aller moins vite que la parole :
+        // un ordre dit maintenant ne serait entendu qu'après (KOB-250).
+        self.signaler_retard(self.origine.elapsed().as_secs_f64() - self.t);
 
         if self.bilan.elapsed() >= BILAN {
             tracing::info!(
@@ -589,6 +641,29 @@ impl<R: Runtime> Fil<R> {
             self.calcul = Duration::ZERO;
             self.bilan = Instant::now();
         }
+    }
+
+    /// Signale le retard de la transcription quand il franchit un palier, et
+    /// son rattrapage.
+    fn signaler_retard(&mut self, retard: f64) {
+        let Some(nouveau) = signal_retard(retard, self.retard) else {
+            return;
+        };
+        self.retard = nouveau;
+        let charge = nouveau.map(|secondes| {
+            tracing::warn!(
+                secondes,
+                "écoute continue : la transcription est en retard sur la parole"
+            );
+            Retard {
+                secondes,
+                raccourci: raccourci_enregistrement(),
+            }
+        });
+        if charge.is_none() {
+            tracing::info!("écoute continue : la transcription a rattrapé son retard");
+        }
+        let _ = self.app.emit(EVENEMENT_RETARD, charge);
     }
 
     /// Niveau du micro, 20 fois par seconde, seulement quand Kobi écoute.
@@ -665,6 +740,19 @@ mod tests {
     use super::*;
     use crate::interpellation::modele_nemotron;
     use std::path::Path;
+
+    /// KOB-250 : le retard est signalé au-delà du seuil, puis à chaque
+    /// palier, et son rattrapage une seule fois.
+    #[test]
+    fn retard_signale_par_paliers() {
+        assert_eq!(signal_retard(3.0, None), None);
+        assert_eq!(signal_retard(16.0, None), Some(Some(16)));
+        assert_eq!(signal_retard(30.0, Some(16)), None);
+        assert_eq!(signal_retard(47.0, Some(16)), Some(Some(47)));
+        assert_eq!(signal_retard(10.0, Some(47)), None, "pas encore rattrapé");
+        assert_eq!(signal_retard(2.0, Some(47)), Some(None));
+        assert_eq!(signal_retard(2.0, None), None);
+    }
 
     /// « Reprends » après un arrêt n'est pas pris pour l'écho de « Dis
     /// « reprends » si c'était une erreur » (essai audio injecté, KOB-165).

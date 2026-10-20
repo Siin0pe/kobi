@@ -155,6 +155,10 @@
 .rec-eux[hidden] {
   display: none;
 }
+/* Retard de la transcription (KOB-250) : à la suite, lisible sans crier. */
+.rec-retard::before {
+  content: '· ';
+}
 .rec-plus {
   position: absolute;
   right: 6px;

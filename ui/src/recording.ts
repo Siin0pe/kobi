@@ -8,6 +8,7 @@
 // sert de repli, sans durée exacte ni notes.
 
 import type { SessionState } from './native';
+import type { MeetingInfo } from './states';
 import type { Stage } from './stage';
 
 /** Charge utile de l'événement `enregistrement`. */
@@ -29,6 +30,12 @@ interface TauriGlobal {
   event: { listen<T>(event: string, handler: (e: { payload: T }) => void): Promise<() => void> };
 }
 
+/**
+ * Dernier retard de la transcription signalé par la coque (KOB-250) : gardé
+ * même hors réunion, car il peut arriver juste avant que la réunion démarre.
+ */
+let retard: MeetingInfo['late'];
+
 /** Applique un état d'enregistrement à la scène. */
 export function applyRecording(stage: Stage, r: RecordingState): void {
   if (!r.actif) {
@@ -41,6 +48,7 @@ export function applyRecording(stage: Stage, r: RecordingState): void {
     startedAt: r.debut_ms,
     paused: r.pause,
     notes: r.notes,
+    late: retard,
     lastNote: r.derniere_note ?? undefined,
   };
   if (stage.currentMeeting) stage.updateMeeting(info);
@@ -90,6 +98,12 @@ export function followRecording(stage: Stage): void {
     if (!stage.canUndoMeeting) return;
     e.preventDefault();
     annuler();
+  });
+  // Retard de la transcription (KOB-250) : affiché sur REC, avec le raccourci.
+  void api.event.listen<{ secondes: number; raccourci: string } | null>('transcription_retard', (e) => {
+    const r = e.payload;
+    retard = r ? { seconds: r.secondes, shortcut: r.raccourci } : undefined;
+    stage.updateMeeting({ late: retard });
   });
   void api.event.listen<RecordingState>('enregistrement', (e) => {
     explicit = true;
