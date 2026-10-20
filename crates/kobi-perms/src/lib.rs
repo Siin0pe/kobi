@@ -37,7 +37,7 @@ use rmcp::{schemars, tool, tool_handler, tool_router, ServerHandler};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::{mpsc, oneshot};
-use tokio_util::sync::CancellationToken;
+use tokio_util::sync::{CancellationToken, DropGuard};
 
 /// Nom du serveur dans la config MCP passée à Claude Code. Distinct de
 /// « kobi », le MCP de pilotage de Kobi (KOB-161).
@@ -173,10 +173,13 @@ fn response(decision: &Decision, input: Value) -> Value {
     }
 }
 
-/// Serveur HTTP lancé sur `127.0.0.1`, port choisi par l'OS.
+/// Serveur HTTP lancé sur `127.0.0.1`, port choisi par l'OS. Lâché sans
+/// [`PermsServer::shutdown`] (session abandonnée), il s'arrête aussi : sinon
+/// sa tâche écouterait jusqu'à la sortie de Kobi (KOB-233).
 pub struct PermsServer {
     addr: SocketAddr,
     cancel: CancellationToken,
+    _arret: DropGuard,
     task: tokio::task::JoinHandle<()>,
 }
 
@@ -213,7 +216,15 @@ impl PermsServer {
                 .with_graceful_shutdown(async move { shutdown.cancelled_owned().await })
                 .await;
         });
-        Ok((Self { addr, cancel, task }, rx))
+        Ok((
+            Self {
+                addr,
+                _arret: cancel.clone().drop_guard(),
+                cancel,
+                task,
+            },
+            rx,
+        ))
     }
 
     pub fn url(&self) -> String {
@@ -321,5 +332,24 @@ mod tests {
             url.as_str()
         );
         server.shutdown().await;
+    }
+
+    /// KOB-233 : une session abandonnée lâche son serveur sans `shutdown` ;
+    /// il ne doit plus écouter.
+    #[tokio::test]
+    async fn serveur_lache_arrete() {
+        let (server, _rx) = PermsServer::start(DEFAULT_TIMEOUT).await.unwrap();
+        let addr = server.addr;
+        assert!(tokio::net::TcpStream::connect(addr).await.is_ok());
+        drop(server);
+        let mut ferme = false;
+        for _ in 0..50 {
+            if tokio::net::TcpStream::connect(addr).await.is_err() {
+                ferme = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(ferme, "le serveur écoute encore après avoir été lâché");
     }
 }
