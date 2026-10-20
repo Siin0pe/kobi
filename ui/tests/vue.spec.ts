@@ -494,3 +494,26 @@ test('KOB-247 : une liste qui reprend après un paragraphe commence à son numé
     ]);
   await expectNoErrors(errors);
 });
+
+test('écrire à Kobi pendant la vue agrandie : la bulle est au premier plan, ce qu’on tape se voit (KOB-255)', async ({ page }) => {
+  await page.setViewportSize({ width: 850, height: 574 });
+  const errors = await kobi(page);
+  await emit(page, 'conversation', [{ tour: 1, question: 'explique le mutex', reponse: `${RICHE}\n\n${longue(20)}`, statut: 'fini', clavier: true, etapes: [] }]);
+  await emit(page, 'vue', { action: 'ouvrir' });
+  await expect(vue(page)).toBeVisible();
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('kobi:menu', { detail: 'ecrire' })));
+  const champ = page.locator('.ecrire-champ');
+  await expect(champ).toBeFocused();
+  const devant = async () =>
+    champ.evaluate((c) => {
+      const r = c.getBoundingClientRect();
+      return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) === c;
+    });
+  expect(await devant()).toBe(true);
+  await page.keyboard.type('Quel jour sommes-nous ?');
+  await expect(page.locator('.ecrire-miroir')).toContainText('Quel jour sommes-nous ?');
+  expect(await devant()).toBe(true);
+  // Le panneau reste ouvert et lisible à côté.
+  await expect(vue(page)).toBeVisible();
+  await expectNoErrors(errors);
+});
