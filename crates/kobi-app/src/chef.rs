@@ -66,6 +66,9 @@ const FIN_CONVERSATION: Duration = Duration::from_secs(45);
 /// « reprends », KOB-245) : la fin est immédiate, le compte rendu part tout de
 /// suite, mais n'est écrit qu'à la fin de ce délai.
 pub const ANNULATION: Duration = Duration::from_secs(10);
+/// À la fin d'une réunion, le compte rendu attend au plus ce temps que les
+/// pistes aient transcrit ce qui a été dit avant l'arrêt (KOB-198).
+pub const VIDANGE: Duration = Duration::from_secs(30);
 
 /// Ce qui arrive au chef.
 #[derive(Debug, Clone, PartialEq)]
@@ -87,8 +90,10 @@ pub enum Message {
     /// L'écoute est mise en pause hors réunion : la conversation se termine
     /// et Kobi revient en veille (KOB-238).
     EcouteCoupee,
-    /// Segment final de la transcription continue.
-    Segment(Segment),
+    /// Segment final de la transcription continue, et l'instant (horloge du
+    /// système) où sa fin a été dite : sous charge, il arrive bien après
+    /// (KOB-198).
+    Segment(Segment, Instant),
     /// Menu, interface ou commande vocale.
     Commande(Intention),
     /// Clic sur une carte.
@@ -284,6 +289,14 @@ struct EnCours {
     pour_compte_rendu: String,
     /// Compte rendu revenu pendant « Annuler » : écrit à la fin du délai.
     compte_rendu_garde: Option<Result<String, String>>,
+    /// Instant de la fin : ce qui a été dit avant est gardé, même transcrit
+    /// après (KOB-198).
+    arret: Option<Instant>,
+    /// Le compte rendu attend que les pistes aient rattrapé l'arrêt, au plus
+    /// jusqu'à cet instant.
+    vidange: Option<Instant>,
+    /// Compte rendu demandé : plus rien n'entre dans la transcription.
+    compte_rendu_demande: bool,
 }
 
 /// Le chef, partagé entre son fil et les commandes de l'interface.
@@ -356,6 +369,41 @@ pub struct ChefPartage<R: Runtime>(pub Mutex<Chef<R>>);
 /// Canal vers le fil du chef.
 pub struct Bus(pub Mutex<Sender<Message>>);
 
+/// Jusqu'où chaque piste a transcrit son audio, sur l'horloge du système
+/// (KOB-198) ; `None` : piste fermée. Sous charge, la transcription prend du
+/// retard : à la fin, le compte rendu attend qu'elle ait rattrapé l'arrêt.
+#[derive(Default)]
+pub struct Avancement {
+    moi: Mutex<Option<Instant>>,
+    eux: Mutex<Option<Instant>>,
+}
+
+impl Avancement {
+    fn piste(&self, source: kobi_stt::Source) -> &Mutex<Option<Instant>> {
+        match source {
+            kobi_stt::Source::Moi => &self.moi,
+            kobi_stt::Source::Eux => &self.eux,
+        }
+    }
+
+    /// Les pistes ouvertes ont toutes transcrit leur audio jusqu'à `instant`.
+    fn a_jour(&self, instant: Instant) -> bool {
+        [&self.moi, &self.eux].iter().all(|p| {
+            p.lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_none_or(|t| t >= instant)
+        })
+    }
+}
+
+/// La piste `source` a transcrit son audio jusqu'à `jusqu_a` (`None` : piste
+/// fermée, plus rien à attendre d'elle).
+pub fn avancer<R: Runtime>(app: &AppHandle<R>, source: kobi_stt::Source, jusqu_a: Option<Instant>) {
+    if let Some(a) = app.try_state::<Avancement>() {
+        *a.piste(source).lock().unwrap_or_else(|e| e.into_inner()) = jusqu_a;
+    }
+}
+
 /// Envoie un message au chef.
 pub fn publier<R: Runtime>(app: &AppHandle<R>, message: Message) {
     if let Some(bus) = app.try_state::<Bus>() {
@@ -372,6 +420,7 @@ pub fn installer<R: Runtime>(
 ) {
     let (tx, rx) = mpsc::channel();
     app.manage(Bus(Mutex::new(tx.clone())));
+    app.manage(Avancement::default());
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -625,7 +674,7 @@ impl<R: Runtime> Chef<R> {
                 self.question(texte, true);
                 self.peut_etre = false;
             }
-            Message::Segment(s) => self.segment(s),
+            Message::Segment(s, dit_a) => self.segment(s, dit_a),
             Message::Commande(i) => {
                 self.commande(i);
             }
@@ -998,6 +1047,9 @@ impl<R: Runtime> Chef<R> {
             annulable_jusqu: None,
             pour_compte_rendu: String::new(),
             compte_rendu_garde: None,
+            arret: None,
+            vidange: None,
+            compte_rendu_demande: false,
         });
         "C'est parti : j'enregistre la réunion et je prends des notes.".into()
     }
@@ -1018,10 +1070,11 @@ impl<R: Runtime> Chef<R> {
             return "J'écris déjà le compte rendu.".into();
         }
         r.fin_demandee = true;
+        r.arret = Some(Instant::now());
         r.annulable_jusqu = Some(Instant::now() + ANNULATION);
         self.transition(&[Evenement::TerminerReunion]);
         self.emettre_enregistrement();
-        self.demander_compte_rendu();
+        self.vider_puis_compte_rendu();
         // « Reprends » s'entend sans redire « Kobi » pendant « Annuler ».
         let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::Annulable);
         tracing::info!("réunion terminée, annulable");
@@ -1052,10 +1105,14 @@ impl<R: Runtime> Chef<R> {
         r.fin_demandee = false;
         r.annulable_jusqu = None;
         r.pause = false;
+        r.arret = None;
+        r.vidange = None;
         let reste = std::mem::take(&mut r.a_noter);
         r.a_noter = std::mem::take(&mut r.pour_compte_rendu) + &reste;
-        if r.compte_rendu_garde.take().is_none() {
-            // Encore chez Claude : sa réponse sera ignorée.
+        // Compte rendu déjà demandé et encore chez Claude : sa réponse sera
+        // ignorée. Demandé seulement après la vidange (KOB-198), il peut ne
+        // pas l'être encore.
+        if std::mem::take(&mut r.compte_rendu_demande) && r.compte_rendu_garde.take().is_none() {
             self.comptes_rendus_abandonnes += 1;
         }
         self.transition(&[Evenement::Reprendre]);
@@ -1064,9 +1121,49 @@ impl<R: Runtime> Chef<R> {
         "J'enregistre de nouveau : la réunion continue.".into()
     }
 
+    /// Le compte rendu part dès que les pistes ont transcrit ce qui a été dit
+    /// avant l'arrêt (tout de suite si rien n'est en retard), au plus tard
+    /// après [`VIDANGE`] (KOB-198).
+    fn vider_puis_compte_rendu(&mut self) {
+        let Some(r) = &mut self.reunion else { return };
+        r.vidange = Some(Instant::now() + VIDANGE);
+        self.vidange();
+    }
+
+    /// Compte rendu demandé si les pistes ont rattrapé l'arrêt ou si l'attente
+    /// est finie.
+    fn vidange(&mut self) {
+        let Some(r) = &mut self.reunion else { return };
+        let (Some(limite), Some(arret)) = (r.vidange, r.arret) else {
+            return;
+        };
+        let a_jour = self
+            .app
+            .try_state::<Avancement>()
+            .is_none_or(|a| a.a_jour(arret));
+        if !a_jour && Instant::now() < limite {
+            return;
+        }
+        let attente_ms = arret.elapsed().as_millis() as u64;
+        if a_jour {
+            tracing::info!(
+                attente_ms,
+                "fin de réunion : transcription à jour, compte rendu demandé"
+            );
+        } else {
+            tracing::warn!(
+                attente_ms,
+                "fin de réunion : transcription encore en retard, compte rendu demandé sans la fin"
+            );
+        }
+        r.vidange = None;
+        self.demander_compte_rendu();
+    }
+
     /// Envoie à Claude la demande de compte rendu de la réunion.
     fn demander_compte_rendu(&mut self) {
         let Some(r) = &mut self.reunion else { return };
+        r.compte_rendu_demande = true;
         let transcript = std::mem::take(&mut r.a_noter);
         r.pour_compte_rendu = transcript.clone();
         let notes = r.notes.clone();
@@ -1074,15 +1171,27 @@ impl<R: Runtime> Chef<R> {
             .demander(Demande::CompteRendu { transcript, notes });
     }
 
-    /// Segment final : écrit tout de suite dans `transcript.jsonl`.
-    fn segment(&mut self, mut s: Segment) {
+    /// Segment final, dont la fin a été dite à `dit_a` : écrit tout de suite
+    /// dans `transcript.jsonl`.
+    fn segment(&mut self, mut s: Segment, dit_a: Instant) {
         let Some(r) = &mut self.reunion else { return };
-        if r.pause || r.fin_demandee || !s.is_final {
+        if r.pause || !s.is_final {
             return;
         }
-        // Horodaté sur la réunion : l'horloge du moteur repart à chaque question.
+        // Dit avant la fin mais transcrit après (charge, file d'attente) :
+        // gardé jusqu'au compte rendu. Ce qui est dit après (le « annule »
+        // d'« Annuler »…) ne l'est pas (KOB-198).
+        if r.compte_rendu_demande || (r.fin_demandee && r.arret.is_none_or(|arret| dit_a > arret)) {
+            return;
+        }
+        // Horodaté sur la réunion, au moment où il a été dit : l'horloge du
+        // moteur repart à chaque question, et le segment arrive en retard
+        // quand la machine est chargée.
         let duree = (s.end - s.start).max(0.0);
-        s.end = r.debut.elapsed().as_secs_f64();
+        s.end = dit_a
+            .min(Instant::now())
+            .saturating_duration_since(r.debut)
+            .as_secs_f64();
         s.start = (s.end - duree).max(0.0);
         self.ecrivain.segment(s.clone());
         let t = s.start as u64;
@@ -1785,6 +1894,10 @@ impl<R: Runtime> Chef<R> {
             && etat(&self.app).etat == "veille"
         {
             self.fermer_conversation();
+        }
+        // Fin : le compte rendu attend la transcription en retard (KOB-198).
+        if self.reunion.as_ref().is_some_and(|r| r.vidange.is_some()) {
+            self.vidange();
         }
         let Some(r) = &mut self.reunion else { return };
         // « Annuler » n'a pas servi : la fin est définitive.

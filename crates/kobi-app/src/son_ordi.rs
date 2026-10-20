@@ -100,6 +100,9 @@ fn date(chemin: &Path) -> Option<SystemTime> {
 struct Piste {
     capture: Capture,
     porte: Porte,
+    /// Ouverture de la capture, sur l'horloge du système : l'instant des
+    /// trames et des segments se compte depuis lui (KOB-198).
+    origine: Instant,
 }
 
 struct Fil<R: Runtime> {
@@ -221,6 +224,7 @@ impl<R: Runtime> Fil<R> {
                 self.piste = Some(Piste {
                     capture,
                     porte: Porte::new(kobi_stt::SAMPLE_RATE),
+                    origine: Instant::now(),
                 });
                 self.echec = None;
                 self.signaler(true);
@@ -232,11 +236,47 @@ impl<R: Runtime> Fil<R> {
         }
     }
 
+    /// Ferme la capture. L'audio encore en file (sous charge, la
+    /// transcription prend du retard) est transcrit, au plus pendant
+    /// [`crate::chef::VIDANGE`], puis Nemotron conclut sa dernière phrase :
+    /// la fin de ce qu'ont dit les autres n'est plus perdue (KOB-198).
     fn fermer(&mut self, raison: &str) {
-        if self.piste.take().is_some() {
-            tracing::info!(%raison, "son de l'ordinateur : capture fermée");
-            self.signaler(false);
+        let Some(piste) = self.piste.take() else {
+            return;
+        };
+        let origine = piste.origine;
+        let mut porte = piste.porte;
+        let (reste, _) = piste.capture.stop();
+        tracing::info!(%raison, trames = reste.len(), "son de l'ordinateur : capture fermée");
+        self.signaler(false);
+        let limite = Instant::now() + crate::chef::VIDANGE;
+        let mut perdues = 0;
+        for frame in reste {
+            if Instant::now() >= limite {
+                perdues += 1;
+                continue;
+            }
+            self.transcrire(&mut porte, origine, frame.t.as_secs_f64(), frame.samples);
         }
+        let fin = self.stt.as_mut().map(|stt| {
+            let fin = stt.finish();
+            stt.reset();
+            fin
+        });
+        match fin {
+            Some(Ok(segments)) => self.publier(origine, segments),
+            Some(Err(e)) => {
+                tracing::warn!(erreur = %e, "son de l'ordinateur : fin de la transcription")
+            }
+            None => {}
+        }
+        if perdues > 0 {
+            tracing::warn!(
+                trames = perdues,
+                "son de l'ordinateur : fin de l'audio non transcrite (délai dépassé)"
+            );
+        }
+        crate::chef::avancer(&self.app, kobi_stt::Source::Eux, None);
     }
 
     fn signaler(&self, capte: bool) {
@@ -259,6 +299,7 @@ impl<R: Runtime> Fil<R> {
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                 tracing::warn!("son de l'ordinateur : la sortie s'est arrêtée");
                 self.piste = None;
+                crate::chef::avancer(&self.app, kobi_stt::Source::Eux, None);
                 self.signaler(false);
                 self.echec = Some(Instant::now());
                 return;
@@ -274,30 +315,54 @@ impl<R: Runtime> Fil<R> {
         } else {
             frame.samples
         };
+        let Some(mut piste) = self.piste.take() else {
+            return;
+        };
+        let t = frame.t.as_secs_f64();
+        self.transcrire(&mut piste.porte, piste.origine, t, samples);
+        self.piste = Some(piste);
+    }
+
+    /// Transcrit une trame de la piste « eux » (instant `t` depuis
+    /// `origine`) et publie ce qui est fini, avec l'instant où c'était dit.
+    fn transcrire(&mut self, porte: &mut Porte, origine: Instant, t: f64, samples: Vec<f32>) {
+        let duree = samples.len() as f64 / kobi_stt::SAMPLE_RATE as f64;
         let Some(stt) = &mut self.stt else { return };
-        for (debut, samples) in piste.porte.trame(frame.t.as_secs_f64(), samples) {
+        let mut finis = Vec::new();
+        for (debut, samples) in porte.trame(t, samples) {
             let morceau = kobi_stt::AudioFrame {
                 source: kobi_stt::Source::Eux,
                 samples,
                 t: debut,
             };
             match stt.push(&morceau) {
-                Ok(segments) => {
-                    for s in segments.into_iter().filter(|s| s.is_final) {
-                        if crate::voix::est_ma_voix(&self.app, &s.text) {
-                            continue;
-                        }
-                        publier(
-                            &self.app,
-                            Message::Segment(kobi_stt::Segment {
-                                source: kobi_stt::Source::Eux,
-                                ..s
-                            }),
-                        );
-                    }
-                }
+                Ok(segments) => finis.extend(segments),
                 Err(e) => tracing::warn!(erreur = %e, "son de l'ordinateur : transcription"),
             }
+        }
+        self.publier(origine, finis);
+        // Tout l'audio reçu jusqu'ici est transcrit.
+        let jusqu_a = origine + Duration::from_secs_f64((t + duree).max(0.0));
+        crate::chef::avancer(&self.app, kobi_stt::Source::Eux, Some(jusqu_a));
+    }
+
+    /// Publie les segments finis de la piste « eux » (sauf la voix de Kobi).
+    fn publier(&self, origine: Instant, segments: Vec<kobi_stt::Segment>) {
+        for s in segments.into_iter().filter(|s| s.is_final) {
+            if crate::voix::est_ma_voix(&self.app, &s.text) {
+                continue;
+            }
+            let dit_a = origine + Duration::from_secs_f64(s.end.max(0.0));
+            publier(
+                &self.app,
+                Message::Segment(
+                    kobi_stt::Segment {
+                        source: kobi_stt::Source::Eux,
+                        ..s
+                    },
+                    dit_a,
+                ),
+            );
         }
     }
 }
