@@ -430,6 +430,8 @@ pub struct Ecouteur {
     precedent: Option<(String, f64)>,
     /// Début de la phrase en cours (premier segment partiel).
     debut: Option<f64>,
+    /// Fin de l'attente d'une carte de validation (`reponse_attendue`).
+    carte: Option<f64>,
 }
 
 impl Default for Ecouteur {
@@ -440,6 +442,7 @@ impl Default for Ecouteur {
             conversation: true,
             precedent: None,
             debut: None,
+            carte: None,
         }
     }
 }
@@ -636,6 +639,7 @@ impl Ecouteur {
         if !self.conversation {
             return;
         }
+        self.carte = Some(t + duree);
         if matches!(
             self.attente,
             Attente::Nom
@@ -647,6 +651,12 @@ impl Ecouteur {
                 parle: None,
             };
         }
+    }
+
+    /// Une carte de validation attend-elle sa réponse à l'instant `t`
+    /// (`reponse_attendue`), et pas seulement une suite de conversation ?
+    pub fn attend_carte(&self, t: f64) -> bool {
+        self.carte.is_some_and(|fin| t <= fin) && self.attend_reponse()
     }
 
     /// Une phrase sans le nom compte-t-elle en ce moment (suite, conversation) ?

@@ -224,9 +224,15 @@ pub fn regler_verbosite<R: Runtime>(app: &AppHandle<R>, v: Verbosite, enregistre
     *voix.verbosite.lock().unwrap_or_else(|e| e.into_inner()) = v;
     if let (true, Some(chemin)) = (enregistrer, &voix.config) {
         let mut lu = kobi_session::config::load_or_create(chemin);
-        lu.config.voice.verbosite = v;
-        if let Err(e) = kobi_session::config::save(&lu.config, chemin) {
-            tracing::warn!(erreur = %e, "voix : verbosité non enregistrée");
+        if let Some(probleme) = lu.problem {
+            // Config illisible : la réécrire avec les défauts effacerait les
+            // autres réglages de l'utilisateur (comme dans `regler`).
+            tracing::warn!(%probleme, "voix : verbosité non enregistrée");
+        } else {
+            lu.config.voice.verbosite = v;
+            if let Err(e) = kobi_session::config::save(&lu.config, chemin) {
+                tracing::warn!(erreur = %e, "voix : verbosité non enregistrée");
+            }
         }
     }
     tracing::info!(?v, "verbosité réglée");
@@ -940,6 +946,10 @@ mod tests {
             !etat.quotidien && etat.reunion,
             "réglage appliqué en mémoire"
         );
+        assert_eq!(std::fs::read_to_string(&chemin).unwrap(), illisible);
+        // « Kobi parle » non plus (revue KOB-225) : appliqué, pas écrit.
+        regler_verbosite(app.handle(), Verbosite::Discret, true);
+        assert_eq!(verbosite(app.handle()), Verbosite::Discret);
         assert_eq!(std::fs::read_to_string(&chemin).unwrap(), illisible);
     }
 }

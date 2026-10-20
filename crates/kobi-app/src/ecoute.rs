@@ -396,7 +396,7 @@ fn transcrire(
     // d'audio jusqu'à la parole suivante), alors que Kobi attend une
     // réponse : il vaut final, tout de suite (KOB-253). Hors carte, une pause
     // au milieu d'une question ne la coupe pas.
-    if etait_ouverte && !porte.ouverte() && ecouteur.attend_reponse() {
+    if etait_ouverte && !porte.ouverte() && ecouteur.attend_carte(t) {
         if let Some((texte, debut)) = rattrapage.partiel.take() {
             stt.conclure(kobi_stt::Source::Moi);
             if let Some(d) = diag {
@@ -1211,6 +1211,17 @@ mod tests {
             "{actions:?}"
         );
         assert!(finals.is_empty());
+        // Fenêtre de suite d'une conversation, sans carte : une question de
+        // suite coupée par une pause n'est pas tranchée non plus (revue
+        // KOB-225).
+        let mut e = Ecouteur::default();
+        e.suite(0.0);
+        let (conclus, actions, _) = jouer(&mut e);
+        assert_eq!(conclus, 0);
+        assert!(
+            !actions.iter().any(|a| matches!(a, Action::Envoyer(_))),
+            "{actions:?}"
+        );
     }
 
     /// KOB-248 : pendant la voix de Kobi, un « stop » dit seul, que le moteur
