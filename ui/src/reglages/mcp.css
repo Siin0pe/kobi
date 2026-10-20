@@ -21,7 +21,7 @@
   transition: opacity 0.2s, box-shadow 0.25s var(--ressort), transform 0.25s var(--ressort);
 }
 .mcp-serveur:hover {
-  transform: translate(-1px, -1px);
+  /* Rien ne bouge sous le pointeur (KOB-246) : l'ombre seule. */
   box-shadow: 3px 3px 0 var(--ink);
 }
 .mcp-serveur[data-actif='false'] {
@@ -77,6 +77,7 @@
   margin-top: 8px;
   max-height: 180px;
   overflow: auto;
+  overscroll-behavior: contain;
 }
 .mcp-outil {
   display: inline-flex;

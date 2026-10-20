@@ -60,6 +60,10 @@ export class Conversation {
     stage.root.addEventListener(
       'wheel',
       (e) => {
+        // La vue agrandie et le champ d'écriture gardent leur molette :
+        // l'historique, caché sous eux, ne s'ouvrait que pour surgir ensuite
+        // (KOB-246).
+        if (stage.root.classList.contains('vue-ouverte') || (e.target as Element | null)?.closest('.lecture, .ecrire')) return;
         // Une réponse longue qui défile garde sa molette (KOB-163).
         const zone = (e.target as Element | null)?.closest<HTMLElement>('.card-answer .defile');
         if (zone && zone.scrollHeight > zone.clientHeight + 2 && zone.scrollTop > 0) return;

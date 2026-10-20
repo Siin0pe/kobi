@@ -6,6 +6,7 @@
   min-height: 0;
   flex: 0 1 auto;
   overflow: auto;
+  overscroll-behavior: contain;
   max-height: 320px;
   border-radius: 8px;
   border: 1.5px dashed var(--ink);

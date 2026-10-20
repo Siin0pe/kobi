@@ -14,9 +14,12 @@ export class Defilement {
   /** Suit le flux (en bas), tant que l'utilisateur ne remonte pas. */
   private follow = true;
   private stopTick: (() => void) | null = null;
-  /** Dernière position posée par le suivi : un autre écart vient de l'utilisateur. */
-  private ours = -1;
   private drag: { y: number; top: number } | null = null;
+  /** Le glisser a bougé : le clic du relâchement n'ouvre rien (KOB-246). */
+  private glisse = false;
+  /** Position et hauteur au défilement précédent : remonter arrête le suivi, seul un retour vers le bas le reprend. */
+  private prevTop = 0;
+  private prevHeight = 0;
   private readonly observer: ResizeObserver;
   private readonly mutations: MutationObserver;
   private instant = false;
@@ -36,7 +39,15 @@ export class Defilement {
       if (e.deltaY < 0 && zone.scrollTop > 0) this.follow = false;
     }, { passive: true });
     zone.addEventListener('pointerdown', (e) => {
+      this.glisse = false;
       if (e.button !== 0 || zone.scrollHeight <= zone.clientHeight) return;
+      // Bulle du mode simple : elle ne défile pas, rien à glisser (KOB-246).
+      if (getComputedStyle(zone).overflowY === 'hidden') return;
+      // Sur la barre de défilement, c'est elle qui défile : pas de glisser
+      // en plus, qui la faisait trembler (KOB-246).
+      const r = zone.getBoundingClientRect();
+      const echelle = r.width / Math.max(1, zone.offsetWidth) || 1;
+      if ((e.clientX - r.left) / echelle >= zone.clientLeft + zone.clientWidth) return;
       // Un bouton ou « N étapes » se clique : pas de glisser ni de capture du
       // pointeur, qui détournaient le clic quand la main bougeait (KOB-213).
       if ((e.target as Element | null)?.closest('button, a, summary, input, textarea, select')) return;
@@ -47,6 +58,7 @@ export class Defilement {
       if (!this.drag) return;
       const scale = zone.getBoundingClientRect().height / Math.max(1, zone.offsetHeight);
       const top = this.drag.top - (e.clientY - this.drag.y) / (scale || 1);
+      if (Math.abs(e.clientY - this.drag.y) > 4) this.glisse = true;
       if (top < zone.scrollTop) this.follow = false;
       zone.scrollTop = top;
     });
@@ -55,6 +67,18 @@ export class Defilement {
     };
     zone.addEventListener('pointerup', release);
     zone.addEventListener('pointercancel', release);
+    // Après un glisser pour défiler, le relâchement n'est pas un clic (qui
+    // ouvrait la vue agrandie, KOB-246).
+    zone.addEventListener(
+      'click',
+      (e) => {
+        if (!this.glisse) return;
+        this.glisse = false;
+        e.stopPropagation();
+        e.preventDefault();
+      },
+      true,
+    );
     this.paintFades();
   }
 
@@ -67,7 +91,6 @@ export class Defilement {
   suivreBas(): void {
     this.follow = true;
     this.zone.scrollTop = this.zone.scrollHeight;
-    this.ours = this.zone.scrollTop;
     this.paintFades();
   }
 
@@ -95,7 +118,6 @@ export class Defilement {
     if (!this.follow || this.stopTick) return;
     if (this.instant) {
       this.zone.scrollTop = this.zone.scrollHeight;
-      this.ours = this.zone.scrollTop;
       return;
     }
     this.stopTick = onFrame(() => this.glide());
@@ -110,16 +132,22 @@ export class Defilement {
       return false;
     }
     z.scrollTop += Math.max(1, gap * EASE);
-    this.ours = z.scrollTop;
     return true;
   }
 
   private onScroll(): void {
     const z = this.zone;
     const atBottom = z.scrollTop + z.clientHeight >= z.scrollHeight - BOTTOM;
-    // Remonté à la main (barre, clavier) : on cesse de suivre ; revenu en bas : on reprend.
-    if (Math.abs(z.scrollTop - this.ours) > 2 && !atBottom && z.scrollTop < this.ours) this.follow = false;
-    if (atBottom) this.follow = true;
+    // Le suivi ne fait que descendre : un pas vers le haut vient de
+    // l'utilisateur (molette, barre, clavier), sauf si le contenu a rétréci.
+    const remonte = z.scrollTop < this.prevTop - 0.5 && z.scrollHeight >= this.prevHeight;
+    const descend = z.scrollTop >= this.prevTop;
+    this.prevTop = z.scrollTop;
+    this.prevHeight = z.scrollHeight;
+    // Remonté à la main, même de quelques pixels : on cesse de suivre ;
+    // revenu en bas en descendant : on reprend (KOB-246).
+    if (remonte) this.follow = false;
+    else if (atBottom && descend) this.follow = true;
     this.paintFades();
   }
 

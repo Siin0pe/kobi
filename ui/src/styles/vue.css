@@ -59,6 +59,8 @@
   flex: 1 1 auto;
   min-height: 0;
   padding: 4px 22px 18px;
+  /* La barre de défilement reste dans l'arrondi du panneau (KOB-246). */
+  margin: 0 6px 14px 0;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;

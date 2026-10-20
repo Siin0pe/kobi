@@ -199,6 +199,17 @@
 .vue-ouverte .fil {
   visibility: hidden;
 }
+/* Caché, rien n'anime en boucle derrière la vue (KOB-246). */
+.vue-ouverte .bubbles .card-answer,
+.vue-ouverte .bubbles .card-answer *,
+.vue-ouverte .bubbles .card-question,
+.vue-ouverte .bubbles .card-question *,
+.vue-ouverte .bubbles .card-sources,
+.vue-ouverte .bubbles .card-sources *,
+.vue-ouverte .card-history *,
+.vue-ouverte .notifs * {
+  animation-play-state: paused;
+}
 
 .reduced-motion .card-answer::after,
 .reduced-motion .card-answer .defile {
