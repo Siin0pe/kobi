@@ -337,16 +337,25 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
 }
 
 /// Ce qui suit un `{` hors guillemets : bash le développe-t-il (`{a,b}`,
-/// `{1..3}`) ?
+/// `{1..3}`) ? Les guillemets à l'intérieur ne l'empêchent pas
+/// (`{"-delete",}` donne `-delete`) : ils sont sautés, et une virgule ou `..`
+/// n'importe où entre les accolades suffit (prudent, KOB-258).
 fn accolades_developpees(suite: &[char]) -> bool {
-    let fin = suite
-        .iter()
-        .position(|&x| x == '}' || x.is_whitespace() || matches!(x, ';' | '|' | '&' | '\'' | '"'));
-    let Some(fin) = fin.filter(|&f| suite[f] == '}') else {
-        return false;
-    };
-    let dedans: String = suite[..fin].iter().collect();
-    dedans.contains(',') || dedans.contains("..")
+    let mut guillemet: Option<char> = None;
+    let mut dedans = String::new();
+    for &x in suite {
+        match guillemet {
+            Some(q) if x == q => guillemet = None,
+            Some(_) => dedans.push(x),
+            None => match x {
+                '\'' | '"' => guillemet = Some(x),
+                '}' => return dedans.contains(',') || dedans.contains(".."),
+                x if x.is_whitespace() || matches!(x, ';' | '|' | '&') => return false,
+                x => dedans.push(x),
+            },
+        }
+    }
+    false
 }
 
 /// Redirection : seules celles qui n'écrivent dans aucun fichier passent.
@@ -981,16 +990,20 @@ fn options_interdites(nom: &str, args: &[String]) -> Option<Avis> {
                 ecrit("`sed` n'est permis qu'en affichage (`sed -n '1,20p'`)".into())
             }
         }
-        // `-o` seul, collé (`-o/x`) ou groupé (`-uo`), ou `--output` abrégé.
+        // `-o` seul, collé (`-o/x`) ou groupé (`-uo`), ou `--output` abrégé ;
+        // `-T` / `--temporary-directory` écrit ailleurs, et
+        // `--compress-program` lance un programme (KOB-258).
         "sort"
             if args.iter().any(|x| {
-                (x.starts_with('-') && !x.starts_with("--") && x.contains('o'))
+                (x.starts_with('-') && !x.starts_with("--") && (x.contains('o') || x.contains('T')))
                     || abrege(x, "--output")
+                    || abrege(x, "--temporary-directory")
+                    || abrege(x, "--compress-program")
             }) =>
         {
             Some(Avis::ecriture(
                 Genre::Fichier,
-                "`sort -o` écrit dans un fichier",
+                "`sort -o`, `-T` ou `--compress-program` écrit ou lance un programme",
             ))
         }
         "uniq" if args.iter().filter(|x| !x.starts_with('-')).count() > 1 => Some(Avis::ecriture(
@@ -1596,6 +1609,17 @@ mod tests {
             "cargo --config build.rustc-wrapper=./x tree",
             "cargo -Zunstable-options tree",
             "rg --hostname-bin ./x motif",
+            // KOB-258 : guillemets dans une expansion d'accolades, `sort` qui
+            // lance un programme ou écrit ailleurs.
+            "find . {\"-delete\",}",
+            "sed -n 1p {\"-i\",Cargo.toml}",
+            "git log {\"--output=x.txt\",}",
+            "fd {'-x',rm} motif",
+            "rg {\"--pre=sh\",} . crates",
+            "sort -S 1 --compress-program=sh f",
+            "sort --comp=./outil f",
+            "sort -T /tmp f",
+            "sort --temporary-directory=/tmp f",
         ] {
             pas_lecture(bash(ligne), ligne);
         }
