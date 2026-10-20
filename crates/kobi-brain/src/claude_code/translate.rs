@@ -1,5 +1,7 @@
 //! Traduction des événements stream-json de Claude Code en [`BrainEvent`].
 
+use std::time::{Duration, Instant};
+
 use crate::brain::{BrainError, BrainEvent, TurnSummary};
 
 use super::event::Event;
@@ -10,7 +12,13 @@ use super::event::Event;
 #[derive(Debug, Default)]
 pub struct TurnTranslator {
     text: String,
+    /// Dernier signe de vie donné pour un événement de flux sans texte : un
+    /// par seconde au plus (la réflexion en émet beaucoup).
+    vie: Option<Instant>,
 }
+
+/// Écart minimal entre deux [`BrainEvent::Vie`] tirés du flux.
+const VIE: Duration = Duration::from_secs(1);
 
 impl TurnTranslator {
     /// Événements Kobi portés par `event` ; le dernier d'un tour est `Done`
@@ -21,23 +29,46 @@ impl TurnTranslator {
             return vec![BrainEvent::Text(delta.to_owned())];
         }
         match event {
-            Event::Assistant { message } => message
-                .get("content")
-                .and_then(|c| c.as_array())
-                .into_iter()
-                .flatten()
-                .filter(|block| block.get("type").and_then(|t| t.as_str()) == Some("tool_use"))
-                .map(|block| {
-                    let name = str_field(block, "name");
-                    let input = block.get("input").cloned().unwrap_or_default();
-                    BrainEvent::ToolCall {
-                        id: str_field(block, "id"),
-                        action: super::outils::action(&name, &input),
-                        name,
-                        input,
-                    }
-                })
-                .collect(),
+            Event::Assistant { message } => {
+                let outils: Vec<BrainEvent> = blocs(message, "tool_use")
+                    .map(|block| {
+                        let name = str_field(block, "name");
+                        let input = block.get("input").cloned().unwrap_or_default();
+                        BrainEvent::ToolCall {
+                            id: str_field(block, "id"),
+                            action: super::outils::action(&name, &input),
+                            name,
+                            input,
+                        }
+                    })
+                    .collect();
+                if outils.is_empty() {
+                    vec![BrainEvent::Vie]
+                } else {
+                    outils
+                }
+            }
+            // Résultats des outils : chacun est revenu (KOB-243).
+            Event::User { message } => {
+                let rendus: Vec<BrainEvent> = blocs(message, "tool_result")
+                    .map(|block| BrainEvent::OutilRendu {
+                        id: str_field(block, "tool_use_id"),
+                    })
+                    .collect();
+                if rendus.is_empty() {
+                    vec![BrainEvent::Vie]
+                } else {
+                    rendus
+                }
+            }
+            Event::Stream(_) => {
+                if self.vie.is_some_and(|t| t.elapsed() < VIE) {
+                    Vec::new()
+                } else {
+                    self.vie = Some(Instant::now());
+                    vec![BrainEvent::Vie]
+                }
+            }
             Event::Result(result) if result.is_error => {
                 let message = result
                     .result
@@ -65,6 +96,19 @@ impl TurnTranslator {
             _ => Vec::new(),
         }
     }
+}
+
+/// Blocs de contenu d'un message, du type donné.
+fn blocs<'a>(
+    message: &'a serde_json::Value,
+    genre: &'a str,
+) -> impl Iterator<Item = &'a serde_json::Value> + 'a {
+    message
+        .get("content")
+        .and_then(|c| c.as_array())
+        .into_iter()
+        .flatten()
+        .filter(move |block| block.get("type").and_then(|t| t.as_str()) == Some(genre))
 }
 
 fn str_field(block: &serde_json::Value, key: &str) -> String {
@@ -112,14 +156,18 @@ mod tests {
                 if id == "toolu_1" && name == "mcp__linear__list_issues" && input["project"] == "API"
                     && matches!(action, crate::Action::Mcp { serveur, .. } if serveur == "linear")
         ));
-        assert!(matches!(&events[1], BrainEvent::Text(t) if t == "Trois "));
-        assert!(matches!(&events[2], BrainEvent::Text(t) if t == "tickets."));
-        let BrainEvent::Done(summary) = &events[3] else {
-            panic!("attendu Done, obtenu {:?}", events[3])
+        // L'outil revenu, puis le texte ; le message complet de l'assistant
+        // n'est qu'un signe de vie (KOB-243).
+        assert!(matches!(&events[1], BrainEvent::OutilRendu { id } if id == "toolu_1"));
+        assert!(matches!(&events[2], BrainEvent::Text(t) if t == "Trois "));
+        assert!(matches!(&events[3], BrainEvent::Text(t) if t == "tickets."));
+        assert!(matches!(&events[4], BrainEvent::Vie));
+        let BrainEvent::Done(summary) = &events[5] else {
+            panic!("attendu Done, obtenu {:?}", events[5])
         };
         assert_eq!(summary.text, "Trois tickets.");
         assert_eq!(summary.usage.unwrap().output_tokens, 3);
-        assert_eq!(events.len(), 4);
+        assert_eq!(events.len(), 6);
     }
 
     #[test]

@@ -62,7 +62,7 @@ async fn play(mut turn: Turn, allow: bool) -> Result<(String, Vec<String>), Brai
             BrainEvent::Permission(pending) => pending.deny("Pas maintenant."),
             BrainEvent::Done(summary) => return Ok((summary.text, tools)),
             BrainEvent::Error(error) => return Err(error),
-            BrainEvent::Text(_) => {}
+            BrainEvent::Text(_) | BrainEvent::OutilRendu { .. } | BrainEvent::Vie => {}
         }
     }
     unreachable!("un tour finit toujours par Done ou Error")

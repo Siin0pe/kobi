@@ -356,7 +356,12 @@ pub fn publier<R: Runtime>(app: &AppHandle<R>, message: Message) {
 }
 
 /// Lance le chef et l'acteur Claude ; renvoie le canal du chef.
-pub fn installer<R: Runtime>(app: &AppHandle<R>, fabrique: Fabrique, intervalle_min: u8) {
+pub fn installer<R: Runtime>(
+    app: &AppHandle<R>,
+    fabrique: Fabrique,
+    intervalle_min: u8,
+    delais: cerveau::Delais,
+) {
     let (tx, rx) = mpsc::channel();
     app.manage(Bus(Mutex::new(tx.clone())));
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -377,6 +382,7 @@ pub fn installer<R: Runtime>(app: &AppHandle<R>, fabrique: Fabrique, intervalle_
             fabrique,
             sortie,
             Arc::new(move || crate::validation::attend(&app)),
+            delais,
         )
     };
     let ecrivain = Ecrivain::lancer(move |compte| {

@@ -5,7 +5,7 @@
 //! | Panne | Réaction |
 //! | -- | -- |
 //! | Claude Code plante | session relancée, question renvoyée une fois |
-//! | rien pendant longtemps | « je cherche encore » à 8 s, abandon à 45 s sans activité |
+//! | rien pendant longtemps | « je cherche encore » à 8 s, abandon à 5 min sans signe de vie (outil en cours et carte en attente exclus), arrêt à 15 min (réglables, KOB-243) |
 //! | limite d'usage, Claude absent ou déconnecté | Oups avec la cause et la marche à suivre |
 //! | pas d'Internet | question mise en attente, reposée au retour du réseau |
 //!
@@ -19,8 +19,10 @@ use kobi_brain::BrainError;
 pub enum Panne {
     /// Le process de Claude Code s'est arrêté pendant le tour.
     Plantage,
-    /// Aucune activité trop longtemps.
+    /// Aucun signe de vie trop longtemps.
     Lenteur,
+    /// Tâche arrêtée à sa durée maximale, même active (KOB-243).
+    DureeMax,
     /// Limite d'usage du compte atteinte.
     LimiteUsage,
     /// Claude Code installé mais pas connecté.
@@ -81,6 +83,8 @@ pub fn classer_message(message: &str) -> Panne {
         Panne::Plantage
     } else if m.contains("pas de réponse en") {
         Panne::Lenteur
+    } else if m.contains("durée maximale") {
+        Panne::DureeMax
     } else {
         Panne::Autre
     }
@@ -140,7 +144,17 @@ pub fn expliquer(panne: &Panne, detail: &str) -> (&'static str, String) {
         ),
         Panne::Lenteur => (
             "Claude ne répond pas",
-            format!("Rien depuis 45 secondes : j'abandonne cette question. Repose-la dans un instant. {continue_}"),
+            format!(
+                "Rien depuis {} : j'abandonne cette question. Repose-la dans un instant. {continue_}",
+                attente(detail).unwrap_or_else(|| "trop longtemps".into())
+            ),
+        ),
+        Panne::DureeMax => (
+            "Tâche trop longue",
+            format!(
+                "Elle a atteint la durée maximale{} : je l'arrête. Découpe la demande, ou allonge « taches.duree_max_s » dans les réglages. {continue_}",
+                entre_parentheses(detail).map(|d| format!(" ({d})")).unwrap_or_default()
+            ),
         ),
         Panne::Plantage => (
             "Claude s'est arrêté",
@@ -152,6 +166,24 @@ pub fn expliquer(panne: &Panne, detail: &str) -> (&'static str, String) {
 
 /// Heure de reprise d'une limite d'usage, si Claude Code la donne
 /// (« …limit reached|1792339200 », horodatage Unix en secondes).
+/// « pas de réponse en 300 s » → « 5 minutes » ; « … en 45 s » → « 45 secondes ».
+fn attente(detail: &str) -> Option<String> {
+    let apres = detail.split("pas de réponse en ").nth(1)?;
+    let secondes: u64 = apres.split_whitespace().next()?.parse().ok()?;
+    Some(if secondes >= 120 && secondes.is_multiple_of(60) {
+        format!("{} minutes", secondes / 60)
+    } else {
+        format!("{secondes} secondes")
+    })
+}
+
+/// Le texte entre les dernières parenthèses : « … atteinte (15 min) » → « 15 min ».
+fn entre_parentheses(detail: &str) -> Option<&str> {
+    let debut = detail.rfind('(')?;
+    let fin = detail[debut..].find(')')? + debut;
+    Some(&detail[debut + 1..fin])
+}
+
 fn reprise(detail: &str) -> Option<String> {
     let secondes: i64 = detail.rsplit('|').next()?.trim().parse().ok()?;
     let t = jiff::Timestamp::from_second(secondes).ok()?;
@@ -168,6 +200,27 @@ pub fn pour_l_utilisateur(message: &str) -> (&'static str, String) {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    /// KOB-243 : l'abandon dit la vraie durée, l'arrêt à la durée maximale
+    /// a son propre message.
+    #[test]
+    fn abandon_et_duree_maximale_expliques() {
+        let abandon = BrainError::Timeout(Duration::from_secs(300)).to_string();
+        let (titre, explication) = pour_l_utilisateur(&abandon);
+        assert_eq!(titre, "Claude ne répond pas");
+        assert!(
+            explication.contains("Rien depuis 5 minutes"),
+            "{explication}"
+        );
+        let court = BrainError::Timeout(Duration::from_secs(45)).to_string();
+        assert!(pour_l_utilisateur(&court)
+            .1
+            .contains("Rien depuis 45 secondes"));
+        let (titre, explication) =
+            pour_l_utilisateur("durée maximale d'une tâche atteinte (15 min)");
+        assert_eq!(titre, "Tâche trop longue");
+        assert!(explication.contains("(15 min)") && explication.contains("taches.duree_max_s"));
+    }
 
     #[test]
     fn classement_des_pannes() {

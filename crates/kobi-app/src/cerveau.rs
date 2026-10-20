@@ -47,9 +47,14 @@ const NOTES_MAX: Duration = Duration::from_secs(180);
 /// fois, qu'il s'en occupe (KOB-68). Avant, Kobi au travail se voit et ne dit
 /// rien : la plupart des tâches finissent avant (KOB-215).
 pub const PATIENCE: Duration = Duration::from_secs(15);
-/// Un tour sans aucune activité (texte, outil) pendant ce délai est
-/// abandonné et sa session fermée (KOB-68).
-pub const ABANDON: Duration = Duration::from_secs(45);
+/// Un tour sans aucun signe de vie pendant ce délai est abandonné et sa
+/// session fermée (KOB-68). Un outil pas encore revenu ou une carte en
+/// attente ne comptent jamais comme inactivité (KOB-243). Réglable :
+/// `taches.abandon_s`.
+pub const ABANDON: Duration = Duration::from_secs(300);
+/// Durée maximale d'un tour, même actif (KOB-243). Réglable :
+/// `taches.duree_max_s`.
+pub const DUREE_MAX: Duration = Duration::from_secs(15 * 60);
 /// Une question qui arrive moins de ce délai après la précédente, encore en
 /// cours en arrière-plan, est de la même rafale (KOB-238).
 pub const RAFALE: Duration = Duration::from_secs(10);
@@ -236,12 +241,17 @@ impl Cerveau {
     /// (tests).
     #[cfg(test)]
     pub fn lancer(fabrique: Fabrique, sortie: Sortie) -> Self {
-        Self::lancer_avec(fabrique, sortie, Arc::new(|| false))
+        Self::lancer_avec(fabrique, sortie, Arc::new(|| false), Delais::default())
     }
 
     /// Lance les deux sessions sur le runtime courant, en sachant quand une
     /// carte de Kobi lui-même attend sa réponse (`attente`).
-    pub fn lancer_avec(fabrique: Fabrique, sortie: Sortie, attente: Attente) -> Self {
+    pub fn lancer_avec(
+        fabrique: Fabrique,
+        sortie: Sortie,
+        attente: Attente,
+        delais: Delais,
+    ) -> Self {
         let cartes = Cartes::new(attente);
         let taches: Taches = Arc::default();
         let (questions, rx_q) = mpsc::unbounded_channel();
@@ -254,6 +264,7 @@ impl Cerveau {
             sortie.clone(),
             cartes.clone(),
             taches.clone(),
+            delais,
         ));
         tokio::spawn(prise_de_notes(fabrique, rx_n, sortie.clone()));
         Self {
@@ -398,6 +409,7 @@ struct Reprise {
     attente: mpsc::UnboundedSender<Question>,
     /// Derniers échanges, pour le résumé d'une relance.
     echanges: Vec<(String, String)>,
+    delais: Delais,
 }
 
 async fn conversation(
@@ -407,6 +419,7 @@ async fn conversation(
     sortie: Sortie,
     cartes: Cartes,
     taches: Taches,
+    delais: Delais,
 ) {
     let mut session: Option<Session> = None;
     let mut suivante = reserve(&fabrique);
@@ -587,6 +600,7 @@ async fn conversation(
                     question: q.clone(),
                     attente: attente_tx.clone(),
                     echanges: echanges.iter().cloned().collect(),
+                    delais,
                 };
                 let (sortie, cartes) = (sortie.clone(), cartes.clone());
                 let mut rendue = Rendre::new(generation, &rendue_tx, None);
@@ -600,7 +614,8 @@ async fn conversation(
                             // revient à la conversation.
                             let mut s = Some(s);
                             let turn = poser(&mut s, &reprise.question);
-                            if finir(turn, String::new(), reprise, &sortie, &cartes).await {
+                            let vigie = Vigie::new(reprise.delais);
+                            if finir(turn, String::new(), vigie, reprise, &sortie, &cartes).await {
                                 rendue.garder(s);
                             }
                         }
@@ -620,7 +635,17 @@ async fn conversation(
         let turn = poser(&mut session, &q);
         // Les arrêts reçus entre deux tours visaient un tour déjà fini.
         while arrets.try_recv().is_ok() {}
-        match suivre(tour, turn, annonce, !attendu, &sortie, &cartes, &mut arrets).await {
+        match suivre(
+            tour,
+            turn,
+            (annonce, !attendu),
+            delais,
+            &sortie,
+            &cartes,
+            &mut arrets,
+        )
+        .await
+        {
             Suivi::Fini(reponse) => {
                 if let Some(reponse) = reponse {
                     retenir(&mut echanges, &q.ask.question, reponse);
@@ -656,7 +681,7 @@ async fn conversation(
                 drop(turn);
                 session = None;
             }
-            Suivi::Detache(turn, texte) => {
+            Suivi::Detache(turn, texte, vigie) => {
                 // Le tour garde sa session jusqu'au bout ; la conversation
                 // continue sur la réserve.
                 let detachee = session.take();
@@ -665,13 +690,14 @@ async fn conversation(
                     question: q,
                     attente: attente_tx.clone(),
                     echanges: echanges.iter().cloned().collect(),
+                    delais,
                 };
                 let (sortie, cartes) = (sortie.clone(), cartes.clone());
                 let mut rendue = Rendre::new(generation, &rendue_tx, Some(&en_cours));
                 detacher(&taches, tour, async move {
                     // La session vit jusqu'à la fin du tour, puis revient à
                     // la conversation (KOB-238).
-                    if finir(turn, texte, reprise, &sortie, &cartes).await {
+                    if finir(turn, texte, vigie, reprise, &sortie, &cartes).await {
                         rendue.garder(detachee);
                     }
                 });
@@ -822,13 +848,87 @@ fn echec_d_ouverture(
     }
 }
 
+/// Délais d'un tour (KOB-243).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Delais {
+    /// Sans signe de vie pendant ce temps, le tour est abandonné.
+    pub abandon: Duration,
+    /// Au-delà, le tour est arrêté, même s'il vit encore.
+    pub duree_max: Duration,
+}
+
+impl Default for Delais {
+    fn default() -> Self {
+        Self {
+            abandon: ABANDON,
+            duree_max: DUREE_MAX,
+        }
+    }
+}
+
+/// Ce qui fait vivre un tour : les outils appelés et pas encore revenus, et
+/// son début, pour la durée maximale (KOB-243). Passe du premier plan à la
+/// tâche détachée.
+struct Vigie {
+    delais: Delais,
+    debut: tokio::time::Instant,
+    /// Dernier signe de vie : l'abandon se compte depuis lui, détachement
+    /// compris.
+    vu: tokio::time::Instant,
+    outils: std::collections::HashSet<String>,
+}
+
+impl Vigie {
+    fn new(delais: Delais) -> Self {
+        let maintenant = tokio::time::Instant::now();
+        Self {
+            delais,
+            debut: maintenant,
+            vu: maintenant,
+            outils: Default::default(),
+        }
+    }
+
+    fn voir(&mut self, evenement: &BrainEvent) {
+        self.vu = tokio::time::Instant::now();
+        match evenement {
+            BrainEvent::ToolCall { id, .. } => {
+                self.outils.insert(id.clone());
+            }
+            BrainEvent::OutilRendu { id } => {
+                self.outils.remove(id);
+            }
+            _ => {}
+        }
+    }
+
+    /// Sans nouvelle depuis `abandon`, mais un outil tourne encore ou une
+    /// carte attend son clic : ce n'est pas de l'inactivité.
+    fn occupe(&self, cartes: &Cartes) -> bool {
+        !self.outils.is_empty() || cartes.attend()
+    }
+
+    fn fin_max(&self) -> tokio::time::Instant {
+        self.debut + self.delais.duree_max
+    }
+
+    /// Message de l'arrêt à la durée maximale, pour l'utilisateur.
+    fn depassee(&self) -> String {
+        format!(
+            "durée maximale d'une tâche atteinte ({} min)",
+            self.delais.duree_max.as_secs().div_ceil(60)
+        )
+    }
+}
+
 enum Suivi {
     /// Fini, avec la réponse s'il y en a une.
     Fini(Option<String>),
     /// Le tour a échoué ; l'appelant décide (relance, attente, erreur).
     Erreur(BrainError),
-    /// Tâche longue ou carte : le reste du tour et le texte déjà reçu.
-    Detache(Turn, String),
+    /// Tâche longue ou carte : le reste du tour, le texte déjà reçu et ce
+    /// qui le fait vivre.
+    Detache(Turn, String, Vigie),
     /// Abandonné par l'utilisateur : le reste du tour, à ignorer.
     Interrompu(Turn),
 }
@@ -837,22 +937,29 @@ enum Suivi {
 async fn suivre(
     tour: u64,
     mut turn: Turn,
-    annonce: tokio::time::Instant,
-    annoncer: bool,
+    // Échéance d'annonce, et si le détachement à l'échéance est annoncé.
+    (annonce, annoncer): (tokio::time::Instant, bool),
+    delais: Delais,
     sortie: &Sortie,
     cartes: &Cartes,
     arrets: &mut mpsc::UnboundedReceiver<u64>,
 ) -> Suivi {
     let mut texte = String::new();
+    let mut vigie = Vigie::new(delais);
     let delai = tokio::time::sleep_until(annonce);
     tokio::pin!(delai);
-    // Sans aucune activité pendant `ABANDON`, le tour est abandonné.
-    let inactif = tokio::time::sleep(ABANDON);
+    // Sans aucun signe de vie pendant `abandon`, le tour est abandonné.
+    let inactif = tokio::time::sleep(delais.abandon);
     tokio::pin!(inactif);
+    let fin_max = tokio::time::sleep_until(vigie.fin_max());
+    tokio::pin!(fin_max);
     loop {
         tokio::select! {
             evenement = turn.next() => {
-                inactif.as_mut().reset(tokio::time::Instant::now() + ABANDON);
+                inactif.as_mut().reset(tokio::time::Instant::now() + delais.abandon);
+                if let Some(e) = &evenement {
+                    vigie.voir(e);
+                }
                 match evenement {
                     Some(BrainEvent::Text(t)) => {
                         texte.push_str(&t);
@@ -862,13 +969,13 @@ async fn suivre(
                         journaliser_outil(&name);
                         activite(tour, id, action, sortie);
                         sortie(Retour::Detache { tour, annonce: true });
-                        return Suivi::Detache(turn, texte);
+                        return Suivi::Detache(turn, texte, vigie);
                     }
-                    Some(BrainEvent::ToolCall { .. }) => {}
+                    Some(BrainEvent::ToolCall { .. } | BrainEvent::OutilRendu { .. } | BrainEvent::Vie) => {}
                     Some(BrainEvent::Permission(demande)) => {
                         carte(tour, demande, sortie, cartes);
                         sortie(Retour::Detache { tour, annonce: false });
-                        return Suivi::Detache(turn, texte);
+                        return Suivi::Detache(turn, texte, vigie);
                     }
                     Some(BrainEvent::Done(fin)) => {
                         let texte = if fin.text.is_empty() { texte } else { fin.text };
@@ -887,15 +994,21 @@ async fn suivre(
             }
             () = &mut delai, if texte.is_empty() => {
                 sortie(Retour::Detache { tour, annonce: annoncer });
-                return Suivi::Detache(turn, texte);
+                return Suivi::Detache(turn, texte, vigie);
             }
             () = &mut inactif => {
-                if cartes.attend() {
-                    inactif.as_mut().reset(tokio::time::Instant::now() + ABANDON);
+                if vigie.occupe(cartes) {
+                    inactif.as_mut().reset(tokio::time::Instant::now() + delais.abandon);
                     continue;
                 }
                 tracing::warn!(tour, "tour sans activité : abandon");
-                return Suivi::Erreur(BrainError::Timeout(ABANDON));
+                return Suivi::Erreur(BrainError::Timeout(delais.abandon));
+            }
+            () = &mut fin_max => {
+                tracing::warn!(tour, "tour arrêté : durée maximale atteinte");
+                sortie(Retour::Erreur { tour, message: vigie.depassee() });
+                // Session fermée avec son tour, comme un arrêt.
+                return Suivi::Interrompu(turn);
             }
         }
     }
@@ -903,22 +1016,28 @@ async fn suivre(
 
 /// Termine un tour détaché : ses cartes s'affichent, son résultat est livré.
 /// Toujours sans texte après `PATIENCE` : Kobi dit qu'il s'en occupe ; sans
-/// aucune activité pendant `ABANDON` : abandon. S'il plante, la question est
-/// reposée une fois sur une session neuve ; hors ligne, elle part en attente.
+/// signe de vie pendant `Delais::abandon` (ni outil en cours ni carte en
+/// attente) : abandon ; au-delà de `Delais::duree_max` : arrêt. S'il plante,
+/// la question est reposée une fois sur une session neuve ; hors ligne, elle
+/// part en attente.
 /// `true` si le tour s'est fini normalement : sa session peut resservir.
 async fn finir(
     mut turn: Turn,
     mut texte: String,
+    mut vigie: Vigie,
     reprise: Reprise,
     sortie: &Sortie,
     cartes: &Cartes,
 ) -> bool {
     let tour = reprise.question.tour;
+    let abandon = vigie.delais.abandon;
     let patience = tokio::time::sleep(PATIENCE.saturating_sub(ANNONCE));
     tokio::pin!(patience);
     let mut patient = !texte.is_empty();
-    let inactif = tokio::time::sleep(ABANDON);
+    let inactif = tokio::time::sleep_until(vigie.vu + abandon);
     tokio::pin!(inactif);
+    let fin_max = tokio::time::sleep_until(vigie.fin_max());
+    tokio::pin!(fin_max);
     loop {
         let evenement = tokio::select! {
             e = turn.next() => e,
@@ -928,21 +1047,27 @@ async fn finir(
                 continue;
             }
             () = &mut inactif => {
-                if cartes.attend() {
-                    inactif.as_mut().reset(tokio::time::Instant::now() + ABANDON);
+                if vigie.occupe(cartes) {
+                    inactif.as_mut().reset(tokio::time::Instant::now() + abandon);
                     continue;
                 }
                 tracing::warn!(tour, "tâche sans activité : abandon");
-                sortie(Retour::Erreur { tour, message: BrainError::Timeout(ABANDON).to_string() });
+                sortie(Retour::Erreur { tour, message: BrainError::Timeout(abandon).to_string() });
+                return false;
+            }
+            () = &mut fin_max => {
+                tracing::warn!(tour, "tâche arrêtée : durée maximale atteinte");
+                sortie(Retour::Erreur { tour, message: vigie.depassee() });
                 return false;
             }
         };
         inactif
             .as_mut()
-            .reset(tokio::time::Instant::now() + ABANDON);
+            .reset(tokio::time::Instant::now() + abandon);
         let Some(evenement) = evenement else {
             return false;
         };
+        vigie.voir(&evenement);
         match evenement {
             BrainEvent::Text(t) => {
                 patient = true;
@@ -957,6 +1082,7 @@ async fn finir(
                     activite(tour, id, action, sortie);
                 }
             }
+            BrainEvent::OutilRendu { .. } | BrainEvent::Vie => {}
             BrainEvent::Done(fin) => {
                 let texte = if fin.text.is_empty() { texte } else { fin.text };
                 sortie(Retour::Resultat { tour, texte });
@@ -1023,7 +1149,8 @@ async fn finir_relance(
     _session: Option<Session>,
 ) {
     // Session neuve d'une relance : elle se ferme avec le tour.
-    finir(turn, String::new(), reprise, sortie, cartes).await;
+    let vigie = Vigie::new(reprise.delais);
+    finir(turn, String::new(), vigie, reprise, sortie, cartes).await;
 }
 
 /// Chaque outil appelé est journalisé : seuls Read, Grep, Glob (KOB-138),
@@ -1320,18 +1447,29 @@ mod tests {
             }));
     }
 
-    /// Lenteur : rien pendant 45 s, la question est abandonnée.
-    #[tokio::test(start_paused = true)]
-    async fn lenteur_abandon_a_45_s_sans_activite() {
-        let (s, recus) = sortie();
-        let muet = vec![vec![
-            Step::Wait(Duration::from_secs(600)),
-            Step::Text("trop tard".into()),
-        ]];
-        let c = Cerveau::lancer(fabrique(vec![muet]), s);
-        c.demander(question(1, "longue"));
-        attendre(&recus, |r| matches!(r, Retour::Erreur { tour: 1, .. })).await;
-        let message = recus
+    /// Abandon à 45 s pour les essais : bien en dessous de l'outil de 2 min
+    /// ou de la carte de 55 s, qui ne doivent pas le déclencher.
+    fn court() -> Delais {
+        Delais {
+            abandon: Duration::from_secs(45),
+            duree_max: DUREE_MAX,
+        }
+    }
+
+    /// Attend un retour jusqu'à `au_plus` de temps (virtuel sous `start_paused`).
+    async fn attendre_jusqu_a(recus: &Recus, au_plus: Duration, ok: impl Fn(&Retour) -> bool) {
+        let fin = tokio::time::Instant::now() + au_plus;
+        while tokio::time::Instant::now() < fin {
+            if recus.lock().unwrap().iter().any(|(_, r)| ok(r)) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        panic!("attendu, reçu : {:?}", recus.lock().unwrap());
+    }
+
+    fn message_d_erreur(recus: &Recus) -> String {
+        recus
             .lock()
             .unwrap()
             .iter()
@@ -1339,10 +1477,35 @@ mod tests {
                 Retour::Erreur { message, .. } => Some(message.clone()),
                 _ => None,
             })
-            .unwrap();
-        assert_eq!(
-            crate::pannes::pour_l_utilisateur(&message).0,
-            "Claude ne répond pas"
+            .unwrap()
+    }
+
+    /// Vrai blocage (rien n'arrive, aucun outil, aucune carte) : abandon
+    /// propre au délai par défaut (5 min), avec la durée dans le message.
+    #[tokio::test(start_paused = true)]
+    async fn blocage_abandon_apres_5_min_sans_signe_de_vie() {
+        let (s, recus) = sortie();
+        let muet = vec![vec![
+            Step::Wait(Duration::from_secs(900)),
+            Step::Text("trop tard".into()),
+        ]];
+        let c = Cerveau::lancer(fabrique(vec![muet]), s);
+        let debut = tokio::time::Instant::now();
+        c.demander(question(1, "longue"));
+        attendre_jusqu_a(&recus, Duration::from_secs(400), |r| {
+            matches!(r, Retour::Erreur { tour: 1, .. })
+        })
+        .await;
+        let ecoule = debut.elapsed();
+        assert!(
+            ecoule >= ABANDON && ecoule < ABANDON + Duration::from_secs(2),
+            "{ecoule:?}"
+        );
+        let (titre, explication) = crate::pannes::pour_l_utilisateur(&message_d_erreur(&recus));
+        assert_eq!(titre, "Claude ne répond pas");
+        assert!(
+            explication.contains("Rien depuis 5 minutes"),
+            "{explication}"
         );
         assert!(
             rang(&recus, |r| matches!(r, Retour::Patience { .. }))
@@ -1351,9 +1514,75 @@ mod tests {
         assert!(!recu(&recus, |r| matches!(r, Retour::Resultat { .. })));
     }
 
-    /// KOB-191 : une carte de Kobi attend sa réponse (Claude bloqué dans le
-    /// hook, rien n'arrive) : le tour passe les 45 s sans être abandonné, et
-    /// la suite arrive une fois la carte tranchée.
+    /// Réflexion longue (4 min sans un mot) : sous le délai par défaut, la
+    /// tâche est menée à terme.
+    #[tokio::test(start_paused = true)]
+    async fn reflexion_longue_menee_a_terme() {
+        let (s, recus) = sortie();
+        let pense = vec![vec![
+            Step::Wait(Duration::from_secs(240)),
+            Step::Text("voilà".into()),
+        ]];
+        let c = Cerveau::lancer(fabrique(vec![pense]), s);
+        c.demander(question(1, "réfléchis"));
+        attendre_jusqu_a(&recus, Duration::from_secs(300), |r| {
+            matches!(r, Retour::Resultat { tour: 1, .. })
+        })
+        .await;
+        assert!(!recu(&recus, |r| matches!(r, Retour::Erreur { .. })));
+    }
+
+    /// Un outil qui tourne 2 min (recherche, Bash) n'est pas de
+    /// l'inactivité, même avec un délai d'abandon de 45 s ; revenu, le
+    /// silence qui suit compte de nouveau (KOB-243).
+    #[tokio::test(start_paused = true)]
+    async fn outil_de_2_min_pas_abandonne() {
+        let (s, recus) = sortie();
+        let recherche = vec![vec![
+            Step::ToolCall {
+                id: "t1".into(),
+                name: "WebSearch".into(),
+                input: serde_json::json!({ "query": "kobi" }),
+            },
+            Step::Wait(Duration::from_secs(120)),
+            Step::Rendu("t1".into()),
+            Step::Text("trouvé".into()),
+        ]];
+        let c = Cerveau::lancer_avec(fabrique(vec![recherche]), s, Arc::new(|| false), court());
+        c.demander(question(1, "cherche"));
+        attendre_jusqu_a(&recus, Duration::from_secs(200), |r| {
+            matches!(r, Retour::Resultat { tour: 1, .. })
+        })
+        .await;
+        assert!(
+            !recu(&recus, |r| matches!(r, Retour::Erreur { .. })),
+            "{:?}",
+            recus.lock().unwrap()
+        );
+
+        // L'outil rendu, plus rien : abandon au délai.
+        let (s, recus) = sortie();
+        let fige = vec![vec![
+            Step::ToolCall {
+                id: "t1".into(),
+                name: "WebSearch".into(),
+                input: serde_json::json!({ "query": "kobi" }),
+            },
+            Step::Rendu("t1".into()),
+            Step::Wait(Duration::from_secs(600)),
+            Step::Text("trop tard".into()),
+        ]];
+        let c = Cerveau::lancer_avec(fabrique(vec![fige]), s, Arc::new(|| false), court());
+        c.demander(question(1, "cherche"));
+        attendre_jusqu_a(&recus, Duration::from_secs(100), |r| {
+            matches!(r, Retour::Erreur { tour: 1, .. })
+        })
+        .await;
+    }
+
+    /// KOB-191, KOB-243 : une carte de Kobi attend sa réponse (Claude
+    /// bloqué dans le hook, rien n'arrive) : validée après 55 s, le tour
+    /// n'est pas abandonné, même avec un délai de 45 s.
     #[tokio::test(start_paused = true)]
     async fn carte_en_attente_le_tour_n_est_pas_abandonne() {
         let (s, recus) = sortie();
@@ -1361,10 +1590,71 @@ mod tests {
             Step::Wait(Duration::from_secs(55)),
             Step::Text("Fichier créé.".into()),
         ]];
-        let c = Cerveau::lancer_avec(fabrique(vec![carte]), s, Arc::new(|| true));
+        let c = Cerveau::lancer_avec(fabrique(vec![carte]), s, Arc::new(|| true), court());
         c.demander(question(1, "crée salut.txt"));
         attendre(&recus, |r| matches!(r, Retour::Resultat { tour: 1, .. })).await;
         assert!(!recu(&recus, |r| matches!(r, Retour::Erreur { .. })));
+    }
+
+    /// Durée maximale (KOB-243) : une tâche qui vit encore est arrêtée à sa
+    /// limite, au premier plan comme détachée, avec un message clair.
+    #[tokio::test(start_paused = true)]
+    async fn duree_maximale_annoncee() {
+        let delais = Delais {
+            abandon: Duration::from_secs(45),
+            duree_max: Duration::from_secs(120),
+        };
+        // Au premier plan : du texte toutes les 30 s.
+        let (s, recus) = sortie();
+        let bavard: Vec<Step> = (0..10)
+            .flat_map(|i| {
+                [
+                    Step::Text(format!("{i} ")),
+                    Step::Wait(Duration::from_secs(30)),
+                ]
+            })
+            .collect();
+        let c = Cerveau::lancer_avec(fabrique(vec![vec![bavard]]), s, Arc::new(|| false), delais);
+        let debut = tokio::time::Instant::now();
+        c.demander(question(1, "parle"));
+        attendre_jusqu_a(&recus, Duration::from_secs(200), |r| {
+            matches!(r, Retour::Erreur { tour: 1, .. })
+        })
+        .await;
+        assert!(
+            debut.elapsed() < Duration::from_secs(122),
+            "{:?}",
+            debut.elapsed()
+        );
+        let (titre, explication) = crate::pannes::pour_l_utilisateur(&message_d_erreur(&recus));
+        assert_eq!(titre, "Tâche trop longue");
+        assert!(explication.contains("(2 min)"), "{explication}");
+        assert!(!recu(&recus, |r| matches!(
+            r,
+            Retour::Fin { .. } | Retour::Resultat { .. }
+        )));
+
+        // Détachée (outil long) : arrêtée de même.
+        let (s, recus) = sortie();
+        let outil = vec![vec![
+            Step::ToolCall {
+                id: "t1".into(),
+                name: "WebSearch".into(),
+                input: serde_json::json!({ "query": "kobi" }),
+            },
+            Step::Wait(Duration::from_secs(600)),
+            Step::Rendu("t1".into()),
+        ]];
+        let c = Cerveau::lancer_avec(fabrique(vec![outil]), s, Arc::new(|| false), delais);
+        c.demander(question(1, "cherche"));
+        attendre_jusqu_a(&recus, Duration::from_secs(200), |r| {
+            matches!(r, Retour::Erreur { tour: 1, .. })
+        })
+        .await;
+        assert_eq!(
+            crate::pannes::pour_l_utilisateur(&message_d_erreur(&recus)).0,
+            "Tâche trop longue"
+        );
     }
 
     /// Limite d'usage : erreur expliquée, la session reste utilisable.

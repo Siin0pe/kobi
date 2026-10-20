@@ -74,11 +74,13 @@ pub fn modele_nemotron() -> Option<PathBuf> {
 }
 
 /// Lance le chef, l'acteur Claude et le fil d'écoute. `codebases` : dossiers
-/// de code que Claude peut lire (KOB-138).
+/// de code que Claude peut lire (KOB-138) ; `taches` : abandon et durée
+/// maximale des tours (KOB-243).
 pub fn installer<R: Runtime>(
     app: &AppHandle<R>,
     intervalle_notes_min: u8,
     codebases: Vec<PathBuf>,
+    taches: &kobi_session::config::TachesConfig,
 ) {
     let codebases = crate::lecture::codebases_valides(&codebases);
     tracing::info!(codebases = ?codebases, "Claude en lecture seule");
@@ -89,6 +91,10 @@ pub fn installer<R: Runtime>(
         app,
         crate::chef::fabrique_claude(MODELE_CLAUDE, dossiers, source_memoire(app)),
         intervalle_notes_min,
+        crate::cerveau::Delais {
+            abandon: std::time::Duration::from_secs(taches.abandon_s.into()),
+            duree_max: std::time::Duration::from_secs(taches.duree_max_s.into()),
+        },
     );
     ecoute::installer(app);
 }

@@ -123,7 +123,7 @@ async fn run_case(args: &Args, case: &Case, dir: &Path) -> Outcome {
             }
         };
         match event {
-            Some(BrainEvent::Text(_)) => {}
+            Some(BrainEvent::Text(_) | BrainEvent::OutilRendu { .. } | BrainEvent::Vie) => {}
             Some(BrainEvent::ToolCall { name, .. }) => outcome.tools.push(name),
             Some(BrainEvent::Permission(pending)) => {
                 outcome.permissions.push(pending.request.tool_name.clone());
