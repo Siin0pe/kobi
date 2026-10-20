@@ -44,6 +44,7 @@ mod son_ordi;
 mod stockage;
 #[cfg(test)]
 mod test_ipc;
+mod transcription_brute;
 mod traversee;
 mod tray;
 mod validation;

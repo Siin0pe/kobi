@@ -25,6 +25,7 @@ import { creerNotifieur } from '../notif';
 import { initLangue, surLangue, t } from '../i18n';
 import { vivreTitres } from '../titre';
 import { monterNotesEnDirect, type VueDirect } from '../notes/direct';
+import { monterTranscriptionBrute, type VueBrute } from '../notes/brut';
 import { ajouterPanneau } from '../reglages/panneaux';
 import { monterReglages, type VueReglages } from '../reglages/vue';
 import { monterMiniKobi, reagir } from './mini-kobi';
@@ -178,6 +179,7 @@ let carnet: VueCarnet | null = null;
 let reglages: VueReglages | null = null;
 let rappels: VueRappels | null = null;
 let direct: VueDirect | null = null;
+let brut: VueBrute | null = null;
 let activite: VueActivite | null = null;
 
 function monter(id: IdSection): void {
@@ -186,6 +188,7 @@ function monter(id: IdSection): void {
   switch (id) {
     case 'direct':
       direct = monterNotesEnDirect(vue);
+      brut = monterTranscriptionBrute(vue);
       break;
     case 'notes':
       carnet = monterCarnet(vue, { reglages: (panneau) => aller(`reglages/${panneau}`) });
@@ -224,6 +227,7 @@ export function aller(adresse: string): void {
     const s = SECTIONS.find((x) => x.id === id)!;
     miniKobi.section(s.mot);
     direct?.montrer(id === 'direct');
+    brut?.montrer(id === 'direct');
     // Hors réunion, l'entrée « En direct » n'est là que si on y est.
     nav.querySelector<HTMLElement>('[data-section="direct"]')!.hidden = !bandeau.courant() && id !== 'direct';
     bandeau.element.dataset.ici = String(id === 'direct');

@@ -474,6 +474,8 @@ struct Fil<R: Runtime> {
     en_reunion: bool,
     /// Niveau du micro en cours d'accumulation : (somme des carrés, échantillons).
     niveau: (f64, usize),
+    /// Dernier partiel envoyé au panneau de mise au point (KOB-50).
+    partiel_publie: Option<String>,
 }
 
 impl<R: Runtime> Fil<R> {
@@ -497,6 +499,7 @@ impl<R: Runtime> Fil<R> {
             veille: Veille::default(),
             en_reunion: false,
             niveau: (0.0, 0),
+            partiel_publie: None,
         }
     }
 
@@ -714,6 +717,24 @@ impl<R: Runtime> Fil<R> {
             kobi_parle,
         );
         self.calcul += debut.elapsed();
+        // Panneau de mise au point (KOB-50) : le partiel en cours, puis les finaux.
+        let partiel = self
+            .rattrapage
+            .partiel
+            .as_ref()
+            .map(|(texte, _)| texte.clone());
+        if partiel.is_some() && partiel != self.partiel_publie {
+            crate::transcription_brute::publier(
+                &self.app,
+                kobi_stt::Source::Moi,
+                partiel.as_deref().unwrap_or_default(),
+                false,
+            );
+        }
+        self.partiel_publie = partiel;
+        for s in &finals {
+            crate::transcription_brute::publier(&self.app, kobi_stt::Source::Moi, &s.text, true);
+        }
         for s in finals {
             let dit_a = self.origine + Duration::from_secs_f64(s.end.max(0.0));
             publier(&self.app, Message::Segment(s, dit_a));

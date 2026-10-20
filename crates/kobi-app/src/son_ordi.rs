@@ -401,7 +401,17 @@ impl<R: Runtime> Fil<R> {
                 t: debut,
             };
             match stt.push(&morceau) {
-                Ok(segments) => finis.extend(segments),
+                Ok(segments) => {
+                    for s in &segments {
+                        crate::transcription_brute::publier(
+                            &self.app,
+                            kobi_stt::Source::Eux,
+                            &s.text,
+                            s.is_final,
+                        );
+                    }
+                    finis.extend(segments)
+                }
                 Err(e) => tracing::warn!(erreur = %e, "son de l'ordinateur : transcription"),
             }
         }

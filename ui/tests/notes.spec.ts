@@ -18,6 +18,7 @@ function fakeTauri(): void {
       invoke: async (cmd: string, args: Record<string, unknown> = {}) => {
         appels.push([cmd, args]);
         if (cmd === 'notes_en_cours') return w.__notes;
+        if (cmd === 'suivre_transcription') return null;
         if (cmd === 'basculer_notes') return true;
         if (cmd === 'etat_enregistrement') return w.__rec;
         if (cmd === 'etat_session') return { etat: 'reunion', activite: null, mascotte: 'write', transcrit: true };
@@ -72,6 +73,47 @@ test('décisions, actions, questions et dernière note mise en valeur', async ({
   await expect(page.locator('.vue-direct [data-section="decisions"] .nombre')).toHaveText('2');
   await expect(page.locator('.vue-direct [data-section="actions"] li.tache')).toHaveCount(1);
   await expect(page.locator('.vue-direct [data-section="questions"] .vide')).toHaveText('Aucune question ouverte.');
+  await expectNoErrors(errors);
+});
+
+test('transcription brute (KOB-50) : masquée par défaut, Ctrl+Alt+T l’ouvre ; partiels en gris remplacés, finaux en clair, piste moi / eux', async ({ page }) => {
+  const errors = await ouvrirNotes(page, NOTES);
+  const panneau = page.locator('.vue-direct .panneau-brut');
+  const suivis = async () => (await appels(page)).filter(([c]) => c === 'suivre_transcription').map(([, a]) => (a as { actif: boolean }).actif);
+  await expect(page.locator('.vue-direct .derniere-texte')).toHaveText('Sophie : devis');
+  await expect(panneau).toBeHidden();
+  expect(await suivis()).not.toContain(true);
+  await page.keyboard.press('Control+Alt+t');
+  await expect(panneau).toBeVisible();
+  await expect(panneau.locator('.brut-vide')).toHaveText('En attente de parole…');
+  await expect.poll(suivis).toContain(true);
+  const emettre = (source: string, texte: string, finale: boolean) =>
+    page.evaluate(([source, texte, finale]) => (window as unknown as { __emit: (e: string, p: unknown) => void }).__emit('transcription_brute', { source, texte, finale }), [source, texte, finale] as const);
+  await emettre('moi', 'On commence', false);
+  await emettre('moi', 'On commence le point hebdo', false);
+  await emettre('eux', 'Bonjour à', false);
+  await emettre('moi', 'On commence le point hebdo.', true);
+  await emettre('eux', 'Bonjour à tous, le budget', false);
+  const lignes = panneau.locator('.brut-lignes li');
+  await expect(lignes).toHaveCount(2);
+  await expect(lignes.nth(0).locator('.brut-source')).toHaveText('moi');
+  await expect(lignes.nth(0).locator('.brut-texte')).toHaveText('On commence le point hebdo.');
+  await expect(lignes.nth(0)).not.toHaveClass(/partiel/);
+  await expect(lignes.nth(1).locator('.brut-source')).toHaveText('eux');
+  await expect(lignes.nth(1)).toHaveClass(/partiel/);
+  await expect(panneau.locator('.brut-vide')).toBeHidden();
+  // Gris : le partiel est plus pâle que le final.
+  const couleur = (i: number) => lignes.nth(i).evaluate((n) => getComputedStyle(n).color);
+  expect(await couleur(1)).not.toBe(await couleur(0));
+  await emettre('eux', 'Bonjour à tous, le budget est tenu.', true);
+  await emettre('moi', 'Merci', false);
+  await expect(lignes).toHaveCount(3);
+  await expect(lignes.nth(1)).not.toHaveClass(/partiel/);
+  if (process.env.CAPTURE_KOB50) await page.screenshot({ path: process.env.CAPTURE_KOB50 });
+  // Refermé : plus rien n'est demandé à la coque.
+  await page.keyboard.press('Control+Alt+t');
+  await expect(panneau).toBeHidden();
+  await expect.poll(async () => (await suivis()).at(-1)).toBe(false);
   await expectNoErrors(errors);
 });
 
