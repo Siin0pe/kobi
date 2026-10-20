@@ -152,10 +152,15 @@ test('repos économe : une scène de la veille se joue à 60 images/s, les boucl
   // ne repart pas à 60 images/s (KOB-170).
   await expect(stage).toHaveAttribute('data-fps', '3');
   const vagues = await page.evaluate(() =>
-    document.querySelector('.kobi')!.getAnimations({ subtree: true }).filter((a) => a instanceof CSSAnimation && a.animationName === 'kobi-breathe').map((a) => a.playState),
+    document
+      .querySelector('.kobi')!
+      .getAnimations({ subtree: true })
+      .filter((a) => a instanceof CSSAnimation && a.animationName === 'kobi-breathe')
+      .map((a) => String(a.effect!.getTiming().easing)),
   );
   expect(vagues.length).toBeGreaterThan(0);
-  expect(new Set(vagues)).toEqual(new Set(['paused']));
+  // Tenues en escalier (KOB-200), pas relâchées à la courbe d'origine.
+  expect(vagues.filter((e) => !e.startsWith('steps('))).toEqual([]);
   await expect(page.locator('.kobi')).toHaveClass(/deep/);
   await page.clock.runFor(3_000);
   await expect(stage).not.toHaveAttribute('data-geste', '');

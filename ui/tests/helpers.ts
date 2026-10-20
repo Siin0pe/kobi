@@ -29,10 +29,11 @@ export async function expectEconomicalLoops(page: Page): Promise<void> {
       .querySelector('.kobi')!
       .getAnimations({ subtree: true })
       .filter((a) => a instanceof CSSAnimation && a.effect?.getTiming().iterations === Infinity)
-      .map((a) => ({ name: (a as CSSAnimation).animationName, state: a.playState })),
+      .map((a) => ({ name: (a as CSSAnimation).animationName, state: a.playState, easing: String(a.effect!.getTiming().easing) })),
   );
   expect(loops.length).toBeGreaterThan(0);
-  for (const l of loops) expect(l.state, l.name).toBe('paused');
+  // Tenues en escalier (KOB-200) : elles tournent, un pas par image réglée.
+  for (const l of loops) expect(`${l.state} ${l.easing}`, l.name).toMatch(/^running steps\(/);
 }
 
 /** Commandes reçues par la coque simulée : `[nom, arguments]`. */
