@@ -1794,9 +1794,15 @@ impl<R: Runtime> Chef<R> {
             Ok(t) => t,
             Err(e) => {
                 tracing::warn!(erreur = %e, "compte rendu en échec : notes gardées");
+                // Une panne reconnue se dit dans la langue de l'interface ;
+                // une autre garde son message (KOB-211).
+                let cause = match crate::pannes::classer_message(&e) {
+                    crate::pannes::Panne::Autre => e.clone(),
+                    p => crate::pannes::expliquer(&p, &e).0.to_owned(),
+                };
                 kobi_i18n::tr(
                     "coque.chef.compteRenduSecours",
-                    &[("erreur", &e), ("notes", &r.notes)],
+                    &[("erreur", &cause), ("notes", &r.notes)],
                 )
             }
         };
@@ -2358,6 +2364,16 @@ mod tests {
             (secours.decisions, secours.actions, secours.questions),
             (0, 0, 0)
         );
+        // En anglais (KOB-211) : la cause d'une panne reconnue est traduite.
+        let cause = crate::pannes::expliquer(&crate::pannes::Panne::Deconnecte, "").0;
+        let md = kobi_i18n::t(
+            kobi_i18n::Langue::En,
+            "coque.chef.compteRenduSecours",
+            &[("erreur", cause), ("notes", "- budget\n")],
+        );
+        let en = compte_rendu_ui("r", &md);
+        assert!(en.resume.starts_with("The summary"), "{}", en.resume);
+        assert_eq!((en.decisions, en.actions, en.questions), (0, 0, 0));
     }
 
     #[test]
