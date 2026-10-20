@@ -114,55 +114,53 @@ test('économie d’énergie en réunion : tout bouge encore, au rythme d’un s
   const stage = page.locator('.stage');
   await expect(stage).toHaveClass(/econome/);
   await expect(stage).toHaveAttribute('data-fps', '3');
-  // Les boucles relevées sont gardées dans la page : on suit les mêmes objets
-  // (une boucle relancée par un petit événement de vie est un nouvel objet).
+  // Boucles de la scène : courbe et départ (KOB-200 : en escalier, sans pause).
   const loops = () =>
-    page.evaluate(() => {
-      const w = window as unknown as { loops?: Animation[] };
-      w.loops ??= document
+    page.evaluate(() =>
+      document
         .querySelector('.scene')!
         .getAnimations({ subtree: true })
-        .filter((a) => a instanceof CSSAnimation && a.effect?.getTiming().iterations === Infinity);
-      return w.loops.map((a) => ({ name: (a as CSSAnimation).animationName, state: a.playState, t: Number(a.currentTime) }));
-    });
-  const before = await loops();
+        .filter((a) => a instanceof CSSAnimation && a.effect?.getTiming().iterations === Infinity)
+        .map((a) => ({
+          name: (a as CSSAnimation).animationName,
+          state: a.playState,
+          easing: String(a.effect!.getTiming().easing),
+          duree: Number(a.effect!.getTiming().duration),
+          debut: a.startTime === null ? null : Number(a.startTime),
+        })),
+    );
+  /** À `fps` images/s : chacune en escalier d'un pas par image, toutes sur la même grille. */
+  const auPas = async (fps: number): Promise<void> => {
+    const pas = 1000 / fps;
+    const l = await loops();
+    expect(l.length).toBeGreaterThan(5);
+    for (const a of l) {
+      expect(a.state, a.name).toBe('running');
+      expect(a.easing, a.name).toBe(`steps(${Math.max(1, Math.round(a.duree / pas))})`);
+      // Départ sur la grille commune : elles changent sur les mêmes images.
+      if (a.debut !== null) expect(Math.abs(a.debut / pas - Math.round(a.debut / pas)), a.name).toBeLessThan(1e-3);
+    }
+  };
   // La pilule, l'anneau bougent toujours (plus de mot en réunion, KOB-204) ; l'étiquette REC et la fiche,
   // cliquables, restent immobiles, mais leur point rouge (clignote, onde), leur
   // surtitre, leur libellé et le crayon vivent…
+  const noms = (await loops()).map((a) => a.name);
   for (const name of ['kobi-scribble', 'kobi-rec', 'rec-blink', 'rec-onde', 'kicker-bob', 'crayon-gratte']) {
-    expect(before.map((a) => a.name)).toContain(name);
+    expect(noms).toContain(name);
   }
-  // … mais aucune ne produit d'image d'elle-même : le métronome les fait avancer ensemble.
-  expect(before.filter((a) => a.state !== 'paused')).toEqual([]);
-  await page.clock.runFor(2_000);
-  const after = await loops();
-  // Toujours tenues (pas relancées entre-temps), elles ont avancé de deux
-  // secondes, à un tic près : le métronome (3 images/s) ne les avance qu'à
-  // ses tics, et une fenêtre de 2 000 ms d'horloge en contient 6 ou 7 selon
-  // la phase (avance mesurée 2 000 ou 2 333 ms ; 1 000 ou 1 333 sur 1 s).
-  const TIC = 1000 / 3;
-  const kept = after.map((a, i) => ({ ...a, d: a.t - before[i]!.t })).filter((a) => a.state === 'paused');
-  expect(kept.length).toBeGreaterThan(5);
-  for (const a of kept) {
-    expect(Math.abs(a.d - 2_000), a.name).toBeLessThanOrEqual(TIC + 1);
-  }
-  // Et toutes du même pas (mêmes tics) : une seule valeur d'avance.
-  expect(new Set(kept.map((a) => Math.round(a.d))).size).toBe(1);
-  // Toutes avancent exactement du même pas : elles changent sur les mêmes images.
-  // (400 ms : au moins un tic à 3 images/s, quelle que soit la phase.)
-  await page.clock.runFor(400);
-  const later = await loops();
-  const steps = new Set(later.map((a, i) => (a.state === 'paused' && after[i]!.state === 'paused' ? Math.round(a.t - after[i]!.t) : null)).filter((d) => d !== null));
-  expect(steps.size).toBe(1);
-  expect([...steps][0]).toBeGreaterThan(0);
+  // … à 3 images/s, toutes ensemble, sans qu'aucune soit mise en pause ni
+  // avancée à la main (aucune boucle par image, KOB-240).
+  await auPas(3);
   // Après une minute, 2 images/s.
   await page.clock.runFor(60_000);
   await expect(stage).toHaveAttribute('data-fps', '2');
-  // Le moindre changement d'état réveille tout : les boucles reprennent seules.
+  await auPas(2);
+  // Le moindre changement d'état réveille tout : les boucles reprennent leur courbe.
   await page.evaluate(() => window.kobi.setState('listen', window.kobi.demoData('listen')));
   await expect(stage).not.toHaveClass(/econome/);
   await expect(stage).toHaveAttribute('data-fps', '0');
-  expect((await loops()).filter((a) => a.state === 'paused')).toEqual([]);
+  const reveil = await loops();
+  expect(reveil.filter((a) => a.state === 'paused' || a.easing.startsWith('steps('))).toEqual([]);
   await expectNoErrors(errors);
 });
 
@@ -173,18 +171,16 @@ test('économie d’énergie : au repos, un geste (animation Web) suit le métro
   await page.evaluate(() => window.kobiAnimations.poser({ economie: true }));
   await page.clock.runFor(23_000);
   await expect(page.locator('.stage')).toHaveClass(/econome/);
-  const state = await page.evaluate(() => {
+  const geste = await page.evaluate(() => {
     const w = window as unknown as { done: boolean; anim: Animation };
     w.done = false;
-    w.anim = document.querySelector('.kobi .ch')!.animate([{ scale: 1 }, { scale: 1.2 }], { duration: 600 });
+    w.anim = document.querySelector('.kobi .pill')!.animate([{ scale: 1 }, { scale: 1.2 }], { duration: 600 });
     w.anim.onfinish = () => (w.done = true);
-    return w.anim.playState;
+    return { state: w.anim.playState, easing: String(w.anim.effect!.getTiming().easing) };
   });
-  // Tenu par le métronome dès sa création : aucune image d'elle-même.
-  expect(state).toBe('paused');
-  await page.clock.runFor(400);
-  expect(await page.evaluate(() => (window as unknown as { anim: Animation }).anim.playState)).toBe('paused');
-  // Arrivé au bout, il est relâché et finit (onfinish).
+  // Adopté dès sa création, en escalier (3 images/s : 2 pas sur 600 ms), sans pause.
+  expect(geste).toEqual({ state: 'running', easing: 'steps(2)' });
+  // Il se termine normalement (onfinish).
   await page.clock.runFor(800);
   await expect.poll(() => page.evaluate(() => (window as unknown as { done: boolean }).done)).toBe(true);
   await expectNoErrors(errors);

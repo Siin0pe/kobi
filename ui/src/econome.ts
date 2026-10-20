@@ -3,10 +3,13 @@
 //
 // Par défaut, tout bouge à 60 images/s (réglage « Images par seconde » de
 // l'app : 5, 15, 30, 60, 120 ou suivre l'écran, cadence.ts). Sous la fréquence
-// de l'écran, les boucles CSS infinies et les animations Web sont mises en
-// pause et une seule horloge les fait avancer ensemble, au rythme réglé :
-// toutes changent sur la même image, quelle que soit leur courbe. À la
-// fréquence de l'écran (ou au-dessus), le navigateur les anime lui-même.
+// de l'écran, chaque animation de la scène (boucles et animations finies,
+// transitions, animations Web) passe en escalier : `steps(n)` sur son effet,
+// un pas tous les 1/rythme de seconde, départ posé sur une grille commune.
+// Toutes changent sur la même image, et le navigateur les anime seul : aucun
+// appel par image, aucun style recalculé hors des pas (KOB-240 : l'ancienne
+// horloge les faisait avancer elle-même à chaque image, d'où un repeint
+// continu). À la fréquence de l'écran (ou au-dessus), rien n'est touché.
 //
 // « Économie d'énergie » (désactivée par défaut) reprend l'ancien repos
 // économe : au repos prolongé, 3 images/s, puis 2 après une minute. Elle ne
@@ -16,9 +19,9 @@
 // des animations Web lancées par `el.animate()` : elles suivent aussi le
 // métronome, puis sont relâchées à leur fin (leur `onfinish` se déclenche).
 // La boucle partagée (ticker.ts : lettres qui se brouillent, frappe des
-// bulles) prend le même rythme, et le métronome avance sur ses images.
+// bulles) prend le même rythme quand elle tourne.
 
-import { onFrame, setFrameInterval } from './ticker';
+import { setFrameInterval } from './ticker';
 
 /** Images par seconde de l'économie d'énergie au repos, puis au sommeil prolongé. */
 export const ECONOMY_FPS = 3;
@@ -55,9 +58,8 @@ function enCours(root: Element): Animation[] {
 }
 
 export class Metronome {
-  /** Animations tenues par le métronome, avec l'instant où elles ont été avancées. */
-  private readonly held = new Map<Animation, number>();
-  private unsub: (() => void) | null = null;
+  /** Animations tenues par le métronome, avec leur courbe et leur vitesse d'origine. */
+  private readonly held = new Map<Animation, { easing: string; vitesse: number }>();
   private slow = 0;
   /** Cadence réglée, 0 : celle de l'écran (le navigateur anime lui-même). */
   private cadence = 0;
@@ -68,6 +70,8 @@ export class Metronome {
   private suspended = false;
   private fps = ECONOMY_FPS;
   private readonly onStart = (): void => {
+    // Animations remplacées (changement d'état) : oubliées.
+    for (const a of [...this.held.keys()]) if (a.playState === 'idle') this.held.delete(a);
     if (!this.rate || this.geste()) return;
     // Une animation ou une transition qui démarre (fiche, « z », couche d'une
     // lettre, regard) suit le métronome.
@@ -117,8 +121,7 @@ export class Metronome {
   /** Fenêtre masquée ou scène repliée : plus aucune image, boucles tenues en l'état. */
   setSuspended(suspended: boolean): void {
     this.suspended = suspended;
-    if (suspended) this.halt();
-    else if (this.rate) this.run();
+    this.run();
   }
 
   destroy(): void {
@@ -151,11 +154,12 @@ export class Metronome {
       active.add(this);
       // Les gestes à pleine vitesse (repos économe) ne sont pas tenus, les boucles si.
       for (const a of enCours(this.root)) if (isLoop(a) || !this.geste()) this.hold(a);
+      // Déjà tenues : elles prennent le nouveau pas.
+      for (const a of [...this.held.keys()]) this.hold(a);
       this.run();
     } else {
       active.delete(this);
-      this.halt();
-      for (const a of this.held.keys()) if (a.playState === 'paused') a.play();
+      for (const [a, easing] of this.held) this.release(a, easing);
       this.held.clear();
     }
     this.frameInterval();
@@ -169,59 +173,50 @@ export class Metronome {
 
   private setRate(fps: number): void {
     this.fps = fps;
+    for (const a of [...this.held.keys()]) this.hold(a);
     this.frameInterval();
     this.onRate?.(this.rate);
   }
 
+  /**
+   * Tient une animation au rythme réglé, sans la faire avancer nous-mêmes
+   * (KOB-200, sans la boucle par image de KOB-240) : son temps passe en
+   * escalier, `steps(n)` sur l'effet, un pas tous les 1/rythme de seconde ;
+   * les courbes de ses images clés restent les siennes. Son départ est posé
+   * sur la grille commune : toutes avancent sur la même image. Ensuite, le
+   * navigateur l'anime seul, sans un seul appel par image.
+   */
   private hold(a: Animation): void {
-    a.pause();
-    // Une animation adoptée entre deux images n'avance que du temps écoulé depuis.
-    this.held.set(a, performance.now());
+    const effet = a.effect;
+    if (!effet) return;
+    if (!this.held.has(a)) this.held.set(a, { easing: String(effet.getTiming().easing ?? 'linear'), vitesse: a.playbackRate });
+    const origine = this.held.get(a)!;
+    const pas = 1000 / this.rate;
+    const duree = Number(effet.getTiming().duration);
+    if (!(duree > 0)) return;
+    const n = Math.max(1, Math.round(duree / pas));
+    effet.updateTiming({ easing: `steps(${n})` });
+    // Chaque pas dure exactement 1/rythme de seconde : une durée qui n'est pas
+    // un multiple du pas (1 100 ms à 5 images/s) est jouée à peine plus vite
+    // ou plus lentement, sinon ses pas tomberaient hors de la grille commune
+    // et ajouteraient des images (essai WebKitGTK).
+    a.playbackRate = origine.vitesse * (duree / (n * pas));
+    if (a.startTime !== null) a.startTime = Math.round(Number(a.startTime) / pas) * pas;
+    if (this.suspended && a.playState === 'running') a.pause();
   }
 
+  /** Rend à une animation sa courbe d'origine : le navigateur l'anime à la cadence de l'écran. */
+  private release(a: Animation, { easing, vitesse }: { easing: string; vitesse: number }): void {
+    a.effect?.updateTiming({ easing });
+    a.playbackRate = vitesse;
+    if (a.playState === 'paused') a.play();
+  }
+
+  /** Fenêtre cachée : les animations tenues s'arrêtent là où elles sont. */
   private run(): void {
-    this.halt();
-    if (this.suspended) return;
-    // Reprise (après une suspension) : le temps passé caché ne compte pas.
-    const now = performance.now();
-    for (const a of this.held.keys()) this.held.set(a, now);
-    // Une image de la boucle partagée (déjà au rythme réglé) : tout avance ensemble.
-    this.unsub = onFrame(() => {
-      this.step();
-      return true;
-    });
-  }
-
-  private halt(): void {
-    this.unsub?.();
-    this.unsub = null;
-  }
-
-  /** Une image : toutes les animations tenues avancent ensemble, chacune du temps écoulé pour elle. */
-  private step(): void {
-    const now = performance.now();
-    for (const [a, since] of this.held) {
-      const target = (a.effect as KeyframeEffect | null)?.target;
-      // Animation remplacée (changement d'état) ou élément retiré : on la lâche.
-      if (a.playState === 'idle' || !target?.isConnected) {
-        this.held.delete(a);
-        continue;
-      }
-      this.held.set(a, now);
-      // Relancée par ailleurs (changement de classe) : le métronome la reprend.
-      if (a.playState !== 'paused') {
-        if (a.playState === 'running') a.pause();
-        continue;
-      }
-      const next = Number(a.currentTime ?? 0) + (now - since);
-      const end = Number(a.effect!.getComputedTiming().endTime);
-      if (next >= end) {
-        // Fin d'une animation courte : posée sur sa dernière image et relâchée,
-        // elle se termine normalement (onfinish, fill).
-        a.currentTime = end;
-        a.play();
-        this.held.delete(a);
-      } else a.currentTime = next;
+    for (const a of this.held.keys()) {
+      if (this.suspended && a.playState === 'running') a.pause();
+      else if (!this.suspended && a.playState === 'paused') a.play();
     }
   }
 }

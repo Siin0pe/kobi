@@ -112,20 +112,17 @@ export function cadenceVoulue(r: ReglageAnimations = reglage, hz = ecran): numbe
  * lui-même) et les images par seconde voulues. Appelée tout de suite, puis à
  * chaque changement du réglage et après la mesure de l'écran.
  *
- * KOB-240 : la cadence imposée est toujours 0. Sous la fréquence de l'écran
- * (écran à plus de 60 Hz au défaut, ou réglage bas), le métronome tenait
- * toutes les animations de la fenêtre et les faisait avancer lui-même à
- * chaque image : style recalculé et fenêtre repeinte en continu (« repaint
- * en boucle » sous Windows). Le navigateur anime donc toujours lui-même ;
- * « Images par seconde » reste enregistré et affiché (`voulue`), sans effet
- * jusqu'à ce que KOB-200 le refasse sans boucle. L'économie d'énergie
- * (désactivée par défaut) n'est pas concernée.
+ * Sous la fréquence de l'écran, la cadence voulue est imposée : les
+ * animations passent en escalier (econome.ts), sans aucune boucle par image
+ * (KOB-200, refait après KOB-240 : l'ancienne horloge les faisait avancer à
+ * chaque image, d'où un repeint continu). À la fréquence de l'écran ou
+ * au-dessus, 0 : le navigateur anime lui-même.
  */
 export function suivreCadence(fn: (cadence: number, voulue: number, r: ReglageAnimations) => void): () => void {
   chargerReglageAnimations();
   const appliquer = (): void => {
     const voulue = cadenceVoulue();
-    fn(0, voulue, reglage);
+    fn(voulue < ecran ? voulue : 0, voulue, reglage);
   };
   appliquer();
   ecouteursEcran.add(appliquer);

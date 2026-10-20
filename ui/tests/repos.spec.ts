@@ -46,7 +46,17 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-const CAS: Array<{ hz: number; fps?: 15 }> = [{ hz: 60 }, { hz: 144 }, { hz: 240 }, { hz: 144, fps: 15 }];
+// KOB-200 : à 15, 30 et 60 images/s réglées sous la fréquence de l'écran,
+// les animations passent en escalier, toujours sans boucle par image.
+const CAS: Array<{ hz: number; fps?: 15 | 30 | 60 }> = [
+  { hz: 60 },
+  { hz: 144 },
+  { hz: 240 },
+  { hz: 144, fps: 15 },
+  { hz: 60, fps: 15 },
+  { hz: 60, fps: 30 },
+  { hz: 144, fps: 60 },
+];
 
 for (const { hz, fps } of CAS) {
   const cas = `écran ${hz} Hz${fps ? `, ${fps} images/s` : ''}`;
