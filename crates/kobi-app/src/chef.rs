@@ -1554,6 +1554,8 @@ impl<R: Runtime> Chef<R> {
                         let _ = self
                             .app
                             .emit(EVENEMENT_COMPTE_RENDU, compte_rendu_ui(&reunion, &texte));
+                        // Annoncé une fois à voix haute, si la voix est active (KOB-204).
+                        crate::voix::dire(&self.app, "Le compte rendu est prêt.");
                     }
                     (_, Err(e)) => tracing::warn!(erreur = %e, "compte rendu illisible"),
                     _ => {}

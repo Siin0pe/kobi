@@ -43,17 +43,20 @@ interface Look {
 
 export const LOOKS: Record<MascotState, Look> = {
   idle: { eye: '–', word: 'zzz', mouth: '', enter: 'settle', gaze: [0, 0] },
-  listen: { eye: 'O', word: 'oui ?', mouth: '', enter: 'startle', gaze: [-14, 0] },
-  think: { eye: '@', word: 'hmm…', mouth: '', enter: 'ponder', gaze: [18, -18] },
+  // Le mot sous Kobi ne s'affiche que quand il informe (KOB-204) : j'écoute,
+  // je réfléchis, je rédige (« je m'en occupe » a ses outils) ; les autres
+  // restent pour le brouillage, sans être montrés (kobi.css).
+  listen: { eye: 'O', word: 'j’écoute…', mouth: '', enter: 'startle', gaze: [-14, 0] },
+  think: { eye: '@', word: 'je réfléchis…', mouth: '', enter: 'ponder', gaze: [18, -18] },
   write: { eye: 'o', word: 'noté', mouth: '', enter: 'lean', gaze: [-18, 16] },
   answer: { eye: '^', word: 'alors', mouth: 'o', enter: 'speak', gaze: [-10, -4] },
   suggest: { eye: '*', word: 'idée !', mouth: '', enter: 'pop', gaze: [-12, -6] },
   done: { eye: '^', word: 'fait !', mouth: '', enter: 'cheer', gaze: [0, 0] },
   error: { eye: 'x', word: 'oups', mouth: '~', enter: 'recoil', gaze: [0, 6] },
-  work: { eye: WORK_EYES.fouille, word: 'occupé', mouth: '', enter: 'lean', gaze: [-10, 16] },
+  work: { eye: WORK_EYES.fouille, word: 'je m’en occupe…', mouth: '', enter: 'lean', gaze: [-10, 16] },
   // Réunion finie, compte rendu en cours (KOB-166) : Kobi relit, les yeux
   // balaient les lignes, les feuilles s'empilent à côté de lui.
-  compose: { eye: 'o', word: 'je rédige', mouth: '', enter: 'settle', gaze: [-12, 12] },
+  compose: { eye: 'o', word: 'je rédige…', mouth: '', enter: 'settle', gaze: [-12, 12] },
 };
 
 /** États où le survol fait sourire Kobi. */
@@ -165,6 +168,8 @@ export class Kobi {
   private readonly eyes: HTMLElement[];
   private readonly mouth: HTMLElement;
   private readonly word: HTMLElement;
+  /** Place sur la tête pour un badge (compte rendu prêt), suit tous les mouvements. */
+  readonly accroche: HTMLElement;
   private readonly burst: HTMLElement;
   /** Anneau rouge de l'enregistrement, autour de la pilule. */
   private readonly ring: HTMLElement;
@@ -226,7 +231,6 @@ export class Kobi {
   constructor(reducedMotion: boolean) {
     this.reduced = reducedMotion;
     this.root = el('div', 'kobi m-idle');
-    this.root.setAttribute('aria-hidden', 'true');
 
     this.body = el('div', 'body');
     const zz = el('div', 'fx zz');
@@ -272,6 +276,11 @@ export class Kobi {
     this.body.append(this.orbit.root, this.travail.root, zz, waves, bang, drop, sheets, this.drag, this.burst);
     this.word = el('div', 'word');
     this.root.append(this.body, this.word);
+    // Le dessin (symboles brouillés…) est masqué aux lecteurs d'écran, mais
+    // pas l'accroche : un bouton posé sur la tête y reste joignable (KOB-204).
+    this.accroche = el('div', 'accroche');
+    this.pill.append(this.accroche);
+    masquerSauf(this.root, this.accroche);
     this.scrambler = new Scrambler(this.eyes, this.word);
     this.scrambler.setInstant(this.reduced);
     this.blinker = new Blinker((closed) => this.blink(closed));
@@ -1402,5 +1411,14 @@ export class Kobi {
   /** Bouche de Kobi (coordonnées de la fenêtre) : la bulle d'écriture en sort et y rentre. */
   mouthRect(): DOMRect {
     return this.mouth.getBoundingClientRect();
+  }
+}
+
+/** Masque aux lecteurs d'écran tout `root`, sauf `garde` (et le chemin qui y mène). */
+function masquerSauf(root: Element, garde: Element): void {
+  for (const enfant of root.children) {
+    if (enfant === garde) continue;
+    if (enfant.contains(garde)) masquerSauf(enfant, garde);
+    else enfant.setAttribute('aria-hidden', 'true');
   }
 }

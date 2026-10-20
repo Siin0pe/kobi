@@ -4,15 +4,15 @@ import { expectNoErrors, openUi } from './helpers';
 const STATES = ['idle', 'listen', 'think', 'write', 'answer', 'suggest', 'done', 'error', 'work'] as const;
 const LOOKS: Record<(typeof STATES)[number], { eye: string; word: string }> = {
   idle: { eye: '–', word: 'zzz' },
-  listen: { eye: 'O', word: 'oui ?' },
-  think: { eye: '@', word: 'hmm…' },
+  listen: { eye: 'O', word: 'j’écoute…' },
+  think: { eye: '@', word: 'je réfléchis…' },
   write: { eye: 'o', word: 'noté' },
   answer: { eye: '^', word: 'alors' },
   suggest: { eye: '*', word: 'idée !' },
   done: { eye: '^', word: 'fait !' },
   error: { eye: 'x', word: 'oups' },
   // Données de démo : Kobi cherche, ses yeux deviennent des loupes.
-  work: { eye: 'o', word: 'occupé' },
+  work: { eye: 'o', word: 'je m’en occupe…' },
 };
 
 /** Matrice visuelle de la pilule : enveloppe d'inertie × animation de la pilule. */

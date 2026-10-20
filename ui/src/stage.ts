@@ -3,6 +3,7 @@
 // animations) et met tout en pause quand la fenêtre est masquée.
 
 import { animationsReduitesSelonReglage, suivreAnimations } from './animations';
+import { affichage, suivreAffichage } from './affichage';
 import { Bubbles, type ActionDecision } from './bubbles';
 import { suivreCadence } from './cadence';
 import { Metronome } from './econome';
@@ -162,6 +163,10 @@ export class Stage {
       this.metronome.setLively(lively);
     };
     this.cleanups.push(() => this.metronome.destroy());
+    // « Afficher l'état en texte » (KOB-204) : sans lui, aucun mot sous Kobi.
+    const mot = (a: { etat: string }): void => void this.root.classList.toggle('sans-mot', a.etat === 'aucun');
+    mot(affichage());
+    this.cleanups.push(suivreAffichage(mot));
     this.root.append(this.scene, this.dot, this.live);
     parent.append(this.root);
 

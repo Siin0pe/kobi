@@ -1,7 +1,7 @@
 // Animations de Kobi (KOB-137) : transitions sans saut, vie de chaque état,
 // curseur, volume du micro, bouche calée sur le flux, enregistrement.
 import { expect, test, type Page } from '@playwright/test';
-import { expectEconomicalFont, expectNoErrors, kobiPose, openUi } from './helpers';
+import { expectEconomicalLoops, expectNoErrors, kobiPose, openUi } from './helpers';
 
 const STATES = ['idle', 'listen', 'think', 'write', 'answer', 'suggest', 'done', 'error', 'work'] as const;
 
@@ -286,13 +286,14 @@ test('Fait ! : une gerbe de symboles jaillit puis disparaît', async ({ page }) 
 });
 
 test('le mot reste lisible sur un fond sombre : contour vert sous le texte noir', async ({ page }) => {
-  const errors = await openUi(page, 'backdrop=sombre&state=answer');
+  const errors = await openUi(page, 'backdrop=sombre&state=listen');
   const style = await page.locator('.kobi .word').evaluate((n) => {
     const s = getComputedStyle(n);
     return { stroke: s.webkitTextStroke || `${s.getPropertyValue('-webkit-text-stroke-width')} ${s.getPropertyValue('-webkit-text-stroke-color')}`, order: s.paintOrder, color: s.color };
   });
   expect(style.order).toContain('stroke');
-  expect(style.stroke).toMatch(/8px/);
+  // Mot court et plus petit (KOB-204) : contour à l'échelle.
+  expect(style.stroke).toMatch(/5px/);
   expect(style.color).toBe('rgb(11, 11, 11)');
   await expectNoErrors(errors);
 });
@@ -337,7 +338,7 @@ test('pendant l’enregistrement, le repos de Kobi est la prise de notes, puis i
   await expectNoErrors(errors);
 });
 
-test('économie d’énergie : la prise de notes passe en mode économe après 20 s, le mot ondule lentement, au pas du métronome', async ({ page }) => {
+test('économie d’énergie : la prise de notes passe en mode économe après 20 s, au pas du métronome', async ({ page }) => {
   await page.clock.install();
   const errors = await openUi(page, '');
   // Économie d'énergie activée (KOB-200) : l'ancien repos économe.
@@ -348,10 +349,9 @@ test('économie d’énergie : la prise de notes passe en mode économe après 2
   await page.clock.runFor(21_000);
   await expect(kobi).toHaveClass(/deep/);
   await page.clock.runFor(1_500);
-  // Animations CSS de la police : en temps réel, hors de l'horloge simulée.
-  await page.waitForTimeout(1_400);
-  await expectEconomicalFont(page);
-  // Le griffonnage continue.
+  await expectEconomicalLoops(page);
+  // Le griffonnage continue, sans mot sous la tête (KOB-204).
+  await expect(page.locator('.kobi .word')).toBeHidden();
   expect(await page.locator('.kobi .pill').evaluate((n) => n.getAnimations().length)).toBe(1);
   await expectNoErrors(errors);
 });

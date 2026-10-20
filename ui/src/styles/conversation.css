@@ -12,8 +12,8 @@
 .validation-open .notifs {
   visibility: hidden;
 }
-.stage[data-state='suggest'] .rapport-pastille,
-.validation-open .rapport-pastille {
+.stage[data-state='suggest'] .rapport-badge,
+.validation-open .rapport-badge {
   display: none;
 }
 

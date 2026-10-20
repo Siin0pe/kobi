@@ -4,13 +4,16 @@
 // résumé et le nombre de décisions, d'actions et de questions. Kobi le montre
 // dans une carte ; « Ouvrir dans le Carnet » appelle `ouvrir_carnet
 // { reunion }`, qui ouvre le Carnet sur ce compte rendu. « Plus tard », ou une
-// nouvelle question, replie la carte en une pastille qui reste à portée de
-// clic ; une nouvelle réunion la retire.
+// nouvelle question, replie la carte en un badge accroché à la tête de Kobi
+// (KOB-204), comme celui d'une notification d'appli : au survol il se déploie
+// en « Compte rendu prêt · ouvrir », un clic ouvre le compte rendu, un clic
+// droit le range (« plus tard ») ; une nouvelle réunion le retire.
 //
 // Toujours animé, sans faire bouger ce qui se clique : la carte et ses
 // boutons restent en place, ce sont le surtitre, les pastilles et le halo du
 // bouton principal qui vivent.
 
+import { reduced } from './effets';
 import { tauri } from './native';
 import type { Stage } from './stage';
 
@@ -66,21 +69,37 @@ export class ReportCard {
     buttons.append(ouvrir, plusTard);
     this.root.append(el('div', 'kicker', 'Réunion terminée'), titre, this.resume, this.chips, buttons);
 
-    this.pill = el('button', 'rapport-pastille');
+    // Badge accroché à la tête (KOB-204) : une feuille sur une pastille vert
+    // acide, qui se déploie au survol.
+    this.pill = el('button', 'rapport-badge');
     this.pill.type = 'button';
     this.pill.hidden = true;
-    const icone = el('span', 'rapport-icone', '✓');
+    const icone = el('span', 'rapport-badge-icone');
     icone.setAttribute('aria-hidden', 'true');
-    this.pill.append(icone, el('span', 'rapport-pastille-texte', 'Compte rendu prêt'));
-    this.pill.setAttribute('aria-label', 'Ouvrir le compte rendu dans le Carnet');
-    this.pill.addEventListener('click', () => this.open());
+    this.pill.append(icone, el('span', 'rapport-badge-texte', 'Compte rendu prêt · ouvrir'));
+    this.pill.setAttribute('aria-label', 'Compte rendu prêt : ouvrir dans l’app');
+    this.pill.title = 'Compte rendu prêt · clic droit : plus tard';
+    // Accroché dans le dessin de Kobi : le clic ne va pas plus loin (il
+    // ouvrirait aussi la bulle d'écriture, ecrire.ts).
+    this.pill.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.open();
+    });
+    // Ni le pincement de Kobi ni le déplacement de la fenêtre.
+    this.pill.addEventListener('pointerdown', (e) => e.stopPropagation());
+    // Clic droit : « plus tard », le compte rendu reste dans le Carnet.
+    this.pill.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.dismiss();
+    });
 
     stage.mount(this.root);
-    stage.mount(this.pill);
+    stage.kobi.accroche.append(this.pill);
     const previous = stage.onStateChange;
     stage.onStateChange = (state) => {
       previous?.(state);
-      // Une nouvelle question passe devant : la carte se replie en pastille.
+      // Une nouvelle question passe devant : la carte se replie en badge.
       if (state !== 'idle' && state !== 'write' && !this.root.hidden) this.collapse();
     };
   }
@@ -99,15 +118,23 @@ export class ReportCard {
     this.root.querySelector<HTMLButtonElement>('.btn-primary')?.focus({ preventScroll: true });
   }
 
-  /** Replie la carte en pastille. */
+  /** Replie la carte en badge sur la tête de Kobi. */
   collapse(): void {
     if (!this.current) return;
     this.root.hidden = true;
     this.stage.root.classList.remove('rapport-open');
+    const arrive = this.pill.hidden;
     this.pill.hidden = false;
+    // Arrivée avec un petit rebond.
+    if (arrive && !reduced(this.pill)) {
+      this.pill.animate([{ scale: 0 }, { scale: 1.25, offset: 0.6 }, { scale: 0.92, offset: 0.8 }, { scale: 1 }], {
+        duration: 460,
+        easing: 'cubic-bezier(.3,1.4,.5,1)',
+      });
+    }
   }
 
-  /** Retire la carte et la pastille (compte rendu ouvert, nouvelle réunion). */
+  /** Retire la carte et le badge (compte rendu ouvert, nouvelle réunion, plus tard). */
   dismiss(): void {
     this.current = null;
     this.root.hidden = true;

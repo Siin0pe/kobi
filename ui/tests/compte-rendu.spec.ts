@@ -26,18 +26,18 @@ test('fin de réunion : la carte montre le résumé et ouvre le Carnet sur la r�
   await card.getByRole('button', { name: 'Ouvrir dans le Carnet' }).click();
   expect(await calls(page)).toContainEqual(['ouvrir_carnet', { reunion: CR.reunion }]);
   await expect(card).toBeHidden();
-  await expect(page.locator('.rapport-pastille')).toBeHidden();
+  await expect(page.locator('.rapport-badge')).toBeHidden();
   await expectNoErrors(errors);
 });
 
-test('« Plus tard » ou une nouvelle question replie la carte en pastille, qui l’ouvre ensuite', async ({ page }) => {
+test('« Plus tard » ou une nouvelle question replie la carte en badge sur la tête de Kobi, qui l’ouvre ensuite', async ({ page }) => {
   await mockTauri(page);
   const errors = await openUi(page, '');
   await emit(page, 'compte_rendu', CR);
   const card = page.getByRole('dialog', { name: 'Compte rendu prêt' });
   await card.getByRole('button', { name: 'Plus tard' }).click();
   await expect(card).toBeHidden();
-  const pill = page.getByRole('button', { name: 'Ouvrir le compte rendu dans le Carnet' });
+  const pill = page.getByRole('button', { name: 'Compte rendu prêt : ouvrir dans l’app' });
   await expect(pill).toBeVisible();
   // De nouveau la carte, puis une question : elle se replie d'elle-même.
   await emit(page, 'compte_rendu', CR);
@@ -45,8 +45,11 @@ test('« Plus tard » ou une nouvelle question replie la carte en pastille, qui 
   await emit(page, 'state', { etat: 'veille', activite: 'ecoute', mascotte: 'listen', transcrit: false });
   await expect(card).toBeHidden();
   await expect(pill).toBeVisible();
-  await pill.click();
-  expect(await calls(page)).toContainEqual(['ouvrir_carnet', { reunion: CR.reunion }]);
+  // Accroché à la tête qui bouge (KOB-204) : jamais « immobile », d'où le
+  // clic forcé, une fois fini son rebond d'arrivée.
+  await expect.poll(() => pill.evaluate((n) => n.getAnimations().length)).toBe(0);
+  await pill.click({ force: true });
+  await expect.poll(() => calls(page)).toContainEqual(['ouvrir_carnet', { reunion: CR.reunion }]);
   await expect(pill).toBeHidden();
   await expectNoErrors(errors);
 });
@@ -56,9 +59,9 @@ test('une nouvelle réunion retire l’ancien compte rendu (il reste dans le Car
   const errors = await openUi(page, '');
   await emit(page, 'compte_rendu', CR);
   await page.getByRole('button', { name: 'Plus tard' }).click();
-  await expect(page.locator('.rapport-pastille')).toBeVisible();
+  await expect(page.locator('.rapport-badge')).toBeVisible();
   await emit(page, 'enregistrement', { actif: true, pause: false, debut_ms: Date.now(), notes: 0, titre: null, derniere_note: null });
-  await expect(page.locator('.rapport-pastille')).toBeHidden();
+  await expect(page.locator('.rapport-badge')).toBeHidden();
   await expectNoErrors(errors);
 });
 
@@ -82,21 +85,21 @@ test('toujours animée sans bouger ce qui se clique ; « réduire les animations
   await expectNoErrors(errors);
 });
 
-test('sobriété : une seule chose à la fois en plus de Kobi et de sa bulle (carte, pastille, notification)', async ({ page }) => {
+test('sobriété : une seule chose à la fois en plus de Kobi et de sa bulle (carte, badge, notification)', async ({ page }) => {
   await mockTauri(page);
   const errors = await openUi(page, '');
   await emit(page, 'compte_rendu', CR);
   // Carte ouverte : une tâche longue annoncée attend derrière.
   await emit(page, 'conversation', [{ tour: 1, question: 'liste les appels', reponse: '', statut: 'tache', clavier: false }]);
   await expect(page.locator('.notifs')).toBeHidden();
-  // Carte repliée : la notification passe, la pastille s'efface tant qu'elle est là.
+  // Carte repliée : la notification passe, le badge s'efface tant qu'elle est là.
   await page.getByRole('button', { name: 'Plus tard' }).click();
   await expect(page.locator('.notif[data-kind=running]')).toBeVisible();
-  await expect(page.locator('.rapport-pastille')).toBeHidden();
-  // Plus de notification : la pastille revient.
+  await expect(page.locator('.rapport-badge')).toBeHidden();
+  // Plus de notification : le badge revient.
   await emit(page, 'conversation', [{ tour: 1, question: 'liste les appels', reponse: 'Fini.', statut: 'fini', clavier: false }]);
   await page.locator('.notif[data-kind=delivered]').click();
   await expect(page.locator('.notif')).toHaveCount(0);
-  await expect(page.locator('.rapport-pastille')).toBeVisible();
+  await expect(page.locator('.rapport-badge')).toBeVisible();
   await expectNoErrors(errors);
 });

@@ -94,6 +94,17 @@
    l'opacité, et penchent ensemble (skew) ; tout est composé par le GPU.
    La lettre elle-même, transparente, ne fait que tenir sa place. */
 .kobi .word{--halo:8px;position:absolute;left:330px;top:410px;width:500px;text-align:center;font-size:104px;line-height:1;letter-spacing:-.03em;transform-origin:50% 70%;animation:kobi-word-breathe 3.6s ease-in-out infinite}
+/* Mot d'état (KOB-204) : seulement quand Kobi informe (il écoute, réfléchit,
+   s'occupe d'une tâche, rédige), court et plus petit ; rien au repos ni quand
+   une bulle parle déjà, et en réunion c'est REC qui porte l'état. Masqué, il
+   ne coûte rien (ses animations ne tournent pas). Réglage « Afficher l'état
+   en texte » : .sans-mot sur la scène. */
+.kobi .word{--halo:5px;top:372px;font-size:46px;letter-spacing:-.01em;display:none}
+.kobi.m-listen .word,.kobi.m-think .word,.kobi.m-compose .word{display:block;animation:kobi-word-breathe 3.6s ease-in-out infinite,kobi-mot-arrive .3s ease-out}
+@keyframes kobi-mot-arrive{from{opacity:0;translate:0 6px}}
+.sans-mot .kobi .word{display:none}
+.kobi .accroche{position:absolute;inset:0;pointer-events:none}
+.kobi .accroche>*{pointer-events:auto}
 @keyframes kobi-word-breathe{0%,100%{scale:1}50%{scale:1.03 .98}}
 @keyframes kobi-bob{0%,100%{translate:0 0}50%{translate:0 -7px}}
 .kobi .ch{position:relative;display:inline-block;white-space:pre;color:transparent;-webkit-text-stroke-color:transparent;font-variation-settings:"wght" 350,"CASL" 0;animation:kobi-bob 1.8s ease-in-out var(--d,0s) infinite}

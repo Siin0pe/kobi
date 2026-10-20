@@ -148,11 +148,11 @@ test('repos économe : une scène de la veille se joue à 60 images/s, les boucl
   await expect(stage).toHaveAttribute('data-geste', '');
   // Le geste (animations Web de la scène) tourne librement…
   expect(await page.evaluate(() => document.querySelector('.kobi')!.getAnimations({ subtree: true }).filter((a) => !(a instanceof CSSAnimation) && a.playState === 'running').length)).toBeGreaterThan(0);
-  // … mais le métronome tient toujours les boucles de fond : l'ondulation de la
-  // police ne repart pas à 60 images/s (c'est elle qui coûte, KOB-170).
+  // … mais le métronome tient toujours les boucles de fond : la respiration
+  // ne repart pas à 60 images/s (KOB-170).
   await expect(stage).toHaveAttribute('data-fps', '3');
   const vagues = await page.evaluate(() =>
-    document.querySelector('.kobi')!.getAnimations({ subtree: true }).filter((a) => a instanceof CSSAnimation && a.animationName === 'kobi-fin').map((a) => a.playState),
+    document.querySelector('.kobi')!.getAnimations({ subtree: true }).filter((a) => a instanceof CSSAnimation && a.animationName === 'kobi-breathe').map((a) => a.playState),
   );
   expect(vagues.length).toBeGreaterThan(0);
   expect(new Set(vagues)).toEqual(new Set(['paused']));

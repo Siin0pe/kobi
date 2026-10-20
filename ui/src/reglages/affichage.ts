@@ -21,6 +21,7 @@ const GROUPES: [
   Groupe<'position'>,
   Groupe<'texte'>,
   Groupe<'delai'>,
+  Groupe<'etat'>,
 ] = [
   {
     cle: 'mode',
@@ -80,6 +81,15 @@ const GROUPES: [
       { valeur: 30, titre: 'Après 30 s', detail: '' },
       { valeur: 60, titre: 'Après 1 min', detail: '' },
       { valeur: 0, titre: 'Jamais toute seule', detail: '' },
+    ],
+  },
+  {
+    cle: 'etat',
+    titre: 'Afficher l’état en texte',
+    aide: 'Le petit mot sous Kobi quand il travaille ; au repos et en réunion, il n’y en a pas.',
+    options: [
+      { valeur: 'texte', titre: 'Oui', detail: '« j’écoute… », « je réfléchis… », « je rédige… »' },
+      { valeur: 'aucun', titre: 'Non', detail: 'Kobi seul, son visage dit tout.' },
     ],
   },
 ];

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { expectEconomicalFont, expectNoErrors, openUi } from './helpers';
+import { expectEconomicalLoops, expectNoErrors, openUi } from './helpers';
 
 const STATES = ['idle', 'listen', 'think', 'write', 'answer', 'suggest', 'done', 'error', 'work'] as const;
 
@@ -45,7 +45,8 @@ test('chaque état a un libellé pour les lecteurs d’écran', async ({ page })
   }
   expect(spoken.size).toBe(STATES.length);
   // Le dessin de la mascotte (symboles brouillés…) est masqué aux lecteurs d'écran.
-  await expect(page.locator('.kobi')).toHaveAttribute('aria-hidden', 'true');
+  await expect(page.locator('.kobi .gaze')).toHaveAttribute('aria-hidden', 'true');
+  await expect(page.locator('.kobi .word')).toHaveAttribute('aria-hidden', 'true');
   await expect(live).toHaveAttribute('aria-live', 'polite');
   await expectNoErrors(errors);
 });
@@ -79,7 +80,7 @@ for (const state of ['idle', 'think', 'answer', 'listen'] as const) {
   });
 }
 
-test('économie d’énergie : après 20 s de veille, sommeil profond, le mot ondule lentement, au pas du métronome', async ({ page }) => {
+test('économie d’énergie : après 20 s de veille, sommeil profond, Kobi respire au pas du métronome', async ({ page }) => {
   await page.clock.install();
   const errors = await openUi(page, '');
   // Économie d'énergie activée (KOB-200) : l'ancien repos économe.
@@ -89,13 +90,12 @@ test('économie d’énergie : après 20 s de veille, sommeil profond, le mot on
   await expect(kobi).not.toHaveClass(/deep/);
   await page.clock.runFor(2_000);
   await expect(kobi).toHaveClass(/deep/);
-  // Le mot vit toujours (exigence « toujours animé »), mais par paliers et lentement.
+  // Kobi vit toujours (exigence « toujours animé »), mais par paliers.
   await page.clock.runFor(1_500);
-  // Animations CSS de la police : en temps réel, hors de l'horloge simulée.
-  await page.waitForTimeout(1_400);
-  await expectEconomicalFont(page);
-  // La respiration continue.
-  expect(await page.locator('.kobi .pill').evaluate((n) => n.getAnimations().length)).toBe(1);
+  await expectEconomicalLoops(page);
+  // Il respire, sans mot sous la tête (KOB-204).
+  expect(await page.locator('.kobi .pill').evaluate((n) => (n.getAnimations()[0] as CSSAnimation).animationName)).toBe('kobi-breathe');
+  await expect(page.locator('.kobi .word')).toBeHidden();
   // Le moindre changement d'état réveille Kobi.
   await page.evaluate(() => window.kobi.setState('listen', window.kobi.demoData('listen')));
   await expect(kobi).not.toHaveClass(/deep/);
@@ -126,10 +126,10 @@ test('économie d’énergie en réunion : tout bouge encore, au rythme d’un s
       return w.loops.map((a) => ({ name: (a as CSSAnimation).animationName, state: a.playState, t: Number(a.currentTime) }));
     });
   const before = await loops();
-  // Le mot, la pilule, l'anneau bougent toujours ; l'étiquette REC et la fiche,
+  // La pilule, l'anneau bougent toujours (plus de mot en réunion, KOB-204) ; l'étiquette REC et la fiche,
   // cliquables, restent immobiles, mais leur point rouge (clignote, onde), leur
   // surtitre, leur libellé et le crayon vivent…
-  for (const name of ['kobi-fin', 'kobi-gras', 'kobi-bob', 'kobi-scribble', 'kobi-rec', 'rec-blink', 'rec-onde', 'kicker-bob', 'crayon-gratte']) {
+  for (const name of ['kobi-scribble', 'kobi-rec', 'rec-blink', 'rec-onde', 'kicker-bob', 'crayon-gratte']) {
     expect(before.map((a) => a.name)).toContain(name);
   }
   // … mais aucune ne produit d'image d'elle-même : le métronome les fait avancer ensemble.
