@@ -13,6 +13,44 @@ pub trait Sortie {
 
 /// Pas de temps pour suivre la lecture et l'arrêt.
 const PAS: Duration = Duration::from_millis(20);
+/// Marge au-delà de la durée du son : un flux qui ne consomme plus (casque
+/// débranché) rend la main au lieu de bloquer la voix (KOB-235).
+#[cfg(feature = "lecture")]
+const MARGE: Duration = Duration::from_secs(2);
+
+/// Attend que la carte son ait tout joué (`file` vide), l'arrêt, une panne
+/// du flux ou l'échéance. Arrêt : la file est vidée, sans erreur. Panne ou
+/// échéance : la file est vidée et la voix est en erreur.
+#[cfg(any(feature = "lecture", test))]
+pub(crate) fn attendre_lecture(
+    file: &std::sync::Mutex<std::collections::VecDeque<f32>>,
+    arret: &Arret,
+    panne: &std::sync::atomic::AtomicBool,
+    echeance: Instant,
+) -> Resultat<()> {
+    use std::sync::atomic::Ordering;
+    loop {
+        let vider = || file.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        if arret.arrete() {
+            vider();
+            return Ok(());
+        }
+        if file.lock().unwrap_or_else(|e| e.into_inner()).is_empty() {
+            return Ok(());
+        }
+        if panne.load(Ordering::SeqCst) {
+            vider();
+            return Err(Erreur::Sortie("la sortie audio s'est arrêtée".into()));
+        }
+        if Instant::now() >= echeance {
+            vider();
+            return Err(Erreur::Sortie(
+                "la sortie audio ne joue plus (débranchée ?)".into(),
+            ));
+        }
+        std::thread::sleep(PAS);
+    }
+}
 
 /// Écrit la voix dans un WAV mono 16 bits, au rythme où elle serait jouée
 /// (l'interruption coupe le fichier au même endroit qu'un haut-parleur).
@@ -93,6 +131,9 @@ mod haut_parleur {
     pub struct HautParleur {
         _flux: cpal::Stream,
         file: Arc<Mutex<VecDeque<f32>>>,
+        /// Levé par le flux en erreur (sortie débranchée) : plus rien ne se
+        /// joue, la voix rend la main tout de suite (KOB-235).
+        panne: Arc<std::sync::atomic::AtomicBool>,
         frequence: u32,
         canaux: usize,
         pub description: String,
@@ -136,17 +177,19 @@ mod haut_parleur {
             let canaux = config.channels() as usize;
             let description = format!("{} ({} Hz, {} canaux)", nom_de(&device), frequence, canaux);
             let file = Arc::new(Mutex::new(VecDeque::<f32>::new()));
+            let panne = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let flux = match config.sample_format() {
-                cpal::SampleFormat::F32 => construire::<f32>(&device, &config, &file),
-                cpal::SampleFormat::I16 => construire::<i16>(&device, &config, &file),
-                cpal::SampleFormat::U16 => construire::<u16>(&device, &config, &file),
-                cpal::SampleFormat::I32 => construire::<i32>(&device, &config, &file),
+                cpal::SampleFormat::F32 => construire::<f32>(&device, &config, &file, &panne),
+                cpal::SampleFormat::I16 => construire::<i16>(&device, &config, &file, &panne),
+                cpal::SampleFormat::U16 => construire::<u16>(&device, &config, &file, &panne),
+                cpal::SampleFormat::I32 => construire::<i32>(&device, &config, &file, &panne),
                 autre => Err(Erreur::Sortie(format!("format {autre:?} non géré"))),
             }?;
             flux.play().map_err(|e| Erreur::Sortie(e.to_string()))?;
             Ok(Self {
                 _flux: flux,
                 file,
+                panne,
                 frequence,
                 canaux,
                 description,
@@ -166,11 +209,13 @@ mod haut_parleur {
         device: &cpal::Device,
         config: &cpal::SupportedStreamConfig,
         file: &Arc<Mutex<VecDeque<f32>>>,
+        panne: &Arc<std::sync::atomic::AtomicBool>,
     ) -> Resultat<cpal::Stream>
     where
         T: cpal::SizedSample + cpal::FromSample<f32>,
     {
         let lue = Arc::clone(file);
+        let panne = Arc::clone(panne);
         device
             .build_output_stream::<T, _, _>(
                 config.config(),
@@ -180,7 +225,13 @@ mod haut_parleur {
                         *x = T::from_sample(file.pop_front().unwrap_or(0.0));
                     }
                 },
-                |e| tracing::warn!(erreur = %e, "sortie audio"),
+                move |e| {
+                    tracing::warn!(erreur = %e, "sortie audio");
+                    // Sortie disparue (casque débranché) : plus rien ne se joue.
+                    if e.kind() == cpal::ErrorKind::DeviceNotAvailable {
+                        panne.store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+                },
                 None,
             )
             .map_err(|e| Erreur::Sortie(e.to_string()))
@@ -188,30 +239,24 @@ mod haut_parleur {
 
     impl Sortie for HautParleur {
         fn jouer(&mut self, echantillons: &[f32], frequence: u32, arret: &Arret) -> Resultat<()> {
+            if self.panne.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(Erreur::Sortie("la sortie audio s'est arrêtée".into()));
+            }
             let son = super::reechantillonner(echantillons, frequence, self.frequence);
-            {
+            let echeance = {
                 let mut file = self.file.lock().unwrap_or_else(|e| e.into_inner());
                 for x in son {
                     for _ in 0..self.canaux {
                         file.push_back(x);
                     }
                 }
-            }
-            loop {
-                if arret.arrete() {
-                    self.file.lock().unwrap_or_else(|e| e.into_inner()).clear();
-                    return Ok(());
-                }
-                if self
-                    .file
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .is_empty()
-                {
-                    return Ok(());
-                }
-                std::thread::sleep(PAS);
-            }
+                // Tout ce qui est en file, plus une marge (KOB-235).
+                let en_file = file.len() / self.canaux.max(1);
+                Instant::now()
+                    + Duration::from_secs_f64(en_file as f64 / self.frequence as f64)
+                    + MARGE
+            };
+            attendre_lecture(&self.file, arret, &self.panne, echeance)
         }
     }
 }
@@ -238,6 +283,37 @@ pub fn reechantillonner(x: &[f32], de: u32, vers: u32) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// KOB-235 : une sortie qui ne consomme plus (casque débranché) rend la
+    /// main en erreur à l'échéance, la file vidée ; une panne signalée, tout
+    /// de suite ; l'arrêt, sans erreur.
+    #[test]
+    fn la_voix_ne_reste_pas_bloquee_sur_une_sortie_qui_ne_joue_plus() {
+        use std::collections::VecDeque;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Mutex;
+        let file = Mutex::new(VecDeque::from(vec![0.1f32; 48_000]));
+        let panne = AtomicBool::new(false);
+        let arret = Arret::default();
+        let debut = Instant::now();
+        let r = attendre_lecture(&file, &arret, &panne, debut + Duration::from_millis(300));
+        assert!(matches!(r, Err(Erreur::Sortie(_))), "{r:?}");
+        assert!(debut.elapsed() < Duration::from_secs(2));
+        assert!(file.lock().unwrap().is_empty());
+        // Panne levée par le flux : en erreur sans attendre l'échéance.
+        file.lock().unwrap().extend([0.1; 480]);
+        panne.store(true, Ordering::SeqCst);
+        let debut = Instant::now();
+        let loin = debut + Duration::from_secs(60);
+        assert!(attendre_lecture(&file, &arret, &panne, loin).is_err());
+        assert!(debut.elapsed() < Duration::from_millis(200));
+        // Arrêt demandé : la file est vidée, sans erreur.
+        panne.store(false, Ordering::SeqCst);
+        file.lock().unwrap().extend([0.1; 480]);
+        arret.arreter();
+        assert!(attendre_lecture(&file, &arret, &panne, loin).is_ok());
+        assert!(file.lock().unwrap().is_empty());
+    }
 
     #[test]
     fn reechantillonnage() {
