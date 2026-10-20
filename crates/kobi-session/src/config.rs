@@ -457,6 +457,41 @@ impl<'de> Deserialize<'de> for Fps {
     }
 }
 
+/// Langue de l'interface (KOB-207).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Langue {
+    Fr,
+    En,
+}
+
+impl Langue {
+    /// Les langues proposées, dans l'ordre du choix.
+    pub const TOUTES: [Langue; 2] = [Langue::Fr, Langue::En];
+
+    /// Code de la langue (`fr`, `en`), celui des fichiers de traduction.
+    pub fn code(self) -> &'static str {
+        match self {
+            Langue::Fr => "fr",
+            Langue::En => "en",
+        }
+    }
+
+    pub fn depuis_code(code: &str) -> Option<Langue> {
+        Self::TOUTES.into_iter().find(|l| l.code() == code)
+    }
+}
+
+/// `[ui]` (KOB-207) : la langue de l'interface ; absente, celle du système.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UiConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<Langue>,
+    #[serde(flatten)]
+    pub extra: toml::Table,
+}
+
 /// `[animations]` (KOB-200) : cadence de tout ce qui bouge, et économie
 /// d'énergie au repos prolongé (l'ancien repos économe de KOB-146).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -514,6 +549,7 @@ pub struct Config {
     pub permissions: PermissionsConfig,
     /// Images par seconde et économie d'énergie (KOB-200).
     pub animations: AnimationsConfig,
+    pub ui: UiConfig,
     /// Clés inconnues, conservées telles quelles à l'écriture.
     #[serde(flatten)]
     pub extra: toml::Table,
@@ -540,6 +576,7 @@ impl Default for Config {
             mcp: crate::mcp::McpConfig::default(),
             permissions: PermissionsConfig::default(),
             animations: AnimationsConfig::default(),
+            ui: UiConfig::default(),
             extra: toml::Table::new(),
         }
     }

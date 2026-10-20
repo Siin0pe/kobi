@@ -32,6 +32,13 @@ function fakeTauri(o: Options): void {
     return d;
   };
   let mcp: unknown[] = [];
+  // Langue de l'interface (KOB-207) : celle du système tant qu'on n'a rien choisi.
+  let langue: string | null = null;
+  // Comme `kobi config set ui.language …` : changée hors de la fenêtre.
+  (window as unknown as Record<string, unknown>).__langueDehors = (l: string | null) => {
+    langue = l;
+    for (const h of listeners.langue ?? []) h({ payload: l });
+  };
   let sonOrdi = false;
   let modele = o.modele ? '/home/neuf/Kobi/models/sherpa-onnx-nemotron' : null;
   const absente = (cmd: string) => {
@@ -105,6 +112,12 @@ function fakeTauri(o: Options): void {
             return mcp;
           case 'raccourcis':
             return { parler: 'Ctrl+Shift+Space', reunion: 'Ctrl+Shift+R', ecrire: 'Ctrl+Alt+K', agrandir: 'Ctrl+Alt+G' };
+          case 'langue_ui':
+            return langue;
+          case 'regler_langue_ui':
+            langue = (args.langue as string | null) ?? null;
+            for (const h of listeners.langue ?? []) h({ payload: langue });
+            return langue;
           case 'terminer_bienvenue':
           case 'ouvrir_bienvenue':
             return null;
@@ -150,8 +163,12 @@ test('Kobi se présente, puis le parcours complet mène à « C’est parti »',
   await expect(etape(page, 'modele').locator('.etape-resume')).toHaveText('à télécharger');
 
   await page.getByRole('button', { name: 'On y va' }).click();
-  // 1. Claude Code.
-  await expect(page.locator('.surtitre')).toHaveText('Étape 1 sur 9');
+  // 1. Langue (KOB-207) : celle du système par défaut.
+  await expect(page.locator('.surtitre')).toHaveText('Étape 1 sur 10');
+  await expect(page.getByRole('radio', { name: /Celle du système/ })).toHaveAttribute('aria-checked', 'true');
+  await page.getByRole('button', { name: 'Suivant' }).click();
+  // 2. Claude Code.
+  await expect(page.locator('.surtitre')).toHaveText('Étape 2 sur 10');
   await expect(page.locator('.etat[data-statut="ok"]')).toContainText('Claude Code 2.1.302 est installé et connecté.');
   await page.getByRole('button', { name: 'Suivant' }).click();
   // 2. Micro.
@@ -215,6 +232,8 @@ test('Kobi se présente, puis le parcours complet mène à « C’est parti »',
 test('Claude non connecté : la marche à suivre, puis revérifier', async ({ page }) => {
   const errors = await ouvrir(page, { claude: 'non-connecte' });
   await page.getByRole('button', { name: 'On y va' }).click();
+  // L'étape Langue (KOB-207) vient d'abord.
+  await page.getByRole('button', { name: 'Suivant' }).click();
   await expect(page.locator('.etat[data-statut="attention"]')).toContainText('pas connecté');
   await expect(page.locator('.etat code')).toHaveText('claude auth login');
   await expect(etape(page, 'claude')).toHaveAttribute('data-statut', 'attention');
@@ -236,7 +255,7 @@ test('une commande absente : l’étape le dit et ne bloque pas le parcours', as
   await page.getByRole('button', { name: 'Suivant' }).click();
   await expect(page.getByRole('switch')).toHaveAttribute('aria-checked', 'true');
   // La fin ne liste que ce qui est à revoir : « en attente » n'en fait pas partie.
-  await page.evaluate(() => window.bienvenue.aller(10));
+  await page.evaluate(() => window.bienvenue.aller(11));
   await expect(page.locator('.panneau')).toContainText('Tout est en ordre.');
   await expectNoErrors(errors);
 });
@@ -283,14 +302,14 @@ test('la section Réglages montre l’état sans rien activer d’office', async
 test('essai sans rien entendu : Kobi le dit et propose le raccourci', async ({ page }) => {
   await page.clock.install();
   const errors = await ouvrir(page, { dependances: true, modele: true });
-  await page.evaluate(() => window.bienvenue.aller(8));
+  await page.evaluate(() => window.bienvenue.aller(9));
   await expect(page.locator('.essai-etat')).toContainText('J’écoute…');
   await page.clock.runFor(21_000);
   await expect(page.locator('.essai-etat')).toContainText('Je n’ai rien entendu.');
   await expect(page.locator('.essai-etat .touches')).toHaveAttribute('aria-label', 'Ctrl + Maj + Espace');
   await expect(etape(page, 'essai')).toHaveAttribute('data-statut', 'attention');
   // À la fin, l'essai est listé à revoir.
-  await page.evaluate(() => window.bienvenue.aller(10));
+  await page.evaluate(() => window.bienvenue.aller(11));
   await expect(page.locator('.a-revoir')).toContainText('Essai');
   await expectNoErrors(errors);
 });
@@ -347,17 +366,63 @@ test('dossier de projets : Kobi liste ses dépôts, on coche ceux qu’il lit (K
 test('étape lente quittée avant sa réponse : elle n’écrit pas dans l’étape suivante (KOB-232)', async ({ page }) => {
   const errors = await ouvrir(page, { dependances: true, microsLent: true });
   await page.getByRole('button', { name: 'On y va' }).click();
-  await expect(page.locator('.surtitre')).toHaveText('Étape 1 sur 9');
+  await expect(page.locator('.surtitre')).toHaveText('Étape 1 sur 10');
   await page.getByRole('button', { name: 'Suivant' }).click();
-  await expect(page.locator('.surtitre')).toHaveText('Étape 2 sur 9');
+  await expect(page.locator('.surtitre')).toHaveText('Étape 2 sur 10');
+  await page.getByRole('button', { name: 'Suivant' }).click();
+  await expect(page.locator('.surtitre')).toHaveText('Étape 3 sur 10');
   // « Suivant » avant que les micros soient listés.
   await page.getByRole('button', { name: 'Suivant' }).click();
-  await expect(page.locator('.surtitre')).toHaveText('Étape 3 sur 9');
+  await expect(page.locator('.surtitre')).toHaveText('Étape 4 sur 10');
   const sonOrdi = page.getByRole('switch', { name: 'Écouter aussi le son de l’ordinateur' });
   await expect(sonOrdi).toBeVisible();
   // La réponse de `micros` arrive : l'étape 3 garde son contenu.
   await page.waitForTimeout(1500);
   await expect(sonOrdi).toBeVisible();
   await expect(page.getByRole('radio', { name: /Casque USB/ })).toHaveCount(0);
+  await expectNoErrors(errors);
+});
+
+test('langue (KOB-207) : choisir English traduit l’accueil et le panneau Langue sans relancer, puis retour au français', async ({ page }) => {
+  const errors = await ouvrir(page, { dependances: true });
+  await page.getByRole('button', { name: 'On y va' }).click();
+  await expect(page.locator('.titre')).toHaveText('Langue');
+  await page.getByRole('radio', { name: 'English', exact: true }).click();
+  expect(await appels(page)).toContainEqual(['regler_langue_ui', { langue: 'en' }]);
+  await expect(page.locator('.titre')).toHaveText('Language');
+  await expect(page.locator('.surtitre')).toHaveText('Step 1 of 10');
+  await expect(page.getByRole('radio', { name: 'English', exact: true })).toHaveAttribute('aria-checked', 'true');
+  await expect(page.getByRole('button', { name: 'Next' })).toBeVisible();
+  await expect(page.locator('html')).toHaveAttribute('lang', 'en');
+  await expect(etape(page, 'langue').locator('.etape-titre')).toHaveText('Language');
+  // L'accueil aussi.
+  await page.getByRole('button', { name: 'Back' }).click();
+  await expect(page.locator('.titre')).toHaveText('Hi, I’m Kobi.');
+  await expect(page.getByRole('button', { name: 'Let’s go' })).toBeVisible();
+  await page.getByRole('button', { name: 'Let’s go' }).click();
+  await page.getByRole('radio', { name: 'Français', exact: true }).click();
+  await expect(page.locator('.titre')).toHaveText('Langue');
+  await expect(page.locator('.surtitre')).toHaveText('Étape 1 sur 10');
+  await expectNoErrors(errors);
+});
+
+test('langue (KOB-207) : dans les Réglages, English traduit le panneau, son titre et le menu', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(String(e)));
+  await page.addInitScript(fakeTauri, { dependances: true });
+  await page.setViewportSize({ width: 900, height: 640 });
+  await page.goto('/app.html#reglages/langue');
+  await expect(page.locator('.feuille .titre')).toHaveText('Langue');
+  await page.getByRole('radio', { name: 'English', exact: true }).click();
+  await expect(page.locator('.feuille .titre')).toHaveText('Language');
+  await expect(page.locator('.menu-entree[data-panneau="langue"] .menu-titre')).toHaveText('Language');
+  await expect(page.getByRole('radio', { name: /Same as the system/ })).toHaveAttribute('aria-checked', 'false');
+  // `kobi config set ui.language …` : changée hors de la fenêtre, le choix coché suit.
+  await page.evaluate(() => (window as unknown as { __langueDehors: (l: string | null) => void }).__langueDehors(null));
+  await expect(page.locator('.feuille .titre')).toHaveText('Langue');
+  await expect(page.getByRole('radio', { name: /Celle du système/ })).toHaveAttribute('aria-checked', 'true');
+  await page.evaluate(() => (window as unknown as { __langueDehors: (l: string | null) => void }).__langueDehors('en'));
+  await expect(page.locator('.feuille .titre')).toHaveText('Language');
+  await expect(page.getByRole('radio', { name: 'English', exact: true })).toHaveAttribute('aria-checked', 'true');
   await expectNoErrors(errors);
 });

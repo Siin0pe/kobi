@@ -143,6 +143,7 @@ pub const PANNEAUX: &[&str] = &[
     "modele",
     "claude",
     "demarrage",
+    "langue",
     "animations",
     "affichage",
     "raccourcis",

@@ -28,7 +28,9 @@ export default defineConfig({
     trace: process.env.KOBI_PW_TRACE ? 'retain-on-failure' : 'off',
     video: 'off',
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'], viewport: { width: 820, height: 560 } } }],
+  // Navigateur en français, comme l'ordinateur du propriétaire : l'interface
+  // suit la langue du système quand `ui.language` n'est pas réglée (KOB-207).
+  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'], viewport: { width: 820, height: 560 }, locale: 'fr-FR' } }],
   webServer: {
     command: `npm run build && npx vite preview --host 127.0.0.1 --port ${PORT} --strictPort`,
     url: `http://127.0.0.1:${PORT}`,

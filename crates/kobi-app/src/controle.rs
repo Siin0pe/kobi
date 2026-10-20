@@ -823,6 +823,11 @@ fn regler<R: Runtime>(
             _ => {}
         }
     }
+    // Langue de l'interface (KOB-207) : toutes les fenêtres se traduisent.
+    if cle == "ui.language" {
+        crate::langue::annoncer(app, m.config.ui.language);
+        application = Application::AChaud;
+    }
     // Combien Kobi parle (KOB-215) : à chaud, déjà écrit dans config.toml.
     if cle == "voice.verbosite" && app.try_state::<crate::voix::Voix>().is_some() {
         crate::voix::regler_verbosite(app, m.config.voice.verbosite, false);

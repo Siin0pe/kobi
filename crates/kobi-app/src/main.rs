@@ -20,9 +20,11 @@ mod ecoute;
 mod ecrivain;
 #[cfg(test)]
 mod essai_pilotage;
+mod i18n;
 mod instance;
 mod intentions;
 mod interpellation;
+mod langue;
 mod lecture;
 mod mcp;
 mod mcp_config;

@@ -1,0 +1,21 @@
+{
+  "langue.titre": "Language",
+  "langue.sousTitre": "Kobi's language: windows, menus and messages.",
+  "langue.aide": "Claude still answers in the language you speak to it.",
+  "langue.choisie": "Language: {nom}",
+  "langue.systeme": "Same as the system",
+  "langue.systemeDetail": "Kobi follows the computer's language ({nom}).",
+  "commun.minutes": {
+    "one": "{n} minute",
+    "other": "{n} minutes"
+  },
+  "nav.retour": "Back",
+  "nav.suivant": "Next",
+  "nav.terminer": "Finish",
+  "accueil.premierLancement": "First launch",
+  "accueil.etape": "Step {n} of {total}",
+  "accueil.salut": "Hi, I’m Kobi.",
+  "accueil.bulle": "I listen on this computer, I answer with your Claude Code, and for now I only read your code.",
+  "accueil.intro": "We’ll set up {n} small things together, it takes two minutes. Everything can be changed later in the settings.",
+  "accueil.onYVa": "Let’s go"
+}

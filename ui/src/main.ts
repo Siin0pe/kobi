@@ -7,6 +7,7 @@ import { isMascotState, STATES, type MascotData, type MascotState } from './stat
 import { demoData, playDemo } from './demo';
 import { command, enableWindowDrag, followSession, tauri, type Command, type SessionState } from './native';
 import { installerTraversee } from './traversee';
+import { initLangue } from './i18n';
 import { KobiMenu } from './menu';
 import { applyRecording, type RecordingState } from './recording';
 import { relierNotes } from './notes-lien';
@@ -29,6 +30,9 @@ import './styles/activite.css';
 import './styles/menu.css';
 import './styles/reponse.css';
 import './styles/vue.css';
+
+// Langue de l'interface (KOB-207) : `lang` de la page, suivie à chaud.
+void initLangue();
 
 const params = new URLSearchParams(location.search);
 

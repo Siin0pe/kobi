@@ -1,0 +1,21 @@
+{
+  "langue.titre": "Langue",
+  "langue.sousTitre": "La langue de Kobi : fenêtres, menus et messages.",
+  "langue.aide": "Les réponses de Claude restent dans la langue où tu lui parles.",
+  "langue.choisie": "Langue : {nom}",
+  "langue.systeme": "Celle du système",
+  "langue.systemeDetail": "Kobi suit la langue de l’ordinateur ({nom}).",
+  "commun.minutes": {
+    "one": "{n} minute",
+    "other": "{n} minutes"
+  },
+  "nav.retour": "Retour",
+  "nav.suivant": "Suivant",
+  "nav.terminer": "Terminer",
+  "accueil.premierLancement": "Premier lancement",
+  "accueil.etape": "Étape {n} sur {total}",
+  "accueil.salut": "Salut, moi c’est Kobi.",
+  "accueil.bulle": "Je t’écoute sur cet ordinateur, je réponds avec ton Claude Code, et pour l’instant je ne fais que lire ton code.",
+  "accueil.intro": "On règle {n} petites choses ensemble, ça prend deux minutes. Tout se retrouve ensuite dans les réglages.",
+  "accueil.onYVa": "On y va"
+}
