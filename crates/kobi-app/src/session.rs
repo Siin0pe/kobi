@@ -303,6 +303,8 @@ pub fn installer<R: Runtime>(builder: Builder<R>) -> Builder<R> {
             crate::bienvenue::annuler_telechargement,
             crate::notes::notes_en_cours,
             crate::notes::basculer_notes,
+            // Transcription brute en direct, pour la mise au point (KOB-50).
+            crate::transcription_brute::suivre_transcription,
             crate::menu::menu_kobi,
             crate::menu_souris::ouvrir_menu,
             crate::menu_souris::montrer_menu,

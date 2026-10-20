@@ -398,8 +398,11 @@ button {
 .vue-rappels .vide {
   color: var(--muted);
 }
-/* Section En direct : la fiche des notes, centrée. */
+/* Section En direct : la fiche des notes, centrée ; dessous, la
+   transcription brute quand elle est ouverte (KOB-50). */
 .vue-direct {
+  display: flex;
+  flex-direction: column;
   padding: 22px 28px 28px;
   box-sizing: border-box;
   background:
