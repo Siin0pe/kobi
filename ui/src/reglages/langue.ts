@@ -69,6 +69,17 @@ export const LANGUE: Panneau = {
         dessiner();
       },
     );
-    return surLangue(() => dessiner());
+    // Changée ailleurs (autre fenêtre, `kobi config set ui.language`) : le
+    // choix coché suit la config.
+    return surLangue(() => {
+      dessiner();
+      reglee().then(
+        (l) => {
+          choix = l;
+          dessiner();
+        },
+        () => {},
+      );
+    });
   },
 };

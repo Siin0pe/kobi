@@ -34,6 +34,11 @@ function fakeTauri(o: Options): void {
   let mcp: unknown[] = [];
   // Langue de l'interface (KOB-207) : celle du système tant qu'on n'a rien choisi.
   let langue: string | null = null;
+  // Comme `kobi config set ui.language …` : changée hors de la fenêtre.
+  (window as unknown as Record<string, unknown>).__langueDehors = (l: string | null) => {
+    langue = l;
+    for (const h of listeners.langue ?? []) h({ payload: l });
+  };
   let sonOrdi = false;
   let modele = o.modele ? '/home/neuf/Kobi/models/sherpa-onnx-nemotron' : null;
   const absente = (cmd: string) => {
@@ -412,7 +417,12 @@ test('langue (KOB-207) : dans les Réglages, English traduit le panneau, son tit
   await expect(page.locator('.feuille .titre')).toHaveText('Language');
   await expect(page.locator('.menu-entree[data-panneau="langue"] .menu-titre')).toHaveText('Language');
   await expect(page.getByRole('radio', { name: /Same as the system/ })).toHaveAttribute('aria-checked', 'false');
-  // `kobi config set ui.language null` : retour à la langue du système (ici, le français du navigateur de test).
-  await page.evaluate(() => (window as unknown as { __emit?: (e: string, p: unknown) => void }).__emit?.('langue', null));
+  // `kobi config set ui.language …` : changée hors de la fenêtre, le choix coché suit.
+  await page.evaluate(() => (window as unknown as { __langueDehors: (l: string | null) => void }).__langueDehors(null));
+  await expect(page.locator('.feuille .titre')).toHaveText('Langue');
+  await expect(page.getByRole('radio', { name: /Celle du système/ })).toHaveAttribute('aria-checked', 'true');
+  await page.evaluate(() => (window as unknown as { __langueDehors: (l: string | null) => void }).__langueDehors('en'));
+  await expect(page.locator('.feuille .titre')).toHaveText('Language');
+  await expect(page.getByRole('radio', { name: 'English', exact: true })).toHaveAttribute('aria-checked', 'true');
   await expectNoErrors(errors);
 });
