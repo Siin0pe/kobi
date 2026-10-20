@@ -90,7 +90,10 @@ pub fn nom_de_dossier(date: Date, titre: Option<&str>) -> String {
 #[derive(Debug)]
 pub struct Reunion {
     dossier: PathBuf,
-    transcript: File,
+    /// Fermée le temps d'un renommage du dossier ([`Reunion::deplacer`]) :
+    /// sous Windows, un dossier qui contient un fichier ouvert ne se renomme
+    /// pas.
+    transcript: Option<File>,
 }
 
 impl Reunion {
@@ -136,8 +139,64 @@ impl Reunion {
         }
         Ok(Self {
             dossier,
-            transcript,
+            transcript: Some(transcript),
         })
+    }
+
+    /// Renomme le dossier d'après `titre` (`AAAA-MM-JJ-titre`, suffixe `-2`,
+    /// `-3`… si le nom est pris), sans perdre l'écriture en cours : la
+    /// transcription est refermée, le dossier déplacé, puis la transcription
+    /// rouverte en ajout. Renvoie l'ancien nom s'il a changé.
+    pub fn deplacer(&mut self, titre: &str) -> io::Result<Option<String>> {
+        let ancien = self.nom().to_owned();
+        let Some(date) = ancien
+            .get(..10)
+            .filter(|d| Date::depuis_nom_de_dossier(d).is_some())
+        else {
+            return Ok(None);
+        };
+        let base = format!("{date}-{}", nettoyer_titre(titre));
+        let suffixe_de_l_ancien = ancien.strip_prefix(&base).is_some_and(|reste| {
+            reste.is_empty()
+                || reste
+                    .strip_prefix('-')
+                    .is_some_and(|n| n.parse::<u32>().is_ok())
+        });
+        if suffixe_de_l_ancien {
+            return Ok(None);
+        }
+        let parent = self
+            .dossier
+            .parent()
+            .map(Path::to_path_buf)
+            .ok_or_else(|| io::Error::other("dossier de réunion sans parent"))?;
+        if let Some(f) = self.transcript.take() {
+            f.sync_all()?;
+        }
+        let mut n = 1;
+        let resultat = loop {
+            let nom = if n == 1 {
+                base.clone()
+            } else {
+                format!("{base}-{n}")
+            };
+            let cible = parent.join(&nom);
+            if cible.exists() {
+                n += 1;
+                continue;
+            }
+            break fs::rename(&self.dossier, &cible).map(|()| cible);
+        };
+        let dossier = match resultat {
+            Ok(cible) => cible,
+            Err(e) => {
+                // Rien n'a bougé : la transcription repart là où elle était.
+                *self = Self::ouvrir(self.dossier.clone())?;
+                return Err(e);
+            }
+        };
+        *self = Self::ouvrir(dossier)?;
+        Ok(Some(ancien))
     }
 
     pub fn dossier(&self) -> &Path {
@@ -187,9 +246,13 @@ impl Reunion {
         }
         let mut ligne = serde_json::to_vec(segment).map_err(io::Error::other)?;
         ligne.push(b'\n');
+        if self.transcript.is_none() {
+            *self = Self::ouvrir(self.dossier.clone())?;
+        }
+        let transcript = self.transcript.as_mut().expect("transcription ouverte");
         // Un seul appel : la ligne est entière ou absente du fichier.
-        self.transcript.write_all(&ligne)?;
-        self.transcript.sync_data()?;
+        transcript.write_all(&ligne)?;
+        transcript.sync_data()?;
         Ok(true)
     }
 }
@@ -314,6 +377,8 @@ mod tests {
         let ligne = serde_json::to_string(&segment(3)).unwrap();
         reunion
             .transcript
+            .as_mut()
+            .unwrap()
             .write_all(&ligne.as_bytes()[..ligne.len() / 2])
             .unwrap();
         std::process::abort();

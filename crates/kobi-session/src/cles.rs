@@ -111,6 +111,11 @@ pub const CLES: &[(&str, Application, &str)] = &[
         "Conservation des réunions : 30, 90, 365 ou \"unlimited\".",
     ),
     (
+        "meetings.titre_auto",
+        AChaud,
+        "Titre de la réunion donné par Kobi d'après ce qui est dit au début.",
+    ),
+    (
         "conversations.retention_days",
         AuRedemarrage,
         "Conservation des conversations : 30, 90, 365 ou \"unlimited\".",

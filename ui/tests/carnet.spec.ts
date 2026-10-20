@@ -111,6 +111,18 @@ function fakeTauri(): void {
             if (args.genre === 'reunion') reunions.splice(0, 1);
             else conversations.splice(conversations.findIndex((c) => c.id === args.id), 1);
             return null;
+          case 'carnet_renommer': {
+            // Titre manuel (KOB-223) : le dossier d'une réunion suit son titre.
+            const titre = String(args.titre);
+            if (args.genre === 'reunion') {
+              const r = reunions.find((x) => x.nom === args.id)!;
+              r.titre = titre;
+              r.nom = `2026-10-18-${norm(titre).replace(/[^a-z0-9]+/g, '-')}`;
+              return r.nom;
+            }
+            (conversations.find((c) => c.id === args.id) as { titre?: string }).titre = titre;
+            return args.id;
+          }
           case 'carnet_rappel_fait':
             rappels.find((r) => r.id === args.id)!.fait = true;
             return true;
@@ -496,5 +508,44 @@ test('hors de Kobi, le Carnet le dit au lieu de planter', async ({ page }) => {
   await page.clock.pauseAt(Date.now() + 1000);
   await page.goto('/app.html#notes');
   await expect(page.locator('.notif', { hasText: 'Ouvrez le Carnet depuis Kobi.' })).toBeVisible();
+  await expectNoErrors(errors);
+});
+
+test('KOB-223 : le titre d’une réunion s’édite sur place (en-tête et liste), Entrée valide, Échap annule', async ({ page }) => {
+  const errors = await ouvrirCarnet(page);
+  await page.locator('.element[data-genre="reunion"]').click();
+  const titre = page.locator('.entete h1.titre');
+  await expect(titre).toHaveText('Point budget');
+
+  // Échap annule : rien n'est envoyé.
+  await titre.click();
+  const champ = page.locator('.entete .titre-champ');
+  await expect(champ).toBeFocused();
+  await expect(champ).toHaveValue('Point budget');
+  expect(await champ.evaluate((e: HTMLInputElement) => [e.selectionStart, e.selectionEnd])).toEqual([0, 'Point budget'.length]);
+  await champ.fill('Autre chose');
+  await champ.press('Escape');
+  await expect(titre).toHaveText('Point budget');
+  expect((await appels(page)).some(([c]) => c === 'carnet_renommer')).toBe(false);
+
+  // Entrée valide : retour visuel immédiat, puis la liste et la vue suivent le nouveau nom.
+  await page.locator('.entete .crayon').click();
+  await champ.fill('Budget du prototype');
+  await champ.press('Enter');
+  await expect(titre).toHaveText('Budget du prototype');
+  await expect(page.locator('.element[data-genre="reunion"] .element-titre')).toHaveText('Budget du prototype');
+  const renommer = (await appels(page)).filter(([c]) => c === 'carnet_renommer');
+  expect(renommer).toEqual([['carnet_renommer', { genre: 'reunion', id: '2026-10-18_point-budget', titre: 'Budget du prototype' }]]);
+  await expect(page.locator('.element[data-genre="reunion"]')).toHaveAttribute('data-id', '2026-10-18-budget-du-prototype');
+
+  // Depuis la liste : crayon au survol de la ligne.
+  const ligne = page.locator('.element-ligne[data-genre="conversation"]').first();
+  await ligne.hover();
+  await ligne.locator('.crayon').click();
+  const champListe = ligne.locator('.titre-champ');
+  await expect(champListe).toBeFocused();
+  await champListe.fill('Refresh token');
+  await champListe.press('Enter');
+  await expect(ligne.locator('.element-titre')).toHaveText('Refresh token');
   await expectNoErrors(errors);
 });

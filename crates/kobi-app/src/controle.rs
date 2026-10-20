@@ -291,6 +291,17 @@ pub fn executer<R: Runtime>(
         "meeting.pause" => reunion(app, Intention::Pause, origine),
         "meeting.resume" => reunion(app, Intention::Reprendre, origine),
         "meeting.status" => en_json(etat_reunion(app)),
+        "meeting.rename" => {
+            let titre = params["titre"].as_str().unwrap_or_default();
+            let nom = crate::carnet::renommer(
+                app,
+                crate::carnet::Genre::Reunion,
+                params["id"].as_str(),
+                titre,
+            )
+            .map_err(|e| erreur(Code::Conflict, &e))?;
+            Ok(json!({ "reunion": nom, "titre": titre.trim() }))
+        }
         "meetings.list" => {
             let mut l = stockage(app)?.reunions().map_err(io)?;
             l.truncate(limite(&params, 20));

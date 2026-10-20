@@ -368,6 +368,85 @@ pub fn fin_de_reunion_dite(question: &str) -> bool {
     FIN_DITE.contains(&q.as_str())
 }
 
+/// « Kobi, appelle cette réunion Budget 2027 » (KOB-223) : le titre donné à
+/// la main, tel qu'il a été dit. `None` si la phrase n'en donne pas.
+pub fn titre_de_reunion_dit(question: &str) -> Option<String> {
+    const DEBUTS: &[&str] = &[
+        "appelle cette reunion",
+        "appelle la reunion",
+        "nomme cette reunion",
+        "nomme la reunion",
+        "renomme cette reunion en",
+        "renomme cette reunion",
+        "renomme la reunion en",
+        "renomme la reunion",
+        "intitule cette reunion",
+        "intitule la reunion",
+        "le titre de la reunion c est",
+        "le titre de la reunion est",
+        "titre de la reunion",
+        "call this meeting",
+        "name this meeting",
+        "rename this meeting to",
+        "rename this meeting",
+    ];
+    // Même nombre de caractères que l'original : le titre se recopie tel quel.
+    let sans_accents: String = question
+        .chars()
+        .map(|c| {
+            let c = c.to_lowercase().next().unwrap_or(c);
+            match c {
+                'à' | 'â' | 'ä' => 'a',
+                'é' | 'è' | 'ê' | 'ë' => 'e',
+                'î' | 'ï' => 'i',
+                'ô' | 'ö' => 'o',
+                'ù' | 'û' | 'ü' => 'u',
+                'ç' => 'c',
+                '\'' | '’' | '-' | ',' => ' ',
+                c => c,
+            }
+        })
+        .collect();
+    let mut debut = 0;
+    let caracteres: Vec<char> = sans_accents.chars().collect();
+    let mots_depuis = |i: usize| -> String { caracteres[i..].iter().collect() };
+    // « Kobi » en tête (tapé au clavier) ne compte pas.
+    while debut < caracteres.len() && !caracteres[debut].is_alphanumeric() {
+        debut += 1;
+    }
+    if mots_depuis(debut).starts_with("kobi ") {
+        debut += 5;
+    }
+    while debut < caracteres.len() && !caracteres[debut].is_alphanumeric() {
+        debut += 1;
+    }
+    let reste = mots_depuis(debut);
+    let reste_norm = reste.split_whitespace().collect::<Vec<_>>().join(" ");
+    let motif = DEBUTS
+        .iter()
+        .find(|d| reste_norm.starts_with(&format!("{d} ")))?;
+    // Saute autant de mots que le motif en compte, dans l'original.
+    let a_sauter = motif.split(' ').count();
+    let original: Vec<char> = question.chars().collect();
+    let mut i = debut;
+    for _ in 0..a_sauter {
+        while i < caracteres.len() && caracteres[i].is_whitespace() {
+            i += 1;
+        }
+        while i < caracteres.len() && !caracteres[i].is_whitespace() {
+            i += 1;
+        }
+    }
+    let titre: String = original[i.min(original.len())..].iter().collect();
+    let titre = titre
+        .trim()
+        .trim_start_matches([':', '«', '"', ' '])
+        .trim_end_matches(['»', '"', '.', '!', ' '])
+        .trim();
+    let mots = titre.split_whitespace().count();
+    (1..=12).contains(&mots).then(|| titre.to_owned())
+}
+
 /// Intention de la question, s'il y en a une. Les ordres sont courts : au
 /// delà de 12 mots, c'est une question pour Claude.
 pub fn intention(question: &str) -> Option<Intention> {
@@ -425,6 +504,43 @@ pub fn intention(question: &str) -> Option<Intention> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// KOB-223 : « appelle cette réunion … » donne le titre tel qu'il est dit.
+    #[test]
+    fn titres_de_reunion_dits() {
+        for (texte, titre) in [
+            (
+                "Kobi, appelle cette réunion Budget du séminaire",
+                "Budget du séminaire",
+            ),
+            ("appelle la réunion « Point équipe ».", "Point équipe"),
+            ("renomme la réunion en Rétro du sprint", "Rétro du sprint"),
+            (
+                "Kobi, le titre de la réunion c'est lancement de la fusée",
+                "lancement de la fusée",
+            ),
+            (
+                "nomme cette réunion : Recrutement mobile",
+                "Recrutement mobile",
+            ),
+            ("call this meeting Q3 planning", "Q3 planning"),
+        ] {
+            assert_eq!(
+                titre_de_reunion_dit(texte).as_deref(),
+                Some(titre),
+                "{texte}"
+            );
+        }
+        for texte in [
+            "comment appelle-t-on cette réunion ?",
+            "appelle Paul après la réunion",
+            "appelle cette réunion",
+            "la réunion est terminée",
+            "",
+        ] {
+            assert_eq!(titre_de_reunion_dit(texte), None, "{texte}");
+        }
+    }
 
     /// KOB-203 : les fins de réunion dites en entier sont des ordres ; une
     /// mention dans une phrase plus longue n'en est pas un.

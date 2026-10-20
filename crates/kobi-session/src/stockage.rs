@@ -77,6 +77,69 @@ pub struct MetaReunion {
     /// Résultat de la publication par MCP, quand elle sera active.
     #[serde(default)]
     pub publication: Option<serde_json::Value>,
+    /// Titre donné par Kobi d'après ce qui a été dit (KOB-223) ; `false` pour
+    /// un titre donné à la main, que Kobi ne remplace jamais.
+    #[serde(default)]
+    pub titre_auto: bool,
+    /// Titres automatiques déjà donnés : au plus [`TITRES_AUTO_MAX`].
+    #[serde(default)]
+    pub changements_auto: u8,
+}
+
+/// Titres automatiques au plus par réunion (le premier, puis un affinage).
+pub const TITRES_AUTO_MAX: u8 = 2;
+
+/// Qui donne un titre à une réunion ou à une conversation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origine {
+    /// Kobi, d'après ce qui a été dit.
+    Auto,
+    /// L'utilisateur (app, voix, `kobi meeting rename`).
+    Manuel,
+}
+
+/// Fichier des renommages, dans le dossier des réunions : ancien nom →
+/// nouveau, pour que les liens vers un ancien nom mènent toujours à la
+/// réunion.
+const RENOMMAGES: &str = ".renommages.json";
+
+fn noter_renommage(reunions: &Path, ancien: &str, nouveau: &str) -> io::Result<()> {
+    let chemin = reunions.join(RENOMMAGES);
+    let mut table: std::collections::BTreeMap<String, String> = fs::read(&chemin)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    table.insert(ancien.to_owned(), nouveau.to_owned());
+    let json = serde_json::to_vec_pretty(&table).map_err(io::Error::other)?;
+    ecrire_atomique(&chemin, &json)
+}
+
+/// Nom actuel d'une réunion renommée (en suivant les renommages successifs).
+fn nom_actuel(reunions: &Path, nom: &str) -> Option<String> {
+    let table: std::collections::BTreeMap<String, String> =
+        serde_json::from_slice(&fs::read(reunions.join(RENOMMAGES)).ok()?).ok()?;
+    let mut nom = table.get(nom)?.clone();
+    for _ in 0..8 {
+        match table.get(&nom) {
+            Some(suivant) => nom = suivant.clone(),
+            None => break,
+        }
+    }
+    Some(nom)
+}
+
+/// Titre d'une réunion sans assez de parole pour être nommée :
+/// « Réunion du 19/10 à 14 h » (KOB-223).
+pub fn titre_par_defaut(debut_ms: u64) -> String {
+    let (date, h, m, _) = heure_locale(debut_ms);
+    if m == 0 {
+        format!("Réunion du {:02}/{:02} à {h} h", date.jour, date.mois)
+    } else {
+        format!(
+            "Réunion du {:02}/{:02} à {h} h {m:02}",
+            date.jour, date.mois
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -123,17 +186,49 @@ impl ReunionOuverte {
         self.reunion.ecrire_compte_rendu(texte)
     }
 
-    /// Donne un titre à la réunion (le dossier garde son nom).
+    /// Donne un titre à la main (le dossier suit, voir [`Self::nommer`]).
     pub fn renommer_titre(&mut self, titre: &str) -> io::Result<()> {
-        let titre = titre.trim();
-        self.meta.titre = (!titre.is_empty()).then(|| titre.to_owned());
-        self.ecrire_meta()
+        self.nommer(titre, Origine::Manuel).map(|_| ())
     }
 
-    /// Marque la réunion terminée, à l'heure `fin_ms`.
+    /// Donne un titre à la réunion et renomme son dossier en conséquence
+    /// (KOB-223), sans perdre la transcription en cours d'écriture. Un titre
+    /// automatique ne remplace jamais un titre donné à la main, et il n'y en
+    /// a pas plus de [`TITRES_AUTO_MAX`]. Renvoie l'ancien nom du dossier
+    /// s'il a changé ; `Ok(None)` si rien n'a changé.
+    pub fn nommer(&mut self, titre: &str, origine: Origine) -> io::Result<Option<String>> {
+        let titre = titre.trim();
+        if titre.is_empty() {
+            return Ok(None);
+        }
+        if origine == Origine::Auto {
+            let manuel = self.meta.titre.is_some() && !self.meta.titre_auto;
+            if manuel || self.meta.changements_auto >= TITRES_AUTO_MAX {
+                return Ok(None);
+            }
+            self.meta.changements_auto += 1;
+        }
+        self.meta.titre = Some(titre.to_owned());
+        self.meta.titre_auto = origine == Origine::Auto;
+        let ancien = self.reunion.deplacer(titre)?;
+        if let Some(ancien) = &ancien {
+            if let Some(reunions) = self.dossier().parent() {
+                noter_renommage(reunions, ancien, self.reunion.nom())?;
+            }
+        }
+        self.ecrire_meta()?;
+        Ok(ancien)
+    }
+
+    /// Marque la réunion terminée, à l'heure `fin_ms`. Sans titre (pas assez
+    /// de parole), elle prend le titre par défaut, sans renommer le dossier.
     pub fn terminer(&mut self, fin_ms: u64) -> io::Result<()> {
         self.meta.fin_ms = Some(fin_ms);
         self.meta.statut = Statut::Terminee;
+        if self.meta.titre.is_none() {
+            self.meta.titre = Some(titre_par_defaut(self.meta.debut_ms));
+            self.meta.titre_auto = true;
+        }
         self.ecrire_meta()
     }
 
@@ -312,6 +407,9 @@ pub struct ResumeConversation {
     pub tours: usize,
     /// Première question.
     pub apercu: String,
+    /// Titre donné à la main dans l'app (KOB-223), à côté de la
+    /// conversation (`HHMMSS.titre`).
+    pub titre: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -444,6 +542,8 @@ impl Stockage {
                 fin_ms: None,
                 statut: Statut::EnCours,
                 publication: None,
+                titre_auto: false,
+                changements_auto: 0,
             },
         };
         ouverte.ecrire_meta()?;
@@ -800,9 +900,45 @@ impl Stockage {
         }
         let dossier = self.dossier_reunions().join(nom);
         if !dossier.is_dir() {
+            // Renommée depuis (KOB-223) : l'ancien nom mène à la réunion.
+            if let Some(actuel) = nom_actuel(&self.dossier_reunions(), nom) {
+                let dossier = self.dossier_reunions().join(actuel);
+                if dossier.is_dir() {
+                    return Ok(dossier);
+                }
+            }
             return Err(ErreurDonnees::Introuvable(nom.to_owned()));
         }
         Ok(dossier)
+    }
+
+    /// Donne un titre à une conversation (KOB-223), à côté de son fichier ;
+    /// un titre vide le retire.
+    pub fn renommer_conversation(&self, id: &str, titre: &str) -> Result<(), ErreurDonnees> {
+        let chemin = self.chemin_de_conversation(id)?;
+        let fichier = chemin.with_extension("titre");
+        let titre = titre.trim();
+        if titre.is_empty() {
+            match fs::remove_file(&fichier) {
+                Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e.into()),
+                _ => return Ok(()),
+            }
+        }
+        ecrire_atomique(&fichier, titre.as_bytes())?;
+        Ok(())
+    }
+
+    /// Renomme une réunion terminée à la main (app, `kobi meeting rename`) :
+    /// titre manuel, dossier renommé. Renvoie le nouveau nom du dossier. La
+    /// réunion en cours se renomme par l'écrivain ([`ReunionOuverte::nommer`]).
+    pub fn renommer_reunion(&self, nom: &str, titre: &str) -> Result<String, ErreurDonnees> {
+        let dossier = self.dossier_de_reunion(nom)?;
+        let mut ouverte = ReunionOuverte {
+            meta: lire_meta(&dossier).unwrap_or_else(|| meta_par_defaut(&dossier)),
+            reunion: Reunion::ouvrir(dossier)?,
+        };
+        ouverte.nommer(titre, Origine::Manuel)?;
+        Ok(ouverte.nom().to_owned())
     }
 
     fn chemin_de_conversation(&self, id: &str) -> Result<PathBuf, ErreurDonnees> {
@@ -870,6 +1006,8 @@ fn meta_par_defaut(dossier: &Path) -> MetaReunion {
             Statut::EnCours
         },
         publication: None,
+        titre_auto: false,
+        changements_auto: 0,
     }
 }
 
@@ -923,6 +1061,10 @@ fn resume_conversation(date: &str, chemin: &Path, tours: &[Tour]) -> ResumeConve
             .or(tours.first())
             .map(|t| apercu(&t.texte))
             .unwrap_or_default(),
+        titre: fs::read_to_string(chemin.with_extension("titre"))
+            .ok()
+            .map(|t| t.trim().to_owned())
+            .filter(|t| !t.is_empty()),
     }
 }
 
@@ -1035,6 +1177,100 @@ mod tests {
         let st = Stockage::new(dir.path().join("Kobi"));
         st.preparer().unwrap();
         (dir, st)
+    }
+
+    /// KOB-223 : le titre automatique renomme le dossier pendant
+    /// l'écriture, sans perdre de segment ; l'ancien nom mène toujours à la
+    /// réunion.
+    #[test]
+    fn titre_auto_renomme_le_dossier_sans_perte() {
+        let (_d, st) = stockage();
+        let mut r = st.nouvelle_reunion(T0, None).unwrap();
+        assert_eq!(r.nom(), "2026-10-18-reunion");
+        r.ecrire_segment(&segment(
+            0.0,
+            Source::Moi,
+            "On parle du budget du séminaire",
+        ))
+        .unwrap();
+        let ancien = r
+            .nommer("Budget du séminaire d'Annecy", Origine::Auto)
+            .unwrap();
+        assert_eq!(ancien.as_deref(), Some("2026-10-18-reunion"));
+        assert_eq!(r.nom(), "2026-10-18-budget-du-seminaire-d-annecy");
+        r.ecrire_segment(&segment(3.0, Source::Eux, "Le devis arrive vendredi"))
+            .unwrap();
+        r.ecrire_notes("- budget\n").unwrap();
+        let lue = st.lire_reunion(r.nom()).unwrap();
+        assert_eq!(lue.segments.len(), 2, "aucun segment perdu");
+        assert_eq!(
+            lue.resume.titre.as_deref(),
+            Some("Budget du séminaire d'Annecy")
+        );
+        assert!(r.meta().titre_auto);
+        // L'ancien nom (lien de l'app ouvert avant) mène à la réunion.
+        let par_ancien = st.lire_reunion("2026-10-18-reunion").unwrap();
+        assert_eq!(par_ancien.dossier, lue.dossier);
+        assert!(!st.dossier_reunions().join("2026-10-18-reunion").exists());
+    }
+
+    /// KOB-223 : un titre donné à la main n'est jamais remplacé ; au plus
+    /// deux titres automatiques ; conflit de noms géré.
+    #[test]
+    fn titre_manuel_jamais_ecrase_et_conflits() {
+        let (_d, st) = stockage();
+        let mut r = st.nouvelle_reunion(T0, None).unwrap();
+        r.nommer("Point équipe", Origine::Manuel).unwrap();
+        assert_eq!(r.nommer("Autre chose", Origine::Auto).unwrap(), None);
+        assert_eq!(r.meta().titre.as_deref(), Some("Point équipe"));
+        assert!(!r.meta().titre_auto);
+        assert_eq!(r.nom(), "2026-10-18-point-equipe");
+
+        let mut r2 = st.nouvelle_reunion(T0 + 3_600_000, None).unwrap();
+        r2.nommer("Point équipe", Origine::Auto).unwrap();
+        assert_eq!(r2.nom(), "2026-10-18-point-equipe-2", "conflit : suffixe");
+        r2.nommer("Budget", Origine::Auto).unwrap();
+        assert_eq!(r2.nommer("Troisième", Origine::Auto).unwrap(), None);
+        assert_eq!(r2.meta().titre.as_deref(), Some("Budget"));
+        // La main reprend toujours la main.
+        r2.nommer("Budget final", Origine::Manuel).unwrap();
+        assert_eq!(r2.nom(), "2026-10-18-budget-final");
+    }
+
+    /// KOB-223 : sans titre (pas assez de parole), « Réunion du 18/10 à
+    /// 11 h 30 » ; une réunion terminée se renomme à la main ; une
+    /// conversation aussi.
+    #[test]
+    fn titre_par_defaut_et_renommage_apres_coup() {
+        let (_d, st) = stockage();
+        let mut r = st.nouvelle_reunion(T0, None).unwrap();
+        r.terminer(T0 + 30_000).unwrap();
+        let titre = r.meta().titre.clone().unwrap();
+        assert!(titre.starts_with("Réunion du 18/10 à "), "{titre}");
+        assert_eq!(r.nom(), "2026-10-18-reunion");
+        let nouveau = st
+            .renommer_reunion("2026-10-18-reunion", "Rétro du sprint")
+            .unwrap();
+        assert_eq!(nouveau, "2026-10-18-retro-du-sprint");
+        let lue = st.lire_reunion(&nouveau).unwrap();
+        assert_eq!(lue.resume.titre.as_deref(), Some("Rétro du sprint"));
+
+        let mut c = st.nouvelle_conversation(T0);
+        c.ajouter(Qui::Moi, "Où est le refresh token ?", true)
+            .unwrap();
+        let id = st.conversations().unwrap()[0].id.clone();
+        st.renommer_conversation(&id, "Refresh token").unwrap();
+        assert_eq!(
+            st.conversations().unwrap()[0].titre.as_deref(),
+            Some("Refresh token")
+        );
+        assert_eq!(
+            st.conversations().unwrap().len(),
+            1,
+            "le titre n'est pas une conversation"
+        );
+        st.renommer_conversation(&id, " ").unwrap();
+        assert_eq!(st.conversations().unwrap()[0].titre, None);
     }
 
     const CR: &str = "## Résumé\nOn a validé le budget du séminaire.\n\n## Décisions\n- Budget validé\n\n## Actions\n- [ ] Sophie : devis\n\n## Questions ouvertes\n- Date ?\n\n## Interpellations\n- Kobi, c'était quoi le chiffre ?\n";

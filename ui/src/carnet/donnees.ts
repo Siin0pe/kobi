@@ -25,6 +25,8 @@ export interface ResumeConversation {
   fin_ms: number | null;
   tours: number;
   apercu: string;
+  /** Titre donné à la main (KOB-223). */
+  titre?: string | null;
 }
 
 export interface Rappel {
@@ -101,5 +103,7 @@ export const carnet = {
   exporter: (genre: Genre, id: string) => invoke<string | null>('carnet_exporter', { genre, id }),
   ouvrirDossier: (genre?: Genre, id?: string) => invoke<void>('carnet_ouvrir_dossier', genre && id ? { genre, id } : {}),
   supprimer: (genre: Genre, id: string) => invoke<void>('carnet_supprimer', { genre, id }),
+  /** Titre édité sur place (KOB-223) ; rend l'identifiant à jour. */
+  renommer: (genre: Genre, id: string, titre: string) => invoke<string>('carnet_renommer', { genre, id, titre }),
   rappelFait: (id: string) => invoke<boolean>('carnet_rappel_fait', { id }),
 };

@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};
 
-use kobi_session::stockage::{Conversation, Qui, ReunionOuverte, Stockage};
+use kobi_session::stockage::{Conversation, Origine, Qui, ReunionOuverte, Stockage};
 use kobi_stt::Segment;
 
 /// Ce que l'écrivain garde ouvert.
@@ -39,6 +39,13 @@ pub enum Nouvelle {
     NotesEcrites(PathBuf),
     /// Compte rendu écrit, à ce chemin.
     CompteRenduEcrit(PathBuf),
+    /// Titre de la réunion donné (KOB-223) : son dossier (renommé si
+    /// `ancien` est là) et le titre retenu (un titre manuel reste).
+    ReunionNommee {
+        dossier: PathBuf,
+        ancien: Option<String>,
+        titre: Option<String>,
+    },
     Erreur(String),
 }
 
@@ -76,6 +83,26 @@ impl Ecrivain {
             Err(e) => d.compter(Nouvelle::Erreur(format!(
                 "Je n'arrive pas à créer le dossier de la réunion : {e}"
             ))),
+        });
+    }
+
+    /// Donne un titre à la réunion en cours (KOB-223) : son dossier est
+    /// renommé ici, entre deux segments, sans perdre l'écriture.
+    pub fn nommer(&self, titre: String, origine: Origine) {
+        self.envoyer(move |d| {
+            let Some(r) = &mut d.reunion else { return };
+            let nouvelle = match r.nommer(&titre, origine) {
+                Ok(ancien) => Nouvelle::ReunionNommee {
+                    dossier: r.dossier().to_path_buf(),
+                    ancien,
+                    titre: r.meta().titre.clone(),
+                },
+                Err(e) => {
+                    tracing::warn!(erreur = %e, "titre de la réunion");
+                    Nouvelle::Erreur(format!("Je n'arrive pas à renommer la réunion : {e}"))
+                }
+            };
+            d.compter(nouvelle);
         });
     }
 
