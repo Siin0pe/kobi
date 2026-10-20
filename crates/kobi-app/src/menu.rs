@@ -542,7 +542,7 @@ mod tests {
         ));
         // Claude ne répond jamais : le compte rendu reste en cours d'écriture.
         let fabrique: crate::cerveau::Fabrique = Arc::new(|_role| Box::pin(std::future::pending()));
-        crate::chef::installer(h, fabrique, 3);
+        crate::chef::installer(h, fabrique, 3, Default::default());
         appliquer_entree(h, Entree::Enregistrer).unwrap();
         assert!(reunion_ouverte(h));
         assert_eq!(appliquer_entree(h, Entree::Quitter), Ok(Effet::Confirmer));

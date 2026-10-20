@@ -236,6 +236,7 @@ fn main() {
                 app.handle(),
                 config.config.notes.interval_min,
                 config.config.codebases.clone(),
+                &config.config.taches,
             );
             raccourci::installer(app.handle(), &config.config)?;
             let window = app

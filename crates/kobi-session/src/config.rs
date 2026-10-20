@@ -215,6 +215,34 @@ impl Default for SttConfig {
     }
 }
 
+/// Tâches longues de Claude (KOB-243) : quand Kobi abandonne un tour.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TachesConfig {
+    /// Sans signe de vie pendant ce temps (ni texte, ni outil en cours, ni
+    /// carte en attente), le tour est abandonné, en secondes.
+    pub abandon_s: u32,
+    /// Durée maximale d'un tour, même actif, en secondes.
+    pub duree_max_s: u32,
+    #[serde(flatten)]
+    pub extra: toml::Table,
+}
+
+impl TachesConfig {
+    pub const ABANDON_RANGE: std::ops::RangeInclusive<u32> = 30..=3600;
+    pub const DUREE_MAX_RANGE: std::ops::RangeInclusive<u32> = 60..=7200;
+}
+
+impl Default for TachesConfig {
+    fn default() -> Self {
+        Self {
+            abandon_s: 300,
+            duree_max_s: 900,
+            extra: toml::Table::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct NotesConfig {
@@ -445,6 +473,8 @@ pub struct Config {
     pub audio: AudioConfig,
     pub stt: SttConfig,
     pub notes: NotesConfig,
+    /// Abandon et durée maximale des tâches de Claude (KOB-243).
+    pub taches: TachesConfig,
     pub voice: VoiceConfig,
     pub meetings: MeetingsConfig,
     pub conversations: ConversationsConfig,
@@ -473,6 +503,7 @@ impl Default for Config {
             audio: AudioConfig::default(),
             stt: SttConfig::default(),
             notes: NotesConfig::default(),
+            taches: TachesConfig::default(),
             voice: VoiceConfig::default(),
             meetings: MeetingsConfig::default(),
             conversations: ConversationsConfig::default(),
@@ -504,6 +535,20 @@ impl Config {
             value: value.to_string(),
             expected,
         };
+        if !TachesConfig::ABANDON_RANGE.contains(&self.taches.abandon_s) {
+            return Err(invalid(
+                "taches.abandon_s",
+                &self.taches.abandon_s,
+                "de 30 à 3600 secondes",
+            ));
+        }
+        if !TachesConfig::DUREE_MAX_RANGE.contains(&self.taches.duree_max_s) {
+            return Err(invalid(
+                "taches.duree_max_s",
+                &self.taches.duree_max_s,
+                "de 60 à 7200 secondes",
+            ));
+        }
         if !NotesConfig::INTERVAL_RANGE.contains(&self.notes.interval_min) {
             return Err(invalid(
                 "notes.interval_min",

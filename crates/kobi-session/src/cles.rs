@@ -78,6 +78,16 @@ pub const CLES: &[(&str, Application, &str)] = &[
         AuRedemarrage,
         "Intervalle des notes en blocs, de 1 à 10 minutes.",
     ),
+    (
+        "taches.abandon_s",
+        AuRedemarrage,
+        "Une tâche de Claude sans signe de vie (ni texte, ni outil en cours, ni carte en attente) est abandonnée après ce délai, de 30 à 3600 secondes (300 par défaut).",
+    ),
+    (
+        "taches.duree_max_s",
+        AuRedemarrage,
+        "Durée maximale d'une tâche de Claude, même active, de 60 à 7200 secondes (900 par défaut).",
+    ),
     // Appliqués à chaud par l'app quand la voix tourne (KOB-142).
     (
         "voice.assistant",

@@ -87,6 +87,12 @@ pub enum BrainEvent {
         input: Value,
         action: Action,
     },
+    /// Un outil appelé a rendu son résultat (KOB-243) : tant qu'un outil
+    /// n'est pas revenu, le tour n'est pas inactif.
+    OutilRendu { id: String },
+    /// Signe de vie sans rien à montrer (réflexion, message intermédiaire) :
+    /// le tour n'est pas bloqué (KOB-243).
+    Vie,
     /// Le cerveau attend une confirmation avant un outil. Abandonner la
     /// demande (la laisser tomber) vaut refus.
     Permission(ApprovalRequest),

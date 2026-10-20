@@ -1659,6 +1659,7 @@ rl.on("line", (l) => {
             while let Some(e) = turn.next().await {
                 match e {
                     BrainEvent::Text(t) => texte.push_str(&t),
+                    BrainEvent::OutilRendu { .. } | BrainEvent::Vie => {}
                     BrainEvent::ToolCall { name, .. } => outils.push(name),
                     BrainEvent::Permission(p) => {
                         demandes.push(p.request.tool_name.clone());

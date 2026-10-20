@@ -29,6 +29,8 @@ pub enum Step {
     /// Demande une confirmation ; si elle est accordée, l'outil est appelé
     /// (événement `ToolCall`), sinon le tour continue sans lui.
     Permission(PermissionRequest),
+    /// L'outil de cet identifiant a rendu son résultat (KOB-243).
+    Rendu(String),
     /// Pause, pour tester les délais.
     Wait(Duration),
     /// Termine le tour en erreur (les étapes suivantes sont ignorées).
@@ -178,6 +180,7 @@ async fn play(
                     input: request.input,
                 }
             }
+            Step::Rendu(id) => BrainEvent::OutilRendu { id },
             Step::Wait(d) => {
                 tokio::time::sleep(d).await;
                 continue;
