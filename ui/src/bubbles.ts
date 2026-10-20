@@ -7,6 +7,7 @@
 import { boutonCopierDedans } from './copie';
 import { dealFromKobi, flyLetters, leaveToKobi } from './effets';
 import { Defilement } from './defilement';
+import { t } from './i18n';
 import type { ActionCard, MascotData, MascotState } from './states';
 import { Typewriter } from './typewriter';
 
@@ -21,9 +22,9 @@ type Kind = 'question' | 'sources' | 'notes' | 'answer' | 'action' | 'error' | '
 const TYPING_CPS: Partial<Record<Kind, number>> = { question: 18, notes: 22, answer: 25, compose: 22 };
 
 /** Bulle de la rédaction du compte rendu (KOB-166). */
-export const COMPOSE_TEXT = 'Je rédige le compte rendu…';
-
-
+export function composeText(): string {
+  return t('kobi.bulles.redige');
+}
 
 /** Carte visible pour un état donné, ou rien. */
 export function cardKind(state: MascotState, data: MascotData): Kind | null {
@@ -52,6 +53,13 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, t
   const node = document.createElement(tag);
   if (className) node.className = className;
   if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+/** Élément au texte traduit, qui se retraduit au changement de langue (`retraduire`). */
+function elT<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, cle: string): HTMLElementTagNameMap[K] {
+  const node = el(tag, className, t(cle));
+  node.dataset.cle = cle;
   return node;
 }
 
@@ -106,6 +114,11 @@ export class Bubbles {
     return this.typer?.text ?? null;
   }
 
+  /** Langue changée : les textes fixes des cartes affichées se retraduisent. */
+  retraduire(): void {
+    for (const node of this.root.querySelectorAll<HTMLElement>('[data-cle]')) node.textContent = t(node.dataset.cle!);
+  }
+
   setPaused(paused: boolean): void {
     this.root.classList.toggle('paused', paused);
   }
@@ -149,7 +162,7 @@ export class Bubbles {
       case 'sources':
         break;
       case 'notes':
-        card.append(el('div', 'kicker', 'Notes · en cours'), el('div', 'body'));
+        card.append(elT('div', 'kicker', 'kobi.bulles.notesEnCours'), el('div', 'body'));
         card.querySelector('.body')!.append(el('span', 'text'), el('span', 'caret'), el('span', 'crayon', '✎'));
         card.querySelector('.crayon')!.setAttribute('aria-hidden', 'true');
         break;
@@ -160,7 +173,7 @@ export class Bubbles {
         const text = el('div', 'text md');
         zone.append(text, el('span', 'caret'));
         // Montré quand la bulle ne peut pas tout montrer (reponse.css).
-        const all = el('button', 'lire-tout', 'Lire en grand ›');
+        const all = elT('button', 'lire-tout', 'kobi.bulles.lireEnGrand');
         all.type = 'button';
         all.addEventListener('click', (e) => {
           e.stopPropagation();
@@ -187,7 +200,7 @@ export class Bubbles {
         card.append(el('div', 'kicker'), el('div', 'message'));
         break;
       case 'compose':
-        card.append(el('div', 'kicker', 'Réunion terminée'), el('div', 'body'));
+        card.append(elT('div', 'kicker', 'kobi.bulles.reunionTerminee'), el('div', 'body'));
         card.querySelector('.body')!.append(el('span', 'text'), el('span', 'caret'));
         break;
     }
@@ -208,7 +221,7 @@ export class Bubbles {
         break;
       }
       case 'compose':
-        this.typed(card, kind, COMPOSE_TEXT);
+        this.typed(card, kind, composeText());
         break;
       case 'answer': {
         this.answerText = data.answer ?? '';
@@ -249,7 +262,7 @@ export class Bubbles {
       }
       pill.classList.toggle('found', s.found);
       setText(pill.querySelector('.icon')!, s.found ? '→' : (s.icon ?? '·'));
-      setText(pill.querySelector('.label')!, s.label + (s.found ? ' · trouvé' : ' …'));
+      setText(pill.querySelector('.label')!, s.found ? t('kobi.bulles.sourceTrouvee', { source: s.label }) : t('kobi.bulles.sourceEnCours', { source: s.label }));
     });
   }
 
@@ -259,8 +272,8 @@ export class Bubbles {
     this.actionKey = key;
     card.dataset.status = action.status;
     if (action.status === 'pending') {
-      const confirm = el('button', 'btn btn-primary', 'Créer');
-      const dismiss = el('button', 'btn', 'Pas maintenant');
+      const confirm = elT('button', 'btn btn-primary', 'kobi.bulles.creer');
+      const dismiss = elT('button', 'btn', 'kobi.bulles.pasMaintenant');
       confirm.type = 'button';
       dismiss.type = 'button';
       confirm.addEventListener('click', () => this.onAction?.({ id: action.id, decision: 'confirm' }));
@@ -274,10 +287,11 @@ export class Bubbles {
       const done = action.status === 'confirmed';
       card.replaceChildren(
         el('div', 'kicker', done ? (action.doneKicker ?? action.kicker) : action.kicker),
-        el('div', 'title', done ? (action.doneTitle ?? 'C’est fait.') : 'Pas maintenant.'),
+        done && action.doneTitle !== undefined ? el('div', 'title', action.doneTitle) : elT('div', 'title', done ? 'kobi.bulles.cestFait' : 'kobi.bulles.pasMaintenantTitre'),
       );
-      const meta = done ? action.doneMeta : 'Gardé dans le compte rendu.';
-      if (meta) card.append(el('div', 'meta', meta));
+      if (done) {
+        if (action.doneMeta) card.append(el('div', 'meta', action.doneMeta));
+      } else card.append(elT('div', 'meta', 'kobi.bulles.garde'));
     }
   }
 }

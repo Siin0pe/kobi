@@ -19,6 +19,7 @@
 // Pendant qu'une carte attend, la scène porte `data-validation` (le genre),
 // pour que la mascotte puisse y réagir.
 
+import { t } from './i18n';
 import { tauri } from './native';
 import type { Stage } from './stage';
 import { cible, genre, type CarteValidation, type Statut } from './validation-detail';
@@ -33,18 +34,13 @@ const URGENT_MS = 10_000;
 const ISSUE_MS = 1400;
 const SORTIE_MS = 420;
 
-const ISSUES: Record<Statut, { titre: string; meta: string }> = {
-  acceptee: { titre: 'Validé.', meta: 'Kobi s’en occupe.' },
-  refusee: { titre: 'Refusé.', meta: 'Kobi n’y touche pas.' },
-  expiree: { titre: 'Pas de réponse : refusé.', meta: 'Rien n’a été modifié.' },
-};
+/** Issue de la carte, lue dans la langue courante (`kobi.validation.<statut>.titre|meta`). */
+function issueDe(statut: Statut): { titre: string; meta: string } {
+  return { titre: t(`kobi.validation.${statut}.titre`), meta: t(`kobi.validation.${statut}.meta`) };
+}
 
 /** Genres qu'une case « Ne plus demander » peut laisser passer (jamais une suppression ni un service). */
-const TOUJOURS: Partial<Record<CarteValidation['genre'], string>> = {
-  fichier: 'Ne plus demander pour écrire des fichiers',
-  commande: 'Ne plus demander pour les commandes',
-  reglage: 'Ne plus demander pour les réglages',
-};
+const TOUJOURS: ReadonlySet<CarteValidation['genre']> = new Set(['fichier', 'commande', 'reglage']);
 
 /**
  * On est en train d'écrire : un champ qui contient du texte. La bulle
@@ -175,24 +171,24 @@ export class Validations {
     const secs = el('span', 'kval-secs');
     temps.append(track, secs);
 
-    const valider = el('button', 'btn btn-primary', carte.genre === 'suppression' ? 'Supprimer' : 'Valider');
+    const valider = el('button', 'btn btn-primary', t(carte.genre === 'suppression' ? 'app.validations.supprimer' : 'app.validations.valider'));
     valider.type = 'button';
     valider.setAttribute('aria-keyshortcuts', 'Enter');
     valider.addEventListener('click', () => this.decide(true));
-    const refuser = el('button', 'btn', 'Refuser');
+    const refuser = el('button', 'btn', t('app.validations.refuser'));
     refuser.type = 'button';
     refuser.setAttribute('aria-keyshortcuts', 'Escape');
     refuser.addEventListener('click', () => this.decide(false));
     const buttons = el('div', 'buttons');
     buttons.append(valider, refuser);
     // Le détail complet se lit dans l'app Kobi, section Activité.
-    const detail = el('button', 'kval-lien', 'Détail dans Kobi');
+    const detail = el('button', 'kval-lien', t('kobi.validation.detail'));
     detail.type = 'button';
     detail.addEventListener('click', () => void tauri()?.core.invoke('ouvrir_app', { section: 'activite' }).catch(() => {}));
     root.append(temps, buttons);
     let toujours: HTMLInputElement | null = null;
-    const libelle = TOUJOURS[carte.genre];
-    if (libelle) {
+    if (TOUJOURS.has(carte.genre)) {
+      const libelle = t(`kobi.validation.toujours.${carte.genre}`);
       const ligne = el('label', 'kval-toujours');
       toujours = el('input');
       toujours.type = 'checkbox';
@@ -218,7 +214,7 @@ export class Validations {
     if (this.courante !== o || o.statut) return;
     const reste = Math.max(0, o.echeance - performance.now());
     const total = o.carte.echeance_ms ?? ECHEANCE_MS;
-    o.secs.textContent = `${Math.ceil(reste / 1000)} s`;
+    o.secs.textContent = t('carnet.format.secondes', { s: Math.ceil(reste / 1000) });
     o.bar.style.transform = `scaleX(${(reste / total).toFixed(4)})`;
     o.root.classList.toggle('urgent', reste <= URGENT_MS);
     if (reste <= 0) {
@@ -241,7 +237,7 @@ export class Validations {
   private afficherIssue(o: Ouverte, statut: Statut, toujours = false): void {
     o.statut = statut;
     window.clearTimeout(o.timer);
-    const issue = toujours ? { ...ISSUES[statut], meta: 'Kobi ne demandera plus (Réglages › Permissions).' } : ISSUES[statut];
+    const issue = toujours ? { ...issueDe(statut), meta: t('kobi.validation.neDemanderaPlus') } : issueDe(statut);
     o.root.dataset.statut = statut;
     o.root.classList.remove('urgent');
     o.root.setAttribute('role', 'status');
@@ -279,7 +275,7 @@ export class Validations {
     const n = this.file.length;
     o.badge.hidden = n === 0;
     o.badge.textContent = `+${n}`;
-    o.badge.setAttribute('aria-label', `${n} autre${n > 1 ? 's' : ''} demande${n > 1 ? 's' : ''} en attente`);
+    o.badge.setAttribute('aria-label', t('kobi.validation.enAttente', { n }));
   }
 
   /** Entrée valide, Échap refuse ; jamais pendant une saisie ni dans le menu. */

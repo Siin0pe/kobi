@@ -12,6 +12,7 @@
 // Clavier : touche Menu ou Maj+F10 pour l'ouvrir, flèches, Origine/Fin,
 // première lettre, Entrée ou Espace, Échap pour fermer.
 
+import { langue, surLangue, t } from './i18n';
 import type { Stage } from './stage';
 
 export const MENU_IDS = ['parler', 'ecrire', 'enregistrer', 'pause', 'app', 'carnet', 'reglages', 'voix', 'discret', 'quitter'] as const;
@@ -78,31 +79,37 @@ interface Entry {
   id: MenuId;
   label: string;
   icon: string;
-  hint?: string;
+  /** Touches du raccourci, noms techniques (`Shift`, `Space`), traduits à l'affichage. */
+  hint?: string[];
   danger?: boolean;
+}
+
+/** Nom d'une touche dans la langue courante. */
+function touche(k: string): string {
+  return k === 'Shift' ? t('touches.maj') : k === 'Space' ? t('touches.espace') : k;
 }
 
 /** Entrées et libellés selon l'état ; `null` : séparateur. */
 export function entries(c: MenuContext): Array<Entry | null> {
   return [
-    { id: 'parler', label: 'Parler à Kobi', icon: 'parler', hint: 'Ctrl Maj Espace' },
+    { id: 'parler', label: t('kobi.menu.parler'), icon: 'parler', hint: ['Ctrl', 'Shift', 'Space'] },
     // La bulle d'écriture (ecrire.ts, KOB-147) s'ouvre sur l'événement `kobi:menu`.
-    { id: 'ecrire', label: 'Écrire à Kobi', icon: 'ecrire', hint: 'Ctrl Alt K' },
+    { id: 'ecrire', label: t('kobi.menu.ecrire'), icon: 'ecrire', hint: ['Ctrl', 'Alt', 'K'] },
     c.recording
-      ? { id: 'enregistrer', label: 'Arrêter l’enregistrement', icon: 'arreter', hint: 'Ctrl Maj R' }
-      : { id: 'enregistrer', label: 'Enregistrer la réunion', icon: 'enregistrer', hint: 'Ctrl Maj R' },
+      ? { id: 'enregistrer', label: t('kobi.menu.arreterEnregistrement'), icon: 'arreter', hint: ['Ctrl', 'Shift', 'R'] }
+      : { id: 'enregistrer', label: t('kobi.menu.enregistrer'), icon: 'enregistrer', hint: ['Ctrl', 'Shift', 'R'] },
     c.recording
-      ? { id: 'pause', label: c.paused ? 'Reprendre l’enregistrement' : 'Pause de l’enregistrement', icon: c.paused ? 'reprendre' : 'pause' }
-      : { id: 'pause', label: c.paused ? 'Reprendre l’écoute' : 'Pause de l’écoute', icon: c.paused ? 'reprendre' : 'pause' },
+      ? { id: 'pause', label: c.paused ? t('kobi.menu.reprendreEnregistrement') : t('kobi.menu.pauseEnregistrement'), icon: c.paused ? 'reprendre' : 'pause' }
+      : { id: 'pause', label: c.paused ? t('kobi.menu.reprendreEcoute') : t('kobi.menu.pauseEcoute'), icon: c.paused ? 'reprendre' : 'pause' },
     null,
     // L'app Kobi (KOB-159) : section par défaut, Carnet, Réglages.
-    { id: 'app', label: 'Ouvrir Kobi', icon: 'app' },
-    { id: 'carnet', label: 'Ouvrir le Carnet', icon: 'carnet' },
-    { id: 'reglages', label: 'Réglages', icon: 'reglages' },
-    c.voice ? { id: 'voix', label: 'Répondre en texte seul', icon: 'texte' } : { id: 'voix', label: 'Répondre à voix haute', icon: 'voix' },
-    c.compact ? { id: 'discret', label: 'Déplier Kobi', icon: 'deplier' } : { id: 'discret', label: 'Mode discret', icon: 'discret' },
+    { id: 'app', label: t('kobi.menu.app'), icon: 'app' },
+    { id: 'carnet', label: t('kobi.menu.carnet'), icon: 'carnet' },
+    { id: 'reglages', label: t('kobi.menu.reglages'), icon: 'reglages' },
+    c.voice ? { id: 'voix', label: t('kobi.menu.texteSeul'), icon: 'texte' } : { id: 'voix', label: t('kobi.menu.voixHaute'), icon: 'voix' },
+    c.compact ? { id: 'discret', label: t('kobi.menu.deplier'), icon: 'deplier' } : { id: 'discret', label: t('kobi.menu.discret'), icon: 'discret' },
     null,
-    { id: 'quitter', label: 'Quitter Kobi', icon: 'quitter', danger: true },
+    { id: 'quitter', label: t('kobi.menu.quitter'), icon: 'quitter', danger: true },
   ];
 }
 
@@ -111,7 +118,7 @@ export function entries(c: MenuContext): Array<Entry | null> {
  * l'ordre. Partagé par la mascotte et la fenêtre du menu (KOB-202).
  */
 export function remplirMenu(heading: HTMLElement, list: HTMLElement, c: MenuContext, choisir: (id: MenuId) => void): HTMLButtonElement[] {
-  heading.replaceChildren(el('span', 'kmenu-brand', 'kobi'), el('span', 'kmenu-state', c.recording ? (c.paused ? 'réunion en pause' : '● réunion en cours') : c.paused ? 'écoute en pause' : 'à ton écoute'));
+  heading.replaceChildren(el('span', 'kmenu-brand', 'kobi'), el('span', 'kmenu-state', c.recording ? (c.paused ? t('kobi.menu.etatReunionPause') : t('kobi.menu.etatReunionEnCours')) : c.paused ? t('kobi.menu.etatEcoutePause') : t('kobi.menu.etatEcoute')));
   heading.classList.toggle('recording', c.recording && !c.paused);
   list.replaceChildren();
   const items: HTMLButtonElement[] = [];
@@ -132,10 +139,10 @@ export function remplirMenu(heading: HTMLElement, list: HTMLElement, c: MenuCont
     b.style.setProperty('--i', String(index++));
     b.append(icon(entry.icon), el('span', 'kmenu-label', entry.label));
     if (entry.hint) {
-      const hint = el('kbd', 'kmenu-hint', entry.hint);
+      const hint = el('kbd', 'kmenu-hint', entry.hint.map(touche).join(' '));
       hint.setAttribute('aria-hidden', 'true');
       b.append(hint);
-      b.setAttribute('aria-keyshortcuts', entry.hint.replace('Maj', 'Shift').replace('Espace', 'Space').replace(/ /g, '+'));
+      b.setAttribute('aria-keyshortcuts', entry.hint.join('+'));
     }
     b.addEventListener('click', () => choisir(entry.id));
     b.addEventListener('pointermove', () => {
@@ -186,10 +193,10 @@ export function clavierMenu(e: KeyboardEvent, items: HTMLButtonElement[], choisi
   }
   // Première lettre : l'entrée suivante qui commence par elle.
   if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-    const key = e.key.toLocaleLowerCase('fr');
+    const key = e.key.toLocaleLowerCase(langue());
     for (let k = 1; k <= n; k++) {
       const b = items[(i + k) % n];
-      if (b?.textContent?.trim().toLocaleLowerCase('fr').startsWith(key)) return go((i + k) % n);
+      if (b?.textContent?.trim().toLocaleLowerCase(langue()).startsWith(key)) return go((i + k) % n);
     }
   }
 }
@@ -222,6 +229,9 @@ export class KobiMenu {
   private readonly heading: HTMLElement;
   private readonly toast: HTMLElement;
   private readonly micOff: HTMLElement;
+  private readonly micOffTexte: HTMLElement;
+  /** Carte « quitter pendant une réunion » ouverte : ses textes, à retraduire. */
+  private confirmTextes: (() => void) | null = null;
   private confirm: HTMLElement | null = null;
   private items: HTMLButtonElement[] = [];
   private returnFocus: HTMLElement | null = null;
@@ -234,7 +244,6 @@ export class KobiMenu {
     this.root = el('div', 'kmenu');
     this.root.hidden = true;
     this.root.setAttribute('role', 'menu');
-    this.root.setAttribute('aria-label', 'Menu de Kobi');
     this.root.setAttribute('aria-orientation', 'vertical');
     this.heading = el('div', 'kmenu-head');
     this.heading.setAttribute('aria-hidden', 'true');
@@ -247,8 +256,11 @@ export class KobiMenu {
     this.toast.hidden = true;
 
     this.micOff = el('div', 'kmenu-micoff');
-    this.micOff.append(el('span', 'kmenu-micoff-dot'), el('span', '', 'micro coupé'));
+    this.micOffTexte = el('span');
+    this.micOff.append(el('span', 'kmenu-micoff-dot'), this.micOffTexte);
     this.micOff.hidden = true;
+    this.traduire();
+    this.cleanups.push(surLangue(() => this.traduire()));
 
     stage.root.append(this.root, this.toast, this.micOff);
     stage.root.classList.add('no-select');
@@ -405,9 +417,9 @@ export class KobiMenu {
     const voix = this.voice;
     try {
       await api.core.invoke('menu_kobi', { entree: id });
-      if (id === 'voix') this.say(voix ? 'Je réponds par écrit.' : 'Je réponds à voix haute.');
+      if (id === 'voix') this.say(voix ? t('kobi.menu.direEcrit') : t('kobi.menu.direVoix'));
     } catch (refus) {
-      this.say(typeof refus === 'string' && refus.includes('transition refusée') ? 'Pas maintenant : Kobi est occupé.' : String(refus));
+      this.say(typeof refus === 'string' && refus.includes('transition refusée') ? t('kobi.menu.occupe') : String(refus));
     }
   }
 
@@ -418,6 +430,18 @@ export class KobiMenu {
     this.micOff.remove();
     this.confirm?.remove();
     this.stage.root.classList.remove('no-select', 'menu-open');
+  }
+
+  /** Textes fixes (et menu ou carte ouverts) dans la langue courante. */
+  private traduire(): void {
+    this.root.setAttribute('aria-label', t('kobi.menu.aria'));
+    this.micOffTexte.textContent = t('kobi.menu.microCoupe');
+    this.confirmTextes?.();
+    if (!this.root.hidden && !this.root.classList.contains('closing')) {
+      const focus = this.items.indexOf(document.activeElement as HTMLButtonElement);
+      this.render();
+      if (focus >= 0) this.items[focus]?.focus({ preventScroll: true });
+    }
   }
 
   private render(): void {
@@ -459,7 +483,7 @@ export class KobiMenu {
         break;
       // Carnet et Réglages : la coque ouvre leur fenêtre (KOB-140).
       case 'quitter-confirme':
-        if (this.stage.currentMeeting) this.say('J’écris le compte rendu, puis je ferme.');
+        if (this.stage.currentMeeting) this.say(t('kobi.menu.compteRenduPuisFerme'));
         break;
       case 'quitter':
         // La coque ne ferme pas pendant une réunion : elle attend la confirmation.
@@ -489,17 +513,17 @@ export class KobiMenu {
         else window.dispatchEvent(new CustomEvent('kobi:quitter'));
         break;
       case 'app':
-        this.say('L’app Kobi s’ouvre depuis Kobi.');
+        this.say(t('kobi.menu.simuleApp'));
         break;
       case 'carnet':
-        this.say('Le Carnet s’ouvre depuis Kobi.');
+        this.say(t('kobi.menu.simuleCarnet'));
         break;
       case 'reglages':
-        this.say('Les réglages s’ouvrent depuis Kobi.');
+        this.say(t('kobi.menu.simuleReglages'));
         break;
       case 'voix':
         this.stage.root.dataset.voix = this.voice ? 'texte' : 'active';
-        this.say(this.voice ? 'Je réponds à voix haute.' : 'Je réponds par écrit.');
+        this.say(this.voice ? t('kobi.menu.direVoix') : t('kobi.menu.direEcrit'));
         break;
       default:
         this.afterShell(id);
@@ -535,14 +559,21 @@ export class KobiMenu {
     const card = el('div', 'kmenu-confirm');
     card.setAttribute('role', 'alertdialog');
     card.setAttribute('aria-modal', 'true');
-    const title = el('p', 'kmenu-confirm-title', 'Une réunion est en cours.');
+    const title = el('p', 'kmenu-confirm-title');
     title.id = 'kmenu-confirm-title';
-    const text = el('p', 'kmenu-confirm-text', 'L’arrêter, écrire le compte rendu et quitter ?');
+    const text = el('p', 'kmenu-confirm-text');
     text.id = 'kmenu-confirm-text';
     card.setAttribute('aria-labelledby', title.id);
     card.setAttribute('aria-describedby', text.id);
-    const stop = el('button', 'kmenu-btn kmenu-btn-danger', 'Arrêter et quitter');
-    const cancel = el('button', 'kmenu-btn', 'Annuler');
+    const stop = el('button', 'kmenu-btn kmenu-btn-danger');
+    const cancel = el('button', 'kmenu-btn');
+    this.confirmTextes = (): void => {
+      title.textContent = t('kobi.menu.confirmTitre');
+      text.textContent = t('kobi.menu.confirmTexte');
+      stop.textContent = t('kobi.menu.confirmArreter');
+      cancel.textContent = t('kobi.menu.confirmAnnuler');
+    };
+    this.confirmTextes();
     stop.type = cancel.type = 'button';
     const buttons = el('div', 'kmenu-confirm-buttons');
     buttons.append(cancel, stop);
@@ -550,6 +581,7 @@ export class KobiMenu {
     const done = (): void => {
       card.remove();
       this.confirm = null;
+      this.confirmTextes = null;
     };
     cancel.addEventListener('click', done);
     stop.addEventListener('click', () => {

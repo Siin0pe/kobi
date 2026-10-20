@@ -22,6 +22,7 @@
 // l'état tournent ; la vie (coups d'œil, bâillements…) est faite de minuteries
 // espacées. Fenêtre masquée ou animations réduites : aucune minuterie.
 
+import { surLangue, t } from '../i18n';
 import type { MascotData, MascotState } from '../states';
 import { onFrame } from '../ticker';
 import { Blinker, Scrambler, type Eyes } from './glyphs';
@@ -32,7 +33,8 @@ import './kobi.css';
 
 interface Look {
   eye: string;
-  word: string;
+  /** Mot sous Kobi, lu au rendu (la langue change à chaud). */
+  readonly word: string;
   /** Bouche au repos. */
   mouth: string;
   /** Geste d'entrée dans l'état. */
@@ -41,22 +43,35 @@ interface Look {
   gaze: readonly [number, number];
 }
 
+/** Un look dont le mot est traduit à chaque lecture. */
+function look(eye: string, cle: string, mouth: string, enter: Gesture, gaze: readonly [number, number]): Look {
+  return {
+    eye,
+    get word() {
+      return t(cle);
+    },
+    mouth,
+    enter,
+    gaze,
+  };
+}
+
 export const LOOKS: Record<MascotState, Look> = {
-  idle: { eye: '–', word: 'zzz', mouth: '', enter: 'settle', gaze: [0, 0] },
+  idle: look('–', 'app.miniKobi.etat.idle', '', 'settle', [0, 0]),
   // Le mot sous Kobi ne s'affiche que quand il informe (KOB-204) : j'écoute,
   // je réfléchis, je rédige (« je m'en occupe » a ses outils) ; les autres
   // restent pour le brouillage, sans être montrés (kobi.css).
-  listen: { eye: 'O', word: 'j’écoute…', mouth: '', enter: 'startle', gaze: [-14, 0] },
-  think: { eye: '@', word: 'je réfléchis…', mouth: '', enter: 'ponder', gaze: [18, -18] },
-  write: { eye: 'o', word: 'noté', mouth: '', enter: 'lean', gaze: [-18, 16] },
-  answer: { eye: '^', word: 'alors', mouth: 'o', enter: 'speak', gaze: [-10, -4] },
-  suggest: { eye: '*', word: 'idée !', mouth: '', enter: 'pop', gaze: [-12, -6] },
-  done: { eye: '^', word: 'fait !', mouth: '', enter: 'cheer', gaze: [0, 0] },
-  error: { eye: 'x', word: 'oups', mouth: '~', enter: 'recoil', gaze: [0, 6] },
-  work: { eye: WORK_EYES.fouille, word: 'je m’en occupe…', mouth: '', enter: 'lean', gaze: [-10, 16] },
+  listen: look('O', 'kobi.mascotte.mot.listen', '', 'startle', [-14, 0]),
+  think: look('@', 'kobi.mascotte.mot.think', '', 'ponder', [18, -18]),
+  write: look('o', 'app.miniKobi.etat.write', '', 'lean', [-18, 16]),
+  answer: look('^', 'app.miniKobi.etat.answer', 'o', 'speak', [-10, -4]),
+  suggest: look('*', 'app.miniKobi.etat.suggest', '', 'pop', [-12, -6]),
+  done: look('^', 'app.miniKobi.etat.done', '', 'cheer', [0, 0]),
+  error: look('x', 'app.miniKobi.etat.error', '~', 'recoil', [0, 6]),
+  work: look(WORK_EYES.fouille, 'kobi.mascotte.mot.work', '', 'lean', [-10, 16]),
   // Réunion finie, compte rendu en cours (KOB-166) : Kobi relit, les yeux
   // balaient les lignes, les feuilles s'empilent à côté de lui.
-  compose: { eye: 'o', word: 'je rédige…', mouth: '', enter: 'settle', gaze: [-12, 12] },
+  compose: look('o', 'kobi.mascotte.mot.compose', '', 'settle', [-12, 12]),
 };
 
 /** États où le survol fait sourire Kobi. */
@@ -287,6 +302,16 @@ export class Kobi {
     this.listenPointer();
     this.listenWindow();
     this.applyFlags();
+    this.cleanups.push(surLangue(() => this.redireMot()));
+  }
+
+  /** Langue changée : le mot sous Kobi se réécrit dans la nouvelle langue. */
+  private redireMot(): void {
+    const state = this.state;
+    if (state === null) return;
+    if (state === 'idle' && this.root.classList.contains('reading')) this.scrambler.show('o', t('kobi.mascotte.mot.lis'));
+    else if (state === 'work') this.scrambler.show(WORK_EYES[this.data.tool ?? 'fouille'], LOOKS.work.word);
+    else this.scrambler.show(LOOKS[state].eye, LOOKS[state].word);
   }
 
   /** Animations permises et fenêtre visible. */
@@ -1368,7 +1393,7 @@ export class Kobi {
     if (this.root.classList.contains('reading') === on) return;
     this.root.classList.toggle('reading', on);
     if (this.state !== 'idle') return;
-    if (on) this.scrambler.show('o', 'je lis');
+    if (on) this.scrambler.show('o', t('kobi.mascotte.mot.lis'));
     else this.scrambler.show(LOOKS.idle.eye, LOOKS.idle.word);
   }
 

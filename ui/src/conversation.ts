@@ -8,6 +8,7 @@
 
 import { etapeLigne, type Etape } from './activite';
 import { dealFromKobi, leaveToKobi, reduced } from './effets';
+import { surLangue, t } from './i18n';
 import { tauri } from './native';
 import type { Stage } from './stage';
 
@@ -48,10 +49,19 @@ export class Conversation {
     this.history = el('div', 'card card-history');
     this.history.dataset.panel = 'history';
     this.history.setAttribute('role', 'log');
-    this.history.setAttribute('aria-label', 'Échanges récents avec Kobi');
     this.history.hidden = true;
     this.list = el('div', 'history-list');
-    this.history.append(el('div', 'kicker', 'Échanges récents'), this.list);
+    const kicker = el('div', 'kicker');
+    this.history.append(kicker, this.list);
+    // L'historique peut rester ouvert : ses textes suivent la langue.
+    const traduire = (): void => {
+      this.history.setAttribute('aria-label', t('kobi.conversation.aria'));
+      kicker.textContent = t('kobi.conversation.titre');
+      for (const box of this.list.querySelectorAll<HTMLElement>('.ex-steps')) delete box.dataset.n;
+      this.renderHistory();
+    };
+    traduire();
+    surLangue(traduire);
     this.history.addEventListener('wheel', (e) => this.onHistoryWheel(e), { passive: true });
     this.history.addEventListener('pointermove', () => this.armIdle());
 
@@ -163,7 +173,7 @@ export class Conversation {
         this.list.append(item);
       }
       item.dataset.statut = b.statut;
-      item.querySelector('.ex-who')!.textContent = b.clavier ? 'tapé' : 'dit';
+      item.querySelector('.ex-who')!.textContent = b.clavier ? t('kobi.conversation.tape') : t('kobi.conversation.dit');
       item.querySelector('.ex-q .ex-text')!.textContent = b.question;
       item.querySelector('.ex-a')!.textContent = b.reponse || (b.statut === 'attente' ? '…' : '');
       this.renderSteps(item, b.etapes ?? []);
@@ -188,7 +198,7 @@ export class Conversation {
     }
     if (box.dataset.n === String(etapes.length)) return;
     box.dataset.n = String(etapes.length);
-    box.querySelector('summary')!.textContent = etapes.length === 1 ? '1 étape' : `${etapes.length} étapes`;
+    box.querySelector('summary')!.textContent = t('kobi.conversation.etapes', { n: etapes.length });
     box.querySelector('.ex-steps-list')!.replaceChildren(...etapes.map((e) => etapeLigne(e)));
   }
 }

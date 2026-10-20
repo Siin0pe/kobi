@@ -10,7 +10,7 @@
 // brouillée, avec une petite icône animée selon l'outil, et la mascotte prend
 // le geste de l'outil. « Réduire les animations » : même texte, sans mouvement.
 
-import { t } from './i18n';
+import { surLangue, t } from './i18n';
 import { tauri } from './native';
 import { scramble, settleStep } from './mascotte/glyphs';
 import type { Stage } from './stage';
@@ -103,7 +103,8 @@ export class Activite {
     this.root = el('div', 'fil');
     this.root.setAttribute('role', 'log');
     this.root.setAttribute('aria-live', 'polite');
-    this.root.setAttribute('aria-label', 'Ce que fait Kobi');
+    this.root.setAttribute('aria-label', t('kobi.activite.aria'));
+    surLangue(() => this.root.setAttribute('aria-label', t('kobi.activite.aria')));
     this.root.dataset.tour = '';
     this.list = el('div', 'fil-list');
     this.root.append(this.list);

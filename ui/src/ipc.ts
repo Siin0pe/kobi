@@ -3,6 +3,10 @@
 // Tauri (navigateur, tests sans fausse coque), `disponible()` est faux et
 // toute commande est refusée avec un message lisible.
 
+// Import circulaire avec i18n (qui lit la langue par `invoke`) : `t` n'est
+// appelé qu'à l'exécution, une fois les deux modules chargés.
+import { t } from './i18n';
+
 interface Coque {
   core: { invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> };
   event: { listen<T>(event: string, handler: (e: { payload: T }) => void): Promise<() => void> };
@@ -26,7 +30,7 @@ export function message(e: unknown): string {
 /** Commande de `kobi-app` ; rejette avec le message d'erreur de Rust. */
 export function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   const api = coque();
-  if (!api) return Promise.reject(new Error('Ouvrez cette fenêtre depuis Kobi.'));
+  if (!api) return Promise.reject(new Error(t('kobi.ipc.horsDeKobi')));
   return api.core.invoke<T>(cmd, args);
 }
 

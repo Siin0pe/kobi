@@ -19,6 +19,7 @@ import { affichage, suivreAffichage, TAILLES, TEXTES, type Affichage } from './a
 import type { Bulle } from './conversation';
 import { boutonCopierDedans } from './copie';
 import { Defilement } from './defilement';
+import { surLangue, t } from './i18n';
 import { Markdown } from './markdown';
 import { tauri } from './native';
 import type { Boite, Stage } from './stage';
@@ -97,18 +98,28 @@ export class Vue {
   constructor(private readonly stage: Stage) {
     this.root = el('section', 'lecture');
     this.root.setAttribute('role', 'dialog');
-    this.root.setAttribute('aria-label', 'Conversation avec Kobi');
     this.root.hidden = true;
     const tete = el('div', 'lecture-tete');
     const fermer = el('button', 'lecture-fermer', '×');
     fermer.type = 'button';
-    fermer.setAttribute('aria-label', 'Ranger la conversation');
     fermer.addEventListener('click', () => void this.fermer('bouton'));
-    tete.append(el('span', 'lecture-titre', 'Conversation'), fermer);
+    const titre = el('span', 'lecture-titre');
+    tete.append(titre, fermer);
+    // La vue reste ouverte : ses textes fixes suivent la langue.
+    const traduire = (): void => {
+      this.root.setAttribute('aria-label', t('kobi.vue.aria'));
+      fermer.setAttribute('aria-label', t('kobi.vue.fermer'));
+      titre.textContent = t('kobi.vue.titre');
+      for (const box of this.liste.querySelectorAll<HTMLElement>('.vex-etapes')) {
+        box.querySelector('summary')!.textContent = t('kobi.vue.etapes', { n: Number(box.dataset.n) });
+      }
+    };
     this.corps = el('div', 'lecture-corps defile');
     this.liste = el('div', 'lecture-liste');
     this.corps.append(this.liste);
     this.root.append(tete, this.corps);
+    traduire();
+    surLangue(traduire);
     stage.root.append(this.root);
     this.defile = new Defilement(this.corps, this.liste);
 
@@ -357,7 +368,7 @@ export class Vue {
     }
     if (box.dataset.n === String(etapes.length)) return;
     box.dataset.n = String(etapes.length);
-    box.querySelector('summary')!.textContent = etapes.length === 1 ? '1 étape' : `${etapes.length} étapes`;
+    box.querySelector('summary')!.textContent = t('kobi.vue.etapes', { n: etapes.length });
     box.querySelector('.vex-etapes-liste')!.replaceChildren(...etapes.map((x) => etapeLigne(x)));
   }
 
