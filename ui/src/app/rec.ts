@@ -79,8 +79,7 @@ export function monterBandeauRec(ouvrir: () => void, change: (r: RecordingState 
     element.dataset.pause = String(!!r?.pause);
     if (r) {
       titre.textContent = r.titre ?? 'Réunion';
-      // Arrêt annulable (KOB-174) : « reprends » relance la même réunion.
-      etat.textContent = r.annulable ? 'arrêtée · dis « reprends »' : r.pause ? 'en pause' : `${r.notes} ${r.notes > 1 ? 'notes' : 'note'}`;
+      etat.textContent = r.pause ? 'en pause' : `${r.notes} ${r.notes > 1 ? 'notes' : 'note'}`;
       tic();
     }
     suivre();

@@ -1507,7 +1507,11 @@ impl<R: Runtime> Chef<R> {
             tracing::info!("compte rendu abandonné ignoré");
             return;
         }
-        if let Some(r) = self.reunion.as_mut().filter(|r| r.annulable_jusqu.is_some()) {
+        if let Some(r) = self
+            .reunion
+            .as_mut()
+            .filter(|r| r.annulable_jusqu.is_some())
+        {
             // « Annuler » encore possible : écrit à la fin du délai.
             r.compte_rendu_garde = Some(resultat);
             return;
@@ -1756,7 +1760,9 @@ impl<R: Runtime> Chef<R> {
         }
         let Some(r) = &mut self.reunion else { return };
         // « Annuler » n'a pas servi : la fin est définitive.
-        if r.annulable_jusqu.is_some_and(|quand| Instant::now() >= quand) {
+        if r.annulable_jusqu
+            .is_some_and(|quand| Instant::now() >= quand)
+        {
             self.clore_annulation();
             return;
         }
@@ -2008,10 +2014,7 @@ mod tests {
 
     /// Réunion menée par le vrai chef, avec un Claude qui ne répond jamais :
     /// les comptes rendus sont injectés à la main.
-    fn chef_en_essai() -> (
-        tauri::App<tauri::test::MockRuntime>,
-        tempfile::TempDir,
-    ) {
+    fn chef_en_essai() -> (tauri::App<tauri::test::MockRuntime>, tempfile::TempDir) {
         use tauri::test::{mock_builder, mock_context, noop_assets};
         let dir = tempfile::tempdir().unwrap();
         let app = crate::session::installer(mock_builder())
@@ -2093,7 +2096,10 @@ mod tests {
             c.tick();
         });
         assert!(!avec_chef(&app, |c| c.fin_annulable()));
-        assert!(avec_chef(&app, |c| c.reunion.is_none()), "compte rendu écrit");
+        assert!(
+            avec_chef(&app, |c| c.reunion.is_none()),
+            "compte rendu écrit"
+        );
         assert_eq!(
             avec_chef(&app, |c| c.commande(Intention::Reprendre)),
             "Aucune réunion en cours."

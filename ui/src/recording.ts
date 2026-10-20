@@ -20,7 +20,7 @@ export interface RecordingState {
   titre: string | null;
   /** Dernière note prise (facultatif), tapée dans la fiche de Kobi. */
   derniere_note?: string | null;
-  /** Arrêt encore annulable par « reprends » (KOB-174), avec `pause`. */
+  /** Réunion terminée, fin encore annulable (KOB-245), avec `actif` faux. */
   annulable?: boolean;
 }
 
@@ -32,14 +32,14 @@ interface TauriGlobal {
 /** Applique un état d'enregistrement à la scène. */
 export function applyRecording(stage: Stage, r: RecordingState): void {
   if (!r.actif) {
-    stage.endMeeting();
+    if (stage.currentMeeting) stage.endMeeting({ undoable: Boolean(r.annulable) });
+    else if (!r.annulable) stage.closeUndo();
     return;
   }
   const info = {
     title: r.titre ?? undefined,
     startedAt: r.debut_ms,
     paused: r.pause,
-    stopping: Boolean(r.annulable),
     notes: r.notes,
     lastNote: r.derniere_note ?? undefined,
   };
@@ -80,6 +80,17 @@ export function followRecording(stage: Stage): void {
     },
     () => {},
   );
+  // « Annuler » (clic ou Ctrl+Z) : la même réunion reprend (KOB-245).
+  const annuler = (): void => {
+    void api.core.invoke('reprendre').catch(() => {});
+  };
+  stage.onUndoMeeting = annuler;
+  document.addEventListener('keydown', (e) => {
+    if (e.key.toLowerCase() !== 'z' || !(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return;
+    if (!stage.canUndoMeeting) return;
+    e.preventDefault();
+    annuler();
+  });
   void api.event.listen<RecordingState>('enregistrement', (e) => {
     explicit = true;
     applyRecording(stage, e.payload);

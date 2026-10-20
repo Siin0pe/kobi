@@ -56,6 +56,12 @@ export class RecIndicator {
   private readonly notes: HTMLElement;
   /** « son de l'ordi » : la piste « eux » est captée (KOB-164). */
   private readonly eux: HTMLElement;
+  /** « Annuler » après la fin (KOB-245) : la même réunion reprend. */
+  private readonly undo: HTMLButtonElement;
+  /** Fin encore annulable : l'étiquette reste, le bouton aussi. */
+  private undoable = false;
+  /** Clic sur « Annuler ». */
+  onUndo: (() => void) | null = null;
   private reduced = false;
   private info: MeetingInfo | null = null;
   private timer = 0;
@@ -76,7 +82,12 @@ export class RecIndicator {
     this.eux = el('span', 'rec-eux', 'son de l’ordi');
     this.eux.title = 'Le son de l’ordinateur (la voix des autres en visio) est transcrit aussi.';
     this.eux.hidden = true;
-    this.root.append(el('span', 'rec-dot'), (this.label = el('span', 'rec-label')), this.time, this.notes, this.eux);
+    this.undo = el('button', 'rec-undo', 'Annuler');
+    this.undo.type = 'button';
+    this.undo.title = 'Reprendre la même réunion (Ctrl+Z)';
+    this.undo.hidden = true;
+    this.undo.addEventListener('click', () => this.onUndo?.());
+    this.root.append(el('span', 'rec-dot'), (this.label = el('span', 'rec-label')), this.time, this.notes, this.eux, this.undo);
   }
 
   setReducedMotion(reduced: boolean): void {
@@ -87,24 +98,19 @@ export class RecIndicator {
     return this.info !== null;
   }
 
-  set(info: MeetingInfo | null): void {
+  /** `undoable` : la fin s'annule encore (KOB-245), « Annuler » s'affiche. */
+  set(info: MeetingInfo | null, undoable = false): void {
     const before = this.info?.notes ?? 0;
     const ended = this.info !== null && info === null ? this.info : null;
     this.info = info;
     this.stopEnding();
     if (ended) {
-      this.end(ended);
+      this.end(ended, undoable);
       return;
     }
     this.root.hidden = info === null;
-    this.root.classList.toggle('is-paused', Boolean(info?.paused || info?.stopping));
-    this.root.classList.toggle('is-stopping', Boolean(info?.stopping));
-    if (info?.stopping) {
-      // Arrêt annulable (KOB-174) : rien n'est rédigé tant que « reprends »
-      // peut tout relancer.
-      this.label.textContent = 'arrêté · dis « reprends »';
-      this.root.setAttribute('aria-label', 'Enregistrement arrêté : dis « reprends » pour continuer');
-    } else if (info) {
+    this.root.classList.toggle('is-paused', Boolean(info?.paused));
+    if (info) {
       const word = info.paused ? 'PAUSE' : 'REC';
       this.label.textContent = info.title ? `${word} · ${info.title}` : word;
       this.root.setAttribute('aria-label', info.paused ? 'Transcription en pause' : 'Réunion transcrite en local');
@@ -124,7 +130,7 @@ export class RecIndicator {
    * point s'éteint, l'étiquette devient grise « réunion terminée · 7 min »,
    * puis elle s'efface. Rien n'y ressemble plus à un enregistrement en cours.
    */
-  private end(info: MeetingInfo): void {
+  private end(info: MeetingInfo, undoable: boolean): void {
     window.clearTimeout(this.timer);
     this.timer = 0;
     const minutes = Math.round((Date.now() - info.startedAt) / 60_000);
@@ -135,6 +141,32 @@ export class RecIndicator {
     this.time.textContent = minutes < 1 ? 'moins d’une minute' : `${minutes} min`;
     this.notes.hidden = true;
     this.root.hidden = false;
+    if (undoable) {
+      // « Réunion terminée · Annuler » (KOB-245) : l'étiquette attend la fin
+      // du délai, puis s'efface comme d'habitude.
+      this.undoable = true;
+      this.undo.hidden = false;
+      this.root.setAttribute('aria-label', 'Réunion terminée. Annuler pour reprendre la même réunion');
+      return;
+    }
+    this.fade();
+  }
+
+  /** Le délai d'« Annuler » est passé : l'étiquette s'efface. */
+  closeUndo(): void {
+    if (!this.undoable) return;
+    this.undoable = false;
+    this.undo.hidden = true;
+    this.root.setAttribute('aria-label', 'Réunion terminée');
+    this.fade();
+  }
+
+  get canUndo(): boolean {
+    return this.undoable;
+  }
+
+  /** L'étiquette « réunion terminée » s'efface. */
+  private fade(): void {
     const hide = (): void => {
       this.ending = 0;
       this.endAnim = null;
@@ -165,6 +197,8 @@ export class RecIndicator {
   }
 
   private stopEnding(): void {
+    this.undoable = false;
+    this.undo.hidden = true;
     window.clearTimeout(this.ending);
     this.ending = 0;
     this.endAnim?.cancel();
