@@ -261,6 +261,8 @@ fn jouer(samples: Vec<f32>) -> Receiver<AudioFrame> {
 struct Rattrapage {
     audio: Vec<f32>,
     texte: bool,
+    /// Dernier partiel resté sans final (KOB-253), et son début.
+    partiel: Option<(String, f64)>,
 }
 
 /// Au plus 3 s gardées : au-delà, ce n'est plus un mot court.
@@ -378,11 +380,38 @@ fn transcrire(
                     }
                     actions.extend(suite);
                     if s.is_final {
+                        rattrapage.partiel = None;
                         finals.push(s);
+                    } else if !s.text.trim().is_empty() {
+                        rattrapage.partiel = Some((s.text, s.start));
                     }
                 }
             }
             Err(e) => tracing::warn!(erreur = %e, "écoute continue : transcription"),
+        }
+    }
+    // La porte se ferme sur un partiel que le moteur ne conclut pas (plus
+    // d'audio jusqu'à la parole suivante), alors que Kobi attend une
+    // réponse : il vaut final, tout de suite (KOB-253). Hors carte, une pause
+    // au milieu d'une question ne la coupe pas.
+    if etait_ouverte && !porte.ouverte() && ecouteur.attend_reponse() {
+        if let Some((texte, debut)) = rattrapage.partiel.take() {
+            stt.conclure(kobi_stt::Source::Moi);
+            if let Some(d) = diag {
+                d.note(&format!("partiel conclu à la fermeture : « {texte} »"));
+            }
+            let suite = ecouteur.segment(&texte, true, t);
+            if let Some(d) = diag {
+                d.segment(&texte, true, &suite);
+            }
+            actions.extend(suite);
+            finals.push(kobi_stt::Segment {
+                start: debut,
+                end: t,
+                source: kobi_stt::Source::Moi,
+                text: texte,
+                is_final: true,
+            });
         }
     }
     // La porte se ferme sur une prise de parole restée sans texte, alors que
@@ -1052,6 +1081,100 @@ mod tests {
         let mut e = Ecouteur::default();
         e.reponse_attendue(0.0, 60.0);
         assert_eq!(jouer(&mut e, 25).0, 0);
+    }
+
+    /// KOB-253 : le moteur ne sort qu'un partiel « Non », jamais conclu
+    /// (plus d'audio après la fermeture de la porte). Carte ouverte, il part
+    /// à la fermeture, une fois, et le flux repart à neuf ; sans carte, il
+    /// attend la suite.
+    #[test]
+    fn partiel_conclu_quand_la_porte_se_ferme_sur_une_carte() {
+        #[derive(Default)]
+        struct Partiel {
+            voix: usize,
+            dit: bool,
+            conclus: usize,
+        }
+        impl SttEngine for Partiel {
+            fn name(&self) -> &str {
+                "partiel"
+            }
+            fn push(
+                &mut self,
+                frame: &kobi_stt::AudioFrame,
+            ) -> kobi_stt::Result<Vec<kobi_stt::Segment>> {
+                if frame.samples.iter().any(|x| x.abs() > 0.01) {
+                    self.voix += 1;
+                }
+                if self.voix < 3 || self.dit {
+                    return Ok(Vec::new());
+                }
+                self.dit = true;
+                Ok(vec![kobi_stt::Segment {
+                    start: frame.t,
+                    end: frame.end(),
+                    source: kobi_stt::Source::Moi,
+                    text: "Non".into(),
+                    is_final: false,
+                }])
+            }
+            fn finish(&mut self) -> kobi_stt::Result<Vec<kobi_stt::Segment>> {
+                Ok(Vec::new())
+            }
+            fn conclure(&mut self, _source: kobi_stt::Source) {
+                self.conclus += 1;
+            }
+        }
+        // 1 s de silence, 0,5 s de voix, 4 s de silence.
+        let jouer = |ecouteur: &mut Ecouteur| {
+            let mut stt = Partiel::default();
+            let mut porte = Porte::new(kobi_stt::SAMPLE_RATE);
+            let mut rattrapage = Rattrapage::default();
+            let voix: Vec<f32> = (0..1600).map(|i| 0.2 * (i as f32 * 0.3).sin()).collect();
+            let (mut t, mut actions, mut finals) = (0.0, Vec::new(), Vec::new());
+            for (n, fort) in [(10, false), (5, true), (40, false)] {
+                for _ in 0..n {
+                    let frame = kobi_stt::AudioFrame {
+                        source: kobi_stt::Source::Moi,
+                        samples: if fort { voix.clone() } else { vec![0.0; 1600] },
+                        t,
+                    };
+                    t += 0.1;
+                    let (a, f) = transcrire(
+                        &mut stt,
+                        &mut porte,
+                        ecouteur,
+                        &mut None,
+                        &mut rattrapage,
+                        frame,
+                        t,
+                        &|_| false,
+                    );
+                    actions.extend(a);
+                    finals.extend(f);
+                }
+            }
+            (stt.conclus, actions, finals)
+        };
+        let mut e = Ecouteur::default();
+        e.reponse_attendue(0.0, 60.0);
+        let (conclus, actions, finals) = jouer(&mut e);
+        assert_eq!(conclus, 1);
+        let envois: Vec<_> = actions
+            .iter()
+            .filter(|a| matches!(a, Action::Envoyer(_)))
+            .collect();
+        assert_eq!(envois, [&Action::Envoyer("Non".into())], "{actions:?}");
+        assert_eq!(finals.len(), 1);
+        assert_eq!(finals[0].text, "Non");
+        // Sans carte : le partiel n'est pas tranché à la fermeture.
+        let (conclus, actions, finals) = jouer(&mut Ecouteur::default());
+        assert_eq!(conclus, 0);
+        assert!(
+            !actions.iter().any(|a| matches!(a, Action::Envoyer(_))),
+            "{actions:?}"
+        );
+        assert!(finals.is_empty());
     }
 
     #[test]

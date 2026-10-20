@@ -101,6 +101,11 @@ pub trait SttEngine {
     /// si la phrase précédente est conclue (KOB-190). Rien par défaut.
     fn nouvel_enonce(&mut self, _source: Source) {}
 
+    /// L'énoncé en cours sur `source` est conclu par l'écoute (KOB-253) : son
+    /// dernier partiel a valu final. La suite repart d'un flux neuf, sans
+    /// redonner ce texte. Rien par défaut.
+    fn conclure(&mut self, _source: Source) {}
+
     /// Transcrit à part une prise de parole très courte (« oui », « non »)
     /// restée sans texte dans le flux (KOB-197). `None` par défaut.
     fn transcrire_court(&mut self, _samples: &[f32]) -> Option<String> {
@@ -132,6 +137,10 @@ impl<E: SttEngine + ?Sized> SttEngine for Box<E> {
 
     fn nouvel_enonce(&mut self, source: Source) {
         (**self).nouvel_enonce(source)
+    }
+
+    fn conclure(&mut self, source: Source) {
+        (**self).conclure(source)
     }
 
     fn transcrire_court(&mut self, samples: &[f32]) -> Option<String> {

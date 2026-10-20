@@ -289,6 +289,22 @@ impl SttEngine for NemotronEngine {
         track.utterance_start = track.pos;
     }
 
+    /// KOB-253 : l'écoute a pris le dernier partiel pour final ; le flux
+    /// repart à neuf pour que le moteur ne le redonne pas avec la parole
+    /// suivante.
+    fn conclure(&mut self, source: Source) {
+        let Some(track) = self.tracks.get_mut(&source) else {
+            return;
+        };
+        track.stream = self.recognizer.create_stream();
+        track.stream.set_option(
+            "language",
+            self.config.language.as_deref().unwrap_or("auto"),
+        );
+        track.utterance_start = track.pos;
+        track.last_text.clear();
+    }
+
     /// KOB-197 : un mot d'une syllabe dit seul (« oui », « non ») ne sort
     /// jamais du modèle, même sur un flux neuf, avec ou sans langue imposée ;
     /// redoublé (« oui… oui »), il sort (« Oui, oui »). Flux à part, mot
