@@ -99,6 +99,9 @@ export async function ecrire(texte: string): Promise<void> {
     const zone = document.createElement('textarea');
     zone.className = 'presse-papiers';
     zone.setAttribute('aria-hidden', 'true');
+    // Hors de l'écran partout, même là où la feuille du Carnet n'est pas chargée.
+    zone.style.position = 'fixed';
+    zone.style.left = '-9999px';
     zone.value = texte;
     document.body.append(zone);
     zone.select();
@@ -138,4 +141,46 @@ export function poserFormatCopie(f: Format): void {
   } catch {
     // Gardé en mémoire seulement.
   }
+}
+
+/** Durée du retour dans le bouton avant qu'il reprenne son libellé. */
+const RETOUR_MS = 2600;
+
+/**
+ * Bouton de copie dont le retour s'affiche dans le bouton lui-même
+ * (« Réponse copiée · 240 caractères »), sans notification : la bulle et la
+ * vue agrandie restent sobres. Le format et l'aperçu sont dans l'infobulle.
+ * `court` : sans le format dans le bouton (la bulle est étroite).
+ */
+export function boutonCopierDedans(quoi: Quoi, texte: () => string, classe: string, court = false): HTMLButtonElement {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = classe;
+  b.dataset.quoi = quoi;
+  const libelle = TEXTES[quoi].bouton;
+  b.textContent = libelle;
+  b.title = libelle;
+  let minuterie = 0;
+  b.addEventListener('click', async (e) => {
+    // Ni la bulle autour (qui ouvre la vue agrandie) ni un clic à côté.
+    e.stopPropagation();
+    window.clearTimeout(minuterie);
+    const format = formatCopie();
+    try {
+      const r = await copier(texte(), quoi, format);
+      b.textContent = court ? r.message.replace(` · ${FORMATS[format]}`, '') : r.message;
+      b.title = `${r.message}\n${r.apercu}`;
+      b.dataset.etat = 'copie';
+    } catch {
+      b.textContent = 'Copie impossible';
+      b.title = 'Le système a refusé la copie.';
+      b.dataset.etat = 'erreur';
+    }
+    minuterie = window.setTimeout(() => {
+      b.textContent = libelle;
+      b.title = libelle;
+      delete b.dataset.etat;
+    }, RETOUR_MS);
+  });
+  return b;
 }

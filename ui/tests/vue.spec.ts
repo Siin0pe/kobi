@@ -376,3 +376,84 @@ test('KOB-246 : la molette vers le haut sur la vue agrandie ne fait pas surgir l
   await expect(page.getByRole('log', { name: 'Échanges récents avec Kobi' })).toBeHidden();
   await expectNoErrors(errors);
 });
+
+// KOB-224 : « Copier la réponse » dans la bulle et la vue agrandie. Le
+// presse-papiers est simulé : on lit exactement ce qui y part.
+async function presse(page: Page, format?: 'texte'): Promise<void> {
+  await page.addInitScript((f) => {
+    const w = window as unknown as { __copie: string };
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText: async (t: string) => void (w.__copie = t) } });
+    if (f) localStorage.setItem('kobi.copie', f);
+  }, format);
+}
+const copie = (page: Page) => page.evaluate(() => (window as unknown as { __copie?: string }).__copie);
+const nbCar = (t: string) => `${new Intl.NumberFormat('fr-FR').format([...t].length)} caractères`;
+
+test('bulle : « Copier la réponse » au survol, la réponse entière en markdown, retour dans le bouton, la vue ne s’ouvre pas (KOB-224)', async ({ page }) => {
+  await presse(page);
+  const errors = await kobi(page, { auto: 'jamais' });
+  await repond(page, 'explique le mutex', RICHE);
+  await expect(carte(page)).toHaveAttribute('data-typing', '0', { timeout: 10_000 });
+  // Par sa classe : son nom change le temps du retour.
+  const bouton = carte(page).locator('.copier-reponse');
+  await expect(bouton).toHaveAccessibleName('Copier la réponse');
+  await expect(bouton).toHaveCSS('opacity', '0');
+  await carte(page).hover();
+  await expect(bouton).toHaveCSS('opacity', '1');
+  await page.screenshot({ path: test.info().outputPath('bulle-copier.png') });
+  await bouton.click();
+  expect(await copie(page)).toBe(RICHE);
+  await expect(bouton).toHaveText(`Réponse copiée · ${nbCar(RICHE)}`);
+  // Le format et l'aperçu sont dans l'infobulle.
+  await expect(bouton).toHaveAttribute('title', `Réponse copiée · ${nbCar(RICHE)} · markdown\nUn **mutex** protège la donnée :\n- on prend le verrou avec \`lock()\` ;`);
+  await page.screenshot({ path: test.info().outputPath('bulle-copiee.png') });
+  await expect(vue(page)).toBeHidden();
+  expect((await calls(page)).filter(([c]) => c === 'agrandir_kobi')).toHaveLength(0);
+  // Le libellé revient seul.
+  await expect(bouton).toHaveText('Copier la réponse', { timeout: 5_000 });
+  await expectNoErrors(errors);
+});
+
+test('bulle : pas de « Copier la réponse » pendant que la réponse s’écrit ; format texte brut retenu du Carnet (KOB-224)', async ({ page }) => {
+  await presse(page, 'texte');
+  const errors = await kobi(page, { auto: 'jamais' });
+  await repond(page, 'raconte', longue(6));
+  await expect(carte(page)).toHaveAttribute('data-typing', '1');
+  await carte(page).hover();
+  await expect(carte(page).locator('.copier-reponse')).toHaveCSS('opacity', '0');
+  await emit(page, 'answer', RICHE);
+  await expect(carte(page)).toHaveAttribute('data-typing', '0', { timeout: 10_000 });
+  await carte(page).hover();
+  await carte(page).getByRole('button', { name: 'Copier la réponse' }).click();
+  const brut = 'Un mutex protège la donnée :\n\n• on prend le verrou avec lock() ;\n• on le relâche en fin de bloc.\n\n```rust\nlet n = m.lock().unwrap();\n```';
+  expect(await copie(page)).toBe(brut);
+  await expect(carte(page).locator('.copier-reponse')).toHaveAttribute('title', new RegExp(`· ${nbCar(brut)} · texte brut`));
+  await expectNoErrors(errors);
+});
+
+test('vue agrandie : « Copier la réponse » sous chaque réponse finie, exactement la sienne, retour avec le format (KOB-224)', async ({ page }) => {
+  await presse(page);
+  const errors = await kobi(page, { auto: 'jamais' });
+  await repond(page, 'explique le mutex', RICHE);
+  await emit(page, 'vue', { action: 'ouvrir' });
+  await expect(vue(page)).toBeVisible();
+  // En flux : pas encore de bouton.
+  await expect(vue(page).locator('.vex-copier')).toBeHidden();
+  const seconde = 'Un sémaphore compte les **places** libres.';
+  await emit(page, 'conversation', [
+    { tour: 1, question: 'explique le mutex', reponse: RICHE, statut: 'fini', clavier: false, etapes: [] },
+    { tour: 2, question: 'et le sémaphore ?', reponse: seconde, statut: 'fini', clavier: false, etapes: [] },
+  ]);
+  await expect(vue(page).locator('.vex')).toHaveCount(2);
+  const boutons = vue(page).getByRole('button', { name: 'Copier la réponse' });
+  await expect(boutons).toHaveCount(2);
+  await boutons.nth(1).click();
+  expect(await copie(page)).toBe(seconde);
+  await expect(vue(page).locator('.vex-copier').nth(1)).toHaveText(`Réponse copiée · ${nbCar(seconde)} · markdown`);
+  await boutons.first().click();
+  expect(await copie(page)).toBe(RICHE);
+  await page.screenshot({ path: test.info().outputPath('vue-copiee.png') });
+  // La vue reste ouverte : le clic ne compte pas comme « à côté ».
+  await expect(vue(page)).toBeVisible();
+  await expectNoErrors(errors);
+});
