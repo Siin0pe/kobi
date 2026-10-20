@@ -101,6 +101,12 @@ pub trait SttEngine {
     /// si la phrase précédente est conclue (KOB-190). Rien par défaut.
     fn nouvel_enonce(&mut self, _source: Source) {}
 
+    /// Transcrit à part une prise de parole très courte (« oui », « non »)
+    /// restée sans texte dans le flux (KOB-197). `None` par défaut.
+    fn transcrire_court(&mut self, _samples: &[f32]) -> Option<String> {
+        None
+    }
+
     /// Options de compilation qui comptent pour la vitesse (instructions
     /// CPU, accélérateur), reprises dans les rapports. Vide par défaut.
     fn build_info(&self) -> String {
@@ -119,6 +125,10 @@ impl<E: SttEngine + ?Sized> SttEngine for Box<E> {
 
     fn nouvel_enonce(&mut self, source: Source) {
         (**self).nouvel_enonce(source)
+    }
+
+    fn transcrire_court(&mut self, samples: &[f32]) -> Option<String> {
+        (**self).transcrire_court(samples)
     }
 
     fn finish(&mut self) -> Result<Vec<Segment>> {

@@ -1201,7 +1201,11 @@ impl<R: Runtime> Chef<R> {
         if let Some(resume) = annonce {
             self.annoncer_validation(&resume);
         }
-        let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::Suite);
+        // « Oui » ou « non » sans le nom, tant que la carte attend (KOB-197).
+        let _ = crate::ecoute::commander(
+            &self.app,
+            crate::ecoute::Commande::ReponseAttendue(crate::validation::ECHEANCE),
+        );
     }
 
     fn validation_fermee(&mut self, id: &str, reponse: crate::validation::Reponse) {
@@ -1213,6 +1217,10 @@ impl<R: Runtime> Chef<R> {
                 Evenement::PermissionRefusee
             }]);
         }
+        // Plus de carte : la fenêtre de suite reprend sa durée habituelle (KOB-197).
+        if self.validations.est_vide() {
+            let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::Suite);
+        }
         // La carte montre déjà « Pas de réponse : refusé. » ; la voix ne le
         // redit que si elle est le seul canal (KOB-215).
         if reponse == crate::validation::Reponse::Delai && self.voix_seul_canal() {
@@ -1222,7 +1230,11 @@ impl<R: Runtime> Chef<R> {
         }
         if let Some(resume) = suivante {
             self.annoncer_validation(&resume);
-            let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::Suite);
+            // La carte suivante attend à son tour sa réponse (KOB-197).
+            let _ = crate::ecoute::commander(
+                &self.app,
+                crate::ecoute::Commande::ReponseAttendue(crate::validation::ECHEANCE),
+            );
         }
     }
 
