@@ -227,7 +227,8 @@ pub enum Effet {
 }
 
 /// Au-delà, l'application se ferme même si le compte rendu n'est pas fini.
-const ATTENTE_COMPTE_RENDU: std::time::Duration = std::time::Duration::from_secs(90);
+const ATTENTE_COMPTE_RENDU: std::time::Duration =
+    crate::chef::VIDANGE.saturating_add(std::time::Duration::from_secs(90));
 
 /// Exécute une entrée sans fermer l'application : [`Effet::Fermer`] est
 /// laissé à l'appelant.

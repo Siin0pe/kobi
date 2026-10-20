@@ -259,6 +259,9 @@ impl<R: Runtime> Fil<R> {
         self.signaler(false);
         let debut = Instant::now();
         let publies = self.publies;
+        // Le chef attend la fermeture de la piste (après `finish`) : la
+        // dernière phrase n'est finie qu'à ce moment-là.
+        crate::chef::avancer(&self.app, kobi_stt::Source::Eux, Some(origine));
         let limite = debut + VIDANGE_PISTE;
         let (mut transcrites, mut perdues) = (0, 0);
         for frame in reste {
@@ -267,7 +270,13 @@ impl<R: Runtime> Fil<R> {
                 continue;
             }
             transcrites += 1;
-            self.transcrire(&mut porte, origine, frame.t.as_secs_f64(), frame.samples);
+            self.transcrire(
+                &mut porte,
+                origine,
+                frame.t.as_secs_f64(),
+                frame.samples,
+                false,
+            );
         }
         let fin = self.stt.as_mut().map(|stt| {
             let fin = stt.finish();
@@ -336,13 +345,21 @@ impl<R: Runtime> Fil<R> {
             return;
         };
         let t = frame.t.as_secs_f64();
-        self.transcrire(&mut piste.porte, piste.origine, t, samples);
+        self.transcrire(&mut piste.porte, piste.origine, t, samples, true);
         self.piste = Some(piste);
     }
 
     /// Transcrit une trame de la piste « eux » (instant `t` depuis
-    /// `origine`) et publie ce qui est fini, avec l'instant où c'était dit.
-    fn transcrire(&mut self, porte: &mut Porte, origine: Instant, t: f64, samples: Vec<f32>) {
+    /// `origine`) et publie ce qui est fini, avec l'instant où c'était dit ;
+    /// `avancer` : publie aussi jusqu'où la piste a transcrit.
+    fn transcrire(
+        &mut self,
+        porte: &mut Porte,
+        origine: Instant,
+        t: f64,
+        samples: Vec<f32>,
+        avancer: bool,
+    ) {
         let duree = samples.len() as f64 / kobi_stt::SAMPLE_RATE as f64;
         let Some(stt) = &mut self.stt else { return };
         let mut finis = Vec::new();
@@ -358,9 +375,11 @@ impl<R: Runtime> Fil<R> {
             }
         }
         self.publier(origine, finis);
-        // Tout l'audio reçu jusqu'ici est transcrit.
-        let jusqu_a = origine + Duration::from_secs_f64((t + duree).max(0.0));
-        crate::chef::avancer(&self.app, kobi_stt::Source::Eux, Some(jusqu_a));
+        if avancer {
+            // Tout l'audio reçu jusqu'ici est transcrit.
+            let jusqu_a = origine + Duration::from_secs_f64((t + duree).max(0.0));
+            crate::chef::avancer(&self.app, kobi_stt::Source::Eux, Some(jusqu_a));
+        }
     }
 
     /// Publie les segments finis de la piste « eux » (sauf la voix de Kobi).
