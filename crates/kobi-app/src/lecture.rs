@@ -280,7 +280,8 @@ pub fn permis(outil: &str) -> bool {
 }
 
 fn config_path() -> Result<PathBuf, String> {
-    config::default_path().ok_or_else(|| "dossier personnel introuvable".to_owned())
+    config::default_path()
+        .ok_or_else(|| kobi_i18n::tr("coque.lecture.dossierPersonnelIntrouvable", &[]))
 }
 
 /// Enregistre les dossiers de code lisibles par Kobi (KOB-138). Les lignes
@@ -293,11 +294,17 @@ pub fn apply_codebases(path: &Path, dossiers: &[String]) -> Result<Vec<PathBuf>,
         .map(PathBuf::from)
         .collect();
     if let Some(absent) = dossiers.iter().find(|d| !d.is_dir()) {
-        return Err(format!("dossier introuvable : {}", absent.display()));
+        return Err(kobi_i18n::tr(
+            "coque.lecture.dossierIntrouvable",
+            &[("dossier", &absent.display().to_string())],
+        ));
     }
     let mut loaded = config::load_or_create(path);
     if let Some(problem) = loaded.problem {
-        return Err(format!("réglage non enregistré : {problem}"));
+        return Err(kobi_i18n::tr(
+            "coque.lecture.reglageNonEnregistre",
+            &[("probleme", &problem.to_string())],
+        ));
     }
     loaded.config.codebases.clone_from(&dossiers);
     config::save(&loaded.config, path).map_err(|e| e.to_string())?;

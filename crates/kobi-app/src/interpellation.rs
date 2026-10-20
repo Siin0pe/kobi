@@ -114,10 +114,8 @@ pub fn declencher<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
 }
 
 pub fn charger_stt() -> Result<NemotronEngine, String> {
-    let dir = modele_nemotron().ok_or_else(|| {
-        "modèle Nemotron introuvable : placer le paquet sherpa-onnx-nemotron-… dans ~/Kobi/models"
-            .to_string()
-    })?;
+    let dir = modele_nemotron()
+        .ok_or_else(|| kobi_i18n::tr("coque.interpellation.nemotronIntrouvable", &[]))?;
     let mut config = NemotronConfig::new(&dir);
     config.num_threads = std::env::var("KOBI_STT_THREADS")
         .ok()

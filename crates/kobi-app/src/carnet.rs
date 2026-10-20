@@ -39,7 +39,8 @@ pub fn ouvrir_sur<R: Runtime>(app: &AppHandle<R>, reunion: Option<&str>) -> taur
 }
 
 fn stockage<R: Runtime>(app: &AppHandle<R>) -> Result<Stockage, String> {
-    crate::stockage::actuel(app).ok_or_else(|| "dossier de Kobi introuvable".to_owned())
+    crate::stockage::actuel(app)
+        .ok_or_else(|| kobi_i18n::tr("coque.commun.dossierKobiIntrouvable", &[]))
 }
 
 /// Type d'élément du Carnet.
@@ -140,7 +141,7 @@ pub async fn carnet_exporter<R: Runtime>(
     let mut dialogue = app
         .dialog()
         .file()
-        .set_title("Exporter en markdown")
+        .set_title(kobi_i18n::tr("coque.carnet.exporterTitre", &[]))
         .set_file_name(nom_d_export(&doc))
         .add_filter("Markdown", &["md"]);
     if let Some(dir) = std::env::home_dir().map(|h| h.join("Documents")) {
@@ -170,9 +171,12 @@ fn dernier_export() -> Result<PathBuf, String> {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clone()
-        .ok_or("Aucun fichier exporté.")?;
+        .ok_or_else(|| kobi_i18n::tr("coque.carnet.aucunExport", &[]))?;
     if !chemin.is_file() {
-        return Err(format!("{} n'existe plus.", chemin.display()));
+        return Err(kobi_i18n::tr(
+            "coque.carnet.nExistePlus",
+            &[("chemin", &chemin.display().to_string())],
+        ));
     }
     Ok(chemin)
 }
@@ -251,9 +255,7 @@ pub fn carnet_supprimer<R: Runtime>(
         Genre::Reunion => {
             let lue = st.lire_reunion(&id).map_err(|e| e.to_string())?;
             if reunion_active(&lue.dossier, lue.resume.en_cours, SystemTime::now()) {
-                return Err(
-                    "Cette réunion est en cours : terminez-la avant de la supprimer.".into(),
-                );
+                return Err(kobi_i18n::tr("coque.carnet.reunionEnCours", &[]));
             }
             st.supprimer_reunion(&id, None).map_err(|e| e.to_string())?;
         }
@@ -276,11 +278,11 @@ pub fn renommer<R: Runtime>(
 ) -> Result<String, String> {
     let titre = titre.trim();
     if titre.is_empty() {
-        return Err("Il me faut un titre.".into());
+        return Err(kobi_i18n::tr("coque.carnet.titreVide", &[]));
     }
     let st = stockage(app)?;
     if genre == Genre::Conversation {
-        let id = id.ok_or("Quelle conversation ?")?;
+        let id = id.ok_or_else(|| kobi_i18n::tr("coque.carnet.quelleConversation", &[]))?;
         st.renommer_conversation(id, titre)
             .map_err(|e| e.to_string())?;
         tracing::info!(id, "conversation renommée");
@@ -299,11 +301,11 @@ pub fn renommer<R: Runtime>(
     let courante = match (&visee, &en_cours) {
         (None, Some(_)) => true,
         (Some(v), Some(c)) => v == c,
-        (None, None) => return Err("Aucune réunion en cours.".into()),
+        (None, None) => return Err(kobi_i18n::tr("coque.commun.aucuneReunion", &[])),
         (Some(_), None) => false,
     };
     if courante {
-        let chef = chef.ok_or("Aucune réunion en cours.")?;
+        let chef = chef.ok_or_else(|| kobi_i18n::tr("coque.commun.aucuneReunion", &[]))?;
         chef.0
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -350,7 +352,7 @@ pub async fn choisir_dossier<R: Runtime>(
     let mut dialogue = app
         .dialog()
         .file()
-        .set_title(titre.as_deref().unwrap_or("Dossier de Kobi"));
+        .set_title(titre.unwrap_or_else(|| kobi_i18n::tr("reglages.stockage.dossierTitre", &[])));
     if let Ok(st) = stockage(&app) {
         dialogue = dialogue.set_directory(st.racine());
     }

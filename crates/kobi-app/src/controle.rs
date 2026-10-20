@@ -111,7 +111,10 @@ fn autoriser<R: Runtime>(
     if commande.interne && origine != Origine::Cli {
         return Err(erreur(
             Code::Unauthorized,
-            format!("{} est réservée à Kobi", commande.nom),
+            kobi_i18n::tr(
+                "coque.controle.reserveeAKobi",
+                &[("commande", commande.nom)],
+            ),
         ));
     }
     match (origine, commande.effet) {
@@ -134,17 +137,16 @@ fn autoriser<R: Runtime>(
         crate::validation::Reponse::Accepte => Ok(()),
         crate::validation::Reponse::Refuse => Err(erreur(
             Code::NeedsValidation,
-            format!(
-                "{} : refusé par l'utilisateur, rien n'a été fait",
-                commande.nom
-            ),
+            kobi_i18n::tr("coque.controle.refuse", &[("commande", commande.nom)]),
         )),
         crate::validation::Reponse::Delai => Err(erreur(
             Code::NeedsValidation,
-            format!(
-                "{} : pas de réponse en {} s, refusé, rien n'a été fait",
-                commande.nom,
-                crate::validation::ECHEANCE.as_secs()
+            kobi_i18n::tr(
+                "coque.controle.delai",
+                &[
+                    ("commande", commande.nom),
+                    ("s", &crate::validation::ECHEANCE.as_secs().to_string()),
+                ],
             ),
         )),
     }
@@ -227,9 +229,12 @@ pub fn executer<R: Runtime>(
             texte(&params, "reunion"),
         ),
         "mascot.show" | "mascot.hide" => {
-            let w = app
-                .get_webview_window("main")
-                .ok_or_else(|| erreur(Code::Unavailable, "fenêtre de la mascotte absente"))?;
+            let w = app.get_webview_window("main").ok_or_else(|| {
+                erreur(
+                    Code::Unavailable,
+                    kobi_i18n::tr("coque.controle.mascotteAbsente", &[]),
+                )
+            })?;
             let montrer = commande.nom == "mascot.show";
             if montrer { w.show() } else { w.hide() }
                 .map_err(|e| erreur(Code::Internal, e.to_string()))?;
@@ -283,7 +288,12 @@ pub fn executer<R: Runtime>(
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .pop()
-                .ok_or_else(|| erreur(Code::Conflict, "aucun changement de réglage à annuler"))?;
+                .ok_or_else(|| {
+                    erreur(
+                        Code::Conflict,
+                        kobi_i18n::tr("coque.controle.rienAAnnuler", &[]),
+                    )
+                })?;
             regler(app, &cle, avant).map(|(_, r)| r)
         }
         "meeting.start" => reunion(app, Intention::DemarrerReunion, origine),
@@ -359,7 +369,12 @@ pub fn executer<R: Runtime>(
                     .map_err(io)?
                     .first()
                     .map(|c| c.id.clone())
-                    .ok_or_else(|| erreur(Code::NotFound, "aucune conversation enregistrée"))?,
+                    .ok_or_else(|| {
+                        erreur(
+                            Code::NotFound,
+                            kobi_i18n::tr("coque.controle.aucuneConversation", &[]),
+                        )
+                    })?,
                 id => id.to_owned(),
             };
             if texte(&params, "format") == Some("md") {
@@ -382,7 +397,10 @@ pub fn executer<R: Runtime>(
         "reminders.add" => {
             let texte_rappel = texte(&params, "text").unwrap_or_default().trim();
             if texte_rappel.is_empty() {
-                return Err(erreur(Code::InvalidValue, "rappel vide"));
+                return Err(erreur(
+                    Code::InvalidValue,
+                    kobi_i18n::tr("coque.controle.rappelVide", &[]),
+                ));
             }
             let echeance = texte(&params, "due").map(echeance_ms).transpose()?;
             en_json(
@@ -394,14 +412,20 @@ pub fn executer<R: Runtime>(
         "reminders.done" => {
             let id = texte(&params, "id").unwrap_or_default();
             if !stockage(app)?.marquer_fait(id).map_err(io)? {
-                return Err(erreur(Code::NotFound, format!("rappel introuvable : {id}")));
+                return Err(erreur(
+                    Code::NotFound,
+                    kobi_i18n::tr("coque.controle.rappelIntrouvable", &[("id", id)]),
+                ));
             }
             Ok(json!({ "id": id, "fait": true }))
         }
         "listen.pause" | "listen.resume" => {
             let pause = commande.nom == "listen.pause";
             if app.try_state::<crate::ecoute::Ecoute>().is_none() {
-                return Err(erreur(Code::Unavailable, "l'écoute n'est pas lancée"));
+                return Err(erreur(
+                    Code::Unavailable,
+                    kobi_i18n::tr("coque.controle.ecouteNonLancee", &[]),
+                ));
             }
             crate::ecoute::commander(app, crate::ecoute::Commande::Pause(pause))
                 .map_err(|e| erreur(Code::Internal, e))?;
@@ -410,18 +434,21 @@ pub fn executer<R: Runtime>(
         "voice.say" => {
             let texte_dit = texte(&params, "text").unwrap_or_default().trim();
             if texte_dit.is_empty() {
-                return Err(erreur(Code::InvalidValue, "texte vide"));
+                return Err(erreur(
+                    Code::InvalidValue,
+                    kobi_i18n::tr("coque.controle.texteVide", &[]),
+                ));
             }
             if app.try_state::<crate::voix::Voix>().is_none() {
                 return Err(erreur(
                     Code::Unavailable,
-                    "la voix de Kobi n'est pas lancée",
+                    kobi_i18n::tr("coque.controle.voixNonLancee", &[]),
                 ));
             }
             if !crate::voix::etat_voix(app).actif {
                 return Err(erreur(
                     Code::Conflict,
-                    "Kobi répond en texte seul ici : kobi config set voice.assistant true (ou voice.meeting en réunion)",
+                    kobi_i18n::tr("coque.controle.texteSeul", &[]),
                 ));
             }
             crate::voix::dire(app, texte_dit);
@@ -448,14 +475,18 @@ pub fn executer<R: Runtime>(
         }
         autre => Err(erreur(
             Code::UnknownCommand,
-            format!("commande sans exécution dans l'app : {autre}"),
+            kobi_i18n::tr("coque.controle.sansExecution", &[("commande", autre)]),
         )),
     }
 }
 
 fn controle<R: Runtime>(app: &AppHandle<R>) -> Result<tauri::State<'_, Controle>, Erreur> {
-    app.try_state::<Controle>()
-        .ok_or_else(|| erreur(Code::Unavailable, "interface de contrôle non installée"))
+    app.try_state::<Controle>().ok_or_else(|| {
+        erreur(
+            Code::Unavailable,
+            kobi_i18n::tr("coque.controle.nonInstallee", &[]),
+        )
+    })
 }
 
 fn io(e: std::io::Error) -> Erreur {
@@ -482,8 +513,12 @@ fn erreur_cle(e: ErreurCle) -> Erreur {
 }
 
 fn stockage<R: Runtime>(app: &AppHandle<R>) -> Result<Stockage, Erreur> {
-    crate::stockage::actuel(app)
-        .ok_or_else(|| erreur(Code::Unavailable, "dossier de Kobi introuvable"))
+    crate::stockage::actuel(app).ok_or_else(|| {
+        erreur(
+            Code::Unavailable,
+            kobi_i18n::tr("coque.commun.dossierKobiIntrouvable", &[]),
+        )
+    })
 }
 
 // ----- État -----
@@ -569,7 +604,7 @@ fn ouvrir_section<R: Runtime>(
     let cible = section_de(section, panneau, reunion).ok_or_else(|| {
         erreur(
             Code::InvalidValue,
-            "panneau ou réunion illisible : lettres, chiffres, tirets et soulignés seulement",
+            kobi_i18n::tr("coque.controle.sectionIllisible", &[]),
         )
     })?;
     let adresse = cible.adresse();
@@ -597,12 +632,16 @@ fn reunion<R: Runtime>(
     let refus = match intention {
         // « Annuler » juste après la fin : la même réunion continue.
         Intention::Reprendre if annulable => None,
-        Intention::DemarrerReunion if e.actif => Some("J'enregistre déjà la réunion."),
-        Intention::TerminerReunion | Intention::Pause | Intention::Reprendre if !e.actif => {
-            Some("Aucune réunion en cours.")
+        Intention::DemarrerReunion if e.actif => {
+            Some(kobi_i18n::tr("coque.controle.dejaEnregistreReunion", &[]))
         }
-        Intention::Pause if e.pause => Some("La réunion est déjà en pause."),
-        Intention::Reprendre if !e.pause => Some("J'enregistre déjà."),
+        Intention::TerminerReunion | Intention::Pause | Intention::Reprendre if !e.actif => {
+            Some(kobi_i18n::tr("coque.commun.aucuneReunion", &[]))
+        }
+        Intention::Pause if e.pause => Some(kobi_i18n::tr("coque.controle.dejaEnPause", &[])),
+        Intention::Reprendre if !e.pause => {
+            Some(kobi_i18n::tr("coque.controle.dejaEnregistre", &[]))
+        }
         _ => None,
     };
     if let Some(r) = refus {
@@ -641,16 +680,23 @@ fn nom_reunion(st: &Stockage, id: &str) -> Result<String, Erreur> {
         .map_err(io)?
         .first()
         .map(|r| r.nom.clone())
-        .ok_or_else(|| erreur(Code::NotFound, "aucune réunion enregistrée"))
+        .ok_or_else(|| {
+            erreur(
+                Code::NotFound,
+                kobi_i18n::tr("coque.controle.aucuneReunionEnregistree", &[]),
+            )
+        })
 }
 
 fn transcription_markdown(lue: &ReunionLue) -> String {
+    let moi = kobi_i18n::tr("session.export.moi", &[]);
+    let eux = kobi_i18n::tr("session.export.eux", &[]);
     lue.segments
         .iter()
         .map(|s| {
             let qui = match s.source {
-                Source::Moi => "Moi",
-                Source::Eux => "Eux",
+                Source::Moi => &moi,
+                Source::Eux => &eux,
             };
             format!(
                 "- `{}` **{qui}** : {}\n",
@@ -668,11 +714,12 @@ fn lire_reunion(st: &Stockage, nom: &str, partie: &str, format: &str) -> Result<
         ("all", false) => en_json(&lue)?,
         ("all", true) => Value::String(st.document_reunion(nom).map_err(donnees)?.markdown),
         ("summary", false) => en_json(&lue.compte_rendu)?,
-        ("summary", true) => Value::String(
-            lue.compte_rendu
-                .map(|c| c.brut)
-                .unwrap_or_else(|| "_Pas encore de compte rendu._".into()),
-        ),
+        ("summary", true) => Value::String(lue.compte_rendu.map(|c| c.brut).unwrap_or_else(|| {
+            format!(
+                "_{}_",
+                kobi_i18n::tr("session.export.pasDeCompteRendu", &[])
+            )
+        })),
         ("notes", false) => json!({ "notes": lue.notes }),
         ("notes", true) => Value::String(lue.notes),
         ("transcript", false) => en_json(&lue.segments)?,
@@ -684,22 +731,25 @@ fn lire_reunion(st: &Stockage, nom: &str, partie: &str, format: &str) -> Result<
 fn notes_markdown(st: &Stockage, lue: &ReunionLue) -> Result<String, Erreur> {
     let titre = st.document_reunion(&lue.resume.nom).map_err(donnees)?.titre;
     let mut md = format!("# {titre}\n\n");
+    let tr = |cle: &str| kobi_i18n::tr(cle, &[]);
     if lue.resume.en_cours {
-        md.push_str("_Réunion en cours._\n\n");
+        md.push_str(&format!("_{}_\n\n", tr("coque.controle.reunionEnCours")));
     }
-    md.push_str("## Notes\n\n");
-    md.push_str(match lue.notes.trim() {
-        "" => "_Pas encore de notes._",
-        n => n,
-    });
-    md.push_str("\n\n## Compte rendu\n\n");
-    md.push_str(
-        lue.compte_rendu
-            .as_ref()
-            .map(|c| c.brut.trim())
-            .filter(|c| !c.is_empty())
-            .unwrap_or("_Pas encore de compte rendu._"),
-    );
+    md.push_str(&format!("## {}\n\n", tr("session.export.notes")));
+    match lue.notes.trim() {
+        "" => md.push_str(&format!("_{}_", tr("coque.controle.pasDeNotes"))),
+        n => md.push_str(n),
+    }
+    md.push_str(&format!("\n\n## {}\n\n", tr("coque.controle.compteRendu")));
+    match lue
+        .compte_rendu
+        .as_ref()
+        .map(|c| c.brut.trim())
+        .filter(|c| !c.is_empty())
+    {
+        Some(c) => md.push_str(c),
+        None => md.push_str(&format!("_{}_", tr("session.export.pasDeCompteRendu"))),
+    }
     md.push('\n');
     Ok(md)
 }
@@ -724,7 +774,7 @@ fn echeance_ms(texte: &str) -> Result<u64, Erreur> {
         .ok_or_else(|| {
             erreur(
                 Code::InvalidValue,
-                format!("échéance illisible : « {texte} » (2026-10-19T09:00 ou 2026-10-19T09:00:00+02:00)"),
+                kobi_i18n::tr("coque.controle.echeanceIllisible", &[("texte", texte)]),
             )
         })
 }
@@ -732,15 +782,20 @@ fn echeance_ms(texte: &str) -> Result<u64, Erreur> {
 // ----- Réglages -----
 
 fn lire_config<R: Runtime>(app: &AppHandle<R>) -> Result<(PathBuf, Config), Erreur> {
-    let chemin = controle(app)?
-        .config
-        .clone()
-        .ok_or_else(|| erreur(Code::Unavailable, "fichier de réglages introuvable"))?;
+    let chemin = controle(app)?.config.clone().ok_or_else(|| {
+        erreur(
+            Code::Unavailable,
+            kobi_i18n::tr("coque.controle.reglagesIntrouvables", &[]),
+        )
+    })?;
     let lu = config::load_or_create(&chemin);
     if let Some(probleme) = lu.problem {
         return Err(erreur(
             Code::Internal,
-            format!("config.toml illisible, rien n'est changé : {probleme}"),
+            kobi_i18n::tr(
+                "coque.controle.configIllisible",
+                &[("probleme", &probleme.to_string())],
+            ),
         ));
     }
     Ok((chemin, lu.config))
@@ -765,7 +820,10 @@ pub fn regler_animations<R: Runtime>(
     valeur: Value,
 ) -> Result<Value, String> {
     if !matches!(cle.as_str(), "fps" | "economie") {
-        return Err(format!("réglage d'animation inconnu : {cle}"));
+        return Err(kobi_i18n::tr(
+            "coque.controle.animationInconnue",
+            &[("cle", &cle)],
+        ));
     }
     regler(&app, &format!("animations.{cle}"), valeur).map_err(|e| e.message)?;
     Ok(reglage_animations(app))
@@ -790,7 +848,10 @@ fn regler<R: Runtime>(
         tauri_plugin_global_shortcut::Shortcut::from_str(texte).map_err(|e| {
             erreur(
                 Code::InvalidValue,
-                format!("{cle} : raccourci « {texte} » illisible ({e})"),
+                kobi_i18n::tr(
+                    "coque.controle.raccourciIllisible",
+                    &[("cle", cle), ("texte", texte), ("erreur", &e.to_string())],
+                ),
             )
         })?;
     }

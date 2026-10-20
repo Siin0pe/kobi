@@ -25,7 +25,8 @@ pub enum Application {
 
 use Application::{AChaud, AuRedemarrage};
 
-/// Réglages connus : clé, application, description.
+/// Réglages connus : clé, application, description (en français ; montrée
+/// traduite par [`description`], clé `session.cles.<clé du réglage>`).
 pub const CLES: &[(&str, Application, &str)] = &[
     (
         "brain",
@@ -187,7 +188,7 @@ pub struct Entree {
     pub key: &'static str,
     pub value: Value,
     pub apply: Application,
-    pub description: &'static str,
+    pub description: String,
 }
 
 /// Changement vérifié, pas encore écrit.
@@ -202,7 +203,7 @@ pub struct Modification {
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ErreurCle {
-    #[error("réglage inconnu : {0} (voir « kobi config list »)")]
+    #[error("{}", kobi_i18n::tr("session.cles.inconnu", &[("cle", .0)]))]
     Inconnue(String),
     #[error("{cle} : {raison}")]
     Refusee { cle: String, raison: String },
@@ -253,19 +254,33 @@ pub fn lire(config: &Config, cle: Option<&str>) -> Result<Value, ErreurCle> {
 /// Tous les réglages modifiables, avec leur valeur.
 pub fn liste(config: &Config) -> Vec<Entree> {
     CLES.iter()
-        .map(|(cle, apply, description)| Entree {
+        .map(|(cle, apply, francais)| Entree {
             key: cle,
             value: lire(config, Some(cle)).unwrap_or(Value::Null),
             apply: *apply,
-            description,
+            description: description(cle, francais),
         })
         .collect()
+}
+
+/// Description d'un réglage dans la langue courante (KOB-210) ; le français
+/// de [`CLES`] si la traduction manque.
+fn description(cle: &str, francais: &str) -> String {
+    let id = format!("session.cles.{cle}");
+    let texte = kobi_i18n::tr(&id, &[]);
+    if texte == id {
+        francais.to_owned()
+    } else {
+        texte
+    }
 }
 
 fn raison(e: ConfigError) -> String {
     match e {
         ConfigError::Parse { source, .. } => source.message().trim().to_owned(),
-        ConfigError::Invalid { expected, .. } => format!("attendu {expected}"),
+        ConfigError::Invalid { expected, .. } => {
+            kobi_i18n::tr("session.cles.attendu", &[("attendu", &expected)])
+        }
         autre => autre.to_string(),
     }
 }
@@ -287,7 +302,12 @@ pub fn modifier(config: &Config, cle: &str, valeur: Value) -> Result<Modificatio
             .entry(m.to_string())
             .or_insert_with(|| toml::Value::Table(toml::Table::new()))
             .as_table_mut()
-            .ok_or_else(|| refus(format!("{m} n'est pas une section")))?;
+            .ok_or_else(|| {
+                refus(kobi_i18n::tr(
+                    "session.cles.pasUneSection",
+                    &[("section", m)],
+                ))
+            })?;
     }
     if valeur.is_null() {
         courant.remove(*dernier);
@@ -304,7 +324,10 @@ pub fn modifier(config: &Config, cle: &str, valeur: Value) -> Result<Modificatio
                 .iter()
                 .find(|d| !d.is_absolute() || !d.is_dir())
             {
-                return Err(refus(format!("dossier introuvable : {}", d.display())));
+                return Err(refus(kobi_i18n::tr(
+                    "coque.commun.dossierIntrouvable",
+                    &[("chemin", &d.display().to_string())],
+                )));
             }
         }
         "stockage.dossier" => {
@@ -315,9 +338,9 @@ pub fn modifier(config: &Config, cle: &str, valeur: Value) -> Result<Modificatio
                 .filter(|d| !d.as_os_str().is_empty())
             {
                 if !d.is_absolute() {
-                    return Err(refus(format!(
-                        "« {} » : il faut un chemin complet",
-                        d.display()
+                    return Err(refus(kobi_i18n::tr(
+                        "session.cles.cheminComplet",
+                        &[("chemin", &d.display().to_string())],
                     )));
                 }
             }
@@ -479,5 +502,26 @@ mod tests {
         ));
         let m = modifier(&c, "voice.meeting", json!(true)).unwrap();
         assert_eq!(m.config.extra["ancien"].as_integer(), Some(1));
+    }
+
+    /// KOB-210 : chaque description a sa traduction, le français identique
+    /// à la table (la clé est construite : le test des clés `tr("…")` ne
+    /// la voit pas).
+    #[test]
+    fn descriptions_traduites() {
+        use kobi_i18n::Langue;
+        for (cle, _, francais) in CLES {
+            let id = format!("session.cles.{cle}");
+            assert_eq!(kobi_i18n::t(Langue::Fr, &id, &[]), *francais, "{id}");
+            assert_ne!(kobi_i18n::t(Langue::En, &id, &[]), *francais, "{id}");
+        }
+        assert_eq!(
+            kobi_i18n::t(Langue::En, "session.cles.voice.meeting", &[]),
+            "Spoken answers in meetings."
+        );
+        assert_eq!(
+            kobi_i18n::t(Langue::En, "session.cles.inconnu", &[("cle", "x.y")]),
+            "unknown setting: x.y (see “kobi config list”)"
+        );
     }
 }

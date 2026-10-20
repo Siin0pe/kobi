@@ -80,8 +80,9 @@ impl Ecrivain {
                 d.reunion = Some(r);
                 d.compter(Nouvelle::ReunionOuverte(dossier));
             }
-            Err(e) => d.compter(Nouvelle::Erreur(format!(
-                "Je n'arrive pas à créer le dossier de la réunion : {e}"
+            Err(e) => d.compter(Nouvelle::Erreur(kobi_i18n::tr(
+                "coque.ecrivain.dossierImpossible",
+                &[("erreur", &e.to_string())],
             ))),
         });
     }
@@ -99,7 +100,10 @@ impl Ecrivain {
                 },
                 Err(e) => {
                     tracing::warn!(erreur = %e, "titre de la réunion");
-                    Nouvelle::Erreur(format!("Je n'arrive pas à renommer la réunion : {e}"))
+                    Nouvelle::Erreur(kobi_i18n::tr(
+                        "coque.ecrivain.renommerImpossible",
+                        &[("erreur", &e.to_string())],
+                    ))
                 }
             };
             d.compter(nouvelle);
@@ -133,9 +137,10 @@ impl Ecrivain {
     pub fn terminer_reunion(&self, compte_rendu: String, notes: String, fin_ms: u64) {
         self.envoyer(move |d| {
             let Some(mut r) = d.reunion.take() else {
-                d.compter(Nouvelle::Erreur(
-                    "Compte rendu non rangé : les fichiers de la réunion manquent.".into(),
-                ));
+                d.compter(Nouvelle::Erreur(kobi_i18n::tr(
+                    "coque.ecrivain.fichiersManquants",
+                    &[],
+                )));
                 return;
             };
             let chemin = r.dossier().join("compte-rendu.md");
@@ -152,9 +157,12 @@ impl Ecrivain {
             }
             d.compter(match ecrit {
                 Ok(()) => Nouvelle::CompteRenduEcrit(chemin),
-                Err(e) => Nouvelle::Erreur(format!(
-                    "Compte rendu non écrit dans {} : {e}",
-                    chemin.display()
+                Err(e) => Nouvelle::Erreur(kobi_i18n::tr(
+                    "coque.ecrivain.compteRenduNonEcrit",
+                    &[
+                        ("chemin", &chemin.display().to_string()),
+                        ("erreur", &e.to_string()),
+                    ],
                 )),
             });
         });

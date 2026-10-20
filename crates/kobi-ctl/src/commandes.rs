@@ -35,6 +35,16 @@ impl Effet {
             Effet::Ecriture => "[écriture]",
         }
     }
+
+    /// [`Effet::etiquette`] dans la langue de l'interface, pour `kobi help`
+    /// (le MCP garde l'étiquette française, lue par Claude).
+    pub fn etiquette_affichee(self) -> String {
+        match self {
+            Effet::Lecture => kobi_i18n::tr("ctl.commandes.effetLecture", &[]),
+            Effet::Affichage => kobi_i18n::tr("ctl.commandes.effetAffichage", &[]),
+            Effet::Ecriture => kobi_i18n::tr("ctl.commandes.effetEcriture", &[]),
+        }
+    }
 }
 
 /// Type d'un paramètre.
@@ -359,6 +369,17 @@ pub const PILOTAGE_REUNION: &[&str] = &[
     "meeting.resume",
 ];
 
+/// Texte de `cle` dans la langue courante ; le français de la table si la
+/// clé manque.
+fn traduite(cle: &str, francais: &str) -> String {
+    let texte = kobi_i18n::tr(cle, &[]);
+    if texte == cle {
+        francais.to_owned()
+    } else {
+        texte
+    }
+}
+
 pub fn trouver(nom: &str) -> Option<&'static Commande> {
     COMMANDES.iter().find(|c| c.nom == nom)
 }
@@ -372,6 +393,34 @@ impl Commande {
     /// L'agent de Kobi la lance-t-il sans validation ([`PILOTAGE_REUNION`]) ?
     pub fn pilote_la_reunion(&self) -> bool {
         PILOTAGE_REUNION.contains(&self.nom)
+    }
+
+    /// Clé de traduction de la description (`ctl.commandes.meetingStart`).
+    fn cle(&self) -> String {
+        let mut cle = String::from("ctl.commandes.");
+        for (i, mot) in self.nom.split('.').enumerate() {
+            let mut lettres = mot.chars();
+            if let (true, Some(premiere)) = (i > 0, lettres.next()) {
+                cle.extend(premiere.to_uppercase());
+                cle.push_str(lettres.as_str());
+            } else {
+                cle.push_str(mot);
+            }
+        }
+        cle
+    }
+
+    /// Description montrée par `kobi help`, dans la langue de l'interface.
+    /// Le MCP garde [`Commande::description`] (lue par Claude). Clé formée
+    /// d'après le nom : une par commande, vérifiée par un test.
+    pub fn description_affichee(&self) -> String {
+        traduite(&self.cle(), self.description)
+    }
+
+    /// Description d'un de ses paramètres pour `kobi help`
+    /// (`ctl.commandes.meetingsGet.part`).
+    pub fn description_du_param(&self, param: &Param) -> String {
+        traduite(&format!("{}.{}", self.cle(), param.nom), param.description)
     }
 
     /// Mots de la CLI (`meeting start`).
@@ -421,13 +470,18 @@ impl Commande {
         let params = match params {
             Value::Null => Map::new(),
             Value::Object(m) => m.clone(),
-            _ => return Err(invalide("les paramètres doivent être un objet JSON".into())),
+            _ => {
+                return Err(invalide(kobi_i18n::tr(
+                    "ctl.commandes.parametresObjet",
+                    &[],
+                )))
+            }
         };
         for nom in params.keys() {
             if !self.params.iter().any(|p| p.nom == nom) {
-                return Err(invalide(format!(
-                    "{} : paramètre inconnu « {nom} »",
-                    self.nom
+                return Err(invalide(kobi_i18n::tr(
+                    "ctl.commandes.parametreInconnu",
+                    &[("commande", self.nom), ("nom", nom)],
                 )));
             }
         }
@@ -439,9 +493,9 @@ impl Commande {
                 .filter(|v| !v.is_null() || matches!(param.genre, Json))
             else {
                 if param.requis {
-                    return Err(invalide(format!(
-                        "{} : paramètre « {} » manquant",
-                        self.nom, param.nom
+                    return Err(invalide(kobi_i18n::tr(
+                        "ctl.commandes.parametreManquant",
+                        &[("commande", self.nom), ("nom", param.nom)],
                     )));
                 }
                 continue;
@@ -453,25 +507,30 @@ impl Commande {
                 Json => true,
             };
             if !bon_type {
-                return Err(invalide(format!(
-                    "{} : « {} » attend {}",
-                    self.nom,
-                    param.nom,
-                    match param.genre {
-                        Texte => "un texte",
-                        Booleen => "true ou false",
-                        Entier => "un entier positif",
-                        Json => "une valeur JSON",
-                    }
+                let attendu = match param.genre {
+                    Texte => kobi_i18n::tr("ctl.commandes.attendTexte", &[]),
+                    Booleen => kobi_i18n::tr("ctl.commandes.attendBooleen", &[]),
+                    Entier => kobi_i18n::tr("ctl.commandes.attendEntier", &[]),
+                    Json => kobi_i18n::tr("ctl.commandes.attendJson", &[]),
+                };
+                return Err(invalide(kobi_i18n::tr(
+                    "ctl.commandes.attend",
+                    &[
+                        ("commande", self.nom),
+                        ("nom", param.nom),
+                        ("attendu", &attendu),
+                    ],
                 )));
             }
             if let (false, Some(s)) = (param.choix.is_empty(), v.as_str()) {
                 if !param.choix.contains(&s) {
-                    return Err(invalide(format!(
-                        "{} : « {} » vaut {}",
-                        self.nom,
-                        param.nom,
-                        param.choix.join(", ")
+                    return Err(invalide(kobi_i18n::tr(
+                        "ctl.commandes.vaut",
+                        &[
+                            ("commande", self.nom),
+                            ("nom", param.nom),
+                            ("choix", &param.choix.join(", ")),
+                        ],
                     )));
                 }
             }
@@ -642,6 +701,33 @@ mod tests {
             .map(|n| ids.get(n).unwrap_or_else(|| panic!("panneau {n}")).as_str())
             .collect();
         assert_eq!(ui, PANNEAUX);
+    }
+
+    /// `kobi help` montre chaque description dans les deux langues ; le
+    /// français du catalogue est celui de la table (lu aussi par le MCP).
+    #[test]
+    fn descriptions_traduites_pour_kobi_help() {
+        use kobi_i18n::{t, Langue};
+        let mut cles = vec![];
+        for c in COMMANDES {
+            cles.push((c.cle(), c.description));
+            for p in c.params {
+                cles.push((format!("{}.{}", c.cle(), p.nom), p.description));
+            }
+        }
+        for (cle, francais) in cles {
+            assert_eq!(t(Langue::Fr, &cle, &[]), francais, "{cle}");
+            let anglais = t(Langue::En, &cle, &[]);
+            assert!(anglais != cle && anglais != francais, "{cle} : {anglais}");
+        }
+        assert_eq!(
+            trouver("meeting.start").unwrap().cle(),
+            "ctl.commandes.meetingStart"
+        );
+        assert_eq!(
+            t(Langue::En, "ctl.commandes.meetingStart", &[]),
+            "Starts recording the meeting (note-taking)."
+        );
     }
 
     #[test]

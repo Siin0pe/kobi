@@ -12,6 +12,7 @@ use crate::commandes::{self, Commande, Genre, Param, COMMANDES};
 use crate::mcp::{self, Mode};
 use crate::protocole::{Code, Erreur, Origine};
 use crate::transport::Point;
+use kobi_i18n::tr;
 
 /// Code de retour d'une erreur d'usage.
 pub const USAGE: i32 = 2;
@@ -49,15 +50,17 @@ fn valeur(param: &Param, texte: &str) -> Result<Value, Erreur> {
         Genre::Booleen => match texte.to_lowercase().as_str() {
             "true" | "on" | "oui" | "yes" | "1" => Ok(Value::Bool(true)),
             "false" | "off" | "non" | "no" | "0" => Ok(Value::Bool(false)),
-            _ => Err(usage(format!(
-                "--{} : « {texte} » n'est pas true/false (on/off)",
-                param.nom
+            _ => Err(usage(tr(
+                "ctl.cli.pasBooleen",
+                &[("nom", param.nom), ("texte", texte)],
             ))),
         },
-        Genre::Entier => texte
-            .parse::<u64>()
-            .map(Value::from)
-            .map_err(|_| usage(format!("--{} : « {texte} » n'est pas un entier", param.nom))),
+        Genre::Entier => texte.parse::<u64>().map(Value::from).map_err(|_| {
+            usage(tr(
+                "ctl.cli.pasEntier",
+                &[("nom", param.nom), ("texte", texte)],
+            ))
+        }),
         // `true`, `3`, `["C:/code"]` sont lus en JSON ; un mot seul reste un texte.
         Genre::Json => {
             Ok(serde_json::from_str(texte).unwrap_or_else(|_| Value::String(texte.to_owned())))
@@ -73,15 +76,18 @@ pub fn analyser(args: &[String]) -> Result<Demande, Erreur> {
         ["--version"] => return Ok(Demande::Version),
         ["help", mots @ ..] => {
             let c = trouver(mots).map(|(c, _)| c);
-            return c
-                .map(|c| Demande::Aide(Some(c)))
-                .ok_or_else(|| usage(format!("commande inconnue : {}", mots.join(" "))));
+            return c.map(|c| Demande::Aide(Some(c))).ok_or_else(|| {
+                usage(tr(
+                    "ctl.cli.commandeInconnue",
+                    &[("commande", &mots.join(" "))],
+                ))
+            });
         }
         ["mcp", reste @ ..] => {
             return match reste {
                 [] => Ok(Demande::Mcp(Mode::Externe)),
                 ["--agent"] => Ok(Demande::Mcp(Mode::Agent)),
-                _ => Err(usage("usage : kobi mcp [--agent]")),
+                _ => Err(usage(tr("ctl.cli.usageMcp", &[]))),
             }
         }
         _ => {}
@@ -93,11 +99,11 @@ pub fn analyser(args: &[String]) -> Result<Demande, Erreur> {
             .map(|c| format!("kobi {}", c.mots()))
             .collect();
         return Err(usage(if groupe.is_empty() {
-            format!("commande inconnue : {} (voir « kobi help »)", args[0])
+            tr("ctl.cli.commandeInconnueAide", &[("commande", args[0])])
         } else {
-            format!(
-                "commande incomplète ; possibles :\n  {}",
-                groupe.join("\n  ")
+            tr(
+                "ctl.cli.commandeIncomplete",
+                &[("possibles", &groupe.join("\n  "))],
             )
         }));
     };
@@ -115,7 +121,7 @@ pub fn analyser(args: &[String]) -> Result<Demande, Erreur> {
                 sortie = Some(
                     reste
                         .get(i)
-                        .ok_or_else(|| usage("--out : fichier manquant"))?
+                        .ok_or_else(|| usage(tr("ctl.cli.fichierManquant", &[])))?
                         .to_string(),
                 );
                 i += 1;
@@ -134,7 +140,10 @@ pub fn analyser(args: &[String]) -> Result<Demande, Erreur> {
                     .iter()
                     .find(|p| p.nom == nom)
                     .ok_or_else(|| {
-                        usage(format!("{} : option inconnue --{nom}", commande.mots()))
+                        usage(tr(
+                            "ctl.cli.optionInconnue",
+                            &[("commande", &commande.mots()), ("nom", nom)],
+                        ))
                     })?;
                 let texte = match texte {
                     Some(t) => t,
@@ -147,7 +156,7 @@ pub fn analyser(args: &[String]) -> Result<Demande, Erreur> {
                     None => {
                         let t = reste
                             .get(i)
-                            .ok_or_else(|| usage(format!("--{nom} : valeur manquante")))?;
+                            .ok_or_else(|| usage(tr("ctl.cli.valeurManquante", &[("nom", nom)])))?;
                         i += 1;
                         t
                     }
@@ -177,9 +186,9 @@ pub fn analyser(args: &[String]) -> Result<Demande, Erreur> {
         }
     }
     if let Some(trop) = mots.next() {
-        return Err(usage(format!(
-            "{} : argument en trop « {trop} »",
-            commande.mots()
+        return Err(usage(tr(
+            "ctl.cli.argumentEnTrop",
+            &[("commande", &commande.mots()), ("trop", trop)],
         )));
     }
     let params = Value::Object(params);
@@ -204,23 +213,16 @@ fn trouver<'a>(mots: &'a [&'a str]) -> Option<(&'static Commande, &'a [&'a str])
 
 pub fn aide(commande: Option<&Commande>) -> String {
     let Some(c) = commande else {
-        let mut t = String::from(
-            "Kobi : pilote l'app Kobi en cours depuis le terminal.\n\n\
-             Usage : kobi <commande> [arguments] [--json] [--out FICHIER]\n\
-             \x20       kobi mcp            serveur MCP (stdio) pour Claude Code, Codex…\n\
-             \x20       kobi help <commande>\n\nCommandes :\n",
-        );
+        let mut t = tr("ctl.cli.aide", &[]);
         for c in COMMANDES {
             t.push_str(&format!(
                 "  {:<22} {:<11} {}\n",
                 c.mots(),
-                c.effet.etiquette(),
-                c.description
+                c.effet.etiquette_affichee(),
+                c.description_affichee()
             ));
         }
-        t.push_str(
-            "\nCodes de retour : 0 succès, 1 commande refusée, 2 usage, 3 Kobi ne tourne pas, 4 jeton refusé.\n",
-        );
+        t.push_str(&tr("ctl.cli.aideCodes", &[]));
         return t;
     };
     let mut ligne = format!("kobi {}", c.mots());
@@ -234,12 +236,13 @@ pub fn aide(commande: Option<&Commande>) -> String {
         ligne.push_str(&if p.requis { nom } else { format!("[{nom}]") });
     }
     let mut t = format!(
-        "{ligne} [--json] [--out FICHIER]\n\n{} {}\n",
-        c.effet.etiquette(),
-        c.description
+        "{ligne} {}\n\n{} {}\n",
+        tr("ctl.cli.aideOptions", &[]),
+        c.effet.etiquette_affichee(),
+        c.description_affichee()
     );
     for p in c.params {
-        t.push_str(&format!("  {:<10} {}", p.nom, p.description));
+        t.push_str(&format!("  {:<10} {}", p.nom, c.description_du_param(p)));
         if !p.choix.is_empty() {
             t.push_str(&format!(" ({})", p.choix.join(", ")));
         }
@@ -273,7 +276,7 @@ pub fn lisible(commande: &Commande, r: &Value) -> String {
     let s = |v: &Value| texte_de(v);
     let lignes = |liste: &Value, f: &dyn Fn(&Value) -> String| -> String {
         match liste.as_array() {
-            Some(l) if l.is_empty() => "(aucun)".into(),
+            Some(l) if l.is_empty() => tr("ctl.cli.aucun", &[]),
             Some(l) => l.iter().map(f).collect::<Vec<_>>().join("\n"),
             None => serde_json::to_string_pretty(liste).unwrap_or_default(),
         }
@@ -282,63 +285,80 @@ pub fn lisible(commande: &Commande, r: &Value) -> String {
         "status" => {
             let reunion = &r["reunion"];
             let reunion = if reunion["actif"] == true {
-                format!(
-                    "{} depuis {}, {} notes",
-                    if reunion["pause"] == true {
-                        "en pause"
-                    } else {
-                        "enregistrée"
-                    },
-                    duree(r["reunion"]["duree_s"].as_f64().unwrap_or(0.0)),
-                    s(&reunion["notes"])
+                let etat = if reunion["pause"] == true {
+                    tr("ctl.cli.enPause", &[])
+                } else {
+                    tr("ctl.cli.enregistree", &[])
+                };
+                tr(
+                    "ctl.cli.reunionDepuis",
+                    &[
+                        ("etat", &etat),
+                        (
+                            "duree",
+                            &duree(r["reunion"]["duree_s"].as_f64().unwrap_or(0.0)),
+                        ),
+                        ("n", &s(&reunion["notes"])),
+                    ],
                 )
             } else {
-                "aucune".into()
+                tr("ctl.cli.aucune", &[])
             };
-            format!(
-                "Kobi      {}{} (mascotte : {})\nRéunion   {reunion}\nÉcoute    {}\nFenêtre   {}{}",
-                s(&r["etat"]),
-                r["activite"]
-                    .as_str()
-                    .map(|a| format!(", {a}"))
-                    .unwrap_or_default(),
-                s(&r["mascotte"]),
-                if r["ecoute"]["pause"] == true {
-                    "en pause"
-                } else {
-                    "active"
-                },
-                if r["fenetre"]["visible"] == false {
-                    "cachée"
-                } else {
-                    "visible"
-                },
-                if r["fenetre"]["discret"] == true {
-                    ", mode discret"
-                } else {
-                    ""
-                },
+            let activite = r["activite"]
+                .as_str()
+                .map(|a| format!(", {a}"))
+                .unwrap_or_default();
+            let ecoute = if r["ecoute"]["pause"] == true {
+                tr("ctl.cli.enPause", &[])
+            } else {
+                tr("ctl.cli.ecouteActive", &[])
+            };
+            let fenetre = if r["fenetre"]["visible"] == false {
+                tr("ctl.cli.fenetreCachee", &[])
+            } else {
+                tr("ctl.cli.fenetreVisible", &[])
+            };
+            let discret = if r["fenetre"]["discret"] == true {
+                tr("ctl.cli.modeDiscret", &[])
+            } else {
+                String::new()
+            };
+            tr(
+                "ctl.cli.statut",
+                &[
+                    ("etat", &s(&r["etat"])),
+                    ("activite", &activite),
+                    ("mascotte", &s(&r["mascotte"])),
+                    ("reunion", &reunion),
+                    ("ecoute", &ecoute),
+                    ("fenetre", &fenetre),
+                    ("discret", &discret),
+                ],
             )
         }
         "meeting.start" | "meeting.stop" | "meeting.pause" | "meeting.resume" => s(&r["message"]),
         "meeting.status" => {
             if r["actif"] == true {
-                format!(
-                    "Réunion {} depuis {}, {} notes{}",
-                    if r["pause"] == true {
-                        "en pause"
-                    } else {
-                        "en cours"
-                    },
-                    duree(r["duree_s"].as_f64().unwrap_or(0.0)),
-                    s(&r["notes"]),
-                    r["derniere_note"]
-                        .as_str()
-                        .map(|n| format!("\nDernière note : {n}"))
-                        .unwrap_or_default()
+                let etat = if r["pause"] == true {
+                    tr("ctl.cli.enPause", &[])
+                } else {
+                    tr("ctl.cli.enCours", &[])
+                };
+                let derniere = r["derniere_note"]
+                    .as_str()
+                    .map(|n| tr("ctl.cli.derniereNote", &[("note", n)]))
+                    .unwrap_or_default();
+                tr(
+                    "ctl.cli.reunionEnCours",
+                    &[
+                        ("etat", &etat),
+                        ("duree", &duree(r["duree_s"].as_f64().unwrap_or(0.0))),
+                        ("n", &s(&r["notes"])),
+                        ("derniere", &derniere),
+                    ],
                 )
             } else {
-                "Aucune réunion en cours.".into()
+                tr("ctl.cli.aucuneReunion", &[])
             }
         }
         "meetings.list" => lignes(r, &|m| {
@@ -346,20 +366,25 @@ pub fn lisible(commande: &Commande, r: &Value) -> String {
                 "{}  {}  {}{}",
                 s(&m["nom"]),
                 duree(m["duree_s"].as_f64().unwrap_or(0.0)),
-                m["titre"].as_str().unwrap_or("(sans titre)"),
+                m["titre"]
+                    .as_str()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| tr("ctl.cli.sansTitre", &[])),
                 if m["en_cours"] == true {
-                    "  [en cours]"
+                    tr("ctl.cli.marqueEnCours", &[])
                 } else {
-                    ""
+                    String::new()
                 }
             )
         }),
         "conversations.list" => lignes(r, &|c| {
-            format!(
-                "{}  {} tours  {}",
-                s(&c["id"]),
-                s(&c["tours"]),
-                s(&c["apercu"])
+            tr(
+                "ctl.cli.conversation",
+                &[
+                    ("id", &s(&c["id"])),
+                    ("n", &s(&c["tours"])),
+                    ("apercu", &s(&c["apercu"])),
+                ],
             )
         }),
         "reminders.list" => lignes(r, &|x| {
@@ -370,13 +395,19 @@ pub fn lisible(commande: &Commande, r: &Value) -> String {
                 s(&x["texte"])
             )
         }),
-        "reminders.add" => format!("Rappel ajouté : {} ({})", s(&r["texte"]), s(&r["id"])),
+        "reminders.add" => tr(
+            "ctl.cli.rappelAjoute",
+            &[("texte", &s(&r["texte"])), ("id", &s(&r["id"]))],
+        ),
         "search" => lignes(r, &|t| {
             let ou = match t["type"].as_str() {
                 Some("reunion") => format!("{} ({})", s(&t["nom"]), s(&t["partie"])),
-                _ => format!("conversation {}", s(&t["id"])),
+                _ => tr("ctl.cli.resultatConversation", &[("id", &s(&t["id"]))]),
             };
-            format!("{ou} : {}", s(&t["extrait"]))
+            tr(
+                "ctl.cli.resultat",
+                &[("ou", &ou), ("extrait", &s(&t["extrait"]))],
+            )
         }),
         "config.get" if !r.is_object() => s(r),
         "config.list" => lignes(r, &|e| {
@@ -385,44 +416,50 @@ pub fn lisible(commande: &Commande, r: &Value) -> String {
                 s(&e["key"]),
                 e["value"],
                 if e["apply"] == "hot" {
-                    "à chaud"
+                    tr("ctl.cli.aChaud", &[])
                 } else {
-                    "au redémarrage"
+                    tr("ctl.cli.auRedemarrage", &[])
                 },
                 s(&e["description"])
             )
         }),
-        "config.set" | "config.undo" => format!(
-            "{} : {} → {}{}",
-            s(&r["key"]),
-            r["before"],
-            r["after"],
-            match r["apply"].as_str() {
-                Some("hot") => " (appliqué tout de suite)",
-                Some(_) => " (appliqué au prochain redémarrage de Kobi)",
-                None => "",
-            }
+        "config.set" | "config.undo" => tr(
+            "ctl.cli.reglageChange",
+            &[
+                ("cle", &s(&r["key"])),
+                ("avant", &r["before"].to_string()),
+                ("apres", &r["after"].to_string()),
+                (
+                    "application",
+                    &match r["apply"].as_str() {
+                        Some("hot") => tr("ctl.cli.appliqueTout", &[]),
+                        Some(_) => tr("ctl.cli.appliqueRedemarrage", &[]),
+                        None => String::new(),
+                    },
+                ),
+            ],
         ),
         "meetings.export" => s(&r["markdown"]),
-        "mascot.discreet" => if r["discret"] == true {
-            "Mode discret : Kobi est une pastille."
-        } else {
-            "Mode discret quitté."
+        "mascot.discreet" => {
+            if r["discret"] == true {
+                tr("ctl.cli.discretOui", &[])
+            } else {
+                tr("ctl.cli.discretNon", &[])
+            }
         }
-        .into(),
-        "mascot.show" | "mascot.hide" => if r["visible"] == true {
-            "Mascotte visible."
-        } else {
-            "Mascotte cachée (Kobi reste dans la barre système)."
+        "mascot.show" | "mascot.hide" => {
+            if r["visible"] == true {
+                tr("ctl.cli.mascotteVisible", &[])
+            } else {
+                tr("ctl.cli.mascotteCachee", &[])
+            }
         }
-        .into(),
-        "app.open" => format!("App Kobi ouverte : {}", s(&r["section"])),
+        "app.open" => tr("ctl.cli.appOuverte", &[("section", &s(&r["section"]))]),
         "view.open" | "view.close" | "view.toggle" => match r["vue"].as_str() {
-            Some("ouvrir") => "Conversation ouverte en grand.",
-            Some("fermer") => "Vue agrandie rangée.",
-            _ => "Vue agrandie ouverte ou rangée.",
-        }
-        .into(),
+            Some("ouvrir") => tr("ctl.cli.vueOuverte", &[]),
+            Some("fermer") => tr("ctl.cli.vueRangee", &[]),
+            _ => tr("ctl.cli.vueBasculee", &[]),
+        },
         _ if r.as_object().is_some_and(Map::is_empty) || r.is_null() => "OK".into(),
         _ => serde_json::to_string_pretty(r).unwrap_or_default(),
     }
@@ -430,6 +467,11 @@ pub fn lisible(commande: &Commande, r: &Value) -> String {
 
 /// Lance la CLI ; renvoie le code de retour.
 pub fn main_avec(args: &[String]) -> i32 {
+    // La langue de l'interface (`[ui] language`), sinon celle du système.
+    kobi_i18n::regler(
+        crate::transport::dossier_kobi()
+            .and_then(|d| kobi_i18n::reglee_dans(&d.join("config.toml"))),
+    );
     let demande = match analyser(args) {
         Ok(d) => d,
         Err(e) => {
@@ -438,7 +480,7 @@ pub fn main_avec(args: &[String]) -> i32 {
         }
     };
     let Some(point) = Point::defaut() else {
-        eprintln!("kobi : dossier personnel introuvable");
+        eprintln!("kobi : {}", tr("ctl.cli.dossierIntrouvable", &[]));
         return 3;
     };
     match demande {
@@ -483,7 +525,7 @@ fn executer(
             match sortie {
                 Some(fichier) => match std::fs::write(fichier, format!("{texte}\n")) {
                     Ok(()) => {
-                        eprintln!("écrit : {fichier}");
+                        eprintln!("{}", tr("ctl.cli.ecrit", &[("fichier", fichier)]));
                         0
                     }
                     Err(e) => {
@@ -660,6 +702,25 @@ mod tests {
         for mot in ["--carnet", "--reglages", "--bienvenue"] {
             assert!(!est_une_commande(mot), "{mot}");
         }
+    }
+
+    /// KOB-210 : la CLI parle anglais quand l'interface est en anglais.
+    #[test]
+    fn textes_anglais() {
+        use kobi_i18n::{t, Langue};
+        assert_eq!(
+            t(
+                Langue::En,
+                "ctl.cli.commandeInconnueAide",
+                &[("commande", "cuisine")]
+            ),
+            "unknown command: cuisine (see “kobi help”)"
+        );
+        assert_eq!(
+            t(Langue::En, "ctl.cli.ecrit", &[("fichier", "cr.md")]),
+            "written: cr.md"
+        );
+        assert!(t(Langue::En, "ctl.cli.aide", &[]).starts_with("Kobi: control"));
     }
 
     #[test]

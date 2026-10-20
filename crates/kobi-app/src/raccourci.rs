@@ -32,8 +32,14 @@ pub fn lire(cle: &str, valeur: &str, defaut: &str) -> (Shortcut, Option<String>)
             let s = Shortcut::from_str(defaut).expect("raccourci par défaut valide");
             (
                 s,
-                Some(format!(
-                    "{cle} = \"{valeur}\" illisible ({e}), {defaut} utilisé"
+                Some(kobi_i18n::tr(
+                    "coque.raccourci.illisible",
+                    &[
+                        ("cle", cle),
+                        ("valeur", valeur),
+                        ("erreur", &e.to_string()),
+                        ("defaut", defaut),
+                    ],
                 )),
             )
         }
@@ -120,10 +126,13 @@ fn remplacer(
             for (a, _) in &changes {
                 let _ = clavier.inscrire(*a);
             }
-            return Err(format!(
-                "{} est déjà utilisé, par une autre application ou un autre raccourci de Kobi : {} reste le raccourci ({e}).",
-                nouveau.into_string(),
-                ancien.into_string()
+            return Err(kobi_i18n::tr(
+                "coque.raccourci.dejaUtilise",
+                &[
+                    ("nouveau", &nouveau.into_string()),
+                    ("ancien", &ancien.into_string()),
+                    ("erreur", &e),
+                ],
             ));
         }
         inscrits.push(*nouveau);

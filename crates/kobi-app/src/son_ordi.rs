@@ -432,7 +432,10 @@ pub fn recharger<R: Runtime>(app: &AppHandle<R>, config: &Config) -> bool {
 pub fn enregistrer(chemin: &Path, actif: bool, sortie: Option<&str>) -> Result<Reglage, String> {
     let mut lu = config::load_or_create(chemin);
     if let Some(probleme) = lu.problem {
-        return Err(format!("réglage non enregistré : {probleme}"));
+        return Err(kobi_i18n::tr(
+            "coque.sonOrdi.reglageNonEnregistre",
+            &[("probleme", &probleme.to_string())],
+        ));
     }
     lu.config.audio.sources = if actif {
         AudioSources::Both
@@ -544,7 +547,8 @@ pub fn regler_son_ordi<R: Runtime>(
     actif: bool,
     sortie: Option<String>,
 ) -> Result<EtatSonOrdi, String> {
-    let chemin = config::default_path().ok_or("dossier personnel introuvable")?;
+    let chemin = config::default_path()
+        .ok_or_else(|| kobi_i18n::tr("coque.sonOrdi.dossierPersonnelIntrouvable", &[]))?;
     let reglage = enregistrer(&chemin, actif, sortie.as_deref())?;
     appliquer(&app, reglage, "réglages de l'app");
     Ok(etat_ui(&app))

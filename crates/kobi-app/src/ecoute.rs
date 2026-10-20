@@ -630,11 +630,12 @@ impl<R: Runtime> Fil<R> {
                 }
                 .or_else(|| {
                     (self.entree.is_none() && !self.ouvrir_micro())
-                        .then(|| "micro indisponible".to_string())
+                        .then(|| kobi_i18n::tr("coque.ecoute.microIndisponible", &[]))
                 });
                 if let Some(message) = probleme {
                     let app = self.app.clone();
-                    std::thread::spawn(move || erreur(&app, "Micro ou transcription", &message));
+                    let titre = kobi_i18n::tr("coque.ecoute.erreurMicro", &[]);
+                    std::thread::spawn(move || erreur(&app, &titre, &message));
                     return;
                 }
                 // Hors réunion, la phrase en cours est oubliée : la suivante est

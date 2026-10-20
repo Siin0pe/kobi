@@ -46,5 +46,5 @@ L'interface de Kobi se traduit à chaud. La langue suit celle du système, ou le
 
 1. Copier `ui/src/i18n/fr.json` en `ui/src/i18n/xx.json` (`xx` : le code de la langue, par exemple `de`) et traduire chaque valeur. Les clés restent les mêmes, et les variables `{nom}` gardent leur nom. Un pluriel s'écrit `{ "one": "…", "other": "…" }`, avec les catégories de `Intl.PluralRules` de la langue.
 2. Ajouter la langue à `LANGUES` dans `ui/src/i18n/index.ts` (son nom écrit dans sa propre langue, par exemple « Deutsch »).
-3. Côté Rust : ajouter la variante à `Langue` (`crates/kobi-session/src/config.rs`) et le fichier à `source()` (`crates/kobi-app/src/i18n.rs`).
-4. `cargo test -p kobi-app i18n` vérifie que chaque langue a toutes les clés, avec les mêmes variables.
+3. Côté Rust : ajouter la variante à `Langue`, le fichier à `source()` et la règle de pluriel à `pluriel()` (`crates/kobi-i18n/src/lib.rs`). Les textes de la coque, de la CLI et des permissions passent par `kobi_i18n::tr("clé", …)` ; `cargo test -p kobi-i18n` vérifie que chaque clé employée existe dans chaque langue.
+4. `cargo test -p kobi-i18n` vérifie que chaque langue a toutes les clés, avec les mêmes variables.

@@ -209,7 +209,7 @@ pub fn agrandir_kobi<R: Runtime>(
     let raison = raison.unwrap_or_default();
     let w = app
         .get_webview_window("main")
-        .ok_or("fenêtre de Kobi absente")?;
+        .ok_or_else(|| kobi_i18n::tr("coque.agrandir.fenetreAbsente", &[]))?;
     let etat = app.state::<Agrandissement>();
     let err = |e: tauri::Error| e.to_string();
     if !grand {

@@ -153,7 +153,10 @@ pub fn decouper(
             "questions" => &mut n.questions,
             _ => {
                 if !corps.is_empty() {
-                    n.autres.push((t.unwrap_or_else(|| "Notes".into()), corps));
+                    n.autres.push((
+                        t.unwrap_or_else(|| kobi_i18n::tr("coque.notes.sansTitre", &[])),
+                        corps,
+                    ));
                 }
                 continue;
             }

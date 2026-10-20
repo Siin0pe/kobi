@@ -16,6 +16,7 @@ tauri-build = { version = "2.7", features = [] }
 kobi-audio = { path = "../kobi-audio" }
 kobi-brain = { path = "../kobi-brain" }
 kobi-ctl = { path = "../kobi-ctl" }
+kobi-i18n = { path = "../kobi-i18n" }
 kobi-perms = { path = "../kobi-perms" }
 kobi-session = { path = "../kobi-session" }
 kobi-stt = { path = "../kobi-stt", features = ["nemotron"] }

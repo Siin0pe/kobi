@@ -536,7 +536,9 @@ fn boucle<R: Runtime>(app: AppHandle<R>, rx: Receiver<Message>) {
 }
 
 /// Réponse à « répète » ou « plus court » avant toute réponse.
-const SANS_REPONSE: &str = "Je n'ai encore rien répondu.";
+fn sans_reponse() -> String {
+    kobi_i18n::tr("coque.chef.sansReponse", &[])
+}
 
 /// Consigne envoyée à Claude pour reprendre la dernière réponse. Elle la
 /// rappelle en entier : la session de conversation a pu changer depuis
@@ -748,7 +750,10 @@ impl<R: Runtime> Chef<R> {
                 tracing::info!(id = %r.id, "rappel livré à l'interface");
                 let _ = self.app.emit(crate::rappels::EVENEMENT_RAPPEL, &r);
                 // À voix haute aussi, si la voix est active (KOB-142).
-                crate::voix::dire(&self.app, &format!("Rappel : {}", r.texte));
+                crate::voix::dire(
+                    &self.app,
+                    &kobi_i18n::tr("kobi.taches.rappelAria", &[("texte", &r.texte)]),
+                );
             }
         }
     }
@@ -782,13 +787,13 @@ impl<R: Runtime> Chef<R> {
                 tracing::info!(commande = ?c, "commande de la voix");
                 let confirmation = crate::voix::executer(&self.app, c).unwrap_or_default();
                 self.transition(&[Evenement::PasDeQuestion]);
-                let _ = self.app.emit(EVENEMENT_REPONSE, confirmation);
-                crate::voix::dire(&self.app, confirmation);
+                let _ = self.app.emit(EVENEMENT_REPONSE, &confirmation);
+                crate::voix::dire(&self.app, &confirmation);
                 self.tour += 1;
                 self.ajouter(Bulle {
                     tour: self.tour,
                     question: texte,
-                    reponse: confirmation.into(),
+                    reponse: confirmation,
                     statut: "fini",
                     clavier: !voix,
                     etapes: Vec::new(),
@@ -1037,20 +1042,20 @@ impl<R: Runtime> Chef<R> {
                 Some(r) if !r.pause => {
                     r.pause = true;
                     self.transition(&[Evenement::Pause]);
-                    "Réunion en pause : je n'enregistre plus.".into()
+                    kobi_i18n::tr("coque.chef.reunionEnPause", &[])
                 }
-                Some(_) => "La réunion est déjà en pause.".into(),
-                None => "Aucune réunion en cours.".into(),
+                Some(_) => kobi_i18n::tr("coque.chef.dejaEnPause", &[]),
+                None => kobi_i18n::tr("coque.chef.aucuneReunion", &[]),
             },
             Intention::Reprendre if self.fin_annulable() => self.annuler_fin(),
             Intention::Reprendre => match &mut self.reunion {
                 Some(r) if r.pause => {
                     r.pause = false;
                     self.transition(&[Evenement::Reprendre]);
-                    "J'enregistre de nouveau.".into()
+                    kobi_i18n::tr("coque.chef.enregistreDeNouveau", &[])
                 }
-                Some(_) => "J'enregistre déjà.".into(),
-                None => "Aucune réunion en cours.".into(),
+                Some(_) => kobi_i18n::tr("coque.chef.enregistreDeja", &[]),
+                None => kobi_i18n::tr("coque.chef.aucuneReunion", &[]),
             },
             Intention::TerminerReunion => self.terminer(),
             Intention::Interrompre => {
@@ -1058,10 +1063,10 @@ impl<R: Runtime> Chef<R> {
                 return None;
             }
             Intention::OuvrirCarnet => match crate::carnet::ouvrir(&self.app) {
-                Ok(()) => "J'ouvre le Carnet.".into(),
+                Ok(()) => kobi_i18n::tr("coque.chef.ouvreCarnet", &[]),
                 Err(e) => {
                     tracing::warn!(erreur = %e, "carnet");
-                    format!("Je n'arrive pas à ouvrir le Carnet : {e}")
+                    kobi_i18n::tr("coque.chef.carnetImpossible", &[("erreur", &e.to_string())])
                 }
             },
             // Reprises et suivi des tâches : seulement par la question.
@@ -1078,13 +1083,13 @@ impl<R: Runtime> Chef<R> {
     fn demarrer(&mut self) -> String {
         if let Some(r) = &self.reunion {
             return if r.fin_demandee {
-                "J'écris encore le compte rendu de la réunion : un instant.".into()
+                kobi_i18n::tr("coque.chef.compteRenduEnCours", &[])
             } else {
-                "J'enregistre déjà la réunion.".into()
+                kobi_i18n::tr("coque.chef.reunionDejaEnregistree", &[])
             };
         }
         let Some(stockage) = crate::stockage::actuel(&self.app) else {
-            return "Dossier personnel introuvable : impossible d'enregistrer.".into();
+            return kobi_i18n::tr("coque.chef.dossierIntrouvable", &[]);
         };
         let debut = Instant::now();
         let debut_ms = maintenant_ms();
@@ -1124,7 +1129,7 @@ impl<R: Runtime> Chef<R> {
             titre_demande: false,
             titre_essais: 0,
         });
-        "C'est parti : j'enregistre la réunion et je prends des notes.".into()
+        kobi_i18n::tr("coque.chef.reunionCommencee", &[])
     }
 
     /// Titre proposé par Claude (KOB-223) : retenu s'il est exploitable et
@@ -1168,10 +1173,10 @@ impl<R: Runtime> Chef<R> {
     pub fn renommer_reunion(&mut self, titre: &str) -> Result<String, String> {
         let titre = titre.trim();
         if titre.is_empty() {
-            return Err("Il me faut un titre.".into());
+            return Err(kobi_i18n::tr("coque.chef.titreManquant", &[]));
         }
         let Some(r) = &mut self.reunion else {
-            return Err("Aucune réunion en cours.".into());
+            return Err(kobi_i18n::tr("coque.chef.aucuneReunion", &[]));
         };
         r.titre = Some(titre.to_owned());
         r.titre_manuel = true;
@@ -1179,7 +1184,10 @@ impl<R: Runtime> Chef<R> {
         tracing::info!(titre, "titre de la réunion donné à la main");
         self.ecrivain.nommer(titre.to_owned(), Origine::Manuel);
         self.emettre_enregistrement();
-        Ok(format!("C'est noté : la réunion s'appelle « {titre} »."))
+        Ok(kobi_i18n::tr(
+            "coque.chef.reunionRenommee",
+            &[("titre", titre)],
+        ))
     }
 
     /// Fin de la réunion, la même par la voix, Claude, le raccourci, le menu
@@ -1188,14 +1196,14 @@ impl<R: Runtime> Chef<R> {
     /// reprend la même réunion pendant [`ANNULATION`].
     fn terminer(&mut self) -> String {
         let Some(r) = &mut self.reunion else {
-            return "Aucune réunion en cours.".into();
+            return kobi_i18n::tr("coque.chef.aucuneReunion", &[]);
         };
         if r.fin_demandee {
             // Redemandée pendant « Annuler » : la fin devient définitive.
             if r.annulable_jusqu.is_some() {
                 self.clore_annulation();
             }
-            return "J'écris déjà le compte rendu.".into();
+            return kobi_i18n::tr("coque.chef.compteRenduDejaEnCours", &[]);
         }
         r.fin_demandee = true;
         r.arret = Some(Instant::now());
@@ -1206,7 +1214,7 @@ impl<R: Runtime> Chef<R> {
         // « Reprends » s'entend sans redire « Kobi » pendant « Annuler ».
         let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::Annulable);
         tracing::info!("réunion terminée, annulable");
-        "Réunion terminée, je prépare le compte rendu.".into()
+        kobi_i18n::tr("coque.chef.reunionTerminee", &[])
     }
 
     /// Fin de « Annuler » (délai écoulé, fin redemandée, quitter) : la fin est
@@ -1228,7 +1236,7 @@ impl<R: Runtime> Chef<R> {
     /// demandé est abandonné.
     fn annuler_fin(&mut self) -> String {
         let Some(r) = &mut self.reunion else {
-            return "Aucune réunion en cours.".into();
+            return kobi_i18n::tr("coque.chef.aucuneReunion", &[]);
         };
         r.fin_demandee = false;
         r.annulable_jusqu = None;
@@ -1246,7 +1254,7 @@ impl<R: Runtime> Chef<R> {
         self.transition(&[Evenement::Reprendre]);
         self.emettre_enregistrement();
         tracing::info!("fin de la réunion annulée");
-        "J'enregistre de nouveau : la réunion continue.".into()
+        kobi_i18n::tr("coque.chef.reunionContinue", &[])
     }
 
     /// Le compte rendu part dès que les pistes ont transcrit ce qui a été dit
@@ -1371,7 +1379,7 @@ impl<R: Runtime> Chef<R> {
     /// tourne encore.
     fn pas_encore_de_reponse(&self) -> String {
         if self.taches.is_empty() {
-            SANS_REPONSE.into()
+            sans_reponse()
         } else {
             self.avancement()
         }
@@ -1380,20 +1388,29 @@ impl<R: Runtime> Chef<R> {
     /// Avancement des tâches longues.
     fn avancement(&self) -> String {
         if self.taches.is_empty() {
-            return "Aucune tâche en cours.".into();
+            return kobi_i18n::tr("coque.chef.aucuneTache", &[]);
         }
         let taches: Vec<String> = self
             .taches
             .values()
-            .map(|(debut, q)| format!("« {q} », depuis {} s", debut.elapsed().as_secs()))
+            .map(|(debut, q)| {
+                kobi_i18n::tr(
+                    "coque.chef.tacheDepuis",
+                    &[
+                        ("secondes", &debut.elapsed().as_secs().to_string()),
+                        ("question", q),
+                    ],
+                )
+            })
             .collect();
-        format!("Je travaille encore sur {}.", taches.join(" ; "))
+        let taches = taches.join(&kobi_i18n::tr("coque.chef.separateurTaches", &[]));
+        kobi_i18n::tr("coque.chef.travailleEncore", &[("taches", &taches)])
     }
 
     /// Annule la dernière tâche longue lancée.
     fn annuler(&mut self) -> String {
         let Some((&tour, (_, question))) = self.taches.iter().next_back() else {
-            return "Aucune tâche à annuler.".into();
+            return kobi_i18n::tr("coque.chef.aucuneTacheAAnnuler", &[]);
         };
         let question = question.clone();
         self.taches.remove(&tour);
@@ -1401,10 +1418,10 @@ impl<R: Runtime> Chef<R> {
         self.cerveau.demander(Demande::Annuler { tour });
         if let Some(b) = self.bulle(tour) {
             b.statut = "fini";
-            b.reponse = "Tâche annulée.".into();
+            b.reponse = kobi_i18n::tr("coque.chef.tacheAnnulee", &[]);
         }
         self.emettre_historique();
-        format!("J'ai annulé « {question} ».")
+        kobi_i18n::tr("coque.chef.aiAnnule", &[("question", &question)])
     }
 
     /// Coupe la réponse en cours : la bulle garde le texte déjà reçu, la
@@ -1476,9 +1493,9 @@ impl<R: Runtime> Chef<R> {
         // La carte montre déjà « Pas de réponse : refusé. » ; la voix ne le
         // redit que si elle est le seul canal (KOB-215).
         if reponse == crate::validation::Reponse::Delai && self.voix_seul_canal() {
-            let message = "Pas de réponse : je n'ai rien fait.";
-            let _ = self.app.emit(EVENEMENT_REPONSE, message);
-            crate::voix::dire(&self.app, message);
+            let message = kobi_i18n::tr("coque.chef.delaiCarte", &[]);
+            let _ = self.app.emit(EVENEMENT_REPONSE, &message);
+            crate::voix::dire(&self.app, &message);
         }
         if let Some(resume) = suivante {
             self.annoncer_validation(&resume);
@@ -1495,9 +1512,9 @@ impl<R: Runtime> Chef<R> {
     /// demande (KOB-215).
     fn annoncer_validation(&self, resume: &str) {
         let phrase = if self.voix_seul_canal() {
-            format!("{resume}. Je le fais ?")
+            kobi_i18n::tr("coque.chef.resumeJeLeFais", &[("resume", resume)])
         } else {
-            "Je le fais ?".to_owned()
+            kobi_i18n::tr("coque.chef.jeLeFais", &[])
         };
         crate::voix::dire(&self.app, &phrase);
     }
@@ -1647,16 +1664,14 @@ impl<R: Runtime> Chef<R> {
                     self.erreur(titre, &explication);
                 }
             }
-            Retour::Relance { tour } => self.patienter(tour, crate::pannes::RELANCE),
-            Retour::Patience { tour } => self.patienter(tour, crate::pannes::PATIENCE),
+            Retour::Relance { tour } => self.patienter(tour, &crate::pannes::relance(), false),
+            Retour::Patience { tour } => self.patienter(tour, &crate::pannes::patience(), true),
             Retour::EnAttente { tour, nombre } => {
                 let (titre, explication) =
                     crate::pannes::expliquer(&crate::pannes::Panne::HorsLigne, "");
                 if let Some(b) = self.bulle(tour) {
-                    b.reponse = format!(
-                        "En attente du réseau ({nombre} question{}).",
-                        if nombre > 1 { "s" } else { "" }
-                    );
+                    b.reponse =
+                        kobi_i18n::tr("coque.chef.enAttenteReseau", &[("n", &nombre.to_string())]);
                     // Pas « tache » : l'Oups dit déjà qu'elle attend, sans
                     // notification en double (sobriété).
                     b.statut = "attente";
@@ -1779,7 +1794,10 @@ impl<R: Runtime> Chef<R> {
             Ok(t) => t,
             Err(e) => {
                 tracing::warn!(erreur = %e, "compte rendu en échec : notes gardées");
-                format!("# Compte rendu\n\nLe compte rendu n'a pas pu être écrit ({e}).\n\n## Notes\n\n{}", r.notes)
+                kobi_i18n::tr(
+                    "coque.chef.compteRenduSecours",
+                    &[("erreur", &e), ("notes", &r.notes)],
+                )
             }
         };
         self.compte_rendu_a_ecrire = true;
@@ -1861,7 +1879,10 @@ impl<R: Runtime> Chef<R> {
                             .app
                             .emit(EVENEMENT_COMPTE_RENDU, compte_rendu_ui(&reunion, &texte));
                         // Annoncé une fois à voix haute, si la voix est active (KOB-204).
-                        crate::voix::dire(&self.app, "Le compte rendu est prêt.");
+                        crate::voix::dire(
+                            &self.app,
+                            &kobi_i18n::tr("coque.chef.compteRenduPret", &[]),
+                        );
                     }
                     (_, Err(e)) => tracing::warn!(erreur = %e, "compte rendu illisible"),
                     _ => {}
@@ -1869,8 +1890,11 @@ impl<R: Runtime> Chef<R> {
                 self.tour += 1;
                 self.ajouter(Bulle {
                     tour: self.tour,
-                    question: "Fin de la réunion".into(),
-                    reponse: format!("Compte rendu écrit : {}", chemin.display()),
+                    question: kobi_i18n::tr("coque.chef.finDeReunion", &[]),
+                    reponse: kobi_i18n::tr(
+                        "coque.chef.compteRenduEcrit",
+                        &[("chemin", &chemin.display().to_string())],
+                    ),
                     statut: "fini",
                     clavier: false,
                     etapes: Vec::new(),
@@ -1881,7 +1905,7 @@ impl<R: Runtime> Chef<R> {
                 // à attendre pour quitter.
                 self.compte_rendu_a_ecrire = false;
                 tracing::warn!(%message, "écriture sur le disque");
-                self.erreur("Enregistrement sur le disque", &message);
+                self.erreur(&kobi_i18n::tr("coque.chef.erreurDisque", &[]), &message);
             }
         }
     }
@@ -1929,14 +1953,12 @@ impl<R: Runtime> Chef<R> {
         self.suite_apres_voix = true;
     }
 
-    /// Tour qui tarde ou relancé : la bulle le dit, et Kobi aussi si c'est
-    /// la question en cours (KOB-68).
-    fn patienter(&mut self, tour: u64, phrase: &str) {
+    /// Tour qui tarde (`longue`) ou relancé : la bulle le dit, et Kobi aussi
+    /// si c'est la question en cours (KOB-68).
+    fn patienter(&mut self, tour: u64, phrase: &str, longue: bool) {
         tracing::info!(tour, phrase, "tour : patience");
         // Discret : la tâche longue ne s'annonce pas, Kobi au travail se voit.
-        if phrase == crate::pannes::PATIENCE
-            && crate::voix::verbosite(&self.app) == kobi_session::config::Verbosite::Discret
-        {
+        if longue && crate::voix::verbosite(&self.app) == kobi_session::config::Verbosite::Discret {
             return;
         }
         if let Some(b) = self.bulle(tour) {
@@ -2235,6 +2257,44 @@ fn moment(m: &jiff::Zoned) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// KOB-210 : les annonces de Kobi en anglais, mêmes variables.
+    #[test]
+    fn annonces_en_anglais() {
+        use kobi_i18n::{t, Langue};
+        assert_eq!(
+            t(Langue::En, "coque.chef.reunionTerminee", &[]),
+            "Meeting over, I'm preparing the summary."
+        );
+        assert_eq!(
+            t(
+                Langue::En,
+                "coque.chef.reunionRenommee",
+                &[("titre", "Devis")]
+            ),
+            "Got it: the meeting is called “Devis”."
+        );
+        assert_eq!(
+            t(Langue::En, "coque.chef.enAttenteReseau", &[("n", "1")]),
+            "Waiting for the network (1 question)."
+        );
+        assert_eq!(
+            t(Langue::En, "coque.chef.enAttenteReseau", &[("n", "3")]),
+            "Waiting for the network (3 questions)."
+        );
+        assert_eq!(
+            t(Langue::Fr, "coque.chef.enAttenteReseau", &[("n", "1")]),
+            "En attente du réseau (1 question)."
+        );
+        assert_eq!(
+            t(
+                Langue::En,
+                "coque.rappels.rappelNote",
+                &[("quand", "tomorrow at 9"), ("texte", "call Paul")]
+            ),
+            "Got it: I'll remind you tomorrow at 9 to call Paul."
+        );
+    }
 
     /// KOB-215 : la longueur voulue part avec la question, sauf en normal.
     #[test]

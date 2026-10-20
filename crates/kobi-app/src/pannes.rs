@@ -112,56 +112,98 @@ pub fn classer(e: &BrainError) -> Panne {
     }
 }
 
-/// Seule annonce d'une tâche longue, quand elle tarde (15 s, KOB-215).
-pub const PATIENCE: &str = "Je m'en occupe, je te préviens dès que c'est prêt.";
+/// Seule annonce d'une tâche longue, quand elle tarde (15 s, KOB-215), dans
+/// la langue de l'interface (KOB-210).
+pub fn patience() -> String {
+    kobi_i18n::tr("coque.pannes.patience", &[])
+}
 
 /// Annonce d'une session relancée après un plantage.
-pub const RELANCE: &str = "Claude s'est arrêté, je le relance et je repose ta question.";
+pub fn relance() -> String {
+    kobi_i18n::tr("coque.pannes.relance", &[])
+}
+
+/// Un texte traduit en `&'static str`, gardé une fois : les titres d'Oups
+/// sont en nombre fini (une poignée par langue), la mémoire reste bornée.
+fn statique(texte: String) -> &'static str {
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+    static GARDES: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
+    let mut gardes = GARDES
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(&s) = gardes.get(texte.as_str()) {
+        return s;
+    }
+    let s: &'static str = Box::leak(texte.into_boxed_str());
+    gardes.insert(s);
+    s
+}
 
 /// Titre et message de l'Oups : la cause en une phrase, puis la marche à
 /// suivre. L'écoute et l'enregistrement continuent, on le rappelle.
 pub fn expliquer(panne: &Panne, detail: &str) -> (&'static str, String) {
-    let continue_ = "L'écoute et l'enregistrement continuent.";
-    match panne {
-        Panne::LimiteUsage => (
-            "Limite d'usage atteinte",
-            format!(
-                "Ton compte Claude a atteint sa limite d'usage{}. Réessaie plus tard, ou passe à une offre supérieure. {continue_}",
-                reprise(detail).map(|h| format!(" jusqu'à {h}")).unwrap_or_default()
-            ),
-        ),
+    let continue_ = kobi_i18n::tr("coque.pannes.continue", &[]);
+    let c = continue_.as_str();
+    let (titre, message) = match panne {
+        Panne::LimiteUsage => {
+            let jusqu_a = reprise(detail)
+                .map(|h| kobi_i18n::tr("coque.pannes.jusquA", &[("heure", &h)]))
+                .unwrap_or_default();
+            (
+                kobi_i18n::tr("coque.pannes.limiteTitre", &[]),
+                kobi_i18n::tr(
+                    "coque.pannes.limiteMessage",
+                    &[("jusquA", &jusqu_a), ("suite", c)],
+                ),
+            )
+        }
         Panne::Deconnecte => (
-            "Claude Code n'est pas connecté",
-            format!("Ouvre un terminal et lance `claude auth login`, puis repose ta question. {continue_}"),
+            kobi_i18n::tr("coque.pannes.deconnecteTitre", &[]),
+            kobi_i18n::tr("coque.pannes.deconnecteMessage", &[("suite", c)]),
         ),
         Panne::Absent => (
-            "Claude Code est introuvable",
-            format!("Installe Claude Code (claude.ai/code) ou vérifie qu'il démarre dans un terminal, puis repose ta question. {continue_}"),
+            kobi_i18n::tr("coque.pannes.absentTitre", &[]),
+            kobi_i18n::tr("coque.pannes.absentMessage", &[("suite", c)]),
         ),
         Panne::HorsLigne => (
-            "Pas d'Internet",
-            format!("Je garde ta question et je la pose dès que la connexion revient. {continue_}"),
+            kobi_i18n::tr("coque.pannes.horsLigneTitre", &[]),
+            kobi_i18n::tr("coque.pannes.horsLigneMessage", &[("suite", c)]),
         ),
-        Panne::Lenteur => (
-            "Claude ne répond pas",
-            format!(
-                "Rien depuis {} : j'abandonne cette question. Repose-la dans un instant. {continue_}",
-                attente(detail).unwrap_or_else(|| "trop longtemps".into())
-            ),
-        ),
-        Panne::DureeMax => (
-            "Tâche trop longue",
-            format!(
-                "Elle a atteint la durée maximale{} : je l'arrête. Découpe la demande, ou allonge « taches.duree_max_s » dans les réglages. {continue_}",
-                entre_parentheses(detail).map(|d| format!(" ({d})")).unwrap_or_default()
-            ),
-        ),
+        Panne::Lenteur => {
+            let duree =
+                attente(detail).unwrap_or_else(|| kobi_i18n::tr("coque.pannes.tropLongtemps", &[]));
+            (
+                kobi_i18n::tr("coque.pannes.lenteurTitre", &[]),
+                kobi_i18n::tr(
+                    "coque.pannes.lenteurMessage",
+                    &[("duree", &duree), ("suite", c)],
+                ),
+            )
+        }
+        Panne::DureeMax => {
+            let duree = entre_parentheses(detail)
+                .map(|d| format!(" ({d})"))
+                .unwrap_or_default();
+            (
+                kobi_i18n::tr("coque.pannes.dureeMaxTitre", &[]),
+                kobi_i18n::tr(
+                    "coque.pannes.dureeMaxMessage",
+                    &[("duree", &duree), ("suite", c)],
+                ),
+            )
+        }
         Panne::Plantage => (
-            "Claude s'est arrêté",
-            format!("Il s'est arrêté deux fois de suite sur cette question. Repose-la dans un instant. {continue_}"),
+            kobi_i18n::tr("coque.pannes.plantageTitre", &[]),
+            kobi_i18n::tr("coque.pannes.plantageMessage", &[("suite", c)]),
         ),
-        Panne::Autre => ("Claude n'a pas répondu", format!("{detail} {continue_}")),
-    }
+        Panne::Autre => (
+            kobi_i18n::tr("coque.pannes.autreTitre", &[]),
+            format!("{detail} {continue_}"),
+        ),
+    };
+    (statique(titre), message)
 }
 
 /// Heure de reprise d'une limite d'usage, si Claude Code la donne
@@ -171,9 +213,9 @@ fn attente(detail: &str) -> Option<String> {
     let apres = detail.split("pas de réponse en ").nth(1)?;
     let secondes: u64 = apres.split_whitespace().next()?.parse().ok()?;
     Some(if secondes >= 120 && secondes.is_multiple_of(60) {
-        format!("{} minutes", secondes / 60)
+        kobi_i18n::tr("commun.minutes", &[("n", &(secondes / 60).to_string())])
     } else {
-        format!("{secondes} secondes")
+        kobi_i18n::tr("coque.pannes.secondes", &[("n", &secondes.to_string())])
     })
 }
 
@@ -188,7 +230,13 @@ fn reprise(detail: &str) -> Option<String> {
     let secondes: i64 = detail.rsplit('|').next()?.trim().parse().ok()?;
     let t = jiff::Timestamp::from_second(secondes).ok()?;
     let local = t.to_zoned(jiff::tz::TimeZone::system());
-    Some(format!("{:02} h {:02}", local.hour(), local.minute()))
+    Some(kobi_i18n::tr(
+        "coque.pannes.heure",
+        &[
+            ("h", &format!("{:02}", local.hour())),
+            ("m", &format!("{:02}", local.minute())),
+        ],
+    ))
 }
 
 /// Le message vu par l'utilisateur pour une erreur de tour.
@@ -291,5 +339,26 @@ mod tests {
         let (titre, message) = pour_l_utilisateur("erreur d'API : Invalid request");
         assert_eq!(titre, "Claude n'a pas répondu");
         assert!(message.starts_with("erreur d'API : Invalid request"));
+    }
+
+    /// KOB-210 : l'Oups en anglais, mêmes variables qu'en français.
+    #[test]
+    fn oups_en_anglais() {
+        use kobi_i18n::Langue;
+        let suite = kobi_i18n::t(Langue::En, "coque.pannes.continue", &[]);
+        assert_eq!(suite, "Listening and recording carry on.");
+        assert_eq!(
+            kobi_i18n::t(
+                Langue::En,
+                "coque.pannes.lenteurMessage",
+                &[("duree", "5 minutes"), ("suite", &suite)]
+            ),
+            "Nothing for 5 minutes: I'm dropping this question. Ask it again in a moment. \
+             Listening and recording carry on."
+        );
+        assert_eq!(
+            kobi_i18n::t(Langue::En, "coque.pannes.secondes", &[("n", "1")]),
+            "1 second"
+        );
     }
 }

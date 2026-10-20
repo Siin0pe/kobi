@@ -82,18 +82,30 @@ fn meme_jeton(a: &str, b: &str) -> bool {
 /// Vérifie la requête et l'exécute.
 fn traiter(requete: Requete, jeton: &str, gestionnaire: &Gestionnaire) -> Result<Value, Erreur> {
     if !meme_jeton(&requete.token, jeton) {
-        return Err(Erreur::new(Code::Unauthorized, "jeton de contrôle refusé"));
+        return Err(Erreur::new(
+            Code::Unauthorized,
+            kobi_i18n::tr("ctl.serveur.jetonRefuse", &[]),
+        ));
     }
     if requete.v != VERSION {
         return Err(Erreur::new(
             Code::InvalidParams,
-            format!("protocole v{} non pris en charge (v{VERSION})", requete.v),
+            kobi_i18n::tr(
+                "ctl.serveur.protocole",
+                &[
+                    ("demandee", &requete.v.to_string()),
+                    ("version", &VERSION.to_string()),
+                ],
+            ),
         ));
     }
     let commande = commandes::trouver(&requete.command).ok_or_else(|| {
         Erreur::new(
             Code::UnknownCommand,
-            format!("commande inconnue : {}", requete.command),
+            kobi_i18n::tr(
+                "ctl.cli.commandeInconnue",
+                &[("commande", &requete.command)],
+            ),
         )
     })?;
     let params = commande.verifier(&requete.params)?;

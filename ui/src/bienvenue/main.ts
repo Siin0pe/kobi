@@ -149,6 +149,8 @@ export function monterAccueil(
     const n = courant;
     courant = -1;
     aller(n);
+    // Les résumés des étapes (« non connecté »…) se refont dans la langue.
+    if (disponible()) precontroler();
   });
 
   function presentation(): void {

@@ -161,10 +161,13 @@ impl CarteValidation {
 
     /// Carte d'un réglage de Kobi : l'appelant connaît la valeur actuelle.
     pub fn reglage(id: u64, cle: &str, avant: Value, apres: Value, echeance: Duration) -> Self {
-        let resume = format!(
-            "Changer le réglage « {cle} » : {} → {}",
-            court(&avant),
-            court(&apres)
+        let resume = kobi_i18n::tr(
+            "coque.validation.changerReglage",
+            &[
+                ("cle", cle),
+                ("avant", &court(&avant)),
+                ("apres", &court(&apres)),
+            ],
         );
         let detail = Detail::Reglage {
             cle: cle.to_owned(),
@@ -347,8 +350,14 @@ fn presenter(genre: Genre, outil: &str, entree: &Value) -> (String, Detail) {
                 .find(|c| !c.is_empty())
                 .unwrap_or("");
             let resume = match outil {
-                "Write" => format!("Écrire le fichier {}", nom(chemin)),
-                _ => format!("Modifier le fichier {}", nom(chemin)),
+                "Write" => kobi_i18n::tr(
+                    "coque.validation.ecrireFichier",
+                    &[("fichier", nom(chemin))],
+                ),
+                _ => kobi_i18n::tr(
+                    "coque.validation.modifierFichier",
+                    &[("fichier", nom(chemin))],
+                ),
             };
             (
                 resume,
@@ -361,11 +370,15 @@ fn presenter(genre: Genre, outil: &str, entree: &Value) -> (String, Detail) {
             let commande = texte(entree, "command").to_owned();
             let description = texte(entree, "description");
             let resume = match (genre, description.is_empty()) {
-                (Genre::Suppression, _) => {
-                    format!("Supprimer : {}", court(&Value::from(commande.as_str())))
-                }
+                (Genre::Suppression, _) => kobi_i18n::tr(
+                    "coque.validation.supprimer",
+                    &[("commande", &court(&Value::from(commande.as_str())))],
+                ),
                 (_, false) => description.to_owned(),
-                (_, true) => format!("Lancer : {}", court(&Value::from(commande.as_str()))),
+                (_, true) => kobi_i18n::tr(
+                    "coque.validation.lancer",
+                    &[("commande", &court(&Value::from(commande.as_str())))],
+                ),
             };
             let dossier = entree.get("cwd").and_then(Value::as_str).map(String::from);
             (resume, Detail::Commande { commande, dossier })
@@ -379,7 +392,10 @@ fn presenter(genre: Genre, outil: &str, entree: &Value) -> (String, Detail) {
                 .find_map(|cle| entree.get(cle).and_then(Value::as_str));
             let mut resume = format!("{serveur} · {}", action.replace('_', " "));
             if let Some(t) = titre {
-                resume.push_str(&format!(" : {}", court(&Value::from(t))));
+                resume.push_str(&kobi_i18n::tr(
+                    "coque.validation.titreMcp",
+                    &[("titre", &court(&Value::from(t)))],
+                ));
             }
             let detail = Detail::Mcp {
                 serveur,
@@ -417,7 +433,10 @@ fn diff(outil: &str, chemin: &str, entree: &Value) -> String {
     let total = lignes.len();
     if total > LIGNES_DIFF {
         lignes.truncate(LIGNES_DIFF);
-        lignes.push(format!("… {} lignes de plus", total - LIGNES_DIFF));
+        lignes.push(kobi_i18n::tr(
+            "coque.validation.lignesDePlus",
+            &[("n", &(total - LIGNES_DIFF).to_string())],
+        ));
     }
     lignes.join("\n")
 }

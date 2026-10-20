@@ -132,12 +132,23 @@ fn nom_actuel(reunions: &Path, nom: &str) -> Option<String> {
 /// « Réunion du 19/10 à 14 h » (KOB-223).
 pub fn titre_par_defaut(debut_ms: u64) -> String {
     let (date, h, m, _) = heure_locale(debut_ms);
+    let jour = format!("{:02}", date.jour);
+    let mois = format!("{:02}", date.mois);
+    let h = h.to_string();
     if m == 0 {
-        format!("Réunion du {:02}/{:02} à {h} h", date.jour, date.mois)
+        kobi_i18n::tr(
+            "session.stockage.titreParDefaut",
+            &[("jour", &jour), ("mois", &mois), ("h", &h)],
+        )
     } else {
-        format!(
-            "Réunion du {:02}/{:02} à {h} h {m:02}",
-            date.jour, date.mois
+        kobi_i18n::tr(
+            "session.stockage.titreParDefautMinutes",
+            &[
+                ("jour", &jour),
+                ("mois", &mois),
+                ("h", &h),
+                ("m", &format!("{m:02}")),
+            ],
         )
     }
 }
@@ -840,23 +851,34 @@ impl Stockage {
         let titre = match (&lue.resume.titre, &lue.resume.date) {
             (Some(t), Some(d)) => format!("{t} — {d}"),
             (Some(t), None) => t.clone(),
-            (None, Some(d)) => format!("Réunion du {d}"),
+            (None, Some(d)) => kobi_i18n::tr("session.export.reunionDu", &[("date", d)]),
             (None, None) => lue.resume.nom.clone(),
         };
         let mut md = format!("# {titre}\n\n");
         match &lue.compte_rendu {
             Some(cr) => md.push_str(cr.brut.trim()),
             None if !lue.notes.trim().is_empty() => {
-                md.push_str("## Notes\n\n");
+                md.push_str(&format!(
+                    "## {}\n\n",
+                    kobi_i18n::tr("session.export.notes", &[])
+                ));
                 md.push_str(lue.notes.trim());
             }
-            None => md.push_str("_Pas encore de compte rendu._"),
+            None => md.push_str(&format!(
+                "_{}_",
+                kobi_i18n::tr("session.export.pasDeCompteRendu", &[])
+            )),
         }
-        md.push_str("\n\n## Transcription\n\n");
+        md.push_str(&format!(
+            "\n\n## {}\n\n",
+            kobi_i18n::tr("session.export.transcription", &[])
+        ));
+        let moi = kobi_i18n::tr("session.export.moi", &[]);
+        let eux = kobi_i18n::tr("session.export.eux", &[]);
         for s in &lue.segments {
             let qui = match s.source {
-                Source::Moi => "Moi",
-                Source::Eux => "Eux",
+                Source::Moi => &moi,
+                Source::Eux => &eux,
             };
             md.push_str(&format!(
                 "- `{}` **{qui}** : {}\n",
@@ -873,12 +895,16 @@ impl Stockage {
     /// Document markdown d'une conversation.
     pub fn document_conversation(&self, id: &str) -> Result<DocumentAPublier, ErreurDonnees> {
         let lue = self.lire_conversation(id)?;
-        let titre = format!("Conversation du {}", lue.resume.date);
+        let titre = kobi_i18n::tr(
+            "session.export.conversationDu",
+            &[("date", &lue.resume.date)],
+        );
         let mut md = format!("# {titre}\n\n");
+        let moi = kobi_i18n::tr("session.export.moi", &[]);
         for t in &lue.tours {
             let (_, h, m, _) = heure_locale(t.at_ms);
             let qui = match t.qui {
-                Qui::Moi => "Moi",
+                Qui::Moi => moi.as_str(),
                 Qui::Kobi => "Kobi",
             };
             md.push_str(&format!(

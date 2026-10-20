@@ -22,17 +22,24 @@ fn lue(chemin: &Path) -> Option<Langue> {
 fn ecrire(chemin: &Path, langue: Option<Langue>) -> Result<(), String> {
     let mut lu = config::load_or_create(chemin);
     if let Some(probleme) = lu.problem {
-        return Err(format!(
-            "config.toml illisible, langue non enregistrée : {probleme}"
+        return Err(kobi_i18n::tr(
+            "coque.langue.configIllisible",
+            &[("probleme", &probleme.to_string())],
         ));
     }
     lu.config.ui.language = langue;
     config::save(&lu.config, chemin).map_err(|e| e.to_string())
 }
 
-/// Annonce la langue à toutes les fenêtres.
+/// Règle la langue de la coque et l'annonce à toutes les fenêtres.
 pub fn annoncer<R: Runtime>(app: &AppHandle<R>, langue: Option<Langue>) {
-    tracing::info!(langue = langue.map(Langue::code), "langue de l'interface");
+    let retenue = kobi_i18n::regler(langue);
+    tracing::info!(
+        langue = langue.map(Langue::code),
+        retenue = retenue.code(),
+        "langue de l'interface"
+    );
+    crate::tray::retraduire(app);
     let _ = app.emit(EVENEMENT_LANGUE, langue.map(Langue::code));
 }
 
@@ -53,11 +60,13 @@ pub fn regler_langue_ui<R: Runtime>(
 ) -> Result<Option<&'static str>, String> {
     let l = match langue.as_deref() {
         None => None,
-        Some(code) => {
-            Some(Langue::depuis_code(code).ok_or_else(|| format!("langue inconnue : {code}"))?)
-        }
+        Some(code) => Some(
+            Langue::depuis_code(code)
+                .ok_or_else(|| kobi_i18n::tr("coque.langue.inconnue", &[("code", code)]))?,
+        ),
     };
-    let chemin = config::default_path().ok_or("dossier personnel introuvable")?;
+    let chemin = config::default_path()
+        .ok_or_else(|| kobi_i18n::tr("coque.commun.dossierPersoIntrouvable", &[]))?;
     ecrire(&chemin, l)?;
     annoncer(&app, l);
     Ok(l.map(Langue::code))
