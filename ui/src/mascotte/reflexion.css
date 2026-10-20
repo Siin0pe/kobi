@@ -1,0 +1,60 @@
+/* « Kobi réfléchit » (KOB-241) : trois propositions (reflexion.ts). Seuls
+   transform et opacity bougent : rien n'est remis en page à chaque image. */
+
+.kobi .reflexion{position:absolute;inset:0;pointer-events:none}
+.kobi .reflexion > *{display:none}
+/* Entrée en opacité seule : la boucle garde transform pour elle, et reste
+   confiée au compositeur (deux animations de transform cumulées la
+   ramenaient sur le fil principal, une remise en style par image). */
+@keyframes kobi-r-entre{from{opacity:0}to{opacity:1}}
+
+/* L'ancienne façon de réfléchir (pilule qui balance, yeux « @ » qui
+   tournent) laisse place à la proposition choisie. */
+.kobi[data-reflexion].m-think .pill{animation:none}
+.kobi[data-reflexion].m-think .g{animation:none}
+
+/* ---------- A : engrenage typographique ---------- */
+.kobi[data-reflexion='a'].m-think .roue{display:block}
+.kobi[data-reflexion='a'].m-think .g{opacity:0}
+.kobi .roue{position:absolute;top:32px;width:84px;height:84px;margin-left:-42px;border-radius:50%;box-shadow:inset 0 0 0 3px rgba(215,255,58,.35);animation:kobi-r-entre .3s ease-out both,kobi-r-cran 1.8s steps(6) .3s infinite}
+.kobi .roue.gauche{left:100px}
+.kobi .roue.droite{left:200px;animation-direction:normal,reverse}
+.kobi .roue .cran{position:absolute;left:50%;top:50%;width:24px;margin:-14px 0 0 -12px;text-align:center;font-family:'Recursive',monospace;font-size:26px;line-height:28px;color:#D7FF3A;font-variation-settings:"wght" 900,"CASL" 1;transform:rotate(calc(var(--i) * 60deg)) translateY(-27px)}
+/* Le moyeu de la roue. */
+.kobi .roue::after{content:'';position:absolute;left:50%;top:50%;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;background:#D7FF3A}
+@keyframes kobi-r-cran{to{transform:rotate(360deg)}}
+/* Un à-coup de la tête à chaque cran (6 crans en 1,8 s). */
+.kobi[data-reflexion='a'].m-think .pill{animation:kobi-r-acoup .3s ease-out infinite}
+@keyframes kobi-r-acoup{0%,100%{transform:translateY(0) rotate(0)}18%{transform:translateY(-3px) rotate(-.6deg)}}
+
+/* ---------- B : regard en l'air ---------- */
+.kobi[data-reflexion='b'].m-think .points{display:block}
+.kobi[data-reflexion='b'].m-think .eyes{animation:none;translate:4px -2px}
+.kobi[data-reflexion='b'].m-think .g{transform:scaleY(.42);transition:transform .25s ease-out}
+.kobi[data-reflexion='b'].m-think .pill{animation:kobi-breathe 4s ease-in-out infinite}
+.kobi .points{position:absolute;right:-74px;top:-40px;width:96px;height:56px;font-family:'Recursive',monospace;color:#0B0B0B;paint-order:stroke fill;-webkit-text-stroke:5px #D7FF3A;font-variation-settings:"wght" 900,"CASL" 1}
+.kobi .points .point{position:absolute;bottom:0;font-size:56px;line-height:1;opacity:0;animation:kobi-r-tape 2.1s ease-out infinite}
+.kobi .points .point:nth-child(1){left:0}
+.kobi .points .point:nth-child(2){left:24px;animation-delay:.35s}
+.kobi .points .point:nth-child(3){left:48px;animation-delay:.7s}
+@keyframes kobi-r-tape{0%{opacity:0;transform:translateY(6px) scale(.6)}10%{opacity:1;transform:none}70%{opacity:1;transform:none}85%,100%{opacity:0;transform:translateY(-4px)}}
+.kobi .points .doute{position:absolute;left:74px;bottom:18px;font-size:46px;line-height:1;opacity:0;animation:kobi-r-doute 6.3s ease-out 2s infinite}
+@keyframes kobi-r-doute{0%,78%{opacity:0;transform:scale(.4) rotate(-20deg)}84%{opacity:1;transform:scale(1.15) rotate(8deg)}92%{opacity:1;transform:scale(1) rotate(0)}100%{opacity:0;transform:scale(1)}}
+
+/* ---------- C : bulle de pensée ---------- */
+.kobi[data-reflexion='c'].m-think .pensee{display:block}
+.kobi[data-reflexion='c'].m-think .eyes{animation:none;translate:4px -2px}
+.kobi[data-reflexion='c'].m-think .g{transform:scaleY(.7)}
+.kobi[data-reflexion='c'].m-think .pill{animation:kobi-breathe 3s ease-in-out infinite}
+.kobi .pensee{position:absolute;right:-70px;top:-150px;width:200px;height:170px}
+.kobi .pensee .maillon{position:absolute;font-family:'Recursive',monospace;line-height:1;color:#0B0B0B;paint-order:stroke fill;-webkit-text-stroke:5px #D7FF3A;font-variation-settings:"wght" 900,"CASL" 1;animation:kobi-r-entre .25s ease-out both}
+.kobi .pensee .maillon.petit{left:8px;bottom:6px;font-size:26px}
+.kobi .pensee .maillon:not(.petit){left:30px;bottom:30px;font-size:40px;animation-delay:.12s}
+.kobi .pensee .nuage{position:absolute;right:0;top:0;width:140px;height:96px;border-radius:48px;background:#0B0B0B;box-shadow:0 0 0 4px #D7FF3A,8px 8px 0 rgba(11,11,11,.16);animation:kobi-r-entre .3s ease-out .2s both,kobi-r-gonfle 2.4s ease-in-out .5s infinite}
+@keyframes kobi-r-gonfle{0%,100%{transform:scale(.94)}50%{transform:scale(1.06)}}
+.kobi .pensee .idee{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-family:'Recursive',monospace;font-size:48px;line-height:1;color:#D7FF3A;font-variation-settings:"wght" 800,"CASL" 1;opacity:0;animation:kobi-r-idee 3.2s ease-in-out infinite;animation-delay:calc(var(--i) * .8s)}
+@keyframes kobi-r-idee{0%{opacity:0;transform:translateY(8px) scale(.8)}8%,22%{opacity:1;transform:none}30%,100%{opacity:0;transform:translateY(-6px) scale(.9)}}
+
+/* Réduire les animations : la proposition se pose, immobile. */
+.kobi.reduced-motion .reflexion *{animation:none!important}
+.kobi.reduced-motion .points .point,.kobi.reduced-motion .pensee .idee:first-child{opacity:1}

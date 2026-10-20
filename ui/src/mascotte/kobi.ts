@@ -26,9 +26,10 @@ import type { MascotData, MascotState } from '../states';
 import { onFrame } from '../ticker';
 import { Blinker, Scrambler, type Eyes } from './glyphs';
 import { GESTURES, Gestures, Inertia, morphEyes, Sway, type Gesture } from './motion';
-import { Orbit } from './orbit';
+import { reflexion, variante } from './reflexion';
 import { Travail, WORK_EYES } from './travail';
 import './kobi.css';
+import './reflexion.css';
 
 interface Look {
   eye: string;
@@ -69,7 +70,7 @@ const BLINKS: ReadonlySet<MascotState> = new Set(['listen', 'write', 'answer', '
 const FX: Partial<Record<MascotState, string>> = {
   idle: '.zz',
   listen: '.waves',
-  think: '.orbit',
+  think: '.reflexion',
   suggest: '.bang',
   done: '.bang',
   error: '.drop',
@@ -173,7 +174,6 @@ export class Kobi {
   private readonly burst: HTMLElement;
   /** Anneau rouge de l'enregistrement, autour de la pilule. */
   private readonly ring: HTMLElement;
-  private readonly orbit = new Orbit();
   private readonly travail = new Travail();
   private readonly inertia: Inertia;
   /** Ressort du calque `.drag` (déplacement de la fenêtre). */
@@ -231,6 +231,8 @@ export class Kobi {
   constructor(reducedMotion: boolean) {
     this.reduced = reducedMotion;
     this.root = el('div', 'kobi m-idle');
+    // Façon de réfléchir à l'essai (KOB-241) : proposition choisie.
+    this.root.dataset.reflexion = variante();
 
     this.body = el('div', 'body');
     const zz = el('div', 'fx zz');
@@ -262,7 +264,7 @@ export class Kobi {
     this.eyesBox.append(...this.eyes);
     this.gaze.append(this.eyesBox);
     this.mouth = el('div', 'mouth');
-    this.pill.append(this.ring, this.gaze, this.mouth);
+    this.pill.append(this.ring, this.gaze, this.mouth, reflexion());
     inertia.append(this.pill);
     react.append(inertia);
     this.voice.append(react);
@@ -273,7 +275,7 @@ export class Kobi {
     this.sway.onRest = () => this.setLively('sway', false);
     this.gestures = new Gestures(react);
 
-    this.body.append(this.orbit.root, this.travail.root, zz, waves, bang, drop, sheets, this.drag, this.burst);
+    this.body.append(this.travail.root, zz, waves, bang, drop, sheets, this.drag, this.burst);
     this.word = el('div', 'word');
     this.root.append(this.body, this.word);
     // Le dessin (symboles brouillés…) est masqué aux lecteurs d'écran, mais
@@ -343,10 +345,7 @@ export class Kobi {
     this.mouth.textContent = LOOKS[state].mouth;
     this.mouthStep = 0;
 
-    if (state === 'think') this.orbit.start(this.reduced);
-    else this.orbit.stop();
     if (state === 'work') this.setTool(this.data.tool, false);
-    if (this.paused) this.orbit.pause(true);
     if (animated) {
       this.popIn(state);
       if (state === 'done') this.confetti();
@@ -514,7 +513,6 @@ export class Kobi {
     this.flushSwitch();
     this.paused = paused;
     this.applyFlags();
-    this.orbit.pause(paused || this.reduced);
     this.inertia.pause(paused);
     this.refreshLife();
   }
@@ -530,7 +528,6 @@ export class Kobi {
       this.morph?.cancel();
       this.morph = null;
     }
-    this.orbit.pause(reduced || this.paused);
     this.scrambler.setInstant(reduced);
     this.refreshLife();
   }
@@ -545,7 +542,6 @@ export class Kobi {
     this.stopLevel();
     this.blinker.run(false);
     this.scrambler.stop();
-    this.orbit.stop();
     this.inertia.cancel();
     this.sway.cancel();
     this.gestures.cancel();

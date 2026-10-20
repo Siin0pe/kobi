@@ -66,7 +66,7 @@
 
 /* Texte noir sur fenêtre transparente : un contour vert peint sous le
    texte le garde lisible sur n'importe quel fond (sombre, clair, photo). */
-.kobi .fx,.kobi .orbit span,.kobi .word,.kobi .burst span{paint-order:stroke fill;-webkit-text-stroke:var(--halo,6px) #D7FF3A}
+.kobi .fx,.kobi .word,.kobi .burst span{paint-order:stroke fill;-webkit-text-stroke:var(--halo,6px) #D7FF3A}
 .kobi .fx{position:absolute;display:none;font-family:'Recursive',monospace;color:#0B0B0B;--halo:5px}
 .kobi.m-idle .zz{display:block}
 .kobi .zz span{position:absolute;font-size:34px;font-variation-settings:"wght" 650;animation:kobi-zfloat 2.6s ease-out infinite}
@@ -82,9 +82,6 @@
 .kobi.m-error .drop{display:block}
 .kobi .drop{font-size:40px;animation:kobi-sweat 1.2s ease-in infinite}
 
-.kobi .orbit{position:absolute;inset:0;display:none}
-.kobi.m-think .orbit{display:block}
-.kobi .orbit span{--halo:6px;position:absolute;left:50%;top:50%;margin:-28px 0 0 -18px;font-family:'Recursive',monospace;font-size:48px;line-height:1;color:#0B0B0B;will-change:transform,opacity}
 
 /* Le grand mot vit en permanence : chaque lettre ondule en graisse, CASL et
    inclinaison, et sautille (translate), avec un décalage par lettre ; le mot

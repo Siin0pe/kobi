@@ -40,16 +40,6 @@ test('Kobi passe les 9 états sans erreur', async ({ page }) => {
   await expectNoErrors(errors);
 });
 
-test('les symboles orbitent seulement en Réfléchit', async ({ page }) => {
-  const errors = await openUi(page, 'state=think');
-  await expect(page.locator('.kobi .orbit')).toBeVisible();
-  expect(await page.locator('.kobi .orbit span').evaluateAll((n) => n.map((s) => s.getAnimations().length))).toEqual([1, 1, 1, 1, 1, 1]);
-  await page.evaluate(() => window.kobi.setState('answer'));
-  await expect(page.locator('.kobi .orbit')).toBeHidden();
-  expect(await page.locator('.kobi .orbit span').evaluateAll((n) => n.flatMap((s) => s.getAnimations()).length)).toBe(0);
-  await expectNoErrors(errors);
-});
-
 test('le changement d’état ne fait pas sauter la pilule', async ({ page }) => {
   const errors = await openUi(page, 'state=think');
   // Réfléchit se balance de ±3° : on change d'état en pleine inclinaison.
