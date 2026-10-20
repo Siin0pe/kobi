@@ -213,3 +213,38 @@ test('réglage dans l’app : « Images par seconde » et « Économie d’éner
   await expect(page.locator('html')).toHaveAttribute('data-fps', '15');
   await expectNoErrors(errors);
 });
+
+// KOB-219 : les « z » du sommeil partent l'un après l'autre (délais décalés).
+// À 5 images/s, ils changent quand même sur les mêmes images que la tête et
+// les yeux : 5 images distinctes par seconde pour tout Kobi, pas 15.
+test('5 images/s : les « z » décalés, la tête et les yeux changent sur les mêmes images', async ({ page }) => {
+  const errors = await openUi(page, '');
+  await ecran(page, 60);
+  await poser(page, { fps: 5 });
+  await expect(page.locator('.stage')).toHaveAttribute('data-fps', '5');
+  await page.waitForTimeout(500);
+  const images = await page.evaluate(
+    () =>
+      new Promise<number>((fini) => {
+        const els = [...document.querySelectorAll('.kobi .zz span, .kobi .pill, .kobi .eyes')];
+        const lire = (e: Element) => {
+          const c = getComputedStyle(e);
+          return `${c.transform} ${c.opacity} ${c.translate}`;
+        };
+        let avant = els.map(lire).join('|');
+        let n = 0;
+        const debut = performance.now();
+        const image = (): void => {
+          const maintenant = els.map(lire).join('|');
+          if (maintenant !== avant) n++;
+          avant = maintenant;
+          const ecoule = performance.now() - debut;
+          if (ecoule < 2000) requestAnimationFrame(image);
+          else fini((n * 1000) / ecoule);
+        };
+        requestAnimationFrame(image);
+      }),
+  );
+  attendre(images, 5);
+  await expectNoErrors(errors);
+});
