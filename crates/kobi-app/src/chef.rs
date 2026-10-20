@@ -2266,4 +2266,96 @@ mod tests {
             "Aucune réunion en cours."
         );
     }
+
+    fn dit(texte: &str) -> Segment {
+        Segment {
+            start: 0.0,
+            end: 1.0,
+            source: kobi_stt::Source::Eux,
+            text: texte.into(),
+            is_final: true,
+        }
+    }
+
+    /// KOB-198 : ce qui a été dit avant la fin mais transcrit après (charge)
+    /// est gardé ; le compte rendu attend que la piste ait rattrapé l'arrêt ;
+    /// ce qui est dit après la fin ne compte pas.
+    #[test]
+    fn fin_attend_la_transcription_en_retard() {
+        let (app, _dir) = chef_en_essai();
+        let h = app.handle();
+        avec_chef(&app, |c| c.commande(Intention::DemarrerReunion));
+        // La piste « eux » n'a transcrit que jusqu'à il y a 5 s.
+        let avant = Instant::now() - Duration::from_secs(5);
+        avancer(h, kobi_stt::Source::Eux, Some(avant));
+        avec_chef(&app, |c| c.commande(Intention::TerminerReunion));
+        let attend = avec_chef(&app, |c| {
+            let r = c.reunion.as_ref().unwrap();
+            (r.vidange.is_some(), r.compte_rendu_demande)
+        });
+        assert_eq!(attend, (true, false), "le compte rendu attend la piste");
+        // Arrive en retard, dit avant la fin : gardé. Dit après : ignoré.
+        avec_chef(&app, |c| {
+            c.recevoir(Message::Segment(dit("Le budget est validé."), avant));
+            c.recevoir(Message::Segment(
+                dit("Annule."),
+                Instant::now() + Duration::from_secs(1),
+            ));
+        });
+        // La piste rattrape l'arrêt : le compte rendu part avec la fin.
+        avancer(h, kobi_stt::Source::Eux, Some(Instant::now()));
+        avec_chef(&app, |c| c.tick());
+        let (demande, transcription) = avec_chef(&app, |c| {
+            let r = c.reunion.as_ref().unwrap();
+            (r.compte_rendu_demande, r.pour_compte_rendu.clone())
+        });
+        assert!(demande);
+        assert!(
+            transcription.contains("Le budget est validé."),
+            "{transcription}"
+        );
+        assert!(!transcription.contains("Annule"), "{transcription}");
+    }
+
+    /// KOB-198 : la piste reste en retard ; au bout de la vidange, le compte
+    /// rendu part quand même. « Annuler » pendant la vidange : aucun compte
+    /// rendu n'était demandé, aucun n'est abandonné.
+    #[test]
+    fn vidange_bornee_et_annuler_pendant_la_vidange() {
+        let (app, _dir) = chef_en_essai();
+        let h = app.handle();
+        avec_chef(&app, |c| c.commande(Intention::DemarrerReunion));
+        avancer(
+            h,
+            kobi_stt::Source::Moi,
+            Some(Instant::now() - Duration::from_secs(5)),
+        );
+        avec_chef(&app, |c| c.commande(Intention::TerminerReunion));
+        avec_chef(&app, |c| {
+            c.recevoir(Message::Segment(
+                dit("Dernière décision."),
+                Instant::now() - Duration::from_secs(6),
+            ))
+        });
+        avec_chef(&app, |c| c.commande(Intention::Reprendre));
+        let (abandonnes, a_noter) = avec_chef(&app, |c| {
+            (
+                c.comptes_rendus_abandonnes,
+                c.reunion.as_ref().unwrap().a_noter.clone(),
+            )
+        });
+        assert_eq!(abandonnes, 0);
+        assert!(a_noter.contains("Dernière décision."), "{a_noter}");
+        // Nouvelle fin, piste toujours en retard : la vidange expire.
+        avec_chef(&app, |c| c.commande(Intention::TerminerReunion));
+        avec_chef(&app, |c| {
+            c.reunion.as_mut().unwrap().vidange = Some(Instant::now());
+            c.tick();
+        });
+        assert!(avec_chef(&app, |c| c
+            .reunion
+            .as_ref()
+            .unwrap()
+            .compte_rendu_demande));
+    }
 }
