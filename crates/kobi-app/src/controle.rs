@@ -569,7 +569,8 @@ fn ouvrir_section<R: Runtime>(
 // ----- Réunion -----
 
 /// Ordre de réunion. Venant de l'agent de Kobi (Claude, KOB-165), c'est un
-/// pilotage : un arrêt s'annule pendant 30 s, et Claude l'annonce lui-même.
+/// pilotage : Claude l'annonce lui-même. Une fin s'annule pendant 10 s par
+/// `meeting.resume` (KOB-245).
 fn reunion<R: Runtime>(
     app: &AppHandle<R>,
     intention: Intention,
@@ -583,7 +584,7 @@ fn reunion<R: Runtime>(
     });
     let e = enregistrement(app);
     let refus = match intention {
-        // « Reprends » juste après un arrêt : la même réunion continue.
+        // « Annuler » juste après la fin : la même réunion continue.
         Intention::Reprendre if annulable => None,
         Intention::DemarrerReunion if e.actif => Some("J'enregistre déjà la réunion."),
         Intention::TerminerReunion | Intention::Pause | Intention::Reprendre if !e.actif => {

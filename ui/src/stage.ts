@@ -217,7 +217,7 @@ export class Stage {
    * tels quels, puis Kobi retourne à ses notes.
    */
   private show(): void {
-    const taking = this.requested === 'idle' && this.meeting !== null && !this.meeting.paused && !this.meeting.stopping;
+    const taking = this.requested === 'idle' && this.meeting !== null && !this.meeting.paused;
     const state: MascotState = taking ? 'write' : this.requested;
     const data = taking ? { notes: this.meeting?.lastNote ?? NOTES_PLACEHOLDER } : this.requestedData;
     if (state === this.state && taking) {
@@ -284,26 +284,39 @@ export class Stage {
   updateMeeting(patch: Partial<MeetingInfo>): void {
     if (!this.meeting) return;
     const wasPaused = Boolean(this.meeting.paused);
-    const wasStopping = Boolean(this.meeting.stopping);
     const notes = this.meeting.notes ?? 0;
     this.setMeeting({ ...this.meeting, ...patch });
     if ((this.meeting.notes ?? 0) > notes && !this.isPaused()) this.kobi.noteAdded();
-    const stopping = Boolean(this.meeting.stopping);
-    if (stopping !== wasStopping) this.say(stopping ? 'Enregistrement arrêté. Dis « reprends » pour continuer.' : 'Transcription reprise.');
-    else if (Boolean(this.meeting.paused) !== wasPaused) this.say(this.meeting.paused ? 'Transcription en pause.' : 'Transcription reprise.');
+    if (Boolean(this.meeting.paused) !== wasPaused) this.say(this.meeting.paused ? 'Transcription en pause.' : 'Transcription reprise.');
   }
 
-  endMeeting(): void {
+  /** `undoable` : « Réunion terminée · Annuler » pendant le délai (KOB-245). */
+  endMeeting(options: { undoable?: boolean } = {}): void {
     if (!this.meeting) return;
     this.closeConsent();
-    this.setMeeting(null);
-    this.say('Réunion terminée.');
+    this.setMeeting(null, Boolean(options.undoable));
+    this.say(options.undoable ? 'Réunion terminée. Annuler pour la reprendre.' : 'Réunion terminée.');
   }
 
-  private setMeeting(info: MeetingInfo | null): void {
+  /** La fin ne s'annule plus : « Annuler » disparaît. */
+  closeUndo(): void {
+    this.rec.closeUndo();
+  }
+
+  /** « Annuler » est-il encore affiché ? */
+  get canUndoMeeting(): boolean {
+    return this.rec.canUndo;
+  }
+
+  /** Clic sur « Annuler » (la même réunion reprend). */
+  set onUndoMeeting(handler: (() => void) | null) {
+    this.rec.onUndo = handler;
+  }
+
+  private setMeeting(info: MeetingInfo | null, undoable = false): void {
     const wasTaking = this.state === 'write' && this.requested === 'idle';
     this.meeting = info;
-    this.rec.set(info);
+    this.rec.set(info, undoable);
     this.kobi.setRecording(info === null ? null : { paused: Boolean(info.paused) });
     this.root.classList.toggle('in-meeting', info !== null);
     this.dot.classList.toggle('recording', info !== null && !info.paused);

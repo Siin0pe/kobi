@@ -319,6 +319,14 @@ pub fn appliquer_entree<R: Runtime>(app: &AppHandle<R>, entree: Entree) -> Resul
                 return Ok(Effet::Fermer);
             }
             terminer(app)?;
+            // Quitter ne laisse pas « Annuler » ouvert (KOB-245) : la fin est
+            // définitive, le compte rendu s'écrit dès qu'il revient.
+            if let Some(chef) = app.try_state::<ChefPartage<R>>() {
+                chef.0
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clore_annulation();
+            }
             // Le chef écrit le compte rendu en arrière-plan (Claude).
             Ok(if reunion_ouverte(app) {
                 Effet::FermerApresCompteRendu

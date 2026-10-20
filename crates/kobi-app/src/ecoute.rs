@@ -51,8 +51,8 @@ pub enum Commande {
     Pause(bool),
     /// Kobi vient de répondre : la conversation attend la suite.
     Suite,
-    /// La réunion vient d'être arrêtée à la voix ou par Claude : « reprends »
-    /// s'entend sans redire « Kobi » pendant l'annulation (KOB-165).
+    /// La réunion vient de finir : « reprends » ou « annule » s'entend sans
+    /// redire « Kobi » tant que la fin s'annule (KOB-165, KOB-245).
     Annulable,
     /// Kobi pose une question et attend la réponse ce temps-là (carte de
     /// validation, KOB-197).
@@ -80,7 +80,8 @@ pub fn installer<R: Runtime>(app: &AppHandle<R>) {
 
 /// Envoie une commande au fil d'écoute.
 pub fn commander<R: Runtime>(app: &AppHandle<R>, commande: Commande) -> Result<(), String> {
-    app.state::<Ecoute>()
+    app.try_state::<Ecoute>()
+        .ok_or("écoute non lancée")?
         .0
         .lock()
         .map_err(|e| e.to_string())?

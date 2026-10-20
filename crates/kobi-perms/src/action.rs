@@ -145,6 +145,13 @@ impl Action {
                 let r = rel(chemin);
                 (format!("Je supprime {r}"), Some(r))
             }
+            // Les outils de réunion de Kobi disent ce qu'ils font (KOB-245) ;
+            // la refonte des autres libellés MCP est celle de KOB-242.
+            Action::Mcp { serveur, outil, .. }
+                if serveur == "kobi" && reunion_kobi(outil).is_some() =>
+            {
+                (reunion_kobi(outil).unwrap_or_default().to_owned(), None)
+            }
             Action::Mcp {
                 serveur,
                 outil,
@@ -159,6 +166,17 @@ impl Action {
             chemin_relatif: chemin,
         }
     }
+}
+
+/// Libellé d'un outil de réunion du MCP de Kobi.
+fn reunion_kobi(outil: &str) -> Option<&'static str> {
+    Some(match outil {
+        "meeting_start" => "Je démarre la réunion",
+        "meeting_stop" => "Je termine la réunion",
+        "meeting_pause" => "Je mets la réunion en pause",
+        "meeting_resume" => "Je reprends la réunion",
+        _ => return None,
+    })
 }
 
 /// Chemin relatif au dossier de code le plus précis qui le contient
@@ -562,6 +580,19 @@ mod tests {
             "Je cherche dans Linear : limit 5, state In Progress"
         );
         assert_eq!(e.famille, Famille::Mcp);
+        // KOB-245 : les outils de réunion de Kobi disent ce qu'ils font.
+        let fin = Action::Mcp {
+            serveur: "kobi".into(),
+            outil: "meeting_stop".into(),
+            params: json!({}),
+        };
+        assert_eq!(fin.etape(&d).resume, "Je termine la réunion");
+        let pause = Action::Mcp {
+            serveur: "kobi".into(),
+            outil: "meeting_pause".into(),
+            params: json!({}),
+        };
+        assert_eq!(pause.etape(&d).resume, "Je mets la réunion en pause");
         let long = Action::Commande {
             ligne: "x".repeat(200),
             dossier: None,

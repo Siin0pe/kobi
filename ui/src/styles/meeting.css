@@ -38,6 +38,9 @@
 .rec[hidden] {
   display: none;
 }
+.rec [hidden] {
+  display: none;
+}
 .rec-dot {
   flex: none;
   width: 10px;
@@ -65,6 +68,27 @@
 .rec-label {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* « Annuler » après la fin (KOB-245) : la même réunion reprend. */
+.rec-undo {
+  flex: none;
+  margin-left: 2px;
+  padding: 2px 10px;
+  border: 2px solid #0b0b0b;
+  border-radius: 999px;
+  background: #d7ff3a;
+  color: #0b0b0b;
+  font: inherit;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.rec-undo:hover {
+  background: #ffffff;
+}
+.rec-undo:focus-visible {
+  outline: 2px solid #ffffff;
+  outline-offset: 2px;
 }
 .rec-time {
   font-variant-numeric: tabular-nums;
