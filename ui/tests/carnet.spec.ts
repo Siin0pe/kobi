@@ -490,6 +490,10 @@ test('animations réduites : titres posés sans brouillage, rien ne bouge', asyn
 test('hors de Kobi, le Carnet le dit au lieu de planter', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(String(e)));
+  // Horloge arrêtée : le message s'efface seul après quelques secondes
+  // (KOB-215), délai qu'un PC chargé dépasse avant que le test ne le lise.
+  await page.clock.install();
+  await page.clock.pauseAt(Date.now() + 1000);
   await page.goto('/app.html#notes');
   await expect(page.locator('.notif', { hasText: 'Ouvrez le Carnet depuis Kobi.' })).toBeVisible();
   await expectNoErrors(errors);

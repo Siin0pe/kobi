@@ -225,6 +225,18 @@ test('panneau « Affichage » de la section Réglages de l’app : chaque choix 
   await page.screenshot({ path: test.info().outputPath('reglages-affichage.png') });
 });
 
+test('Réglages › Affichage › « Kobi parle » : normal par défaut, discret envoyé à la coque (KOB-215)', async ({ page }) => {
+  await mockTauri(page, { verbosite_ui: 'normal', regler_verbosite_ui: 'discret' });
+  await page.setViewportSize({ width: 1180, height: 760 });
+  await page.goto('/app.html#reglages/affichage');
+  const groupe = page.getByRole('radiogroup', { name: 'Kobi parle' });
+  await expect(groupe.getByRole('radio', { name: /Normal/ })).toHaveAttribute('aria-checked', 'true');
+  await groupe.getByRole('radio', { name: /Discret/ }).click();
+  await expect(groupe.getByRole('radio', { name: /Discret/ })).toHaveAttribute('aria-checked', 'true');
+  await expect(groupe.getByRole('radio', { name: /Normal/ })).toHaveAttribute('aria-checked', 'false');
+  expect((await calls(page)).filter(([c]) => c === 'regler_verbosite_ui')).toEqual([['regler_verbosite_ui', { verbosite: 'discret' }]]);
+});
+
 test('réduire les animations : la vue apparaît et disparaît en fondu court', async ({ page }) => {
   const errors = await kobi(page, { auto: 'jamais' }, 'reduced=1');
   await repond(page, 'bonjour', 'Bonjour !');

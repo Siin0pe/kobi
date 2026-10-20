@@ -234,6 +234,8 @@ pub fn installer<R: Runtime>(builder: Builder<R>) -> Builder<R> {
             historique,
             // Réponse à voix haute ou en texte (KOB-142).
             crate::voix::etat_voix_ui,
+            crate::voix::verbosite_ui,
+            crate::voix::regler_verbosite_ui,
             crate::voix::regler_voix,
             crate::voix::basculer_voix,
             // Images par seconde et économie d'énergie (KOB-200).

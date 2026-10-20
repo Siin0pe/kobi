@@ -5,7 +5,56 @@
 
 import { affichage, changerAffichage, type Affichage } from '../affichage';
 import { h } from '../dom';
+import { invoke, message } from '../ipc';
 import type { Panneau } from './panneau';
+
+type Verbosite = 'bavard' | 'normal' | 'discret';
+
+/** Combien Kobi parle (KOB-215) : réglage de la coque (`voice.verbosite`), appliqué à chaud. */
+const VERBOSITES: ReadonlyArray<{ valeur: Verbosite; titre: string; detail: string }> = [
+  { valeur: 'normal', titre: 'Normal', detail: 'Une ou deux phrases, le détail quand tu le demandes.' },
+  { valeur: 'discret', titre: 'Discret', detail: 'Une phrase, et rien d’annoncé quand une tâche est longue.' },
+  { valeur: 'bavard', titre: 'Bavard', detail: 'Des réponses plus complètes, et la voix en lit davantage.' },
+];
+
+function blocVerbosite(notifier: (texte: string, ton?: 'ok' | 'erreur') => void): HTMLElement {
+  const choix = h('div', { class: 'choix', role: 'radiogroup', 'aria-label': 'Kobi parle' });
+  const marquer = (v: Verbosite): void => {
+    for (const b of choix.children) b.setAttribute('aria-checked', String(b.getAttribute('data-valeur') === v));
+  };
+  for (const o of VERBOSITES) {
+    choix.append(
+      h(
+        'button',
+        {
+          type: 'button',
+          role: 'radio',
+          class: 'option',
+          'data-valeur': o.valeur,
+          'aria-checked': 'false',
+          onclick: async () => {
+            try {
+              marquer(await invoke<Verbosite>('regler_verbosite_ui', { verbosite: o.valeur }));
+              notifier(`Kobi parle : ${o.titre.toLowerCase()}`);
+            } catch (e) {
+              notifier(message(e), 'erreur');
+            }
+          },
+        },
+        h('span', { class: 'option-rond', 'aria-hidden': 'true' }),
+        h('span', { class: 'option-corps' }, h('span', { class: 'option-titre' }, o.titre), h('span', { class: 'option-detail' }, o.detail)),
+      ),
+    );
+  }
+  invoke<Verbosite>('verbosite_ui').then(marquer, () => marquer('normal'));
+  return h(
+    'div',
+    { class: 'reglage', 'data-reglage': 'verbosite' },
+    h('div', { class: 'reglage-titre' }, 'Kobi parle'),
+    h('p', { class: 'aide' }, 'La longueur de ses réponses, ce que la voix en dit, et ses annonces.'),
+    choix,
+  );
+}
 
 interface Groupe<K extends keyof Affichage> {
   cle: K;
@@ -127,7 +176,7 @@ export const AFFICHAGE: Panneau = {
       marquer(affichage()[g.cle]);
       return h('div', { class: 'reglage', 'data-reglage': g.cle }, h('div', { class: 'reglage-titre' }, g.titre), h('p', { class: 'aide' }, g.aide), choix);
     });
-    el.replaceChildren(...blocs);
+    el.replaceChildren(blocVerbosite(ctx.notifier), ...blocs);
     ctx.signaler?.('ok', affichage().mode === 'simple' ? 'widget simple' : 'bulle détaillée');
   },
 };
