@@ -1033,6 +1033,31 @@ mod tests {
         assert_eq!(echeance_ms("1792393200000").unwrap(), 1_792_393_200_000);
     }
 
+    /// KOB-256 : `kobi config set <clé> null` retire la clé de config.toml :
+    /// le réglage revient à son défaut.
+    #[test]
+    fn reglage_remis_a_null() {
+        let e = essai();
+        cli(
+            &e,
+            "config.set",
+            json!({"key": "notes.interval_min", "value": 5}),
+        )
+        .unwrap();
+        let r = cli(
+            &e,
+            "config.set",
+            json!({"key": "notes.interval_min", "value": null}),
+        )
+        .unwrap();
+        assert_eq!(
+            (r["before"].clone(), r["after"].clone()),
+            (json!(5), json!(3))
+        );
+        let ecrit = config::load_or_create(&e.dir.path().join("config.toml")).config;
+        assert_eq!(ecrit.notes.interval_min, 3);
+    }
+
     #[test]
     fn reglages_modifies_et_annules() {
         let e = essai();

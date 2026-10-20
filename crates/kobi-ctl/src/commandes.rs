@@ -432,7 +432,12 @@ impl Commande {
             }
         }
         for param in self.params {
-            let Some(v) = params.get(param.nom).filter(|v| !v.is_null()) else {
+            // `null` est une vraie valeur JSON (« revenir au défaut » pour
+            // `config set`, KOB-256) ; pour les autres genres, il vaut absent.
+            let Some(v) = params
+                .get(param.nom)
+                .filter(|v| !v.is_null() || matches!(param.genre, Json))
+            else {
                 if param.requis {
                     return Err(invalide(format!(
                         "{} : paramètre « {} » manquant",
@@ -478,6 +483,24 @@ impl Commande {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// KOB-256 : `kobi config set <clé> null` revient au défaut ; `null`
+    /// n'est pas un paramètre manquant pour une valeur JSON.
+    #[test]
+    fn null_est_une_valeur_json() {
+        let set = trouver("config.set").unwrap();
+        assert!(set
+            .verifier(&json!({"key": "notes.interval_min", "value": null}))
+            .is_ok());
+        assert!(
+            set.verifier(&json!({"key": "notes.interval_min"})).is_err(),
+            "absente : manquante"
+        );
+        assert!(
+            set.verifier(&json!({"key": null, "value": 1})).is_err(),
+            "clé nulle : manquante"
+        );
+    }
 
     #[test]
     fn noms_uniques_et_outils_valides() {
