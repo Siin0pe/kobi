@@ -30,6 +30,7 @@ use crate::interpellation::{charger_stt, erreur};
 use crate::mot_cle::{Action, Ecouteur};
 use crate::porte::Porte;
 use crate::session::etat;
+use crate::voix::CommandeVoix;
 
 /// Après un échec d'ouverture du micro, nouvel essai après ce délai.
 const REESSAI_MICRO: Duration = Duration::from_secs(5);
@@ -334,6 +335,7 @@ fn transcrire(
     frame: kobi_stt::AudioFrame,
     t: f64,
     entendu: &dyn Fn(&str) -> bool,
+    kobi_parle: bool,
 ) -> (Vec<Action>, Vec<kobi_stt::Segment>) {
     if let Some(d) = diag {
         d.trame(frame.t, &frame.samples);
@@ -415,22 +417,29 @@ fn transcrire(
         }
     }
     // La porte se ferme sur une prise de parole restée sans texte, alors que
-    // Kobi attend une réponse : un « oui » ou un « non » seul (KOB-197).
-    if etait_ouverte && !porte.ouverte() && !rattrapage.texte && ecouteur.attend_reponse() {
+    // Kobi attend une réponse : un « oui » ou un « non » seul (KOB-197). Ou
+    // pendant qu'il parle : un « stop » seul (KOB-248).
+    let attend = ecouteur.attend_reponse();
+    if etait_ouverte && !porte.ouverte() && !rattrapage.texte && (attend || kobi_parle) {
         let audio = std::mem::take(&mut rattrapage.audio);
         if let Some(texte) = mot_court(&audio).and_then(|m| stt.transcrire_court(m)) {
             let texte = oui_ou_non(&texte)
                 .map(str::to_owned)
                 .unwrap_or_else(|| sans_repetition(&texte));
-            if !texte.is_empty() && !entendu(&texte) {
+            // Pendant la voix, seul « stop » compte : un reste d'écho ne
+            // coupe pas Kobi. `entendu` le fait taire.
+            let stop = crate::voix::commande_vocale(&texte) == Some(CommandeVoix::Stop);
+            if !texte.is_empty() && (attend || stop) && !entendu(&texte) {
                 if let Some(d) = diag {
                     d.note(&format!("mot court rattrapé : « {texte} »"));
                 }
-                let suite = ecouteur.segment(&texte, true, t);
-                if let Some(d) = diag {
-                    d.segment(&texte, true, &suite);
+                if attend {
+                    let suite = ecouteur.segment(&texte, true, t);
+                    if let Some(d) = diag {
+                        d.segment(&texte, true, &suite);
+                    }
+                    actions.extend(suite);
                 }
-                actions.extend(suite);
             }
         }
     }
@@ -682,6 +691,7 @@ impl<R: Runtime> Fil<R> {
         // fait taire (KOB-142).
         let app = &self.app;
         let annulation = self.ecouteur.en_annulation();
+        let kobi_parle = crate::voix::parle(app);
         let entendu = |texte: &str| {
             if crate::voix::est_ma_voix(app, texte)
                 && !ordre_d_annulation(texte, annulation, crate::voix::parle(app))
@@ -700,6 +710,7 @@ impl<R: Runtime> Fil<R> {
             frame,
             t,
             &entendu,
+            kobi_parle,
         );
         self.calcul += debut.elapsed();
         for s in finals {
@@ -1000,6 +1011,7 @@ mod tests {
                 frame,
                 t,
                 &|_| false,
+                false,
             );
             if let Some(d) = diag {
                 finals.extend(d.finals());
@@ -1059,6 +1071,7 @@ mod tests {
                         frame,
                         t,
                         &|_| false,
+                        false,
                     );
                     actions.extend(a);
                 }
@@ -1149,6 +1162,7 @@ mod tests {
                         frame,
                         t,
                         &|_| false,
+                        false,
                     );
                     actions.extend(a);
                     finals.extend(f);
@@ -1175,6 +1189,74 @@ mod tests {
             "{actions:?}"
         );
         assert!(finals.is_empty());
+    }
+
+    /// KOB-248 : pendant la voix de Kobi, un « stop » dit seul, que le moteur
+    /// ne sort pas, est rattrapé et le fait taire (`entendu`) ; un autre mot
+    /// court (reste d'écho) ne compte pas.
+    #[test]
+    fn stop_seul_rattrape_pendant_la_voix() {
+        struct Court(&'static str);
+        impl SttEngine for Court {
+            fn name(&self) -> &str {
+                "court"
+            }
+            fn push(
+                &mut self,
+                _frame: &kobi_stt::AudioFrame,
+            ) -> kobi_stt::Result<Vec<kobi_stt::Segment>> {
+                Ok(Vec::new())
+            }
+            fn finish(&mut self) -> kobi_stt::Result<Vec<kobi_stt::Segment>> {
+                Ok(Vec::new())
+            }
+            fn transcrire_court(&mut self, _samples: &[f32]) -> Option<String> {
+                Some(self.0.into())
+            }
+        }
+        // 1 s de silence, 0,4 s de voix, 4 s de silence, Kobi parlant.
+        let jouer = |mot: &'static str| {
+            let mut stt = Court(mot);
+            let mut porte = Porte::new(kobi_stt::SAMPLE_RATE);
+            let mut rattrapage = Rattrapage::default();
+            let mut ecouteur = Ecouteur::default();
+            let entendus = std::cell::RefCell::new(Vec::new());
+            let entendu = |texte: &str| {
+                entendus.borrow_mut().push(texte.to_owned());
+                false
+            };
+            let voix: Vec<f32> = (0..1600).map(|i| 0.2 * (i as f32 * 0.3).sin()).collect();
+            let (mut t, mut actions) = (0.0, Vec::new());
+            for (n, fort) in [(10, false), (4, true), (40, false)] {
+                for _ in 0..n {
+                    let frame = kobi_stt::AudioFrame {
+                        source: kobi_stt::Source::Moi,
+                        samples: if fort { voix.clone() } else { vec![0.0; 1600] },
+                        t,
+                    };
+                    t += 0.1;
+                    let (a, _) = transcrire(
+                        &mut stt,
+                        &mut porte,
+                        &mut ecouteur,
+                        &mut None,
+                        &mut rattrapage,
+                        frame,
+                        t,
+                        &entendu,
+                        true,
+                    );
+                    actions.extend(a);
+                }
+            }
+            (entendus.into_inner(), actions)
+        };
+        let (entendus, actions) = jouer("Stop, stop.");
+        assert_eq!(entendus, ["Stop"]);
+        assert!(actions.is_empty(), "{actions:?}");
+        let (entendus, actions) = jouer("Le, le.");
+        assert!(entendus.is_empty(), "{entendus:?}");
+        assert!(actions.is_empty(), "{actions:?}");
     }
 
     #[test]
@@ -1246,6 +1328,7 @@ mod tests {
                     frame,
                     t,
                     &|_| false,
+                    false,
                 );
             }
         }
