@@ -96,6 +96,8 @@ export function followRecording(stage: Stage): void {
   document.addEventListener('keydown', (e) => {
     if (e.key.toLowerCase() !== 'z' || !(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return;
     if (!stage.canUndoMeeting) return;
+    // Dans un champ (bulle d'écriture), Ctrl+Z annule la frappe (KOB-264).
+    if ((e.target as Element | null)?.closest?.('input, textarea, [contenteditable]')) return;
     e.preventDefault();
     annuler();
   });

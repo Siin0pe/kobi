@@ -95,5 +95,17 @@ test('la coque reçoit les zones actives (Kobi et la bulle) et l’état du bout
   await page.mouse.up();
   const appuis = (await calls(page)).filter(([c]) => c === 'appui_souris').map(([, a]) => (a as { appui: boolean }).appui);
   expect(appuis.slice(-2)).toEqual([true, false]);
+  // La carte « quitter pendant une réunion » et le badge du compte rendu,
+  // hors de la tête de Kobi, sont aussi des zones (KOB-264).
+  await page.evaluate(() => {
+    for (const [classe, gauche] of [['kmenu-confirm', 40], ['rapport-badge', 160]] as const) {
+      const n = document.createElement('div');
+      n.className = classe;
+      n.style.cssText = `position:fixed;left:${gauche}px;top:40px;width:80px;height:40px`;
+      document.querySelector('.stage')!.append(n);
+    }
+  });
+  await expect.poll(async () => dedans(await zones(), 80, 60)).toBe(true);
+  await expect.poll(async () => dedans(await zones(), 200, 60)).toBe(true);
   await expectNoErrors(errors);
 });

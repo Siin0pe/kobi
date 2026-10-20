@@ -14,12 +14,14 @@ export const ZONES_ACTIVES = [
   '.rec',
   '.dot',
   '.kmenu',
+  // Carte « quitter pendant une réunion », centrée hors du menu (KOB-264).
+  '.kmenu-confirm',
   '.kmenu-toast',
   '.notifs > *',
   '.fil.shown',
   '.lecture',
   '.ecrire',
-  '.rapport-pastille',
+  '.rapport-badge',
 ].join(', ');
 
 /** Marge autour de chaque zone (px) : on attrape un bord sans viser au pixel. */
@@ -68,7 +70,16 @@ export function installerTraversee(): void {
     });
   };
   envoyer();
-  window.setInterval(envoyer, RELEVE_MS);
+  // Relevé seulement quand la fenêtre est à l'écran (sobriété, KOB-264).
+  let releve = 0;
+  const suivre = (): void => {
+    window.clearInterval(releve);
+    if (document.hidden) return;
+    envoyer();
+    releve = window.setInterval(envoyer, RELEVE_MS);
+  };
+  document.addEventListener('visibilitychange', suivre);
+  suivre();
   let appui = false;
   const appuyer = (etat: boolean): void => {
     if (etat === appui) return;
