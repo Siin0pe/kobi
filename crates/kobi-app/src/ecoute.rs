@@ -228,7 +228,7 @@ fn annulation_echo_reglee() -> bool {
                 .audio
                 .annulation_echo
         })
-        .unwrap_or(true)
+        .unwrap_or(false)
 }
 
 /// D'où vient l'audio.

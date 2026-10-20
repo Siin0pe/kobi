@@ -72,7 +72,7 @@ pub const CLES: &[(&str, Application, &str)] = &[
     (
         "audio.annulation_echo",
         AChaud,
-        "Retire la voix de Kobi de ce qu'entend le micro (haut-parleurs sans casque) : true (défaut) ou false, pris à la phrase suivante de Kobi.",
+        "Retire la voix de Kobi de ce qu'entend le micro (haut-parleurs sans casque) : true ou false (défaut), pris à la phrase suivante de Kobi.",
     ),
     (
         "stt.engine",
