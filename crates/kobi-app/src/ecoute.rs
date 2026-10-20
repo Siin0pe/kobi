@@ -48,6 +48,10 @@ const PALIER_RETARD: f64 = 30.0;
 /// retard, en secondes : assez pour « Kobi, arrête l'enregistrement »
 /// (KOB-250).
 const EXTRAIT_ANTICIPE: f64 = 2.5;
+/// Une phrase arrivée depuis plus longtemps (s) n'est pas transcrite à
+/// l'avance : la veille reste sur la parole fraîche au lieu de prendre du
+/// retard à son tour ; la transcription ordinaire s'en chargera.
+const FRAICHEUR_ANTICIPEE: f64 = 6.0;
 
 /// Un ordre de fin de réunion dans une phrase qui appelle Kobi (« Kobi,
 /// arrête l'enregistrement », « Kobi, la réunion est terminée »).
@@ -719,6 +723,13 @@ impl<R: Runtime> Fil<R> {
         }
         let ouverte = porte.ouverte();
         let pret = v.extrait.len() as f64 >= EXTRAIT_ANTICIPE * kobi_stt::SAMPLE_RATE as f64;
+        let rassise = v.debut.is_some_and(|d| {
+            self.origine.elapsed().as_secs_f64() - d > FRAICHEUR_ANTICIPEE + EXTRAIT_ANTICIPE
+        });
+        if !v.faite && rassise {
+            // Trop ancienne : la transcription ordinaire s'en chargera.
+            v.faite = true;
+        }
         if !v.faite && (pret || (!ouverte && !v.extrait.is_empty())) {
             v.faite = true;
             let debut = v.debut.unwrap_or_default();
