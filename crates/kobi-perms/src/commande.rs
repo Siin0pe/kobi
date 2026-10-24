@@ -339,11 +339,23 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
 /// Ce qui suit un `{` hors guillemets : bash le développe-t-il (`{a,b}`,
 /// `{1..3}`) ? Les guillemets à l'intérieur ne l'empêchent pas
 /// (`{"-delete",}` donne `-delete`) : ils sont sautés, et une virgule ou `..`
-/// n'importe où entre les accolades suffit (prudent, KOB-258).
+/// n'importe où entre les accolades suffit (prudent, KOB-258). Un caractère
+/// échappé par `\`, hors guillemets ou entre guillemets doubles, n'ouvre ni
+/// ne ferme rien : `{"\"",-delete}` et `{\",-delete}` se développent
+/// (KOB-272).
 fn accolades_developpees(suite: &[char]) -> bool {
     let mut guillemet: Option<char> = None;
     let mut dedans = String::new();
-    for &x in suite {
+    let mut i = 0;
+    while let Some(&x) = suite.get(i) {
+        i += 1;
+        if x == '\\' && guillemet != Some('\'') {
+            if let Some(&y) = suite.get(i) {
+                dedans.push(y);
+                i += 1;
+            }
+            continue;
+        }
         match guillemet {
             Some(q) if x == q => guillemet = None,
             Some(_) => dedans.push(x),
@@ -1612,6 +1624,15 @@ mod tests {
             // KOB-258 : guillemets dans une expansion d'accolades, `sort` qui
             // lance un programme ou écrit ailleurs.
             "find . {\"-delete\",}",
+            // KOB-272 : un guillemet échappé n'ouvre ni ne ferme rien.
+            "find . {\"\\\"\",-delete}",
+            "find . {\\\",-delete}",
+            "sed -n 1p {\"\\\"\",-i,Cargo.toml}",
+            "rg {\"\\\"\",--pre=sh} . crates",
+            "git log {\\\",--output=x.txt}",
+            "find . {\\',-delete}",
+            "find . {\"\\'\",-delete}",
+            "fd {\\',-x,rm} motif",
             "sed -n 1p {\"-i\",Cargo.toml}",
             "git log {\"--output=x.txt\",}",
             "fd {'-x',rm} motif",
