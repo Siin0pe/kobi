@@ -270,11 +270,16 @@ fn montrer_dans_l_explorateur(chemin: &Path) -> Result<(), String> {
     let programme = "open";
     #[cfg(all(unix, not(target_os = "macos")))]
     let programme = "xdg-open";
-    std::process::Command::new(programme)
+    let mut enfant = std::process::Command::new(programme)
         .arg(chemin)
         .spawn()
-        .map(|_| ())
-        .map_err(|e| format!("{} : {e}", chemin.display()))
+        .map_err(|e| format!("{} : {e}", chemin.display()))?;
+    // Attendu à part, comme le navigateur des MCP : sinon chaque « Ouvrir »
+    // laisse un zombie jusqu'à la sortie de Kobi (KOB-266).
+    std::thread::spawn(move || {
+        let _ = enfant.wait();
+    });
+    Ok(())
 }
 
 /// Une réunion en cours d'enregistrement : marquée en cours et écrite il y

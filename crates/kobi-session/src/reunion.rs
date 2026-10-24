@@ -156,20 +156,23 @@ impl Reunion {
             return Ok(None);
         };
         let base = format!("{date}-{}", nettoyer_titre(titre));
-        let suffixe_de_l_ancien = ancien.strip_prefix(&base).is_some_and(|reste| {
-            reste.is_empty()
-                || reste
-                    .strip_prefix('-')
-                    .is_some_and(|n| n.parse::<u32>().is_ok())
-        });
-        if suffixe_de_l_ancien {
-            return Ok(None);
-        }
         let parent = self
             .dossier
             .parent()
             .map(Path::to_path_buf)
             .ok_or_else(|| io::Error::other("dossier de réunion sans parent"))?;
+        // Déjà nommé ainsi, ou avec le suffixe d'un vrai conflit (`base` pris
+        // par une autre réunion). « Budget 2027 » renommé « Budget » n'en est
+        // pas un : `-2027` fait partie de l'ancien titre (KOB-266).
+        let suffixe_de_l_ancien = ancien == base
+            || ancien
+                .strip_prefix(&base)
+                .and_then(|reste| reste.strip_prefix('-'))
+                .and_then(|n| n.parse::<u32>().ok())
+                .is_some_and(|n| n >= 2 && parent.join(&base).exists());
+        if suffixe_de_l_ancien {
+            return Ok(None);
+        }
         if let Some(f) = self.transcript.take() {
             f.sync_all()?;
         }
@@ -187,16 +190,21 @@ impl Reunion {
             }
             break fs::rename(&self.dossier, &cible).map(|()| cible);
         };
-        let dossier = match resultat {
-            Ok(cible) => cible,
+        match resultat {
+            Ok(cible) => {
+                // Le dossier a bougé : même si la réouverture échoue (fichier
+                // verrouillé sous Windows), les segments suivants y vont, pas
+                // dans un dossier fantôme à l'ancien nom (KOB-266).
+                self.dossier = cible;
+                *self = Self::ouvrir(self.dossier.clone())?;
+                Ok(Some(ancien))
+            }
             Err(e) => {
                 // Rien n'a bougé : la transcription repart là où elle était.
                 *self = Self::ouvrir(self.dossier.clone())?;
-                return Err(e);
+                Err(e)
             }
-        };
-        *self = Self::ouvrir(dossier)?;
-        Ok(Some(ancien))
+        }
     }
 
     pub fn dossier(&self) -> &Path {

@@ -14,7 +14,17 @@ pub const EVENEMENT_LANGUE: &str = "langue";
 
 /// Langue réglée dans `config.toml`, `None` pour celle du système.
 fn lue(chemin: &Path) -> Option<Langue> {
-    config::load_or_create(chemin).config.ui.language
+    reglee(&config::load_or_create(chemin), chemin)
+}
+
+/// Langue réglée dans une config chargée. Config illisible (un autre réglage
+/// invalide) : la ligne `[ui] language` compte quand même, au lieu de faire
+/// passer l'interface dans la langue du système (KOB-266).
+pub fn reglee(lu: &config::Loaded, chemin: &Path) -> Option<Langue> {
+    match lu.problem {
+        Some(_) => kobi_i18n::reglee_dans(chemin),
+        None => lu.config.ui.language,
+    }
 }
 
 /// Écrit la langue dans `config.toml`, sans jamais réécrire une config
@@ -86,6 +96,10 @@ mod tests {
         assert_eq!(lue(&chemin), Some(Langue::En));
         let relu = config::load_or_create(&chemin).config;
         assert_eq!(relu.hotkey, "Alt+K", "le reste de la config est gardé");
+        // Un autre réglage invalide : la langue reste celle choisie.
+        std::fs::write(&chemin, "hotkey = 3\n[ui]\nlanguage = \"en\"\n").unwrap();
+        assert!(config::load_or_create(&chemin).problem.is_some());
+        assert_eq!(lue(&chemin), Some(Langue::En));
         let illisible = "hotkey = \"Alt+K\"\n[ui\nlanguage = \"fr\"\n";
         std::fs::write(&chemin, illisible).unwrap();
         assert!(ecrire(&chemin, Some(Langue::Fr)).is_err());

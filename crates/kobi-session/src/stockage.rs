@@ -217,17 +217,24 @@ impl ReunionOuverte {
             if manuel || self.meta.changements_auto >= TITRES_AUTO_MAX {
                 return Ok(None);
             }
+        }
+        // Le titre ne change qu'une fois le dossier déplacé, et il est écrit
+        // avant la table des renommages : si elle échoue, `reunion.json` a
+        // quand même le nouveau titre (KOB-266).
+        let ancien = self.reunion.deplacer(titre)?;
+        if origine == Origine::Auto {
             self.meta.changements_auto += 1;
         }
         self.meta.titre = Some(titre.to_owned());
         self.meta.titre_auto = origine == Origine::Auto;
-        let ancien = self.reunion.deplacer(titre)?;
+        self.ecrire_meta()?;
         if let Some(ancien) = &ancien {
             if let Some(reunions) = self.dossier().parent() {
-                noter_renommage(reunions, ancien, self.reunion.nom())?;
+                if let Err(erreur) = noter_renommage(reunions, ancien, self.reunion.nom()) {
+                    tracing::warn!(%erreur, ancien, "renommage de réunion non noté : l'ancien nom ne mènera plus à elle");
+                }
             }
         }
-        self.ecrire_meta()?;
         Ok(ancien)
     }
 
@@ -1282,6 +1289,40 @@ mod tests {
         // La main reprend toujours la main.
         r2.nommer("Budget final", Origine::Manuel).unwrap();
         assert_eq!(r2.nom(), "2026-10-18-budget-final");
+    }
+
+    /// KOB-266 : un nombre à la fin de l'ancien titre n'est pas un suffixe
+    /// de conflit ; un vrai suffixe de conflit reste tant que le nom est pris.
+    #[test]
+    fn nombre_du_titre_n_est_pas_un_suffixe_de_conflit() {
+        let (_d, st) = stockage();
+        let mut r = st.nouvelle_reunion(T0, None).unwrap();
+        r.nommer("Budget 2027", Origine::Manuel).unwrap();
+        assert_eq!(r.nom(), "2026-10-18-budget-2027");
+        r.nommer("Budget", Origine::Manuel).unwrap();
+        assert_eq!(r.nom(), "2026-10-18-budget", "le dossier suit le titre");
+
+        let mut r2 = st.nouvelle_reunion(T0 + 3_600_000, None).unwrap();
+        r2.nommer("Budget", Origine::Manuel).unwrap();
+        assert_eq!(r2.nom(), "2026-10-18-budget-2");
+        // Même titre redonné : « budget » est toujours pris, rien ne bouge.
+        assert_eq!(r2.nommer("Budget", Origine::Manuel).unwrap(), None);
+        assert_eq!(r2.nom(), "2026-10-18-budget-2");
+    }
+
+    /// KOB-266 : la table des renommages illisible en écriture n'empêche
+    /// pas le nouveau titre d'être écrit dans `reunion.json`.
+    #[test]
+    fn titre_ecrit_meme_si_la_table_des_renommages_echoue() {
+        let (_d, st) = stockage();
+        let mut r = st.nouvelle_reunion(T0, None).unwrap();
+        // Un dossier à la place du fichier : son écriture échoue.
+        fs::create_dir_all(st.dossier_reunions().join(RENOMMAGES)).unwrap();
+        let ancien = r.nommer("Rétro du sprint", Origine::Auto).unwrap();
+        assert_eq!(ancien.as_deref(), Some("2026-10-18-reunion"));
+        let lue = st.lire_reunion(r.nom()).unwrap();
+        assert_eq!(lue.resume.titre.as_deref(), Some("Rétro du sprint"));
+        assert_eq!(r.meta().changements_auto, 1);
     }
 
     /// KOB-223 : sans titre (pas assez de parole), « Réunion du 18/10 à
