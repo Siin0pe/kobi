@@ -132,9 +132,20 @@ fn trouver_variante(texte: &str) -> Option<(usize, usize)> {
     None
 }
 
-/// Retire la ponctuation et les espaces qui entourent un morceau de phrase.
+/// Retire la ponctuation et les espaces qui entourent un morceau de phrase,
+/// et en tête les apostrophes et guillemets détachés que la reconnaissance
+/// colle au nom (« Kobe,', what day… », « Kobai '' Tell me… », KOB-267). Un
+/// guillemet collé au mot qui suit (« "Hello" en espagnol ») reste.
 fn nettoyer(morceau: &str) -> &str {
-    morceau.trim_matches(|c: char| c.is_whitespace() || matches!(c, ',' | '.' | '!' | ';' | ':'))
+    let ponctuation = |c: char| c.is_whitespace() || matches!(c, ',' | '.' | '!' | ';' | ':');
+    let mut reste = morceau.trim_matches(ponctuation);
+    loop {
+        let sans = reste.trim_start_matches(['\'', '’', '"', '“', '”', '`']);
+        if sans.len() == reste.len() || sans.starts_with(char::is_alphanumeric) {
+            return reste;
+        }
+        reste = sans.trim_start_matches(ponctuation);
+    }
 }
 
 /// Ce qui suit « Kobi » dans le texte, ou `None` s'il n'y est pas.
@@ -1114,6 +1125,29 @@ mod tests {
         );
     }
 
+    /// KOB-267, segments de l'essai KOB-259 : la question envoyée (et titre
+    /// de la conversation) ne commence pas par la ponctuation parasite.
+    #[test]
+    fn question_sans_ponctuation_parasite() {
+        let mut e = Ecouteur::default();
+        assert_eq!(
+            e.segment("Kobe,', what day is it today", true, 1.0),
+            [Interpeller, Envoyer("what day is it today".into())]
+        );
+        let mut e = Ecouteur::default();
+        let actions = e.segment(
+            "Kobi '' Tell me a long story about a little robot who learns to cook pancakes",
+            true,
+            1.0,
+        );
+        assert_eq!(
+            actions.last(),
+            Some(&Envoyer(
+                "Tell me a long story about a little robot who learns to cook pancakes".into()
+            ))
+        );
+    }
+
     #[test]
     fn annulation_expiree_ou_nom() {
         let mut e = Ecouteur::new(false);
@@ -1394,6 +1428,22 @@ mod tests {
                 "est-ce que tu peux noter ça",
             ),
             ("Kobe, démarre la réunion", Appel, "démarre la réunion"),
+            // Ponctuation parasite après le nom (KOB-267).
+            (
+                "Kobe,', what day is it today",
+                Appel,
+                "what day is it today",
+            ),
+            (
+                "Kobi '' Tell me a long story about a little robot who learns to cook pancakes",
+                Appel,
+                "Tell me a long story about a little robot who learns to cook pancakes",
+            ),
+            (
+                "Kobi, \"Hello\" en espagnol ?",
+                Appel,
+                "\"Hello\" en espagnol ?",
+            ),
             ("Oui Kobé, vas-y", Appel, "vas-y"),
             ("Kobi.", Appel, ""),
             // Nom à la fin : la phrase entière.
