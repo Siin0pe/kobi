@@ -66,7 +66,8 @@ fn notes_a_la_fin() -> bool {
     })
 }
 
-/// Titre automatique réglé (`meetings.titre_auto`, à chaud).
+/// Titre automatique réglé (`meetings.titre_auto`). Lu au début de chaque
+/// réunion, pas à chaque tick sous le verrou du chef (KOB-265).
 fn titre_auto_actif() -> bool {
     kobi_session::config::default_path().is_none_or(|p| {
         kobi_session::config::load_or_create(&p)
@@ -373,6 +374,8 @@ struct EnCours {
     /// `notes.mode = end` (KOB-71) : ni bloc de notes ni titre pendant la
     /// réunion ; le titre est demandé avec le compte rendu.
     a_la_fin: bool,
+    /// `meetings.titre_auto`, lu au début de la réunion (KOB-265).
+    titre_auto: bool,
     /// Latence de chaque interpellation, résumée à la fin du compte rendu
     /// (KOB-85).
     latences: crate::latence::Latences,
@@ -466,6 +469,15 @@ impl Avancement {
             kobi_stt::Source::Moi => self.moi = jusqu_a,
             kobi_stt::Source::Eux => self.eux = jusqu_a,
         }
+    }
+
+    /// La piste `source` a transcrit son audio jusqu'à `instant` (ou elle est
+    /// fermée).
+    fn piste_a_jour(&self, source: kobi_stt::Source, instant: Instant) -> bool {
+        self.piste(source)
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_none_or(|t| t >= instant)
     }
 
     /// Les pistes ouvertes ont toutes transcrit leur audio jusqu'à `instant`.
@@ -1179,6 +1191,7 @@ impl<R: Runtime> Chef<R> {
             titre_demande: false,
             titre_essais: 0,
             a_la_fin: notes_a_la_fin(),
+            titre_auto: titre_auto_actif(),
             latences: Default::default(),
         });
         kobi_i18n::tr("coque.chef.reunionCommencee", &[])
@@ -1258,13 +1271,16 @@ impl<R: Runtime> Chef<R> {
             return kobi_i18n::tr("coque.chef.compteRenduDejaEnCours", &[]);
         }
         r.fin_demandee = true;
-        r.arret = Some(Instant::now());
-        r.annulable_jusqu = Some(Instant::now() + ANNULATION);
+        let arret = Instant::now();
+        r.arret = Some(arret);
+        r.annulable_jusqu = Some(arret + ANNULATION);
         self.transition(&[Evenement::TerminerReunion]);
         self.emettre_enregistrement();
         self.vider_puis_compte_rendu();
         // « Reprends » s'entend sans redire « Kobi » pendant « Annuler ».
-        let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::Annulable);
+        // L'instant réel de l'arrêt : sous retard, seul ce qui est dit après
+        // annule la fin (KOB-265).
+        let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::Annulable(arret));
         tracing::info!("réunion terminée, annulable");
         kobi_i18n::tr("coque.chef.reunionTerminee", &[])
     }
@@ -1352,7 +1368,7 @@ impl<R: Runtime> Chef<R> {
         r.compte_rendu_demande = true;
         // Mode fin de réunion (KOB-71) : le titre n'a pas été demandé pendant ;
         // il part avant le compte rendu, et revient avant lui.
-        if r.a_la_fin && !r.titre_demande && !r.titre_manuel && titre_auto_actif() {
+        if r.a_la_fin && !r.titre_demande && !r.titre_manuel && r.titre_auto {
             r.titre_demande = true;
             tracing::info!("titre de la réunion demandé avec le compte rendu");
             self.cerveau.demander(Demande::Titre {
@@ -2172,11 +2188,19 @@ impl<R: Runtime> Chef<R> {
         if self.reunion.as_ref().is_some_and(|r| r.vidange.is_some()) {
             self.vidange();
         }
+        let avancement = self.app.try_state::<Avancement>();
         let Some(r) = &mut self.reunion else { return };
-        // « Annuler » n'a pas servi : la fin est définitive.
-        if r.annulable_jusqu
-            .is_some_and(|quand| Instant::now() >= quand)
-        {
+        // « Annuler » n'a pas servi : la fin est définitive, une fois
+        // transcrit ce qui a été dit pendant le délai (micro en retard,
+        // KOB-265), au plus [`VIDANGE`] de plus.
+        if r.annulable_jusqu.is_some_and(|quand| {
+            let maintenant = Instant::now();
+            maintenant >= quand
+                && (maintenant >= quand + VIDANGE
+                    || avancement
+                        .as_ref()
+                        .is_none_or(|a| a.piste_a_jour(kobi_stt::Source::Moi, quand)))
+        }) {
             self.clore_annulation();
             return;
         }
@@ -2189,7 +2213,7 @@ impl<R: Runtime> Chef<R> {
             let pret = (depuis >= TITRE_APRES && mots >= seuil)
                 || mots >= 3 * seuil
                 || (depuis >= 2 * TITRE_APRES && mots >= TITRE_MOTS_MIN);
-            if pret && r.titre_essais < TITRE_ESSAIS && titre_auto_actif() {
+            if pret && r.titre_essais < TITRE_ESSAIS && r.titre_auto {
                 r.titre_demande = true;
                 tracing::info!(mots, s = depuis.as_secs(), "titre de la réunion demandé");
                 self.cerveau.demander(Demande::Titre {
@@ -2731,6 +2755,38 @@ mod tests {
         assert!(!transcription.contains("Annule"), "{transcription}");
     }
 
+    /// KOB-265 : micro en retard, « Annuler » reste ouvert tant que ce qui a
+    /// été dit pendant le délai n'est pas transcrit, au plus la vidange.
+    #[test]
+    fn annuler_attend_le_micro_en_retard() {
+        type Essai = Chef<tauri::test::MockRuntime>;
+        let expire = |c: &mut Essai, depuis: Duration| {
+            c.reunion.as_mut().unwrap().annulable_jusqu = Some(Instant::now() - depuis);
+            c.tick();
+            c.fin_annulable()
+        };
+        for rattrape in [true, false] {
+            let (app, _dir) = chef_en_essai();
+            let h = app.handle();
+            avec_chef(&app, |c| c.commande(Intention::DemarrerReunion));
+            avancer(
+                h,
+                kobi_stt::Source::Moi,
+                Some(Instant::now() - Duration::from_secs(15)),
+            );
+            avec_chef(&app, |c| c.commande(Intention::TerminerReunion));
+            assert!(avec_chef(&app, |c| expire(c, Duration::from_millis(1))));
+            if rattrape {
+                // Le micro rattrape le délai : la fin est définitive.
+                avancer(h, kobi_stt::Source::Moi, Some(Instant::now()));
+                assert!(!avec_chef(&app, |c| expire(c, Duration::from_millis(1))));
+            } else {
+                // Toujours en retard : au plus la vidange.
+                assert!(!avec_chef(&app, |c| expire(c, VIDANGE)));
+            }
+        }
+    }
+
     /// KOB-198 : la piste reste en retard ; au bout de la vidange, le compte
     /// rendu part quand même. « Annuler » pendant la vidange : aucun compte
     /// rendu n'était demandé, aucun n'est abandonné.
@@ -2869,13 +2925,17 @@ mod tests {
     /// KOB-71 : en mode fin de réunion, aucun bloc de notes ni titre ne part
     /// pendant la réunion ; toute la transcription va au compte rendu, avec
     /// la demande de titre. En mode blocs, le bloc part à l'heure.
+    /// KOB-265 : sans titre automatique (réglage lu au début de la réunion),
+    /// aucun titre ne part, ni pendant ni avec le compte rendu.
     #[test]
     fn notes_en_mode_fin_de_reunion() {
-        for a_la_fin in [false, true] {
+        for (a_la_fin, titre_auto) in [(false, true), (true, true), (false, false), (true, false)] {
             let (app, _dir) = chef_en_essai();
             avec_chef(&app, |c| {
                 c.commande(Intention::DemarrerReunion);
-                c.reunion.as_mut().unwrap().a_la_fin = a_la_fin;
+                let r = c.reunion.as_mut().unwrap();
+                r.a_la_fin = a_la_fin;
+                r.titre_auto = titre_auto;
                 for texte in ["Budget validé.", "Lieu : Annecy.", "Date à fixer."] {
                     c.recevoir(Message::Segment(dit(texte), Instant::now()));
                 }
@@ -2888,8 +2948,8 @@ mod tests {
                 assert_eq!(r.envoye.is_some(), !a_la_fin, "bloc envoyé : {a_la_fin}");
                 assert_eq!(
                     r.titre_demande,
-                    !a_la_fin || !titre_auto_actif(),
-                    "titre : {a_la_fin}"
+                    !a_la_fin && titre_auto,
+                    "titre : {a_la_fin} {titre_auto}"
                 );
                 if !a_la_fin {
                     return;
@@ -2908,8 +2968,7 @@ mod tests {
                     );
                 }
                 assert_eq!(
-                    r.titre_demande,
-                    titre_auto_actif(),
+                    r.titre_demande, titre_auto,
                     "titre demandé avec le compte rendu"
                 );
             });

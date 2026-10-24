@@ -379,9 +379,10 @@ enum Attente {
     /// Question envoyée avant la fin de la phrase (trop longue) : le reste de
     /// la phrase est ignoré jusqu'à sa fin.
     Ignore,
-    /// Réunion arrêtée à la voix (KOB-165) : jusqu'à `jusqu`, « reprends »
-    /// part sans le nom ; toute autre phrase est ignorée.
-    Annulation { jusqu: f64 },
+    /// Réunion arrêtée à la voix (KOB-165) : de `depuis` (l'arrêt) à
+    /// `jusqu`, « reprends » part sans le nom ; toute autre phrase est
+    /// ignorée, comme ce qui a été dit avant l'arrêt (KOB-265).
+    Annulation { depuis: f64, jusqu: f64 },
 }
 
 /// Silence qui clôt une conversation, en secondes.
@@ -469,8 +470,9 @@ impl Ecouteur {
                     self.attente = self.apres(t);
                 }
             }
-            Attente::Annulation { .. }
+            Attente::Annulation { depuis, .. }
                 if finale
+                    && t >= depuis
                     && reperer(texte).is_none()
                     && crate::intentions::annule_la_fin(texte) =>
             {
@@ -557,7 +559,7 @@ impl Ecouteur {
     /// Le temps passe (appelé à chaque trame audio) : délais de l'écoute.
     pub fn tick(&mut self, t: f64) -> Vec<Action> {
         match self.attente {
-            Attente::Annulation { jusqu } if t > jusqu => {
+            Attente::Annulation { jusqu, .. } if t > jusqu => {
                 self.attente = Attente::Nom;
                 Vec::new()
             }
@@ -667,14 +669,17 @@ impl Ecouteur {
         )
     }
 
-    /// La réunion vient d'être arrêtée : pendant `duree` secondes,
-    /// « reprends » suffit, sans le nom.
+    /// La réunion vient d'être arrêtée, à l'instant `t` de l'audio : pendant
+    /// `duree` secondes, « reprends » suffit, sans le nom.
     pub fn annulable(&mut self, t: f64, duree: f64) {
         if matches!(
             self.attente,
             Attente::Nom | Attente::Conversation { parle: None, .. }
         ) {
-            self.attente = Attente::Annulation { jusqu: t + duree };
+            self.attente = Attente::Annulation {
+                depuis: t,
+                jusqu: t + duree,
+            };
         }
     }
 
@@ -1092,6 +1097,21 @@ mod tests {
         );
         // Une seule fois : ensuite il faut de nouveau le nom.
         assert!(e.segment("reprends", true, 18.0).is_empty());
+    }
+
+    /// KOB-265 : sous retard, un « on reprend » dit avant l'arrêt, encore en
+    /// file, n'annule pas la fin ; celui dit après, si.
+    #[test]
+    fn reprends_dit_avant_l_arret_ne_compte_pas() {
+        let mut e = Ecouteur::new(false);
+        e.annulable(30.0, 10.0);
+        assert!(e.tick(25.0).is_empty());
+        assert!(e.segment("Bon, on reprend.", true, 25.0).is_empty());
+        assert!(e.en_annulation());
+        assert_eq!(
+            e.segment("Ah non, reprends !", true, 38.0),
+            [Interpeller, Envoyer("Ah non, reprends !".into())]
+        );
     }
 
     #[test]
