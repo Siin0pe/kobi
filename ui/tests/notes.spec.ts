@@ -109,6 +109,19 @@ test('transcription brute (KOB-50) : masquée par défaut, Ctrl+Alt+T l’ouvre 
   await emettre('moi', 'Merci', false);
   await expect(lignes).toHaveCount(3);
   await expect(lignes.nth(1)).not.toHaveClass(/partiel/);
+  // KOB-274 : « Merci » reste sans final (phrase reprise après un silence).
+  // La coque le fige ; la phrase suivante ouvre une ligne neuve, après la
+  // ligne « eux » arrivée entre-temps.
+  await emettre('eux', 'On passe au point deux.', true);
+  await page.evaluate(() => (window as unknown as { __emit: (e: string, p: unknown) => void }).__emit('transcription_brute', { source: 'moi', texte: 'Merci', finale: true, abandon: true }));
+  await emettre('moi', 'Attends, une question', false);
+  await expect(lignes).toHaveCount(5);
+  await expect(lignes.nth(2).locator('.brut-texte')).toHaveText('Merci');
+  await expect(lignes.nth(2)).toHaveClass(/abandon/);
+  await expect(lignes.nth(2)).not.toHaveClass(/partiel/);
+  await expect(lignes.nth(3).locator('.brut-texte')).toHaveText('On passe au point deux.');
+  await expect(lignes.nth(4).locator('.brut-texte')).toHaveText('Attends, une question');
+  await expect(lignes.nth(4)).toHaveClass(/partiel/);
   if (process.env.CAPTURE_KOB50) await page.screenshot({ path: process.env.CAPTURE_KOB50 });
   // Refermé : plus rien n'est demandé à la coque.
   await page.keyboard.press('Control+Alt+t');

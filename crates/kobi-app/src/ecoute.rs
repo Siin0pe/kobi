@@ -685,6 +685,7 @@ impl<R: Runtime> Fil<R> {
             |fil: &mut Self, frame| fil.traiter(frame, false),
             self,
         );
+        let mut conclue = false;
         if let Ok(stt) = self.stt.as_mut() {
             match stt.finish() {
                 Ok(segments) => {
@@ -692,6 +693,7 @@ impl<R: Runtime> Fil<R> {
                         if crate::voix::est_ma_voix(&self.app, &s.text) {
                             continue;
                         }
+                        conclue = true;
                         crate::transcription_brute::publier(
                             &self.app,
                             kobi_stt::Source::Moi,
@@ -707,7 +709,10 @@ impl<R: Runtime> Fil<R> {
             stt.reset();
         }
         self.rattrapage = Rattrapage::default();
-        self.partiel_publie = None;
+        // Le partiel affiché n'aura pas de final (KOB-274).
+        if let Some(ancien) = self.partiel_publie.take().filter(|_| !conclue) {
+            crate::transcription_brute::abandonner(&self.app, kobi_stt::Source::Moi, &ancien);
+        }
         if a_vider > 0 {
             tracing::info!(
                 trames = transcrites,
@@ -893,6 +898,7 @@ impl<R: Runtime> Fil<R> {
             crate::voix::entendu(app, texte);
             false
         };
+        let ouverte_avant = self.porte.ouverte();
         let (actions, finals) = transcrire(
             stt,
             &mut self.porte,
@@ -911,6 +917,15 @@ impl<R: Runtime> Fil<R> {
             .partiel
             .as_ref()
             .map(|(texte, _)| texte.clone());
+        // Partiel affiché que le moteur a laissé tomber (phrase reprise après
+        // un silence, KOB-190) : il n'aura pas de final, la ligne se fige
+        // (KOB-274).
+        let nouvel_enonce = !ouverte_avant && self.porte.ouverte();
+        if partiel_abandonne(partiel.is_some(), !finals.is_empty(), nouvel_enonce) {
+            if let Some(ancien) = self.partiel_publie.take() {
+                crate::transcription_brute::abandonner(&self.app, kobi_stt::Source::Moi, &ancien);
+            }
+        }
         if partiel.is_some() && partiel != self.partiel_publie {
             crate::transcription_brute::publier(
                 &self.app,
@@ -1104,6 +1119,13 @@ impl<R: Runtime> Fil<R> {
     }
 }
 
+/// Le partiel déjà affiché est-il abandonné (KOB-274) ? Sans final dans ce
+/// tour, il a disparu, ou la phrase a repris après un silence (nouvel
+/// énoncé : le partiel actuel est celui de la nouvelle phrase).
+fn partiel_abandonne(partiel: bool, final_publie: bool, nouvel_enonce: bool) -> bool {
+    !final_publie && (!partiel || nouvel_enonce)
+}
+
 /// Instant `quand` dans le temps de l'audio du micro ouvert à `origine`.
 fn instant_audio(origine: Instant, quand: Instant) -> f64 {
     quand.saturating_duration_since(origine).as_secs_f64()
@@ -1184,6 +1206,24 @@ mod tests {
             Action::Envoyer("quelle heure ?".into()),
         ];
         assert_eq!(sans_ordres_deja_executes(autre.clone(), deja), autre);
+    }
+
+    /// KOB-274 : un partiel affiché sans final se fige quand il disparaît ou
+    /// qu'une nouvelle phrase commence ; pas quand il s'affine, ni quand un
+    /// final le conclut.
+    #[test]
+    fn partiel_affiche_abandonne() {
+        assert!(partiel_abandonne(false, false, false), "disparu sans final");
+        assert!(partiel_abandonne(true, false, true), "nouvelle phrase");
+        assert!(!partiel_abandonne(true, false, false), "il s'affine");
+        assert!(
+            !partiel_abandonne(false, true, false),
+            "conclu par un final"
+        );
+        assert!(
+            !partiel_abandonne(true, true, true),
+            "conclu, puis nouvelle phrase"
+        );
     }
 
     #[test]
