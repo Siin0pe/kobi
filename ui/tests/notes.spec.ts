@@ -110,6 +110,20 @@ test('transcription brute (KOB-50) : masquée par défaut, Ctrl+Alt+T l’ouvre 
   await expect(lignes).toHaveCount(3);
   await expect(lignes.nth(1)).not.toHaveClass(/partiel/);
   if (process.env.CAPTURE_KOB50) await page.screenshot({ path: process.env.CAPTURE_KOB50 });
+  // KOB-275 : la liste suit le flux tant qu'elle est en bas ; remontée pour
+  // relire, elle reste où on l'a laissée, puis reprend le suivi en bas.
+  const liste = panneau.locator('.brut-lignes');
+  for (let i = 0; i < 40; i++) await emettre('eux', `Phrase numéro ${i} du point budget.`, true);
+  const position = () => liste.evaluate((n) => ({ haut: n.scrollTop, bas: n.scrollHeight - n.clientHeight }));
+  await expect.poll(async () => { const p = await position(); return p.bas > 0 && p.haut >= p.bas - 4; }).toBe(true);
+  await liste.evaluate((n) => (n.scrollTop = 0));
+  await emettre('moi', 'Je relis plus haut', false);
+  await emettre('moi', 'Je relis plus haut pendant que je parle', false);
+  await emettre('eux', 'Une autre phrase arrive.', true);
+  expect((await position()).haut).toBe(0);
+  await liste.evaluate((n) => (n.scrollTop = n.scrollHeight));
+  await emettre('eux', 'Et le suivi reprend.', true);
+  await expect.poll(async () => { const p = await position(); return p.haut >= p.bas - 4; }).toBe(true);
   // Refermé : plus rien n'est demandé à la coque.
   await page.keyboard.press('Control+Alt+t');
   await expect(panneau).toBeHidden();
