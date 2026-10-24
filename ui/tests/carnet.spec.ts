@@ -635,3 +635,27 @@ test('réunion en cours : la durée suit l’horloge dans la liste et dans l’e
   expect(await page.evaluate(() => (window as unknown as { __ligne: Element | null }).__ligne === document.querySelector('.element[data-genre="reunion"]'))).toBe(true);
   await expectNoErrors(errors);
 });
+
+test('KOB-246 (4.4) : le soulignement épouse l’onglet choisi une fois sa graisse posée ; survoler un onglet ne pousse pas ses voisins', async ({ page }) => {
+  const errors = await ouvrirCarnet(page);
+  await page.locator('.element[data-genre="reunion"]').click();
+  const tab = (nom: RegExp) => page.getByRole('tab', { name: nom });
+  const gauches = () => page.locator('.onglet').evaluateAll((bs) => bs.map((b) => Math.round((b as HTMLElement).offsetLeft)));
+  const avant = await gauches();
+  // Onglet du milieu, pas encore choisi : sa graisse change au survol.
+  await tab(/Transcription/).hover();
+  await page.waitForTimeout(450);
+  expect(await gauches()).toEqual(avant);
+  await tab(/Transcription/).click();
+  // Après la transition de graisse (0,3 s) et le ressort (0,45 s).
+  await page.waitForTimeout(800);
+  const { indicateur, onglet } = await page.evaluate(() => {
+    const i = document.querySelector<HTMLElement>('.onglet-indicateur')!.getBoundingClientRect();
+    const o = document.querySelector<HTMLElement>('.onglet[aria-selected="true"]')!.getBoundingClientRect();
+    return { indicateur: { x: i.x, l: i.width }, onglet: { x: o.x, l: o.width } };
+  });
+  expect(Math.abs(indicateur.x - onglet.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(indicateur.l - onglet.l)).toBeLessThanOrEqual(1);
+  expect(await gauches()).toEqual(avant);
+  await expectNoErrors(errors);
+});

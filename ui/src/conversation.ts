@@ -170,6 +170,11 @@ export class Conversation {
         const q = el('div', 'ex-q');
         q.append(el('span', 'ex-who'), el('span', 'ex-text'));
         item.append(q, el('div', 'ex-a'));
+        if (!this.history.hidden && !this.closing) {
+          const nouveau = item;
+          nouveau.classList.add('nouveau');
+          nouveau.addEventListener('animationend', () => nouveau.classList.remove('nouveau'), { once: true });
+        }
         this.list.append(item);
       }
       item.dataset.statut = b.statut;

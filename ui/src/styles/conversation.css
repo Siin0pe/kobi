@@ -53,13 +53,18 @@
   margin-top: 8px;
   padding-right: 10px;
   overflow-y: auto;
-  scroll-behavior: smooth;
+  /* Pas de défilement doux : il se battait avec les sauts en bas du code
+     (ouverture, nouvel échange) (KOB-246, 2.7). */
   scrollbar-width: thin;
   scrollbar-color: var(--accent) transparent;
 }
 .ex {
   padding: 10px 0;
   border-top: 1px dashed color-mix(in srgb, var(--paper) 30%, transparent);
+}
+/* Seul un échange arrivé historique ouvert entre ainsi ; à l'ouverture, la
+   cascade de `openHistory` suffit (KOB-246, 4.3). */
+.ex.nouveau {
   animation: ex-in 0.3s ease-out both;
 }
 .ex:first-child {

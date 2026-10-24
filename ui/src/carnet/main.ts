@@ -823,30 +823,36 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
       ['transcription', t('carnet.main.ongletTranscription'), r.segments.length],
       ['notes', t('carnet.main.ongletNotes'), null],
     ];
+    // Le soulignement suit l'onglet actif, mesuré à chaque changement de
+    // taille : la graisse change en transition après le clic (KOB-246, 4.4).
+    const souligner = () => {
+      const b = onglets.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+      if (!b) return;
+      indicateur.style.setProperty('--x', `${b.offsetLeft}px`);
+      indicateur.style.setProperty('--l', `${b.offsetWidth}px`);
+    };
+    const mesure = new ResizeObserver(souligner);
     const montrer = (o: Onglet, defiler?: Cible) => {
       etat.onglet = o;
       for (const b of onglets.querySelectorAll<HTMLElement>('[role="tab"]')) {
         const actif = b.dataset.onglet === o;
         b.setAttribute('aria-selected', String(actif));
         b.tabIndex = actif ? 0 : -1;
-        if (actif) {
-          indicateur.style.setProperty('--x', `${b.offsetLeft}px`);
-          indicateur.style.setProperty('--l', `${b.offsetWidth}px`);
-        }
       }
+      souligner();
       contenu.dataset.onglet = o;
       contenu.replaceChildren(o === 'compte-rendu' ? compteRendu(r, mot) : o === 'transcription' ? transcription(r, mot) : notes(r, mot));
       if (defiler) allerA(contenu, defiler);
     };
     for (const [o, libelle, n] of liste) {
-      onglets.append(
-        h(
-          'button',
-          { type: 'button', role: 'tab', class: 'onglet', 'data-onglet': o, onclick: () => montrer(o) },
-          libelle,
-          n !== null && n > 0 && h('span', { class: 'nombre' }, String(n)),
-        ),
+      const onglet = h(
+        'button',
+        { type: 'button', role: 'tab', class: 'onglet', 'data-onglet': o, onclick: () => montrer(o) },
+        h('span', { class: 'libelle', 'data-libelle': libelle }, libelle),
+        n !== null && n > 0 && h('span', { class: 'nombre' }, String(n)),
       );
+      mesure.observe(onglet);
+      onglets.append(onglet);
     }
     onglets.append(indicateur);
     onglets.addEventListener('keydown', (e) => {
