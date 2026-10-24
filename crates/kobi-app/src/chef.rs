@@ -117,6 +117,10 @@ pub const ANNULATION: Duration = Duration::from_secs(10);
 /// une demi-minute de retard demande une minute. Kobi montre déjà qu'il
 /// rédige pendant ce temps (KOB-245).
 pub const VIDANGE: Duration = Duration::from_secs(60);
+/// Rien n'est encore transcrit quand [`VIDANGE`] expire, et les pistes sont
+/// en retard : le compte rendu attend encore, au plus jusqu'à ce temps après
+/// l'arrêt, plutôt que de partir vide (KOB-281).
+const VIDANGE_SANS_PAROLE: Duration = Duration::from_secs(300);
 
 /// Ce qui arrive au chef.
 #[derive(Debug, Clone, PartialEq)]
@@ -358,6 +362,9 @@ struct EnCours {
     /// Le compte rendu attend que les pistes aient rattrapé l'arrêt, au plus
     /// jusqu'à cet instant.
     vidange: Option<Instant>,
+    /// Compte rendu demandé avant que les pistes aient rattrapé l'arrêt : il
+    /// le dit, et la suite arrive dans la transcription seule (KOB-281).
+    incomplet: bool,
     /// Compte rendu demandé : plus rien n'entre dans la transcription.
     compte_rendu_demande: bool,
     /// Titre de la réunion (KOB-223), affiché dans le badge REC.
@@ -395,6 +402,10 @@ pub struct Chef<R: Runtime> {
     cartes: BTreeMap<u64, CarteUi>,
     /// Transcription que la conversation n'a pas encore vue.
     pour_conversation: String,
+    /// Dernière réunion close sur une transcription incomplète : son début
+    /// et son arrêt. Ce qui a été dit avant l'arrêt et arrive encore va dans
+    /// sa transcription (KOB-281).
+    reunion_close: Option<(Instant, Instant)>,
     /// Retour au calme prévu (fin de lecture d'une réponse, d'une erreur).
     calme_a: Option<(Instant, Evenement)>,
     /// Résultats de tâches à montrer, un à la fois (KOB-238) : tour, texte,
@@ -494,6 +505,18 @@ impl Avancement {
 /// publiés par la piste (KOB-261).
 pub fn avancer<R: Runtime>(app: &AppHandle<R>, source: kobi_stt::Source, jusqu_a: Option<Instant>) {
     publier(app, Message::Avancement(source, jusqu_a));
+}
+
+/// Horodate un segment sur la réunion commencée à `debut`, au moment où il a
+/// été dit : l'horloge du moteur repart à chaque question, et le segment
+/// arrive en retard quand la machine est chargée.
+fn horodater(s: &mut Segment, debut: Instant, dit_a: Instant) {
+    let duree = (s.end - s.start).max(0.0);
+    s.end = dit_a
+        .min(Instant::now())
+        .saturating_duration_since(debut)
+        .as_secs_f64();
+    s.start = (s.end - duree).max(0.0);
 }
 
 /// Transcription confiée au compte rendu : le bloc parti à la prise de notes
@@ -690,6 +713,7 @@ impl<R: Runtime> Chef<R> {
             compte_rendu_a_ecrire: false,
             comptes_rendus_abandonnes: 0,
             avancement: Avancement::default(),
+            reunion_close: None,
         }
     }
 
@@ -1155,6 +1179,7 @@ impl<R: Runtime> Chef<R> {
         };
         let debut = Instant::now();
         let debut_ms = maintenant_ms();
+        self.reunion_close = None;
         self.ecrivain.ouvrir_reunion(stockage, debut_ms);
         // Ses notes et son compte rendu ne partent pas de la réunion
         // précédente (KOB-252).
@@ -1184,6 +1209,7 @@ impl<R: Runtime> Chef<R> {
             compte_rendu_garde: None,
             arret: None,
             vidange: None,
+            incomplet: false,
             compte_rendu_demande: false,
             pause_a: None,
             titre: None,
@@ -1347,6 +1373,13 @@ impl<R: Runtime> Chef<R> {
         if !a_jour && Instant::now() < limite {
             return;
         }
+        // Rien encore transcrit, pistes en retard : un compte rendu vide ne
+        // servirait à rien, il attend encore (KOB-281).
+        let rien = r.envoye.is_none() && r.a_noter.trim().is_empty();
+        if !a_jour && rien && arret.elapsed() < VIDANGE_SANS_PAROLE {
+            return;
+        }
+        r.incomplet = !a_jour;
         let attente_ms = arret.elapsed().as_millis() as u64;
         if a_jour {
             tracing::info!(
@@ -1367,6 +1400,13 @@ impl<R: Runtime> Chef<R> {
     fn demander_compte_rendu(&mut self) {
         let Some(r) = &mut self.reunion else { return };
         r.compte_rendu_demande = true;
+        // Rien de transcrit ni de noté : pas d'appel à Claude, dont la réponse
+        // (« il n'y a rien à résumer ») deviendrait le compte rendu (KOB-281).
+        if r.envoye.is_none() && r.a_noter.trim().is_empty() && r.notes.trim().is_empty() {
+            tracing::warn!("fin de réunion : aucune parole transcrite, compte rendu sans Claude");
+            self.compte_rendu(Ok(kobi_i18n::tr("coque.chef.compteRenduVide", &[])));
+            return;
+        }
         // Mode fin de réunion (KOB-71) : le titre n'a pas été demandé pendant ;
         // il part avant le compte rendu, et revient avant lui.
         if r.a_la_fin && !r.titre_demande && !r.titre_manuel && r.titre_auto {
@@ -1389,10 +1429,19 @@ impl<R: Runtime> Chef<R> {
     /// Segment final, dont la fin a été dite à `dit_a` : écrit tout de suite
     /// dans `transcript.jsonl`.
     fn segment(&mut self, mut s: Segment, dit_a: Instant) {
-        let Some(r) = &mut self.reunion else { return };
         if !s.is_final {
             return;
         }
+        let Some(r) = &mut self.reunion else {
+            // Réunion close avant que la transcription ait rattrapé l'arrêt :
+            // ce qui a été dit avant va encore dans sa transcription (KOB-281).
+            if let Some((debut, _)) = self.reunion_close.filter(|(_, arret)| dit_a <= *arret) {
+                horodater(&mut s, debut, dit_a);
+                tracing::info!("segment arrivé après le compte rendu : ajouté à la transcription");
+                self.ecrivain.segment(s);
+            }
+            return;
+        };
         // En pause, seul ce qui a été dit avant la pause est gardé : sous
         // charge, il arrive après (KOB-261).
         if r.pause && r.pause_a.is_none_or(|pause| dit_a > pause) {
@@ -1401,19 +1450,19 @@ impl<R: Runtime> Chef<R> {
         // Dit avant la fin mais transcrit après (charge, file d'attente) :
         // gardé jusqu'au compte rendu. Ce qui est dit après (le « annule »
         // d'« Annuler »…) ne l'est pas (KOB-198).
-        if r.compte_rendu_demande || (r.fin_demandee && r.arret.is_none_or(|arret| dit_a > arret)) {
+        if r.fin_demandee && r.arret.is_none_or(|arret| dit_a > arret) {
             return;
         }
-        // Horodaté sur la réunion, au moment où il a été dit : l'horloge du
-        // moteur repart à chaque question, et le segment arrive en retard
-        // quand la machine est chargée.
-        let duree = (s.end - s.start).max(0.0);
-        s.end = dit_a
-            .min(Instant::now())
-            .saturating_duration_since(r.debut)
-            .as_secs_f64();
-        s.start = (s.end - duree).max(0.0);
+        horodater(&mut s, r.debut, dit_a);
         self.ecrivain.segment(s.clone());
+        // Arrivé après la demande de compte rendu : il manque à celui-ci, qui
+        // le dit, mais la transcription le garde (KOB-281).
+        if r.compte_rendu_demande {
+            tracing::info!(
+                "segment arrivé après la demande de compte rendu : ajouté à la transcription"
+            );
+            return;
+        }
         let t = s.start as u64;
         let ligne = format!(
             "[{:02}:{:02} {}] {}\n",
@@ -1907,6 +1956,18 @@ impl<R: Runtime> Chef<R> {
         let texte = match r.latences.resume() {
             Some(resume) => format!("{}\n\n{resume}", texte.trim_end()),
             None => texte,
+        };
+        // Transcription en retard au moment du compte rendu : il le dit, et la
+        // suite va dans la transcription de cette réunion (KOB-281).
+        let texte = if r.incomplet {
+            self.reunion_close = r.arret.map(|arret| (r.debut, arret));
+            format!(
+                "{}\n\n{}",
+                texte.trim_end(),
+                kobi_i18n::tr("coque.chef.compteRenduIncomplet", &[])
+            )
+        } else {
+            texte
         };
         self.compte_rendu_a_ecrire = true;
         self.ecrivain
@@ -2578,6 +2639,10 @@ mod tests {
         let h = app.handle();
         avec_chef(&app, |c| c.commande(Intention::DemarrerReunion));
         assert!(avec_chef(&app, |c| c.enregistrement().actif));
+        // De la parole : le compte rendu passe par Claude (KOB-281).
+        avec_chef(&app, |c| {
+            c.recevoir(Message::Segment(dit("On commence."), Instant::now()))
+        });
         let debut_ms = avec_chef(&app, |c| c.enregistrement().debut_ms);
         // Fin par Claude (pilotage), comme par la phrase ou le raccourci.
         let depuis = Instant::now();
@@ -3004,6 +3069,103 @@ mod tests {
                 assert!(francais.ends_with("\nquel jour on est ?"), "{francais}");
             });
         }
+    }
+
+    /// KOB-281 : la vidange expire, la transcription est en retard ; ce qui
+    /// a été dit avant l'arrêt et arrive ensuite, avant ou après l'écriture
+    /// du compte rendu, va dans la transcription. Le compte rendu dit qu'il
+    /// est incomplet ; ce qui est dit après l'arrêt reste dehors.
+    #[test]
+    fn fin_sous_charge_rien_ne_manque_a_la_transcription() {
+        let (app, dir) = chef_en_essai();
+        let avant = Instant::now() - Duration::from_secs(3);
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            c.recevoir(Message::Segment(dit("Premier point."), avant));
+            c.recevoir(Message::Avancement(
+                kobi_stt::Source::Moi,
+                Some(Instant::now() - Duration::from_secs(30)),
+            ));
+            c.commande(Intention::TerminerReunion);
+            // La vidange expire : compte rendu demandé sans la fin.
+            c.reunion.as_mut().unwrap().vidange = Some(Instant::now());
+            c.tick();
+            let r = c.reunion.as_ref().unwrap();
+            assert!(r.compte_rendu_demande && r.incomplet);
+            c.recevoir(Message::Segment(dit("Arrivé après la demande."), avant));
+            c.recevoir(Message::Cerveau(Retour::CompteRendu(Ok(
+                "# Compte rendu\n\nPremier point.\n".into(),
+            ))));
+            // « Annuler » passé, au-delà de l'attente du micro (KOB-265).
+            c.reunion.as_mut().unwrap().annulable_jusqu = Some(Instant::now() - VIDANGE);
+            c.tick();
+            assert!(c.reunion.is_none());
+            c.recevoir(Message::Segment(
+                dit("Arrivé après le compte rendu."),
+                avant,
+            ));
+            c.recevoir(Message::Segment(
+                dit("Dit après la fin."),
+                Instant::now() + Duration::from_secs(1),
+            ));
+            c.ecrivain.attendre();
+        });
+        let reunions = dir.path().join("donnees").join("reunions");
+        let dossier = std::fs::read_dir(reunions)
+            .unwrap()
+            .flatten()
+            .next()
+            .unwrap()
+            .path();
+        let transcription = std::fs::read_to_string(dossier.join("transcript.jsonl")).unwrap();
+        for texte in [
+            "Premier point.",
+            "Arrivé après la demande.",
+            "Arrivé après le compte rendu.",
+        ] {
+            assert!(transcription.contains(texte), "{texte} : {transcription}");
+        }
+        assert!(
+            !transcription.contains("Dit après la fin."),
+            "{transcription}"
+        );
+        let cr = std::fs::read_to_string(dossier.join("compte-rendu.md")).unwrap();
+        assert!(
+            cr.contains(&kobi_i18n::tr("coque.chef.compteRenduIncomplet", &[])),
+            "{cr}"
+        );
+    }
+
+    /// KOB-281 : rien de transcrit, pistes en retard : le compte rendu
+    /// attend au-delà de la vidange ; toujours rien, il est écrit sans
+    /// Claude, dont le refus devenait le compte rendu.
+    #[test]
+    fn reunion_sans_parole_compte_rendu_sans_claude() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            c.recevoir(Message::Avancement(
+                kobi_stt::Source::Moi,
+                Some(Instant::now() - Duration::from_secs(30)),
+            ));
+            c.commande(Intention::TerminerReunion);
+            c.reunion.as_mut().unwrap().vidange = Some(Instant::now());
+            c.tick();
+            assert!(
+                !c.reunion.as_ref().unwrap().compte_rendu_demande,
+                "rien de transcrit : la vidange continue"
+            );
+            // L'arrêt est loin : le compte rendu part, sans Claude.
+            let r = c.reunion.as_mut().unwrap();
+            r.arret = Some(Instant::now() - VIDANGE_SANS_PAROLE);
+            c.tick();
+            let r = c.reunion.as_ref().unwrap();
+            assert!(r.compte_rendu_demande);
+            assert_eq!(
+                r.compte_rendu_garde,
+                Some(Ok(kobi_i18n::tr("coque.chef.compteRenduVide", &[])))
+            );
+        });
     }
 
     /// KOB-228 : un compte rendu demandé pendant qu'un bloc est à la prise

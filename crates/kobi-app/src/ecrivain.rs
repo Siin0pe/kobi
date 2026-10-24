@@ -13,6 +13,9 @@ use kobi_stt::Segment;
 #[derive(Default)]
 pub struct Disque {
     reunion: Option<ReunionOuverte>,
+    /// Dernière réunion terminée : un segment dit avant sa fin, arrivé après
+    /// son compte rendu, s'ajoute encore à sa transcription (KOB-281).
+    terminee: Option<ReunionOuverte>,
     conversation: Option<Conversation>,
     compte: Option<Box<dyn Fn(Nouvelle) + Send>>,
 }
@@ -77,6 +80,7 @@ impl Ecrivain {
         self.envoyer(move |d| match stockage.nouvelle_reunion(debut_ms, None) {
             Ok(r) => {
                 let dossier = r.dossier().to_path_buf();
+                d.terminee = None;
                 d.reunion = Some(r);
                 d.compter(Nouvelle::ReunionOuverte(dossier));
             }
@@ -110,9 +114,11 @@ impl Ecrivain {
         });
     }
 
+    /// Écrit un segment dans la transcription de la réunion en cours, ou de
+    /// la dernière terminée s'il n'y en a plus (KOB-281).
     pub fn segment(&self, segment: Segment) {
         self.envoyer(move |d| {
-            if let Some(r) = &mut d.reunion {
+            if let Some(r) = d.reunion.as_mut().or(d.terminee.as_mut()) {
                 if let Err(e) = r.ecrire_segment(&segment) {
                     tracing::warn!(erreur = %e, "transcript.jsonl");
                 }
@@ -155,6 +161,7 @@ impl Ecrivain {
             if let Err(e) = r.terminer(fin_ms) {
                 tracing::warn!(erreur = %e, "reunion.json");
             }
+            d.terminee = Some(r);
             d.compter(match ecrit {
                 Ok(()) => Nouvelle::CompteRenduEcrit(chemin),
                 Err(e) => Nouvelle::Erreur(kobi_i18n::tr(
