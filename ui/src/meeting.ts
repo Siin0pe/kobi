@@ -60,6 +60,8 @@ export class RecIndicator {
   private readonly eux: HTMLElement;
   /** Retard de la transcription (KOB-250) : un ordre dit maintenant attendra. */
   private readonly retard: HTMLElement;
+  /** « micro perdu » (KOB-236) : la voix n'est plus transcrite. */
+  private readonly micro: HTMLElement;
   /** « Annuler » après la fin (KOB-245) : la même réunion reprend. */
   private readonly undo: HTMLButtonElement;
   /** Fin encore annulable : l'étiquette reste, le bouton aussi. */
@@ -90,11 +92,13 @@ export class RecIndicator {
     this.eux.hidden = true;
     this.retard = el('span', 'rec-retard');
     this.retard.hidden = true;
+    this.micro = el('span', 'rec-micro');
+    this.micro.hidden = true;
     this.undo = el('button', 'rec-undo');
     this.undo.type = 'button';
     this.undo.hidden = true;
     this.undo.addEventListener('click', () => this.onUndo?.());
-    this.root.append(el('span', 'rec-dot'), (this.label = el('span', 'rec-label')), this.time, this.notes, this.eux, this.retard, this.undo);
+    this.root.append(el('span', 'rec-dot'), (this.label = el('span', 'rec-label')), this.time, this.notes, this.eux, this.retard, this.micro, this.undo);
     this.fixes();
     // L'étiquette reste affichée : elle suit la langue à chaud.
     this.offLangue = surLangue(() => this.retraduire());
@@ -104,6 +108,9 @@ export class RecIndicator {
   private fixes(): void {
     this.eux.textContent = t('kobi.meeting.sonOrdi');
     this.eux.title = t('kobi.meeting.sonOrdiAide');
+    this.micro.textContent = t('kobi.meeting.microPerdu');
+    this.micro.title = t('kobi.meeting.microPerduAide');
+    this.micro.setAttribute('aria-label', this.micro.title);
     this.undo.textContent = t('kobi.meeting.annuler');
     this.undo.title = t('kobi.meeting.annulerAide');
   }
@@ -159,6 +166,7 @@ export class RecIndicator {
       this.notes.hidden = n === 0;
       this.textes(info);
       this.eux.hidden = !info.computerAudio || Boolean(info.paused);
+      this.micro.hidden = !info.micLost || Boolean(info.paused);
       if (n > before && !this.reduced && !this.paused) this.bump(n - before);
     }
     this.tick();

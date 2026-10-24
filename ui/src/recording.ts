@@ -36,6 +36,9 @@ interface TauriGlobal {
  */
 let retard: MeetingInfo['late'];
 
+/** Micro perdu (KOB-236) : gardé hors réunion, il peut tomber juste avant. */
+let microPerdu = false;
+
 /** Applique un état d'enregistrement à la scène. */
 export function applyRecording(stage: Stage, r: RecordingState): void {
   if (!r.actif) {
@@ -49,6 +52,7 @@ export function applyRecording(stage: Stage, r: RecordingState): void {
     paused: r.pause,
     notes: r.notes,
     late: retard,
+    micLost: microPerdu,
     lastNote: r.derniere_note ?? undefined,
   };
   if (stage.currentMeeting) stage.updateMeeting(info);
@@ -106,6 +110,11 @@ export function followRecording(stage: Stage): void {
     const r = e.payload;
     retard = r ? { seconds: r.secondes, shortcut: r.raccourci } : undefined;
     stage.updateMeeting({ late: retard });
+  });
+  // Micro perdu sans autre micro (KOB-236) : affiché sur REC jusqu'au retour.
+  void api.event.listen<boolean>('micro', (e) => {
+    microPerdu = e.payload;
+    stage.updateMeeting({ micLost: microPerdu });
   });
   void api.event.listen<RecordingState>('enregistrement', (e) => {
     explicit = true;
