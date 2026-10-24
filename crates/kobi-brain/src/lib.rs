@@ -14,6 +14,7 @@ pub mod claude_code;
 #[cfg(test)]
 mod dossier_test;
 pub mod fake;
+pub mod langue;
 pub mod outils;
 pub mod transcript;
 
