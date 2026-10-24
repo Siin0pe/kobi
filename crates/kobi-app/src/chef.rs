@@ -2920,8 +2920,6 @@ mod tests {
         });
     }
 
-    /// KOB-228 : un compte rendu demandé pendant qu'un bloc est à la prise
-    /// de notes reprend ce bloc, avant ce qui reste à noter.
     /// KOB-71 : en mode fin de réunion, aucun bloc de notes ni titre ne part
     /// pendant la réunion ; toute la transcription va au compte rendu, avec
     /// la demande de titre. En mode blocs, le bloc part à l'heure.
@@ -2975,6 +2973,8 @@ mod tests {
         }
     }
 
+    /// KOB-228 : un compte rendu demandé pendant qu'un bloc est à la prise
+    /// de notes reprend ce bloc, avant ce qui reste à noter.
     #[test]
     fn compte_rendu_avec_le_bloc_en_cours() {
         assert_eq!(
