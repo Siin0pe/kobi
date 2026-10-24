@@ -838,12 +838,8 @@ impl<R: Runtime> Fil<R> {
             kobi_i18n::tr("coque.ecoute.microPerduAucun", &[])
         };
         let titre = kobi_i18n::tr("coque.ecoute.microPerdu", &[]);
-        crate::activite::noter(
-            &self.app,
-            crate::activite::Genre::Erreur,
-            &titre,
-            Some(&message),
-        );
+        // L'erreur affichée entre seule dans l'activité ; la noter en plus
+        // la doublait.
         let app = self.app.clone();
         std::thread::spawn(move || erreur(&app, &titre, &message));
     }
