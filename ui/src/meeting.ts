@@ -60,7 +60,7 @@ export class RecIndicator {
   private readonly eux: HTMLElement;
   /** Retard de la transcription (KOB-250) : un ordre dit maintenant attendra. */
   private readonly retard: HTMLElement;
-  /** « micro coupé » (KOB-236) : la voix n'est plus transcrite. */
+  /** « micro perdu » (KOB-236) : la voix n'est plus transcrite. */
   private readonly micro: HTMLElement;
   /** « Annuler » après la fin (KOB-245) : la même réunion reprend. */
   private readonly undo: HTMLButtonElement;
@@ -108,8 +108,8 @@ export class RecIndicator {
   private fixes(): void {
     this.eux.textContent = t('kobi.meeting.sonOrdi');
     this.eux.title = t('kobi.meeting.sonOrdiAide');
-    this.micro.textContent = t('kobi.meeting.microCoupe');
-    this.micro.title = t('kobi.meeting.microCoupeAide');
+    this.micro.textContent = t('kobi.meeting.microPerdu');
+    this.micro.title = t('kobi.meeting.microPerduAide');
     this.micro.setAttribute('aria-label', this.micro.title);
     this.undo.textContent = t('kobi.meeting.annuler');
     this.undo.title = t('kobi.meeting.annulerAide');

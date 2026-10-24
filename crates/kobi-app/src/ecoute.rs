@@ -742,13 +742,13 @@ impl<R: Runtime> Fil<R> {
         }
         let rouvert = self.ouvrir_micro();
         let message = if rouvert {
-            kobi_i18n::tr("coque.ecoute.microCoupeRouvert", &[])
+            kobi_i18n::tr("coque.ecoute.microPerduRouvert", &[])
         } else {
             self.micro_perdu = true;
             let _ = self.app.emit(EVENEMENT_MICRO, true);
-            kobi_i18n::tr("coque.ecoute.microCoupeAucun", &[])
+            kobi_i18n::tr("coque.ecoute.microPerduAucun", &[])
         };
-        let titre = kobi_i18n::tr("coque.ecoute.microCoupe", &[]);
+        let titre = kobi_i18n::tr("coque.ecoute.microPerdu", &[]);
         crate::activite::noter(
             &self.app,
             crate::activite::Genre::Erreur,

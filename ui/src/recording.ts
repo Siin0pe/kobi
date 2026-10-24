@@ -111,7 +111,7 @@ export function followRecording(stage: Stage): void {
     retard = r ? { seconds: r.secondes, shortcut: r.raccourci } : undefined;
     stage.updateMeeting({ late: retard });
   });
-  // Micro coupé sans autre micro (KOB-236) : affiché sur REC jusqu'au retour.
+  // Micro perdu sans autre micro (KOB-236) : affiché sur REC jusqu'au retour.
   void api.event.listen<boolean>('micro', (e) => {
     microPerdu = e.payload;
     stage.updateMeeting({ micLost: microPerdu });
