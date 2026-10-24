@@ -83,7 +83,39 @@ impl Raccourcis {
 }
 
 /// Raccourcis actifs, changés à chaud.
-struct Actifs(Mutex<Raccourcis>);
+///
+/// Le gestionnaire de touche lit `courants` sur le fil principal ; or, sous
+/// Windows et macOS, le plugin y renvoie aussi `register` et `unregister` et
+/// attend leur fin. Un changement ne tient donc jamais `courants` pendant
+/// qu'il inscrit (KOB-262) : c'est `changement` qui sérialise deux
+/// changements simultanés, et la touche ne le prend jamais.
+struct Actifs {
+    courants: Mutex<Raccourcis>,
+    changement: Mutex<()>,
+}
+
+impl Actifs {
+    fn new(r: Raccourcis) -> Self {
+        Actifs {
+            courants: Mutex::new(r),
+            changement: Mutex::new(()),
+        }
+    }
+
+    fn courants(&self) -> Raccourcis {
+        *self.courants.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Passe aux `nouveaux` sans tenir `courants` pendant l'inscription.
+    /// Vrai si quelque chose a changé.
+    fn changer(&self, clavier: &impl Clavier, nouveaux: Raccourcis) -> Result<bool, String> {
+        let _seul = self.changement.lock().unwrap_or_else(|e| e.into_inner());
+        let anciens = self.courants();
+        remplacer(clavier, anciens, nouveaux)?;
+        *self.courants.lock().unwrap_or_else(|e| e.into_inner()) = nouveaux;
+        Ok(anciens != nouveaux)
+    }
+}
 
 /// Inscription des raccourcis auprès du système (le plugin ; un faux en test).
 trait Clavier {
@@ -153,12 +185,9 @@ pub fn appliquer<R: Runtime>(
     if let Some(p) = problemes.first() {
         return Err(p.clone());
     }
-    let mut actuels = actifs.0.lock().unwrap_or_else(|e| e.into_inner());
-    remplacer(app.global_shortcut(), *actuels, nouveaux)?;
-    if *actuels != nouveaux {
+    if actifs.changer(app.global_shortcut(), nouveaux)? {
         tracing::info!(raccourcis = ?nouveaux.tous().map(|r| r.into_string()), "raccourcis globaux changés à chaud");
     }
-    *actuels = nouveaux;
     Ok(())
 }
 
@@ -204,18 +233,14 @@ pub fn installer<R: Runtime>(
     for probleme in problemes {
         tracing::warn!(%probleme, "raccourci de la config ignoré");
     }
-    app.manage(Actifs(Mutex::new(raccourcis)));
+    app.manage(Actifs::new(raccourcis));
     app.plugin(
         tauri_plugin_global_shortcut::Builder::new()
             .with_handler(|app, raccourci, evenement| {
                 if evenement.state() != ShortcutState::Pressed {
                     return;
                 }
-                let r = *app
-                    .state::<Actifs>()
-                    .0
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
+                let r = app.state::<Actifs>().courants();
                 if *raccourci == r.enregistrer {
                     basculer_enregistrement(app);
                 } else if *raccourci == r.ecrire {
@@ -327,6 +352,68 @@ mod tests {
             *clavier.inscrits.borrow(),
             raccourcis(&avant).tous().into_iter().collect()
         );
+    }
+
+    /// Clavier dont l'inscription passe par un « fil principal » qui lit les
+    /// raccourcis courants, comme le gestionnaire d'une touche pressée au même
+    /// moment (Windows, macOS). Il abandonne au bout d'un délai au lieu de
+    /// rester figé.
+    struct ClavierFilPrincipal {
+        actifs: std::sync::Arc<Actifs>,
+        inscriptions: std::sync::atomic::AtomicUsize,
+    }
+
+    impl Clavier for ClavierFilPrincipal {
+        fn inscrire(&self, _: Shortcut) -> Result<(), String> {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let actifs = self.actifs.clone();
+            std::thread::spawn(move || {
+                let _ = tx.send(actifs.courants());
+            });
+            rx.recv_timeout(std::time::Duration::from_secs(5))
+                .map_err(|_| "fil principal figé".to_string())?;
+            self.inscriptions
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+        fn desinscrire(&self, _: Shortcut) {}
+    }
+
+    /// KOB-262 : une touche de Kobi pressée pendant un changement de
+    /// raccourci ne fige plus l'app, et le changement aboutit.
+    #[test]
+    fn touche_pressee_pendant_un_changement() {
+        let avant = Config::default();
+        let actifs = std::sync::Arc::new(Actifs::new(raccourcis(&avant)));
+        let clavier = ClavierFilPrincipal {
+            actifs: actifs.clone(),
+            inscriptions: Default::default(),
+        };
+        let mut apres = avant.clone();
+        apres.hotkey = "Ctrl+Alt+J".into();
+        apres.hotkey_record = "Ctrl+Alt+Q".into();
+        assert_eq!(actifs.changer(&clavier, raccourcis(&apres)), Ok(true));
+        assert_eq!(
+            clavier
+                .inscriptions
+                .load(std::sync::atomic::Ordering::SeqCst),
+            2
+        );
+        assert_eq!(actifs.courants(), raccourcis(&apres));
+        assert_eq!(actifs.changer(&clavier, raccourcis(&apres)), Ok(false));
+    }
+
+    /// Un changement refusé laisse les raccourcis courants tels quels.
+    #[test]
+    fn changement_refuse_garde_les_courants() {
+        let avant = Config::default();
+        let mut clavier = installe(&avant);
+        let actifs = Actifs::new(raccourcis(&avant));
+        let mut apres = avant.clone();
+        apres.hotkey = "Ctrl+Alt+J".into();
+        clavier.pris.insert(raccourcis(&apres).interpeller);
+        assert!(actifs.changer(&clavier, raccourcis(&apres)).is_err());
+        assert_eq!(actifs.courants(), raccourcis(&avant));
     }
 
     #[test]
