@@ -128,6 +128,9 @@ pub enum Commande {
     Pause(bool),
     /// Kobi vient de répondre : la conversation attend la suite.
     Suite,
+    /// La dernière carte de validation s'est fermée : sa fenêtre aussi, la
+    /// conversation attend la suite (KOB-273).
+    CartesFermees,
     /// La réunion vient de finir : « reprends » ou « annule » s'entend sans
     /// redire « Kobi » tant que la fin s'annule (KOB-165, KOB-245). Porte
     /// l'instant réel de l'arrêt : sous retard, ce qui a été dit avant ne
@@ -776,6 +779,7 @@ impl<R: Runtime> Fil<R> {
     fn executer_commande(&mut self, commande: Commande) {
         match commande {
             Commande::Suite => self.ecouteur.suite(self.t),
+            Commande::CartesFermees => self.ecouteur.cartes_fermees(self.t),
             Commande::ReponseAttendue(duree) => {
                 self.ecouteur.reponse_attendue(self.t, duree.as_secs_f64())
             }

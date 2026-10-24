@@ -1567,9 +1567,10 @@ impl<R: Runtime> Chef<R> {
                 Evenement::PermissionRefusee
             }]);
         }
-        // Plus de carte : la fenêtre de suite reprend sa durée habituelle (KOB-197).
+        // Plus de carte : la fenêtre de suite reprend sa durée habituelle
+        // (KOB-197), et celle de la carte se ferme (KOB-273).
         if self.validations.est_vide() {
-            let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::Suite);
+            let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::CartesFermees);
         }
         // La carte montre déjà « Pas de réponse : refusé. » ; la voix ne le
         // redit que si elle est le seul canal (KOB-215).
