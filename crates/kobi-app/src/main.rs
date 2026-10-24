@@ -225,7 +225,10 @@ fn main() {
             }
             // Langue des textes de la coque (KOB-210) : barre système,
             // notifications, annonces ; suivie à chaud par `langue::annoncer`.
-            kobi_i18n::regler(config.config.ui.language);
+            kobi_i18n::regler(match &config_path {
+                Some(path) => langue::reglee(&config, path),
+                None => config.config.ui.language,
+            });
             app.manage(menu::EcouteEnPause::default());
             demarrage::installer(app.handle());
             // Interface de contrôle (KOB-161) : `kobi <commande>`, `kobi mcp`.

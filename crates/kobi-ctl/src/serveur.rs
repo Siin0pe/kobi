@@ -181,29 +181,46 @@ async fn boucle(
                 // (ERROR_NO_DATA à chaque appel) : une neuve la remplace, sinon la
                 // boucle tourne à vide et plus rien n'est accepté (KOB-234). La
                 // pause évite une rafale si l'erreur persiste.
-                serveur = match creer(false) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        eprintln!("contrôle : canal fermé : {e}");
-                        return;
-                    }
+                let Some(neuf) = reessayer(|| creer(false), &mut arret).await else {
+                    return;
                 };
+                serveur = neuf;
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
                 continue;
             },
             _ = &mut arret => return,
         }
-        let client = std::mem::replace(
-            &mut serveur,
-            match creer(false) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("contrôle : canal fermé : {e}");
-                    return;
-                }
-            },
-        );
+        let client = serveur;
         tokio::spawn(servir(client, jeton.clone(), gestionnaire.clone()));
+        let Some(neuf) = reessayer(|| creer(false), &mut arret).await else {
+            return;
+        };
+        serveur = neuf;
+    }
+}
+
+/// Crée une instance du canal en réessayant, à intervalle croissant (au plus
+/// 5 s) : un échec passager ne ferme plus le canal de contrôle jusqu'au
+/// redémarrage de Kobi (KOB-266). `None` : Kobi s'arrête.
+#[cfg(any(windows, test))]
+async fn reessayer<T, E: std::fmt::Display>(
+    mut creer: impl FnMut() -> Result<T, E>,
+    arret: &mut oneshot::Receiver<()>,
+) -> Option<T> {
+    let mut delai = std::time::Duration::from_millis(50);
+    loop {
+        match creer() {
+            Ok(t) => return Some(t),
+            Err(e) => eprintln!(
+                "contrôle : instance du canal non créée ({e}), nouvel essai dans {} ms",
+                delai.as_millis()
+            ),
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(delai) => {}
+            _ = &mut *arret => return None,
+        }
+        delai = (delai * 2).min(std::time::Duration::from_secs(5));
     }
 }
 
@@ -311,6 +328,37 @@ mod tests {
         assert!(meme_jeton(&a, &a.clone()));
         assert!(!meme_jeton(&a, &b));
         assert!(!meme_jeton(&a, "court"));
+    }
+
+    /// KOB-266 : deux échecs de création, puis l'instance arrive ; à l'arrêt
+    /// de Kobi, les essais cessent.
+    #[test]
+    fn instance_recreee_apres_un_echec() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let (_garde, mut arret) = oneshot::channel::<()>();
+            let mut essais = 0;
+            let instance = reessayer(
+                || {
+                    essais += 1;
+                    if essais < 3 {
+                        Err("occupé")
+                    } else {
+                        Ok(essais)
+                    }
+                },
+                &mut arret,
+            )
+            .await;
+            assert_eq!(instance, Some(3));
+            let (stop, mut arret) = oneshot::channel::<()>();
+            stop.send(()).unwrap();
+            let jamais = reessayer(|| Err::<(), _>("occupé"), &mut arret).await;
+            assert_eq!(jamais, None);
+        });
     }
 
     #[test]

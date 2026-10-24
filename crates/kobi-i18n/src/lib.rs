@@ -173,7 +173,9 @@ fn pluriel(l: Langue, n: f64) -> &'static str {
     }
 }
 
-/// Le texte de `cle` dans `langue`, variables `{nom}` remplacées.
+/// Le texte de `cle` dans `langue`, variables `{nom}` remplacées en une
+/// seule passe sur le gabarit : une valeur qui contient `{autre}` (un titre
+/// de réunion, par exemple) reste telle quelle (KOB-266).
 pub fn t(langue: Langue, cle: &str, vars: &[(&str, &str)]) -> String {
     let Some((l, brut)) = [langue, Langue::Fr]
         .into_iter()
@@ -197,10 +199,28 @@ pub fn t(langue: Langue, cle: &str, vars: &[(&str, &str)]) -> String {
         }
         _ => "",
     };
-    let mut texte = gabarit.to_owned();
-    for (nom, valeur) in vars {
-        texte = texte.replace(&format!("{{{nom}}}"), valeur);
+    let mut texte = String::with_capacity(gabarit.len());
+    let mut reste = gabarit;
+    while let Some(i) = reste.find('{') {
+        texte.push_str(&reste[..i]);
+        let apres = &reste[i + 1..];
+        let variable = apres.find('}').and_then(|j| {
+            vars.iter()
+                .find(|(nom, _)| *nom == &apres[..j])
+                .map(|(_, valeur)| (*valeur, j))
+        });
+        match variable {
+            Some((valeur, j)) => {
+                texte.push_str(valeur);
+                reste = &apres[j + 1..];
+            }
+            None => {
+                texte.push('{');
+                reste = apres;
+            }
+        }
     }
+    texte.push_str(reste);
     texte
 }
 
@@ -314,6 +334,28 @@ mod tests {
             })
             .collect();
         assert!(manquantes.is_empty(), "{}", manquantes.join("\n"));
+    }
+
+    /// KOB-266 : une valeur qui contient le nom d'une autre variable n'est
+    /// pas remplacée à son tour.
+    #[test]
+    fn variables_remplacees_en_une_passe() {
+        let texte = t(
+            Langue::Fr,
+            "coque.raccourci.dejaUtilise",
+            &[
+                ("nouveau", "{ancien}"),
+                ("ancien", "Ctrl+K"),
+                ("erreur", "{x}"),
+            ],
+        );
+        assert!(texte.starts_with("{ancien} est déjà utilisé"), "{texte}");
+        assert!(
+            texte.contains(": Ctrl+K reste") && texte.ends_with("({x})."),
+            "{texte}"
+        );
+        // Variable absente ou accolade seule : le gabarit reste.
+        assert!(t(Langue::Fr, "coque.raccourci.dejaUtilise", &[]).starts_with("{nouveau} est"));
     }
 
     #[test]

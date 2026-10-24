@@ -533,11 +533,7 @@ pub fn revoir_import(config: &mut McpConfig) -> usize {
     config.import_revu = true;
     let mut desactives = 0;
     for s in config.serveurs.values_mut() {
-        let importe = s
-            .origine
-            .as_deref()
-            .is_some_and(|o| o.starts_with("Claude Code"));
-        if importe && s.actif {
+        if importe_de_claude_code(s) && s.actif {
             s.actif = false;
             desactives += 1;
         }
@@ -548,6 +544,13 @@ pub fn revoir_import(config: &mut McpConfig) -> usize {
     desactives
 }
 
+/// Serveur importé de Claude Code (son origine le dit).
+fn importe_de_claude_code(s: &Serveur) -> bool {
+    s.origine
+        .as_deref()
+        .is_some_and(|o| o.starts_with("Claude Code"))
+}
+
 /// Au démarrage, avant toute session : la revue de [`revoir_import`].
 pub fn revoir_import_au_demarrage(path: &Path) {
     let lu = config::load_or_create(path);
@@ -555,6 +558,13 @@ pub fn revoir_import_au_demarrage(path: &Path) {
         return;
     }
     let mut c = lu.config;
+    // Aucun serveur importé de Claude Code : rien à revoir ni à protéger
+    // (un import ultérieur marque lui-même la revue faite). `config.toml`
+    // n'est pas réécrit, ses commentaires et sa mise en forme restent
+    // (KOB-266).
+    if !c.mcp.serveurs.values().any(importe_de_claude_code) {
+        return;
+    }
     let n = revoir_import(&mut c.mcp);
     match config::save(&c, path) {
         Ok(()) if n > 0 => tracing::info!(
@@ -1392,6 +1402,12 @@ mod tests {
         let lu = config::load_or_create(&path).config;
         assert!(!lu.mcp.serveurs["linear"].actif);
         assert!(lu.mcp.import_revu && lu.mcp.choix_a_proposer);
+        // Sans serveur importé : le fichier n'est pas réécrit (KOB-266).
+        let commente = dir.path().join("commente.toml");
+        let texte = "# Mes réglages\nhotkey = \"Alt+K\"  # à moi\n";
+        std::fs::write(&commente, texte).unwrap();
+        revoir_import_au_demarrage(&commente);
+        assert_eq!(std::fs::read_to_string(&commente).unwrap(), texte);
         let illisible = dir.path().join("illisible.toml");
         std::fs::write(&illisible, "mcp = [ pas du toml").unwrap();
         revoir_import_au_demarrage(&illisible);

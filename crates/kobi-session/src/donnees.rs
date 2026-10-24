@@ -136,15 +136,16 @@ impl Session {
     }
 }
 
+/// Messages dans la langue de l'interface (KOB-266).
 #[derive(Debug, thiserror::Error)]
 pub enum ErreurDonnees {
     #[error(transparent)]
     Transition(#[from] Refus),
-    #[error("réunion introuvable : {0}")]
+    #[error("{}", kobi_i18n::tr("session.donnees.introuvable", &[("nom", .0)]))]
     Introuvable(String),
-    #[error("la réunion {0} est en cours : terminez-la avant de la supprimer")]
+    #[error("{}", kobi_i18n::tr("session.donnees.enCours", &[("nom", .0)]))]
     EnCours(String),
-    #[error("nom de réunion refusé : {0}")]
+    #[error("{}", kobi_i18n::tr("session.donnees.nomRefuse", &[("nom", .0)]))]
     Nom(String),
     #[error(transparent)]
     Io(#[from] io::Error),
