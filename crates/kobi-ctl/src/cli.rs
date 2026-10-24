@@ -251,6 +251,17 @@ pub fn aide(commande: Option<&Commande>) -> String {
     t
 }
 
+/// Libellé traduit d'un identifiant interne (état, activité) pour le rendu
+/// lisible (KOB-270) ; l'identifiant lui-même s'il n'a pas de traduction.
+/// `--json` garde l'identifiant brut.
+fn libelle(prefixe: &str, id: &str) -> String {
+    let cle = format!("{prefixe}.{id}");
+    match tr(&cle, &[]) {
+        texte if texte == cle => id.to_owned(),
+        texte => texte,
+    }
+}
+
 fn duree(secondes: f64) -> String {
     let s = secondes.max(0.0) as u64;
     if s >= 3600 {
@@ -306,7 +317,7 @@ pub fn lisible(commande: &Commande, r: &Value) -> String {
             };
             let activite = r["activite"]
                 .as_str()
-                .map(|a| format!(", {a}"))
+                .map(|a| format!(", {}", libelle("ctl.activite", a)))
                 .unwrap_or_default();
             let ecoute = if r["ecoute"]["pause"] == true {
                 tr("ctl.cli.enPause", &[])
@@ -326,7 +337,7 @@ pub fn lisible(commande: &Commande, r: &Value) -> String {
             tr(
                 "ctl.cli.statut",
                 &[
-                    ("etat", &s(&r["etat"])),
+                    ("etat", &libelle("ctl.etat", &s(&r["etat"]))),
                     ("activite", &activite),
                     ("mascotte", &s(&r["mascotte"])),
                     ("reunion", &reunion),
@@ -556,6 +567,33 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// KOB-270 : chaque état et chaque activité de la session a son libellé
+    /// anglais (sinon `kobi status` montrerait l'identifiant français).
+    #[test]
+    fn etats_traduits_en_anglais() {
+        use kobi_i18n::{t, Langue};
+        let en = |cle: &str| t(Langue::En, cle, &[]);
+        for etat in ["veille", "assistant", "reunion", "pause", "fin"] {
+            let cle = format!("ctl.etat.{etat}");
+            assert_ne!(en(&cle), cle);
+        }
+        for activite in [
+            "calme",
+            "ecoute",
+            "reflechit",
+            "note",
+            "repond",
+            "propose",
+            "fait",
+            "oups",
+            "occupe",
+        ] {
+            let cle = format!("ctl.activite.{activite}");
+            assert_ne!(en(&cle), cle);
+        }
+        assert_eq!(en("ctl.etat.veille"), "standby");
+    }
+
     fn lire(ligne: &str) -> Result<Demande, Erreur> {
         let args: Vec<String> = ligne.split_whitespace().map(String::from).collect();
         analyser(&args)
@@ -744,6 +782,9 @@ mod tests {
             st.contains("enregistrée depuis 3 min 05 s, 4 notes"),
             "{st}"
         );
+        // KOB-270 : l'état et l'activité sont traduits, pas l'identifiant.
+        assert!(st.starts_with("Kobi      réunion, calme"), "{st}");
+        assert_eq!(libelle("ctl.etat", "inconnu"), "inconnu");
         assert_eq!(lisible(c("config.get"), &json!(true)), "true");
         assert_eq!(lisible(c("app.quit"), &json!({})), "OK");
         assert_eq!(
