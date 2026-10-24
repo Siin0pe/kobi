@@ -52,6 +52,22 @@ pub(crate) fn attendre_lecture(
     }
 }
 
+/// Rouvre une sortie tombée en panne (casque débranché) : celle choisie si
+/// elle est encore là, sinon celle par défaut à ce moment-là (KOB-263).
+#[cfg(any(feature = "lecture", test))]
+pub(crate) fn rouvrir<T>(
+    nom: Option<&str>,
+    ouvrir: impl Fn(Option<&str>) -> Resultat<T>,
+) -> Resultat<T> {
+    match ouvrir(nom) {
+        Err(e) if nom.is_some() => {
+            tracing::warn!(erreur = %e, "sortie choisie disparue : sortie par défaut");
+            ouvrir(None)
+        }
+        r => r,
+    }
+}
+
 /// Écrit la voix dans un WAV mono 16 bits, au rythme où elle serait jouée
 /// (l'interruption coupe le fichier au même endroit qu'un haut-parleur).
 pub struct Fichier {
@@ -137,6 +153,8 @@ mod haut_parleur {
         frequence: u32,
         canaux: usize,
         pub description: String,
+        /// Sortie demandée, pour la rouvrir après une panne (KOB-263).
+        nom: Option<String>,
     }
 
     impl HautParleur {
@@ -193,6 +211,7 @@ mod haut_parleur {
                 frequence,
                 canaux,
                 description,
+                nom: nom.map(String::from),
             })
         }
     }
@@ -239,8 +258,15 @@ mod haut_parleur {
 
     impl Sortie for HautParleur {
         fn jouer(&mut self, echantillons: &[f32], frequence: u32, arret: &Arret) -> Resultat<()> {
+            // Flux mort (casque débranché) : la sortie est rouverte, la voix
+            // revient par celle qui reste (KOB-263).
             if self.panne.load(std::sync::atomic::Ordering::SeqCst) {
-                return Err(Erreur::Sortie("la sortie audio s'est arrêtée".into()));
+                let neuve = super::rouvrir(self.nom.as_deref(), HautParleur::ouvrir)
+                    .map_err(|e| Erreur::Sortie(format!("la sortie audio s'est arrêtée ({e})")))?;
+                tracing::info!(sortie = %neuve.description, "sortie audio rouverte après une panne");
+                // La sortie demandée reste celle à rouvrir à la prochaine panne.
+                let nom = self.nom.take();
+                *self = HautParleur { nom, ..neuve };
             }
             let son = super::reechantillonner(echantillons, frequence, self.frequence);
             let echeance = {
@@ -313,6 +339,25 @@ mod tests {
         arret.arreter();
         assert!(attendre_lecture(&file, &arret, &panne, loin).is_ok());
         assert!(file.lock().unwrap().is_empty());
+    }
+
+    /// KOB-263 : la sortie choisie est rouverte si elle est encore là, sinon
+    /// celle par défaut ; sans rien, l'erreur reste.
+    #[test]
+    fn sortie_rouverte_apres_une_panne() {
+        let casque_parti = |nom: Option<&str>| match nom {
+            Some("Casque") => Err(Erreur::Sortie("introuvable".into())),
+            Some(n) => Ok(n.to_owned()),
+            None => Ok("Haut-parleurs".to_owned()),
+        };
+        assert_eq!(
+            rouvrir(Some("Casque"), casque_parti).unwrap(),
+            "Haut-parleurs"
+        );
+        assert_eq!(rouvrir(Some("Écran"), casque_parti).unwrap(), "Écran");
+        assert_eq!(rouvrir(None, casque_parti).unwrap(), "Haut-parleurs");
+        let rien = |_: Option<&str>| -> Resultat<String> { Err(Erreur::Sortie("aucune".into())) };
+        assert!(rouvrir(Some("Casque"), rien).is_err());
     }
 
     #[test]
