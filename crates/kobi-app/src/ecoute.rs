@@ -125,8 +125,10 @@ pub enum Commande {
     /// Kobi vient de répondre : la conversation attend la suite.
     Suite,
     /// La réunion vient de finir : « reprends » ou « annule » s'entend sans
-    /// redire « Kobi » tant que la fin s'annule (KOB-165, KOB-245).
-    Annulable,
+    /// redire « Kobi » tant que la fin s'annule (KOB-165, KOB-245). Porte
+    /// l'instant réel de l'arrêt : sous retard, ce qui a été dit avant ne
+    /// l'annule pas, et le délai court depuis lui (KOB-265).
+    Annulable(Instant),
     /// Kobi pose une question et attend la réponse ce temps-là (carte de
     /// validation, KOB-197).
     ReponseAttendue(Duration),
@@ -701,9 +703,10 @@ impl<R: Runtime> Fil<R> {
             Commande::ReponseAttendue(duree) => {
                 self.ecouteur.reponse_attendue(self.t, duree.as_secs_f64())
             }
-            Commande::Annulable => self
-                .ecouteur
-                .annulable(self.t, crate::chef::ANNULATION.as_secs_f64()),
+            Commande::Annulable(arret) => self.ecouteur.annulable(
+                instant_audio(self.origine, arret),
+                crate::chef::ANNULATION.as_secs_f64(),
+            ),
             Commande::BasculerPause => {
                 self.en_pause = !self.en_pause;
                 tracing::info!(pause = self.en_pause, "écoute continue");
@@ -986,6 +989,7 @@ impl<R: Runtime> Fil<R> {
     }
 
     fn executer(&mut self, actions: Vec<Action>) {
+        let actions = sans_ordres_deja_executes(actions, |q| self.deja_execute(q));
         for action in actions {
             let message = match action {
                 Action::Interpeller => {
@@ -995,7 +999,6 @@ impl<R: Runtime> Fil<R> {
                     Message::Interpelle
                 }
                 Action::Question(q) => Message::QuestionPartielle(q),
-                Action::Envoyer(q) if self.deja_execute(&q) => continue,
                 Action::Envoyer(q) => {
                     tracing::info!(longueur = q.len(), "question transcrite");
                     Message::Question {
@@ -1018,6 +1021,35 @@ impl<R: Runtime> Fil<R> {
             publier(&self.app, message);
         }
     }
+}
+
+/// Instant `quand` dans le temps de l'audio du micro ouvert à `origine`.
+fn instant_audio(origine: Instant, quand: Instant) -> f64 {
+    quand.saturating_duration_since(origine).as_secs_f64()
+}
+
+/// Retire les ordres de fin déjà exécutés par l'écoute anticipée (KOB-250),
+/// et avec eux l'interpellation qui les annonce dans le même lot : Kobi ne
+/// passe pas en écoute pour rien (KOB-265). Annoncé plus tôt, l'appel est
+/// clos sans question.
+fn sans_ordres_deja_executes(
+    actions: Vec<Action>,
+    mut deja_execute: impl FnMut(&str) -> bool,
+) -> Vec<Action> {
+    let mut gardees = Vec::with_capacity(actions.len());
+    for action in actions {
+        if let Action::Envoyer(q) = &action {
+            if deja_execute(q) {
+                match gardees.iter().rposition(|a| *a == Action::Interpeller) {
+                    Some(i) => gardees.truncate(i),
+                    None => gardees.push(Action::Abandonner),
+                }
+                continue;
+            }
+        }
+        gardees.push(action);
+    }
+    gardees
 }
 
 /// « Reprends » juste après un arrêt (KOB-165) : Kobi vient de dire « Dis
@@ -1043,6 +1075,49 @@ mod tests {
     use super::*;
     use crate::interpellation::modele_nemotron;
     use std::path::Path;
+
+    /// KOB-265 : l'ordre de fin déjà exécuté à l'avance ne repart pas, ni
+    /// l'interpellation qui l'annonce dans le même lot ; annoncée plus tôt,
+    /// elle est close sans question. Les autres questions passent.
+    #[test]
+    fn ordre_deja_execute_sans_interpellation() {
+        let deja = |q: &str| q == "termine la réunion";
+        let fin = || Action::Envoyer("termine la réunion".into());
+        assert_eq!(
+            sans_ordres_deja_executes(
+                vec![
+                    Action::Interpeller,
+                    Action::Question("termine".into()),
+                    fin()
+                ],
+                deja
+            ),
+            []
+        );
+        assert_eq!(
+            sans_ordres_deja_executes(vec![fin()], deja),
+            [Action::Abandonner]
+        );
+        let autre = vec![
+            Action::Interpeller,
+            Action::Envoyer("quelle heure ?".into()),
+        ];
+        assert_eq!(sans_ordres_deja_executes(autre.clone(), deja), autre);
+    }
+
+    #[test]
+    fn instant_audio_de_l_arret() {
+        let origine = Instant::now();
+        assert_eq!(
+            instant_audio(origine, origine + Duration::from_secs(42)),
+            42.0
+        );
+        // Arrêt avant l'ouverture du micro : début de l'audio.
+        assert_eq!(
+            instant_audio(origine + Duration::from_secs(5), origine),
+            0.0
+        );
+    }
 
     /// KOB-250 : seuls les ordres de fin de réunion adressés à Kobi partent
     /// en avance ; une mention ou une autre question attend son tour.
