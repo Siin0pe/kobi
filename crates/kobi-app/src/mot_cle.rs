@@ -655,6 +655,15 @@ impl Ecouteur {
         }
     }
 
+    /// Plus aucune carte n'attend (réponse au clic, à la voix, délai) : la
+    /// fenêtre de la carte se ferme avec elle, et une question de suite
+    /// coupée par une pause n'est plus tranchée (KOB-273). La conversation
+    /// continue, comme après une réponse ([`Self::suite`]).
+    pub fn cartes_fermees(&mut self, t: f64) {
+        self.carte = None;
+        self.suite(t);
+    }
+
     /// Une carte de validation attend-elle sa réponse à l'instant `t`
     /// (`reponse_attendue`), et pas seulement une suite de conversation ?
     pub fn attend_carte(&self, t: f64) -> bool {
@@ -1274,6 +1283,21 @@ mod tests {
             actions.contains(&Action::Envoyer("Non".into())),
             "{actions:?}"
         );
+    }
+
+    /// KOB-273 : la carte fermée au clic, sa fenêtre se ferme avec elle ; la
+    /// conversation, elle, continue sans le nom.
+    #[test]
+    fn fenetre_de_la_carte_fermee_avec_elle() {
+        let mut e = Ecouteur::default();
+        e.reponse_attendue(0.0, 60.0);
+        assert!(e.attend_carte(5.0));
+        e.cartes_fermees(5.0);
+        assert!(!e.attend_carte(10.0), "plus de carte : rien n'est tranché");
+        assert!(e.attend_reponse(), "la suite de la conversation reste");
+        // Une nouvelle carte rouvre la fenêtre.
+        e.reponse_attendue(20.0, 60.0);
+        assert!(e.attend_carte(30.0));
     }
 
     /// Graphies de Nemotron relevées sur le corpus de KOB-179 : retrouvées en
