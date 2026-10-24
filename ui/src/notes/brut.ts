@@ -26,6 +26,8 @@ export interface VueBrute {
 const CLE = 'kobi.transcriptionBrute';
 /** Lignes gardées : un outil de mise au point, pas un journal. */
 const MAX_LIGNES = 60;
+/** Écart (px) sous lequel la liste est « en bas ». */
+const BAS = 4;
 
 function lireChoix(): boolean {
   try {
@@ -64,6 +66,9 @@ export function monterTranscriptionBrute(hote: HTMLElement): VueBrute {
   /** Partiel en cours de chaque piste : remplacé, puis figé par le final. */
   const partiels = new Map<string, HTMLElement>();
   function ajouter(l: LigneBrute): void {
+    // Suivi du flux seulement si la liste était en bas : remontée pour
+    // relire, elle reste où on l'a laissée (règle de KOB-246, KOB-275).
+    const enBas = lignes.scrollTop + lignes.clientHeight >= lignes.scrollHeight - BAS;
     let li = partiels.get(l.source);
     if (!li) {
       li = h('li', { 'data-source': l.source }, h('span', { class: 'brut-source' }, t(`notes.brut.${l.source}`)), h('span', { class: 'brut-texte' }));
@@ -76,7 +81,7 @@ export function monterTranscriptionBrute(hote: HTMLElement): VueBrute {
     else partiels.set(l.source, li);
     while (lignes.children.length > MAX_LIGNES) lignes.firstElementChild!.remove();
     vide.hidden = lignes.children.length > 0;
-    lignes.scrollTop = lignes.scrollHeight;
+    if (enBas) lignes.scrollTop = lignes.scrollHeight;
   }
   ecouter<LigneBrute>('transcription_brute', ajouter);
 
