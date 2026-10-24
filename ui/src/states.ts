@@ -81,6 +81,8 @@ export interface MeetingInfo {
    * qui arrête la réunion tout de suite (KOB-250).
    */
   late?: { seconds: number; shortcut: string };
+  /** Le micro s'est arrêté et aucun autre n'est ouvert (KOB-236). */
+  micLost?: boolean;
 }
 
 export type ConsentLang = 'fr' | 'en';

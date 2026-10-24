@@ -83,6 +83,10 @@ struct Veille {
     ordres: Vec<f64>,
 }
 
+/// Événement du micro perdu (KOB-236) : `true` tant que Kobi n'a plus de
+/// micro (débranché, aucun autre), `false` quand il en a retrouvé un.
+pub const EVENEMENT_MICRO: &str = "micro";
+
 /// Charge de [`EVENEMENT_RETARD`].
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Retard {
@@ -199,8 +203,17 @@ impl Entree {
         }
     }
 
-    /// Ouvre le fichier injecté, ou le micro par défaut ; renvoie aussi sa
-    /// description pour le journal.
+    /// Panne du périphérique signalée par le flux (micro débranché), xruns
+    /// mis à part : le canal des trames, lui, ne se ferme pas (KOB-236).
+    fn panne(&self) -> Option<String> {
+        match self {
+            Entree::Micro(capture) => panne_peripherique(capture.errors().try_iter()),
+            Entree::Fichier(_) => None,
+        }
+    }
+
+    /// Ouvre le fichier injecté, ou le micro choisi ; s'il a disparu, celui
+    /// par défaut (KOB-236). Renvoie aussi sa description pour le journal.
     fn ouvrir() -> Result<(Entree, String), String> {
         if let Some(wav) = std::env::var_os("KOBI_ECOUTE_WAV") {
             let wav = PathBuf::from(wav);
@@ -213,12 +226,21 @@ impl Entree {
             );
             return Ok((Entree::Fichier(jouer(samples)), description));
         }
-        let capture = Capture::start(&CaptureOptions {
-            sources: vec![kobi_audio::Source::Moi],
-            // Micro choisi au premier lancement (KOB-144), sinon celui du système.
-            mic: crate::bienvenue::micro_choisi(),
-            output: None,
-        })
+        let demarrer = |mic: Option<String>| {
+            Capture::start(&CaptureOptions {
+                sources: vec![kobi_audio::Source::Moi],
+                mic,
+                output: None,
+            })
+        };
+        // Micro choisi au premier lancement (KOB-144), sinon celui du système.
+        let capture = match crate::bienvenue::micro_choisi() {
+            Some(choisi) => demarrer(Some(choisi.clone())).or_else(|e| {
+                tracing::warn!(%choisi, erreur = %e, "micro choisi indisponible : micro par défaut");
+                demarrer(None)
+            }),
+            None => demarrer(None),
+        }
         .map_err(|e| e.to_string())?;
         let description = capture
             .sources()
@@ -253,6 +275,12 @@ fn vidanger<T, C>(
         }
     }
     traitees
+}
+
+/// Première erreur de périphérique parmi celles d'un flux ; un xrun (trames
+/// perdues) n'arrête pas le micro (KOB-236).
+fn panne_peripherique(erreurs: impl Iterator<Item = kobi_audio::StreamError>) -> Option<String> {
+    erreurs.filter(|e| !e.xrun).map(|e| e.message).next()
 }
 
 /// Joue des échantillons 16 kHz en temps réel, par trames de 100 ms, puis du
@@ -510,6 +538,8 @@ struct Fil<R: Runtime> {
     niveau: (f64, usize),
     /// Dernier partiel envoyé au panneau de mise au point (KOB-50).
     partiel_publie: Option<String>,
+    /// Le micro a été perdu et n'est pas encore rouvert (KOB-236).
+    micro_perdu: bool,
 }
 
 impl<R: Runtime> Fil<R> {
@@ -534,6 +564,7 @@ impl<R: Runtime> Fil<R> {
             en_reunion: false,
             niveau: (0.0, 0),
             partiel_publie: None,
+            micro_perdu: false,
         }
     }
 
@@ -596,6 +627,12 @@ impl<R: Runtime> Fil<R> {
                 self.origine = Instant::now();
                 self.entree = Some(entree);
                 tracing::info!(entree = %description, "écoute continue : micro ouvert");
+                if std::mem::take(&mut self.micro_perdu) {
+                    let texte =
+                        kobi_i18n::tr("coque.ecoute.microRetrouve", &[("micro", &description)]);
+                    crate::activite::noter(&self.app, crate::activite::Genre::Erreur, &texte, None);
+                    let _ = self.app.emit(EVENEMENT_MICRO, false);
+                }
                 if let Some(d) = &mut self.diag {
                     d.entree(&description);
                 }
@@ -683,6 +720,45 @@ impl<R: Runtime> Fil<R> {
         }
     }
 
+    /// Le micro s'est arrêté (débranché, casque coupé) : Kobi le dit, une
+    /// fois, et rouvre celui par défaut s'il y en a un ; sinon il réessaie à
+    /// intervalle et REC le montre (KOB-236).
+    fn micro_coupe(&mut self, cause: &str) {
+        tracing::warn!(%cause, "écoute continue : le micro s'est arrêté");
+        self.note(&format!("le micro s'est arrêté : {cause}"));
+        self.entree = None;
+        // L'audio en retard n'est pas transcrit ici, à la différence de la
+        // pause (KOB-261) : le micro par défaut se rouvre tout de suite.
+        if !self.file.is_empty() {
+            tracing::warn!(
+                trames = self.file.len(),
+                "écoute continue : audio en retard perdu avec le micro"
+            );
+        }
+        self.file.clear();
+        crate::chef::avancer(&self.app, kobi_stt::Source::Moi, None);
+        if self.micro_perdu {
+            return;
+        }
+        let rouvert = self.ouvrir_micro();
+        let message = if rouvert {
+            kobi_i18n::tr("coque.ecoute.microCoupeRouvert", &[])
+        } else {
+            self.micro_perdu = true;
+            let _ = self.app.emit(EVENEMENT_MICRO, true);
+            kobi_i18n::tr("coque.ecoute.microCoupeAucun", &[])
+        };
+        let titre = kobi_i18n::tr("coque.ecoute.microCoupe", &[]);
+        crate::activite::noter(
+            &self.app,
+            crate::activite::Genre::Erreur,
+            &titre,
+            Some(&message),
+        );
+        let app = self.app.clone();
+        std::thread::spawn(move || erreur(&app, &titre, &message));
+    }
+
     fn commande(&mut self, commande: Commande) {
         let avant = self.en_pause;
         self.executer_commande(commande);
@@ -754,16 +830,17 @@ impl<R: Runtime> Fil<R> {
 
     fn trame(&mut self) {
         let Some(entree) = &self.entree else { return };
+        if let Some(panne) = entree.panne() {
+            self.micro_coupe(&panne);
+            return;
+        }
         let mut arrivees = Vec::new();
         if self.file.is_empty() {
             match entree.frames().recv_timeout(Duration::from_millis(200)) {
                 Ok(frame) => arrivees.push(frame),
                 Err(RecvTimeoutError::Timeout) => return,
                 Err(RecvTimeoutError::Disconnected) => {
-                    tracing::warn!("écoute continue : le micro s'est arrêté");
-                    self.note("le micro s'est arrêté");
-                    self.entree = None;
-                    crate::chef::avancer(&self.app, kobi_stt::Source::Moi, None);
+                    self.micro_coupe("le flux s'est fermé");
                     return;
                 }
             }
@@ -1740,5 +1817,40 @@ mod tests {
             vidanger(&mut file, Instant::now(), |_| false, traiter, &mut vues),
             0
         );
+    }
+
+    /// KOB-236 : une erreur de périphérique (micro débranché) arrête le
+    /// micro ; un xrun, non.
+    #[test]
+    fn micro_debranche_vu_dans_les_erreurs_du_flux() {
+        let erreur = |xrun: bool, message: &str| kobi_audio::StreamError {
+            source: kobi_audio::Source::Moi,
+            xrun,
+            message: message.into(),
+        };
+        assert_eq!(panne_peripherique(std::iter::empty()), None);
+        assert_eq!(
+            panne_peripherique([erreur(true, "xrun"), erreur(true, "xrun")].into_iter()),
+            None
+        );
+        assert_eq!(
+            panne_peripherique(
+                [
+                    erreur(true, "xrun"),
+                    erreur(false, "device no longer available")
+                ]
+                .into_iter()
+            )
+            .as_deref(),
+            Some("device no longer available")
+        );
+        // Par le canal, comme `Capture::errors()`.
+        let (tx, rx) = mpsc::channel();
+        tx.send(erreur(false, "débranché")).unwrap();
+        assert_eq!(
+            panne_peripherique(rx.try_iter()).as_deref(),
+            Some("débranché")
+        );
+        assert_eq!(panne_peripherique(rx.try_iter()), None, "signalée une fois");
     }
 }

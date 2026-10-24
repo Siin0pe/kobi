@@ -159,6 +159,13 @@
 .rec-retard::before {
   content: '· ';
 }
+/* Micro coupé (KOB-236) : à la suite, comme le retard. */
+.rec-micro::before {
+  content: '· ';
+}
+.rec-micro[hidden] {
+  display: none;
+}
 .rec-plus {
   position: absolute;
   right: 6px;
