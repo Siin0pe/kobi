@@ -11,7 +11,8 @@
 //! micro, pour se tester sur des transcriptions écrites.
 
 /// Fins du nom produites par la reconnaissance (après « kob », « cob »…).
-const FINS: [&str; 7] = ["i", "y", "ie", "e", "ey", "is", "ye"];
+/// « ai » : « Kobi » prononcé à l'anglaise, « Ko-bye » (KOB-269).
+const FINS: [&str; 8] = ["i", "y", "ie", "e", "ey", "is", "ye", "ai"];
 
 /// Sans aucun mot après l'interpellation, l'écoute s'arrête.
 pub const SANS_PAROLE: f64 = 6.0;
@@ -883,6 +884,9 @@ mod tests {
             "il faut gober ça",
             "un coup de bol",
             "le Cobra et la Kombi",
+            // « ai » accepté (KOB-269) : les mots proches restent ignorés.
+            "je gobais tout",
+            "un combat de boxe",
             "",
         ] {
             assert_eq!(reperer(texte), None, "{texte}");
@@ -1318,6 +1322,9 @@ mod tests {
                 "lance la prise de notes",
             ),
             ("Oke Kobi lance la prise de note", "lance la prise de note"),
+            // Prononcé à l'anglaise, segments de l'essai KOB-259 (KOB-269).
+            ("Kobai record the meeting", "record the meeting"),
+            ("Kobai, record the meeting", "record the meeting"),
         ];
         for (texte, question) in appels {
             assert_eq!(
