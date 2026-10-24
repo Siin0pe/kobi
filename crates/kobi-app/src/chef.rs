@@ -474,10 +474,11 @@ impl Avancement {
     /// La piste `source` a transcrit son audio jusqu'à `instant` (ou elle est
     /// fermée).
     fn piste_a_jour(&self, source: kobi_stt::Source, instant: Instant) -> bool {
-        self.piste(source)
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .is_none_or(|t| t >= instant)
+        match source {
+            kobi_stt::Source::Moi => self.moi,
+            kobi_stt::Source::Eux => self.eux,
+        }
+        .is_none_or(|t| t >= instant)
     }
 
     /// Les pistes ouvertes ont toutes transcrit leur audio jusqu'à `instant`.
@@ -2188,7 +2189,7 @@ impl<R: Runtime> Chef<R> {
         if self.reunion.as_ref().is_some_and(|r| r.vidange.is_some()) {
             self.vidange();
         }
-        let avancement = self.app.try_state::<Avancement>();
+        let avancement = &self.avancement;
         let Some(r) = &mut self.reunion else { return };
         // « Annuler » n'a pas servi : la fin est définitive, une fois
         // transcrit ce qui a été dit pendant le délai (micro en retard,
@@ -2197,9 +2198,7 @@ impl<R: Runtime> Chef<R> {
             let maintenant = Instant::now();
             maintenant >= quand
                 && (maintenant >= quand + VIDANGE
-                    || avancement
-                        .as_ref()
-                        .is_none_or(|a| a.piste_a_jour(kobi_stt::Source::Moi, quand)))
+                    || avancement.piste_a_jour(kobi_stt::Source::Moi, quand))
         }) {
             self.clore_annulation();
             return;
@@ -2767,18 +2766,23 @@ mod tests {
         };
         for rattrape in [true, false] {
             let (app, _dir) = chef_en_essai();
-            let h = app.handle();
-            avec_chef(&app, |c| c.commande(Intention::DemarrerReunion));
-            avancer(
-                h,
-                kobi_stt::Source::Moi,
-                Some(Instant::now() - Duration::from_secs(15)),
-            );
-            avec_chef(&app, |c| c.commande(Intention::TerminerReunion));
+            avec_chef(&app, |c| {
+                c.commande(Intention::DemarrerReunion);
+                c.recevoir(Message::Avancement(
+                    kobi_stt::Source::Moi,
+                    Some(Instant::now() - Duration::from_secs(15)),
+                ));
+                c.commande(Intention::TerminerReunion);
+            });
             assert!(avec_chef(&app, |c| expire(c, Duration::from_millis(1))));
             if rattrape {
                 // Le micro rattrape le délai : la fin est définitive.
-                avancer(h, kobi_stt::Source::Moi, Some(Instant::now()));
+                avec_chef(&app, |c| {
+                    c.recevoir(Message::Avancement(
+                        kobi_stt::Source::Moi,
+                        Some(Instant::now()),
+                    ))
+                });
                 assert!(!avec_chef(&app, |c| expire(c, Duration::from_millis(1))));
             } else {
                 // Toujours en retard : au plus la vidange.
