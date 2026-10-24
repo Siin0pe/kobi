@@ -2019,15 +2019,20 @@ impl<R: Runtime> Chef<R> {
 
     /// La question, précédée du moment présent et de l'état de la réunion :
     /// où en est l'enregistrement, que Claude pilote (KOB-165), ou qu'aucune
-    /// réunion n'est en cours (KOB-181).
+    /// réunion n'est en cours (KOB-181). Une question nettement anglaise est
+    /// précédée d'un rappel en anglais : sans lui, ce contexte en français
+    /// l'emporte et Claude répond en français (KOB-268).
     fn avec_contexte(&self, question: String) -> String {
         let maintenant = moment(&jiff::Zoned::now());
+        let langue = kobi_brain::langue::rappel_de_langue(&question)
+            .map(|r| format!("\n{r}"))
+            .unwrap_or_default();
         let etat = match &self.reunion {
             // Dit aussi hors réunion : sans cela, Claude en suppose une
             // (« comment se passe ta réunion ? », KOB-181).
             None => {
                 return format!(
-                    "{maintenant}\n(Aucune réunion en cours.){}\n{question}",
+                    "{maintenant}\n(Aucune réunion en cours.){}{langue}\n{question}",
                     consigne_longueur(crate::voix::verbosite(&self.app))
                 )
             }
@@ -2036,7 +2041,7 @@ impl<R: Runtime> Chef<R> {
             Some(_) => "en cours",
         };
         format!(
-            "{maintenant}\n(Réunion : enregistrement {etat}.){}\n{question}",
+            "{maintenant}\n(Réunion : enregistrement {etat}.){}{langue}\n{question}",
             consigne_longueur(crate::voix::verbosite(&self.app))
         )
     }
@@ -2973,6 +2978,29 @@ mod tests {
                     r.titre_demande, titre_auto,
                     "titre demandé avec le compte rendu"
                 );
+            });
+        }
+    }
+
+    /// KOB-268 : une question courte en anglais part avec un rappel en
+    /// anglais juste avant elle, en réunion ou non ; en français, rien.
+    #[test]
+    fn question_anglaise_avec_rappel_de_langue() {
+        let (app, _dir) = chef_en_essai();
+        let rappel = kobi_brain::langue::rappel_de_langue("what day is it today").unwrap();
+        for reunion in [false, true] {
+            avec_chef(&app, |c| {
+                if reunion {
+                    c.commande(Intention::DemarrerReunion);
+                }
+                let anglais = c.avec_contexte("what day is it today".into());
+                assert!(
+                    anglais.ends_with(&format!("\n{rappel}\nwhat day is it today")),
+                    "{anglais}"
+                );
+                let francais = c.avec_contexte("quel jour on est ?".into());
+                assert!(!francais.contains(rappel), "{francais}");
+                assert!(francais.ends_with("\nquel jour on est ?"), "{francais}");
             });
         }
     }
