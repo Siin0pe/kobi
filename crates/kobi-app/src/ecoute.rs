@@ -543,6 +543,10 @@ struct Fil<R: Runtime> {
     partiel_publie: Option<String>,
     /// Le micro a été perdu et n'est pas encore rouvert (KOB-236).
     micro_perdu: bool,
+    /// Décalage (s) des instants du micro ouvert sur l'horloge de l'audio :
+    /// un micro rouvert après une panne repart de 0, la session non
+    /// (KOB-278).
+    decalage: f64,
 }
 
 impl<R: Runtime> Fil<R> {
@@ -568,6 +572,7 @@ impl<R: Runtime> Fil<R> {
             niveau: (0.0, 0),
             partiel_publie: None,
             micro_perdu: false,
+            decalage: 0.0,
         }
     }
 
@@ -606,7 +611,15 @@ impl<R: Runtime> Fil<R> {
                 }
                 continue;
             }
-            if self.entree.is_none() && !self.ouvrir_micro() {
+            // Micro perdu (KOB-236) : la session continue avec le suivant.
+            let rouvert = |fil: &mut Self| {
+                if fil.micro_perdu {
+                    fil.rouvrir_apres_panne()
+                } else {
+                    fil.ouvrir_micro()
+                }
+            };
+            if self.entree.is_none() && !rouvert(&mut self) {
                 match rx.recv_timeout(REESSAI_MICRO) {
                     Ok(commande) => self.commande(commande),
                     Err(RecvTimeoutError::Timeout) => {}
@@ -628,6 +641,7 @@ impl<R: Runtime> Fil<R> {
                 self.porte = Porte::new(kobi_stt::SAMPLE_RATE);
                 self.t = 0.0;
                 self.origine = Instant::now();
+                self.decalage = 0.0;
                 self.entree = Some(entree);
                 tracing::info!(entree = %description, "écoute continue : micro ouvert");
                 if std::mem::take(&mut self.micro_perdu) {
@@ -647,6 +661,23 @@ impl<R: Runtime> Fil<R> {
                 false
             }
         }
+    }
+
+    /// Rouvre un micro après une panne (KOB-236) : la session continue.
+    /// L'écouteur garde son état (carte qui attend « oui », fenêtre
+    /// « Annuler », conversation) et l'horloge de l'audio continue celle du
+    /// micro perdu (KOB-278).
+    fn rouvrir_apres_panne(&mut self) -> bool {
+        let ecouteur = std::mem::take(&mut self.ecouteur);
+        let origine = self.origine;
+        let rouvert = self.ouvrir_micro();
+        self.ecouteur = ecouteur;
+        if rouvert {
+            self.origine = origine;
+            self.decalage = reprise_de_l_horloge(origine, Instant::now());
+            self.t = self.decalage;
+        }
+        rouvert
     }
 
     fn fermer_micro(&mut self) {
@@ -748,7 +779,7 @@ impl<R: Runtime> Fil<R> {
         if self.micro_perdu {
             return;
         }
-        let rouvert = self.ouvrir_micro();
+        let rouvert = self.rouvrir_apres_panne();
         let message = if rouvert {
             kobi_i18n::tr("coque.ecoute.microPerduRouvert", &[])
         } else {
@@ -878,7 +909,7 @@ impl<R: Runtime> Fil<R> {
         let frame = kobi_stt::AudioFrame {
             source: kobi_stt::Source::Moi,
             samples: frame.samples,
-            t: frame.t.as_secs_f64(),
+            t: frame.t.as_secs_f64() + self.decalage,
         };
         self.t = frame.end();
         self.audio += frame.samples.len() as f64 / kobi_stt::SAMPLE_RATE as f64;
@@ -983,7 +1014,9 @@ impl<R: Runtime> Fil<R> {
         let porte = v
             .porte
             .get_or_insert_with(|| Porte::new(kobi_stt::SAMPLE_RATE));
-        for (debut, morceau) in porte.trame(frame.t.as_secs_f64(), frame.samples.clone()) {
+        for (debut, morceau) in
+            porte.trame(frame.t.as_secs_f64() + self.decalage, frame.samples.clone())
+        {
             if !v.faite {
                 v.debut.get_or_insert(debut);
                 v.extrait.extend(morceau);
@@ -1126,6 +1159,13 @@ fn partiel_abandonne(partiel: bool, final_publie: bool, nouvel_enonce: bool) -> 
     !final_publie && (!partiel || nouvel_enonce)
 }
 
+/// Horloge de l'audio d'un micro rouvert en pleine session (KOB-278) : elle
+/// reprend au temps écoulé depuis l'ouverture du premier, pour que les
+/// délais de l'écouteur (carte, « Annuler », conversation) gardent leur sens.
+fn reprise_de_l_horloge(origine: Instant, maintenant: Instant) -> f64 {
+    maintenant.saturating_duration_since(origine).as_secs_f64()
+}
+
 /// Instant `quand` dans le temps de l'audio du micro ouvert à `origine`.
 fn instant_audio(origine: Instant, quand: Instant) -> f64 {
     quand.saturating_duration_since(origine).as_secs_f64()
@@ -1224,6 +1264,35 @@ mod tests {
             !partiel_abandonne(true, true, true),
             "conclu, puis nouvelle phrase"
         );
+    }
+
+    /// KOB-278 : la carte attend « oui » depuis 10 s quand le micro tombe à
+    /// 12 s ; le suivant s'ouvre à 13 s et ses trames repartent de 0. Avec
+    /// l'écouteur gardé et l'horloge reprise, le « oui » sans le nom répond
+    /// encore à la carte ; un écouteur neuf (avant) l'ignorait.
+    #[test]
+    fn carte_entendue_apres_micro_rouvert() {
+        let origine = Instant::now();
+        let decalage = reprise_de_l_horloge(origine, origine + Duration::from_secs(13));
+        assert_eq!(decalage, 13.0);
+        assert_eq!(
+            reprise_de_l_horloge(origine + Duration::from_secs(1), origine),
+            0.0
+        );
+        let mut e = Ecouteur::default();
+        e.reponse_attendue(10.0, 60.0);
+        let t = 0.8 + decalage;
+        assert!(e.tick(t).is_empty());
+        assert!(e.attend_carte(t));
+        let actions = e.segment("Oui", true, t);
+        assert!(
+            actions.contains(&Action::Envoyer("Oui".into())),
+            "{actions:?}"
+        );
+        let mut neuf = Ecouteur::new(true);
+        assert!(!neuf
+            .segment("Oui", true, 0.8)
+            .contains(&Action::Envoyer("Oui".into())));
     }
 
     #[test]
