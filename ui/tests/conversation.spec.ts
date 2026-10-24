@@ -264,8 +264,9 @@ test('KOB-246 (2.7, 4.3) : l’historique s’ouvre en bas sans défilement doux
   await expect(history).toBeVisible();
   const liste = page.locator('.history-list');
   expect(await liste.evaluate((n) => getComputedStyle(n).scrollBehavior)).toBe('auto');
-  // En bas tout de suite, sans glissement.
-  expect(await liste.evaluate((n) => n.scrollTop + n.clientHeight >= n.scrollHeight - 2)).toBe(true);
+  // En bas, sans glissement (pendant la cascade, les échanges décalés par
+  // leur entrée agrandissent un instant la zone défilable).
+  await expect.poll(() => liste.evaluate((n) => n.scrollTop + n.clientHeight >= n.scrollHeight - 2), { timeout: 2000 }).toBe(true);
   // À l'ouverture, seule la cascade (animations Web) joue : pas d'`ex-in` en plus.
   const exIn = () =>
     page.locator('.card-history .ex').evaluateAll((items) => items.map((i) => i.getAnimations().filter((a) => (a as CSSAnimation).animationName === 'ex-in').length));
