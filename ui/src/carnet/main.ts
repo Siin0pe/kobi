@@ -530,10 +530,23 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
   /**
    * « Publier » (KOB-75) : le compte rendu part vers la destination réglée
    * (Réglages › Stockage), par Kobi et le MCP, après sa carte de
-   * confirmation. Sans destination, le clic propose de la régler.
+   * confirmation. Sans destination, le clic propose de la régler. La
+   * destination est relue à chaque clic (KOB-264) : réglée après coup, elle
+   * vaut sans rouvrir la réunion.
    */
   function boutonPublier(nom: string): HTMLElement {
     let destination: { mcp: string; destination: string } | null = null;
+    const relire = async (): Promise<void> => {
+      try {
+        destination = await carnet.publication();
+      } catch {
+        return;
+      }
+      bouton.dataset.reglee = String(Boolean(destination));
+      bouton.title = destination
+        ? t('carnet.main.publierAide', { mcp: destination.mcp, destination: destination.destination || destination.mcp })
+        : t('carnet.main.publierNonRegle');
+    };
     const bouton = h(
       'button',
       {
@@ -541,7 +554,10 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
         class: 'bouton',
         'data-action': 'publier',
         title: t('carnet.main.publierNonRegle'),
+        onpointerenter: () => void relire(),
+        onfocus: () => void relire(),
         onclick: async () => {
+          await relire();
           if (!destination) {
             notifier(t('carnet.main.publierNonRegle'), 'ok', { action: { libelle: t('carnet.main.regler'), faire: () => ouvrirStockage() } });
             return;
@@ -555,14 +571,7 @@ export function monterCarnet(hote: HTMLElement, options: OptionsCarnet = {}): Vu
       },
       t('carnet.main.publier'),
     );
-    void carnet
-      .publication()
-      .then((d) => {
-        destination = d;
-        bouton.dataset.reglee = String(Boolean(d));
-        if (d) bouton.title = t('carnet.main.publierAide', { mcp: d.mcp, destination: d.destination || d.mcp });
-      })
-      .catch(() => {});
+    void relire();
     return bouton;
   }
 

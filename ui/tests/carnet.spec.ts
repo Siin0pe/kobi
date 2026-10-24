@@ -321,6 +321,29 @@ test('« Publier » sans destination (KOB-75) : rien ne part, le Carnet propose 
   await expectNoErrors(errors);
 });
 
+test('« Publier » relit la destination réglée après coup, sans rouvrir la réunion (KOB-264)', async ({ page }) => {
+  await page.addInitScript(() => ((window as unknown as Record<string, unknown>).__sansPublication = true));
+  const errors = await ouvrirCarnet(page);
+  await page.locator('.element[data-genre="reunion"]').click();
+  const publier = page.locator('.actions [data-action="publier"]');
+  await expect(publier).toHaveAttribute('data-reglee', 'false');
+  // Réglée ensuite (Réglages › Stockage, ou par Claude) : la vue n'est pas redessinée.
+  await page.evaluate(() => ((window as unknown as Record<string, unknown>).__sansPublication = false));
+  await publier.hover();
+  await expect(publier).toHaveAttribute('data-reglee', 'true');
+  await expect(publier).toHaveAttribute('title', /linear \(Projet Kobi\)/);
+  await publier.click();
+  expect(await appels(page)).toContainEqual(['carnet_publier', { nom: '2026-10-18_point-budget' }]);
+  // Retirée ensuite : le clic propose de nouveau de la régler, rien ne part.
+  await page.evaluate(() => ((window as unknown as Record<string, unknown>).__sansPublication = true));
+  const avant = (await appels(page)).filter(([c]) => c === 'carnet_publier').length;
+  await page.mouse.move(0, 0);
+  await publier.click();
+  await expect(page.locator('.notif').last()).toContainText('Choisissez d’abord où publier');
+  expect((await appels(page)).filter(([c]) => c === 'carnet_publier').length).toBe(avant);
+  await expectNoErrors(errors);
+});
+
 test('« Copier » dit ce qu’on copie : compte rendu, transcription, notes, tout, avec leur taille ; chacun met exactement son contenu (KOB-224)', async ({ page }) => {
   const errors = await ouvrirCarnet(page);
   await page.locator('.element[data-genre="reunion"]').click();
