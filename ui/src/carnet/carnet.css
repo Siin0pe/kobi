@@ -488,6 +488,20 @@
 .vue-notes .onglet[aria-selected='true'] {
   font-variation-settings: 'wght' 900, 'CASL' 1;
 }
+/* Largeur réservée pour la graisse la plus forte : survoler ou choisir un
+   onglet ne pousse plus ses voisins (KOB-246, 4.4). */
+.vue-notes .onglet .libelle {
+  display: inline-grid;
+}
+.vue-notes .onglet .libelle::after {
+  content: attr(data-libelle);
+  content: attr(data-libelle) / '';
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+  user-select: none;
+  font-variation-settings: 'wght' 900, 'CASL' 1, 'slnt' -8;
+}
 .vue-notes .nombre {
   margin-left: 6px;
   font-size: 11px;

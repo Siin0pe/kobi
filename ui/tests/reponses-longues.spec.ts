@@ -214,3 +214,19 @@ test('KOB-246 : remonter de 2 px depuis le bas arrête le suivi ; un glisser pou
   await expect(page.getByRole('dialog', { name: 'Conversation avec Kobi' })).toBeHidden();
   await expectNoErrors(errors);
 });
+
+test('KOB-246 (4.1) : la bulle qui devient défilante en pleine frappe cesse de flotter sans rejouer son entrée', async ({ page }) => {
+  const errors = await openUi(page, '');
+  await answer(page, mots(300));
+  await expect(zone(page)).toHaveClass(/peut-monter|peut-descendre/, { timeout: 30_000 });
+  // Encore en frappe : aucune animation d'entrée relancée, la bulle reste visible.
+  const etat = await card(page).evaluate((n) => ({
+    noms: n.getAnimations().map((a) => (a as CSSAnimation).animationName),
+    lecture: getComputedStyle(n).animationPlayState,
+    opacite: Number(getComputedStyle(n).opacity),
+  }));
+  expect(etat.noms).not.toContain('deal');
+  expect(etat.lecture).toBe('paused');
+  expect(etat.opacite).toBe(1);
+  await expectNoErrors(errors);
+});

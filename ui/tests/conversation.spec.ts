@@ -252,3 +252,37 @@ test('toujours animé, sans faire bouger ce qui se clique ; « réduire les anim
   expect(await live('.notif')).toBe(0);
   await expectNoErrors(errors);
 });
+
+test('KOB-246 (2.7, 4.3) : l’historique s’ouvre en bas sans défilement doux ; une seule entrée en cascade, l’échange arrivé ensuite entre seul', async ({ page }) => {
+  await mockTauri(page);
+  const errors = await openUi(page, '');
+  const beaucoup = Array.from({ length: 12 }, (_, i) => bulle(i + 1, `question ${i + 1}`, `Réponse ${i + 1}, assez longue pour remplir la liste.`, 'fini'));
+  await emit(page, 'conversation', beaucoup);
+  await page.mouse.move(600, 260);
+  await page.mouse.wheel(0, -300);
+  const history = page.getByRole('log', { name: 'Échanges récents avec Kobi' });
+  await expect(history).toBeVisible();
+  const liste = page.locator('.history-list');
+  expect(await liste.evaluate((n) => getComputedStyle(n).scrollBehavior)).toBe('auto');
+  // En bas, sans glissement (pendant la cascade, les échanges décalés par
+  // leur entrée agrandissent un instant la zone défilable).
+  await expect.poll(() => liste.evaluate((n) => n.scrollTop + n.clientHeight >= n.scrollHeight - 2), { timeout: 2000 }).toBe(true);
+  // À l'ouverture, seule la cascade (animations Web) joue : pas d'`ex-in` en plus.
+  const exIn = () =>
+    page.locator('.card-history .ex').evaluateAll((items) => items.map((i) => i.getAnimations().filter((a) => (a as CSSAnimation).animationName === 'ex-in').length));
+  expect((await exIn()).reduce((a, b) => a + b, 0)).toBe(0);
+  // Un échange arrive historique ouvert : lui seul entre (relevé au vol, la
+  // classe tombe à la fin de son entrée).
+  await page.evaluate(() => {
+    const vus: string[] = [];
+    (window as unknown as { entres: string[] }).entres = vus;
+    const liste = document.querySelector('.history-list')!;
+    const noter = (n: Node) => n instanceof HTMLElement && n.classList.contains('nouveau') && vus.push(n.dataset.tour ?? '');
+    new MutationObserver((ms) => ms.forEach((m) => m.addedNodes.forEach(noter))).observe(liste, { childList: true });
+  });
+  await emit(page, 'conversation', [...beaucoup, bulle(13, 'une de plus ?', 'Oui.', 'fini')]);
+  await expect(page.locator('.card-history .ex')).toHaveCount(13);
+  expect((await exIn()).slice(0, 12).reduce((a, b) => a + b, 0)).toBe(0);
+  expect(await page.evaluate(() => (window as unknown as { entres: string[] }).entres)).toEqual(['13']);
+  await expectNoErrors(errors);
+});
