@@ -73,6 +73,8 @@ test('balayage (KOB-211) : la fenêtre du menu en anglais, hors réunion et en r
   await page.goto('/menu.html');
   await page.waitForFunction(() => '__ouvrirMenu' in window);
   await expect(page.locator('html')).toHaveAttribute('lang', 'en');
+  // Le titre de la fenêtre aussi (KOB-271).
+  await expect(page).toHaveTitle('Kobi menu');
   const restes: string[] = [];
   for (const recording of [false, true]) {
     await page.evaluate(

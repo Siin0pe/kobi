@@ -50,8 +50,13 @@ const root = document.createElement('div');
 root.className = 'kmenu';
 root.hidden = true;
 root.setAttribute('role', 'menu');
-root.setAttribute('aria-label', t('kobi.menu.aria'));
-surLangue(() => root.setAttribute('aria-label', t('kobi.menu.aria')));
+// Le titre du document aussi (barre des tâches, accessibilité, KOB-271).
+const nommer = (): void => {
+  root.setAttribute('aria-label', t('kobi.menu.aria'));
+  document.title = t('kobi.menu.aria');
+};
+nommer();
+surLangue(nommer);
 root.setAttribute('aria-orientation', 'vertical');
 const heading = document.createElement('div');
 heading.className = 'kmenu-head';
