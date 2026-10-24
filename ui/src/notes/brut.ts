@@ -14,6 +14,8 @@ export interface LigneBrute {
   source: 'moi' | 'eux';
   texte: string;
   finale: boolean;
+  /** Partiel resté sans final (nouvel énoncé, pause) : figé tel quel (KOB-274). */
+  abandon?: boolean;
 }
 
 export interface VueBrute {
@@ -69,6 +71,7 @@ export function monterTranscriptionBrute(hote: HTMLElement): VueBrute {
     }
     li.querySelector('.brut-texte')!.textContent = l.texte;
     li.classList.toggle('partiel', !l.finale);
+    li.classList.toggle('abandon', Boolean(l.abandon));
     if (l.finale) partiels.delete(l.source);
     else partiels.set(l.source, li);
     while (lignes.children.length > MAX_LIGNES) lignes.firstElementChild!.remove();

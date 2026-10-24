@@ -22,10 +22,13 @@ pub struct Ligne {
     pub texte: String,
     /// Segment final ; sinon partiel, remplacé par le suivant.
     pub finale: bool,
+    /// Partiel abandonné sans final (nouvel énoncé, pause) : la ligne se
+    /// fige telle quelle, la phrase suivante en ouvre une neuve (KOB-274).
+    pub abandon: bool,
 }
 
 /// Ligne à envoyer, si le panneau suit et que le texte n'est pas vide.
-fn ligne(source: kobi_stt::Source, texte: &str, finale: bool) -> Option<Ligne> {
+fn ligne(source: kobi_stt::Source, texte: &str, finale: bool, abandon: bool) -> Option<Ligne> {
     let texte = texte.trim();
     if !SUIVIE.load(Ordering::Relaxed) || texte.is_empty() {
         return None;
@@ -37,6 +40,7 @@ fn ligne(source: kobi_stt::Source, texte: &str, finale: bool) -> Option<Ligne> {
         },
         texte: texte.to_owned(),
         finale,
+        abandon,
     })
 }
 
@@ -47,7 +51,15 @@ pub fn publier<R: Runtime>(
     texte: &str,
     finale: bool,
 ) {
-    if let Some(l) = ligne(source, texte, finale) {
+    if let Some(l) = ligne(source, texte, finale, false) {
+        let _ = app.emit(EVENEMENT, l);
+    }
+}
+
+/// Le partiel `texte`, déjà envoyé, n'aura pas de final : le panneau le
+/// fige, marqué abandonné (KOB-274).
+pub fn abandonner<R: Runtime>(app: &AppHandle<R>, source: kobi_stt::Source, texte: &str) {
+    if let Some(l) = ligne(source, texte, true, true) {
         let _ = app.emit(EVENEMENT, l);
     }
 }
@@ -67,17 +79,18 @@ mod tests {
     #[test]
     fn rien_sans_panneau_ouvert() {
         suivre_transcription(false);
-        assert_eq!(ligne(kobi_stt::Source::Moi, "bonjour", false), None);
+        assert_eq!(ligne(kobi_stt::Source::Moi, "bonjour", false, false), None);
         suivre_transcription(true);
         assert_eq!(
-            ligne(kobi_stt::Source::Eux, " on commence ", true),
+            ligne(kobi_stt::Source::Eux, " on commence ", true, false),
             Some(Ligne {
                 source: "eux",
                 texte: "on commence".into(),
-                finale: true
+                finale: true,
+                abandon: false,
             })
         );
-        assert_eq!(ligne(kobi_stt::Source::Moi, "  ", false), None);
+        assert_eq!(ligne(kobi_stt::Source::Moi, "  ", false, false), None);
         suivre_transcription(false);
     }
 }

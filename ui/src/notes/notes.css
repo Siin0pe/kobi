@@ -271,6 +271,11 @@
 .vue-direct .brut-lignes li.partiel {
   color: rgba(255, 255, 255, 0.5);
 }
+/* Partiel sans final (KOB-274) : figé, pâle et barré. */
+.vue-direct .brut-lignes li.abandon .brut-texte {
+  color: rgba(255, 255, 255, 0.5);
+  text-decoration: line-through;
+}
 .vue-direct .brut-source {
   flex: none;
   width: 3.5ch;
