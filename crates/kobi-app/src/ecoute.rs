@@ -34,6 +34,10 @@ use crate::voix::CommandeVoix;
 
 /// Après un échec d'ouverture du micro, nouvel essai après ce délai.
 const REESSAI_MICRO: Duration = Duration::from_secs(5);
+/// Réunion mise en pause sous charge : l'audio reçu mais pas encore
+/// transcrit l'est avant de fermer le micro, au plus pendant ce temps
+/// (KOB-261, comme la piste « eux » à sa fermeture).
+const VIDANGE_FILE: Duration = Duration::from_secs(45);
 /// Période du bilan de charge dans le journal.
 const BILAN: Duration = Duration::from_secs(300);
 /// Événement du retard de la transcription sur la parole (KOB-250) :
@@ -185,6 +189,14 @@ impl Entree {
         }
     }
 
+    /// Ferme l'entrée ; renvoie l'audio reçu mais pas encore lu.
+    fn fermer(self) -> Vec<AudioFrame> {
+        match self {
+            Entree::Micro(capture) => capture.stop().0,
+            Entree::Fichier(rx) => rx.try_iter().collect(),
+        }
+    }
+
     /// Ouvre le fichier injecté, ou le micro par défaut ; renvoie aussi sa
     /// description pour le journal.
     fn ouvrir() -> Result<(Entree, String), String> {
@@ -219,6 +231,26 @@ impl Entree {
             .join(", ");
         Ok((Entree::Micro(capture), description))
     }
+}
+
+/// Passe les trames de `file` à `traiter`, dans l'ordre, jusqu'à `limite`
+/// ou jusqu'à ce que `reprise` soit vraie ; renvoie le nombre de trames
+/// traitées (KOB-261).
+fn vidanger<T, C>(
+    file: &mut std::collections::VecDeque<T>,
+    limite: Instant,
+    reprise: impl Fn(&mut C) -> bool,
+    mut traiter: impl FnMut(&mut C, T),
+    contexte: &mut C,
+) -> usize {
+    let mut traitees = 0;
+    while !file.is_empty() && Instant::now() < limite && !reprise(contexte) {
+        if let Some(trame) = file.pop_front() {
+            traiter(contexte, trame);
+            traitees += 1;
+        }
+    }
+    traitees
 }
 
 /// Joue des échantillons 16 kHz en temps réel, par trames de 100 ms, puis du
@@ -576,13 +608,76 @@ impl<R: Runtime> Fil<R> {
     }
 
     fn fermer_micro(&mut self) {
+        if let Some(entree) = self.entree.take() {
+            let reste = entree.fermer();
+            tracing::info!("écoute continue : micro fermé");
+            self.note("micro fermé");
+            // En réunion, ce qui a été dit avant la pause est transcrit
+            // (KOB-261) ; hors réunion, rien n'attend cet audio.
+            if self.en_reunion {
+                self.file.extend(reste);
+                self.vider();
+            }
+        }
         crate::chef::avancer(&self.app, kobi_stt::Source::Moi, None);
         self.signaler_retard(0.0);
         self.file.clear();
         self.veille = Veille::default();
-        if self.entree.take().is_some() {
-            tracing::info!("écoute continue : micro fermé");
-            self.note("micro fermé");
+    }
+
+    /// Transcrit l'audio resté en file à la fermeture du micro, au plus
+    /// pendant [`VIDANGE_FILE`], puis Nemotron conclut la dernière phrase.
+    /// Sans effet sur l'écoute : un ordre dit avant la pause n'est plus
+    /// exécuté. S'arrête si la réunion reprend entre-temps (KOB-261).
+    fn vider(&mut self) {
+        if self.stt.is_err() {
+            return;
+        }
+        let debut = Instant::now();
+        let a_vider = self.file.len();
+        let mut file = std::mem::take(&mut self.file);
+        let transcrites = vidanger(
+            &mut file,
+            debut + VIDANGE_FILE,
+            |fil: &mut Self| !fil.en_pause && etat(&fil.app).etat == "reunion",
+            |fil: &mut Self, frame| fil.traiter(frame, false),
+            self,
+        );
+        if let Ok(stt) = self.stt.as_mut() {
+            match stt.finish() {
+                Ok(segments) => {
+                    for s in segments.into_iter().filter(|s| s.is_final) {
+                        if crate::voix::est_ma_voix(&self.app, &s.text) {
+                            continue;
+                        }
+                        crate::transcription_brute::publier(
+                            &self.app,
+                            kobi_stt::Source::Moi,
+                            &s.text,
+                            true,
+                        );
+                        let dit_a = self.origine + Duration::from_secs_f64(s.end.max(0.0));
+                        publier(&self.app, Message::Segment(s, dit_a));
+                    }
+                }
+                Err(e) => tracing::warn!(erreur = %e, "écoute continue : fin de la transcription"),
+            }
+            stt.reset();
+        }
+        self.rattrapage = Rattrapage::default();
+        self.partiel_publie = None;
+        if a_vider > 0 {
+            tracing::info!(
+                trames = transcrites,
+                ms = debut.elapsed().as_millis() as u64,
+                "écoute continue : audio en retard transcrit à la pause"
+            );
+        }
+        if transcrites < a_vider {
+            tracing::warn!(
+                trames = a_vider - transcrites,
+                "écoute continue : fin de l'audio non transcrite (délai dépassé ou reprise)"
+            );
         }
     }
 
@@ -680,7 +775,16 @@ impl<R: Runtime> Fil<R> {
         let Some(frame) = self.file.pop_front() else {
             return;
         };
-        self.niveau(&frame.samples);
+        self.traiter(frame, true);
+    }
+
+    /// Transcrit une trame et publie ses segments finis ; `en_direct` : en
+    /// déduit aussi les actions de l'écoute (faux pendant la vidange de la
+    /// pause, KOB-261).
+    fn traiter(&mut self, frame: AudioFrame, en_direct: bool) {
+        if en_direct {
+            self.niveau(&frame.samples);
+        }
         let Ok(stt) = self.stt.as_mut() else { return };
         let frame = kobi_stt::AudioFrame {
             source: kobi_stt::Source::Moi,
@@ -742,10 +846,13 @@ impl<R: Runtime> Fil<R> {
         // Tout l'audio reçu jusqu'ici est transcrit.
         let jusqu_a = self.origine + Duration::from_secs_f64(self.t.max(0.0));
         crate::chef::avancer(&self.app, kobi_stt::Source::Moi, Some(jusqu_a));
-        self.executer(actions);
-        // Sous charge, la transcription peut aller moins vite que la parole :
-        // un ordre dit maintenant ne serait entendu qu'après (KOB-250).
-        self.signaler_retard(self.origine.elapsed().as_secs_f64() - self.t);
+        if en_direct {
+            self.executer(actions);
+            // Sous charge, la transcription peut aller moins vite que la
+            // parole : un ordre dit maintenant ne serait entendu qu'après
+            // (KOB-250).
+            self.signaler_retard(self.origine.elapsed().as_secs_f64() - self.t);
+        }
 
         if self.bilan.elapsed() >= BILAN {
             tracing::info!(
@@ -1511,6 +1618,52 @@ mod tests {
              calcul {:.1} s pour {audio:.1} s d'audio (×{:.2} temps réel)",
             calcul.as_secs_f64(),
             calcul.as_secs_f64() / audio
+        );
+    }
+
+    /// KOB-261 : 30 s d'audio en file à la pause sont toutes transcrites,
+    /// dans l'ordre ; la vidange s'arrête si la réunion reprend, ou au bout
+    /// du délai.
+    #[test]
+    fn pause_avec_30_s_en_file_rien_de_perdu() {
+        let trente_s = || -> std::collections::VecDeque<AudioFrame> {
+            (0..300)
+                .map(|i| AudioFrame {
+                    source: kobi_audio::Source::Moi,
+                    samples: vec![0.0; 1_600],
+                    t: Duration::from_millis(100 * i),
+                })
+                .collect()
+        };
+        let limite = Instant::now() + VIDANGE_FILE;
+        let traiter = |vues: &mut Vec<Duration>, f: AudioFrame| vues.push(f.t);
+
+        let mut file = trente_s();
+        let mut vues = Vec::new();
+        assert_eq!(
+            vidanger(&mut file, limite, |_| false, traiter, &mut vues),
+            300
+        );
+        assert!(file.is_empty());
+        let attendu: Vec<_> = (0..300).map(|i| Duration::from_millis(100 * i)).collect();
+        assert_eq!(vues, attendu);
+
+        // Reprise après 10 s d'audio vidées.
+        let mut file = trente_s();
+        let mut vues = Vec::new();
+        let reprise = |v: &mut Vec<Duration>| v.len() >= 100;
+        assert_eq!(
+            vidanger(&mut file, limite, reprise, traiter, &mut vues),
+            100
+        );
+        assert_eq!(file.len(), 200);
+
+        // Délai dépassé : rien n'est plus transcrit.
+        let mut file = trente_s();
+        let mut vues = Vec::new();
+        assert_eq!(
+            vidanger(&mut file, Instant::now(), |_| false, traiter, &mut vues),
+            0
         );
     }
 }

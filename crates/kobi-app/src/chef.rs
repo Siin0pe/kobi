@@ -148,6 +148,11 @@ pub enum Message {
     /// système) où sa fin a été dite : sous charge, il arrive bien après
     /// (KOB-198).
     Segment(Segment, Instant),
+    /// La piste a transcrit son audio jusqu'à cet instant (`None` : piste
+    /// fermée). Par le même canal que les segments : le chef ne voit une
+    /// piste à jour qu'après avoir reçu tout ce qu'elle a publié avant
+    /// (KOB-261).
+    Avancement(kobi_stt::Source, Option<Instant>),
     /// Menu, interface ou commande vocale.
     Commande(Intention),
     /// Clic sur une carte.
@@ -328,6 +333,9 @@ struct EnCours {
     debut: Instant,
     debut_ms: u64,
     pause: bool,
+    /// Début de la pause : ce qui a été dit avant est gardé, même transcrit
+    /// après (KOB-261).
+    pause_a: Option<Instant>,
     notes: String,
     derniere_note: Option<String>,
     /// Transcription pas encore passée aux notes.
@@ -424,6 +432,8 @@ pub struct Chef<R: Runtime> {
     /// Comptes rendus demandés puis abandonnés par « Annuler » (KOB-245) :
     /// leurs réponses sont ignorées.
     comptes_rendus_abandonnes: u32,
+    /// Jusqu'où les pistes ont transcrit leur audio (KOB-198).
+    avancement: Avancement,
 }
 
 /// Consigne jointe à une phrase qui cite Kobi sans lui parler à coup sûr
@@ -443,36 +453,34 @@ pub struct Bus(pub Mutex<Sender<Message>>);
 /// Jusqu'où chaque piste a transcrit son audio, sur l'horloge du système
 /// (KOB-198) ; `None` : piste fermée. Sous charge, la transcription prend du
 /// retard : à la fin, le compte rendu attend qu'elle ait rattrapé l'arrêt.
-#[derive(Default)]
-pub struct Avancement {
-    moi: Mutex<Option<Instant>>,
-    eux: Mutex<Option<Instant>>,
+/// Tenu par le chef, d'après [`Message::Avancement`] (KOB-261).
+#[derive(Debug, Default)]
+struct Avancement {
+    moi: Option<Instant>,
+    eux: Option<Instant>,
 }
 
 impl Avancement {
-    fn piste(&self, source: kobi_stt::Source) -> &Mutex<Option<Instant>> {
+    fn avancer(&mut self, source: kobi_stt::Source, jusqu_a: Option<Instant>) {
         match source {
-            kobi_stt::Source::Moi => &self.moi,
-            kobi_stt::Source::Eux => &self.eux,
+            kobi_stt::Source::Moi => self.moi = jusqu_a,
+            kobi_stt::Source::Eux => self.eux = jusqu_a,
         }
     }
 
     /// Les pistes ouvertes ont toutes transcrit leur audio jusqu'à `instant`.
     fn a_jour(&self, instant: Instant) -> bool {
-        [&self.moi, &self.eux].iter().all(|p| {
-            p.lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .is_none_or(|t| t >= instant)
-        })
+        [self.moi, self.eux]
+            .iter()
+            .all(|p| p.is_none_or(|t| t >= instant))
     }
 }
 
 /// La piste `source` a transcrit son audio jusqu'à `jusqu_a` (`None` : piste
-/// fermée, plus rien à attendre d'elle).
+/// fermée, plus rien à attendre d'elle). Passe derrière les segments déjà
+/// publiés par la piste (KOB-261).
 pub fn avancer<R: Runtime>(app: &AppHandle<R>, source: kobi_stt::Source, jusqu_a: Option<Instant>) {
-    if let Some(a) = app.try_state::<Avancement>() {
-        *a.piste(source).lock().unwrap_or_else(|e| e.into_inner()) = jusqu_a;
-    }
+    publier(app, Message::Avancement(source, jusqu_a));
 }
 
 /// Transcription confiée au compte rendu : le bloc parti à la prise de notes
@@ -500,7 +508,6 @@ pub fn installer<R: Runtime>(
 ) {
     let (tx, rx) = mpsc::channel();
     app.manage(Bus(Mutex::new(tx.clone())));
-    app.manage(Avancement::default());
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -669,6 +676,7 @@ impl<R: Runtime> Chef<R> {
             tour_peut_etre: None,
             compte_rendu_a_ecrire: false,
             comptes_rendus_abandonnes: 0,
+            avancement: Avancement::default(),
         }
     }
 
@@ -763,6 +771,7 @@ impl<R: Runtime> Chef<R> {
                 self.peut_etre = false;
             }
             Message::Segment(s, dit_a) => self.segment(s, dit_a),
+            Message::Avancement(source, jusqu_a) => self.avancement.avancer(source, jusqu_a),
             Message::Commande(i) => {
                 self.commande(i);
             }
@@ -1079,6 +1088,7 @@ impl<R: Runtime> Chef<R> {
             Intention::Pause => match &mut self.reunion {
                 Some(r) if !r.pause => {
                     r.pause = true;
+                    r.pause_a = Some(Instant::now());
                     self.transition(&[Evenement::Pause]);
                     kobi_i18n::tr("coque.chef.reunionEnPause", &[])
                 }
@@ -1089,6 +1099,7 @@ impl<R: Runtime> Chef<R> {
             Intention::Reprendre => match &mut self.reunion {
                 Some(r) if r.pause => {
                     r.pause = false;
+                    r.pause_a = None;
                     self.transition(&[Evenement::Reprendre]);
                     kobi_i18n::tr("coque.chef.enregistreDeNouveau", &[])
                 }
@@ -1161,6 +1172,7 @@ impl<R: Runtime> Chef<R> {
             arret: None,
             vidange: None,
             compte_rendu_demande: false,
+            pause_a: None,
             titre: None,
             titre_manuel: false,
             debut_parole: String::new(),
@@ -1281,6 +1293,7 @@ impl<R: Runtime> Chef<R> {
         r.fin_demandee = false;
         r.annulable_jusqu = None;
         r.pause = false;
+        r.pause_a = None;
         r.arret = None;
         r.vidange = None;
         let reste = std::mem::take(&mut r.a_noter);
@@ -1313,10 +1326,7 @@ impl<R: Runtime> Chef<R> {
         let (Some(limite), Some(arret)) = (r.vidange, r.arret) else {
             return;
         };
-        let a_jour = self
-            .app
-            .try_state::<Avancement>()
-            .is_none_or(|a| a.a_jour(arret));
+        let a_jour = self.avancement.a_jour(arret);
         if !a_jour && Instant::now() < limite {
             return;
         }
@@ -1363,7 +1373,12 @@ impl<R: Runtime> Chef<R> {
     /// dans `transcript.jsonl`.
     fn segment(&mut self, mut s: Segment, dit_a: Instant) {
         let Some(r) = &mut self.reunion else { return };
-        if r.pause || !s.is_final {
+        if !s.is_final {
+            return;
+        }
+        // En pause, seul ce qui a été dit avant la pause est gardé : sous
+        // charge, il arrive après (KOB-261).
+        if r.pause && r.pause_a.is_none_or(|pause| dit_a > pause) {
             return;
         }
         // Dit avant la fin mais transcrit après (charge, file d'attente) :
@@ -2676,12 +2691,13 @@ mod tests {
     #[test]
     fn fin_attend_la_transcription_en_retard() {
         let (app, _dir) = chef_en_essai();
-        let h = app.handle();
         avec_chef(&app, |c| c.commande(Intention::DemarrerReunion));
         // La piste « eux » n'a transcrit que jusqu'à il y a 5 s.
         let avant = Instant::now() - Duration::from_secs(5);
-        avancer(h, kobi_stt::Source::Eux, Some(avant));
-        avec_chef(&app, |c| c.commande(Intention::TerminerReunion));
+        avec_chef(&app, |c| {
+            c.recevoir(Message::Avancement(kobi_stt::Source::Eux, Some(avant)));
+            c.commande(Intention::TerminerReunion)
+        });
         let attend = avec_chef(&app, |c| {
             let r = c.reunion.as_ref().unwrap();
             (r.vidange.is_some(), r.compte_rendu_demande)
@@ -2696,8 +2712,13 @@ mod tests {
             ));
         });
         // La piste rattrape l'arrêt : le compte rendu part avec la fin.
-        avancer(h, kobi_stt::Source::Eux, Some(Instant::now()));
-        avec_chef(&app, |c| c.tick());
+        avec_chef(&app, |c| {
+            c.recevoir(Message::Avancement(
+                kobi_stt::Source::Eux,
+                Some(Instant::now()),
+            ));
+            c.tick()
+        });
         let (demande, transcription) = avec_chef(&app, |c| {
             let r = c.reunion.as_ref().unwrap();
             (r.compte_rendu_demande, r.pour_compte_rendu.clone())
@@ -2716,14 +2737,14 @@ mod tests {
     #[test]
     fn vidange_bornee_et_annuler_pendant_la_vidange() {
         let (app, _dir) = chef_en_essai();
-        let h = app.handle();
         avec_chef(&app, |c| c.commande(Intention::DemarrerReunion));
-        avancer(
-            h,
-            kobi_stt::Source::Moi,
-            Some(Instant::now() - Duration::from_secs(5)),
-        );
-        avec_chef(&app, |c| c.commande(Intention::TerminerReunion));
+        avec_chef(&app, |c| {
+            c.recevoir(Message::Avancement(
+                kobi_stt::Source::Moi,
+                Some(Instant::now() - Duration::from_secs(5)),
+            ));
+            c.commande(Intention::TerminerReunion)
+        });
         avec_chef(&app, |c| {
             c.recevoir(Message::Segment(
                 dit("Dernière décision."),
@@ -2750,6 +2771,97 @@ mod tests {
             .as_ref()
             .unwrap()
             .compte_rendu_demande));
+    }
+
+    /// KOB-261 : une piste publie une rafale de segments puis se ferme (fin
+    /// de réunion sous charge) ; son avancement passe par le même canal :
+    /// le compte rendu ne part qu'après les avoir tous reçus.
+    #[test]
+    fn rafale_puis_avancement_rien_de_perdu() {
+        let (app, _dir) = chef_en_essai();
+        let h = app.handle().clone();
+        let avant = Instant::now() - Duration::from_secs(30);
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            c.recevoir(Message::Avancement(kobi_stt::Source::Eux, Some(avant)));
+            c.commande(Intention::TerminerReunion);
+        });
+        // La piste « eux » vide sa file depuis son fil, comme
+        // `son_ordi::fermer`.
+        std::thread::spawn(move || {
+            for i in 0..200 {
+                publier(&h, Message::Segment(dit(&format!("Phrase {i}.")), avant));
+            }
+            avancer(&h, kobi_stt::Source::Eux, None);
+        })
+        .join()
+        .unwrap();
+        let limite = Instant::now() + Duration::from_secs(10);
+        let transcription = loop {
+            let fini = avec_chef(&app, |c| {
+                let r = c.reunion.as_ref().unwrap();
+                r.compte_rendu_demande.then(|| r.pour_compte_rendu.clone())
+            });
+            if let Some(t) = fini {
+                break t;
+            }
+            assert!(Instant::now() < limite, "compte rendu jamais demandé");
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        for i in 0..200 {
+            assert!(
+                transcription.contains(&format!("Phrase {i}.")),
+                "phrase {i} perdue"
+            );
+        }
+    }
+
+    /// KOB-261 : ce qui a été dit avant la pause mais transcrit après est
+    /// gardé, y compris si la réunion se termine pendant la pause ; ce qui
+    /// est dit après la pause ne l'est pas.
+    #[test]
+    fn pause_garde_ce_qui_a_ete_dit_avant() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            let avant = Instant::now() - Duration::from_secs(30);
+            c.commande(Intention::Pause);
+            for i in 0..30 {
+                c.recevoir(Message::Segment(
+                    dit(&format!("Seconde {i}.")),
+                    avant + Duration::from_secs(i),
+                ));
+            }
+            c.recevoir(Message::Segment(
+                dit("Pendant la pause."),
+                Instant::now() + Duration::from_secs(1),
+            ));
+            let r = c.reunion.as_ref().unwrap();
+            for i in 0..30 {
+                assert!(
+                    r.a_noter.contains(&format!("Seconde {i}.")),
+                    "{}",
+                    r.a_noter
+                );
+            }
+            assert!(!r.a_noter.contains("Pendant la pause."), "{}", r.a_noter);
+            // Fin pendant la pause : un retardataire dit avant la pause entre
+            // encore au compte rendu, que le micro vide encore.
+            c.recevoir(Message::Avancement(kobi_stt::Source::Moi, Some(avant)));
+            c.commande(Intention::TerminerReunion);
+            c.recevoir(Message::Segment(dit("Retardataire."), avant));
+            c.recevoir(Message::Avancement(kobi_stt::Source::Moi, None));
+            c.recevoir(Message::Avancement(kobi_stt::Source::Eux, None));
+            c.tick();
+            let r = c.reunion.as_ref().unwrap();
+            assert!(r.compte_rendu_demande);
+            assert!(r.pour_compte_rendu.contains("Seconde 29."));
+            assert!(
+                r.pour_compte_rendu.contains("Retardataire."),
+                "{}",
+                r.pour_compte_rendu
+            );
+        });
     }
 
     /// KOB-228 : un compte rendu demandé pendant qu'un bloc est à la prise
