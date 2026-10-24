@@ -34,6 +34,12 @@ use crate::voix::CommandeVoix;
 
 /// Après un échec d'ouverture du micro, nouvel essai après ce délai.
 const REESSAI_MICRO: Duration = Duration::from_secs(5);
+/// Micro ouvert sans aucune trame depuis ce temps : il est perdu, même sans
+/// erreur signalée (serveur audio arrêté, KOB-280). Il en arrive une toutes
+/// les 100 ms tant qu'il vit.
+const MICRO_MUET: Duration = Duration::from_secs(3);
+/// Attente d'une trame quand la file est vide.
+const ATTENTE_TRAME: Duration = Duration::from_millis(200);
 /// Réunion mise en pause sous charge : l'audio reçu mais pas encore
 /// transcrit l'est avant de fermer le micro, au plus pendant ce temps
 /// (KOB-261, comme la piste « eux » à sa fermeture).
@@ -278,6 +284,46 @@ fn vidanger<T, C>(
         }
     }
     traitees
+}
+
+/// Ce que le micro a envoyé depuis le dernier tour.
+enum Arrivee {
+    Trames(Vec<AudioFrame>),
+    /// Rien pour l'instant.
+    Rien,
+    /// Rien depuis [`MICRO_MUET`] : le flux s'est arrêté sans le dire.
+    Muet,
+    /// Le canal des trames est fermé.
+    Ferme,
+}
+
+/// Trames arrivées du micro : attend la première au plus [`ATTENTE_TRAME`]
+/// si `attendre` (file vide), puis prend tout ce qui est arrivé.
+/// `derniere`, l'instant de la dernière trame reçue, est tenu à jour ; sans
+/// trame depuis `muet`, le micro est muet (KOB-280).
+fn recevoir(
+    trames: &Receiver<AudioFrame>,
+    attendre: bool,
+    derniere: &mut Instant,
+    muet: Duration,
+) -> Arrivee {
+    let mut arrivees = Vec::new();
+    if attendre {
+        match trames.recv_timeout(ATTENTE_TRAME) {
+            Ok(trame) => arrivees.push(trame),
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => return Arrivee::Ferme,
+        }
+    }
+    arrivees.extend(trames.try_iter());
+    if !arrivees.is_empty() {
+        *derniere = Instant::now();
+        Arrivee::Trames(arrivees)
+    } else if derniere.elapsed() >= muet {
+        Arrivee::Muet
+    } else {
+        Arrivee::Rien
+    }
 }
 
 /// Première erreur de périphérique parmi celles d'un flux ; un xrun (trames
@@ -547,6 +593,8 @@ struct Fil<R: Runtime> {
     /// un micro rouvert après une panne repart de 0, la session non
     /// (KOB-278).
     decalage: f64,
+    /// Dernière trame reçue du micro ouvert (KOB-280).
+    derniere_trame: Instant,
 }
 
 impl<R: Runtime> Fil<R> {
@@ -573,6 +621,7 @@ impl<R: Runtime> Fil<R> {
             partiel_publie: None,
             micro_perdu: false,
             decalage: 0.0,
+            derniere_trame: Instant::now(),
         }
     }
 
@@ -642,6 +691,7 @@ impl<R: Runtime> Fil<R> {
                 self.t = 0.0;
                 self.origine = Instant::now();
                 self.decalage = 0.0;
+                self.derniere_trame = Instant::now();
                 self.entree = Some(entree);
                 tracing::info!(entree = %description, "écoute continue : micro ouvert");
                 if std::mem::take(&mut self.micro_perdu) {
@@ -788,12 +838,8 @@ impl<R: Runtime> Fil<R> {
             kobi_i18n::tr("coque.ecoute.microPerduAucun", &[])
         };
         let titre = kobi_i18n::tr("coque.ecoute.microPerdu", &[]);
-        crate::activite::noter(
-            &self.app,
-            crate::activite::Genre::Erreur,
-            &titre,
-            Some(&message),
-        );
+        // L'erreur affichée entre seule dans l'activité ; la noter en plus
+        // la doublait.
         let app = self.app.clone();
         std::thread::spawn(move || erreur(&app, &titre, &message));
     }
@@ -874,20 +920,27 @@ impl<R: Runtime> Fil<R> {
             self.micro_coupe(&panne);
             return;
         }
-        let mut arrivees = Vec::new();
-        if self.file.is_empty() {
-            match entree.frames().recv_timeout(Duration::from_millis(200)) {
-                Ok(frame) => arrivees.push(frame),
-                Err(RecvTimeoutError::Timeout) => return,
-                Err(RecvTimeoutError::Disconnected) => {
-                    self.micro_coupe("le flux s'est fermé");
-                    return;
-                }
-            }
-        }
         // Tout ce qui est arrivé entre-temps : la veille voit la parole la
         // plus récente, même quand la transcription est en retard (KOB-250).
-        arrivees.extend(entree.frames().try_iter());
+        let arrivees = match recevoir(
+            entree.frames(),
+            self.file.is_empty(),
+            &mut self.derniere_trame,
+            MICRO_MUET,
+        ) {
+            Arrivee::Trames(trames) => trames,
+            Arrivee::Rien => Vec::new(),
+            Arrivee::Ferme => {
+                self.micro_coupe("le flux s'est fermé");
+                return;
+            }
+            // Flux arrêté sans erreur (serveur audio arrêté) : même réaction
+            // qu'un micro débranché (KOB-280).
+            Arrivee::Muet => {
+                self.micro_coupe(&format!("aucune trame depuis {} s", MICRO_MUET.as_secs()));
+                return;
+            }
+        };
         for frame in arrivees {
             self.veiller(&frame);
             self.file.push_back(frame);
@@ -1930,6 +1983,50 @@ mod tests {
             vidanger(&mut file, Instant::now(), |_| false, traiter, &mut vues),
             0
         );
+    }
+
+    /// KOB-280 : une doublure d'entrée qui cesse d'envoyer des trames, sans
+    /// erreur ni fermeture, est vue muette au bout du délai ; une trame qui
+    /// revient la ranime ; le canal fermé reste « fermé ».
+    #[test]
+    fn micro_muet_sans_erreur() {
+        let trame = || AudioFrame {
+            source: kobi_audio::Source::Moi,
+            samples: vec![0.0; 1_600],
+            t: Duration::ZERO,
+        };
+        let muet = Duration::from_millis(300);
+        let (tx, rx) = mpsc::channel();
+        let mut derniere = Instant::now();
+        tx.send(trame()).unwrap();
+        tx.send(trame()).unwrap();
+        assert!(matches!(
+            recevoir(&rx, true, &mut derniere, muet),
+            Arrivee::Trames(t) if t.len() == 2
+        ));
+        assert!(matches!(
+            recevoir(&rx, false, &mut derniere, muet),
+            Arrivee::Rien
+        ));
+        std::thread::sleep(muet);
+        assert!(matches!(
+            recevoir(&rx, true, &mut derniere, muet),
+            Arrivee::Muet
+        ));
+        tx.send(trame()).unwrap();
+        assert!(matches!(
+            recevoir(&rx, true, &mut derniere, muet),
+            Arrivee::Trames(_)
+        ));
+        assert!(matches!(
+            recevoir(&rx, false, &mut derniere, muet),
+            Arrivee::Rien
+        ));
+        drop(tx);
+        assert!(matches!(
+            recevoir(&rx, true, &mut derniere, muet),
+            Arrivee::Ferme
+        ));
     }
 
     /// KOB-236 : une erreur de périphérique (micro débranché) arrête le
