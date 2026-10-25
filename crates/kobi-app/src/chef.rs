@@ -590,10 +590,18 @@ type FinsAnnulees = Vec<(Instant, Instant, bool)>;
 /// porte (KOB-323).
 const MARGE_FIN: Duration = Duration::from_millis(2400);
 
+/// Segment de `commence_a` à `dit_a` dit après l'arrêt `arret`. Jugé sur la
+/// fin (KOB-198) : le début d'un segment peut précéder la parole du silence
+/// transmis, jusqu'à [`MARGE_FIN`]. Mais un énoncé commencé plus tôt est
+/// de la parole d'avant l'arrêt, encore en cours au clic : il reste à la
+/// réunion, en entier, sinon tout ce qu'il contient serait perdu (KOB-364).
+fn dit_apres_l_arret(commence_a: Instant, dit_a: Instant, arret: Instant) -> bool {
+    dit_a > arret && commence_a + MARGE_FIN > arret
+}
+
 /// Dit pendant l'une des fins annulées `fins` (arrêt, annulation), pour un
-/// segment de `commence_a` à `dit_a` (KOB-309). Jugé sur la fin, comme pour
-/// KOB-198 : le début d'un segment peut précéder la parole (silence
-/// transmis, son de l'ordinateur). Une phrase dite juste avant le clic finit
+/// segment de `commence_a` à `dit_a` (KOB-309), d'après
+/// [`dit_apres_l_arret`]. Une phrase dite juste avant le clic finit
 /// après lui de tout le silence qui la suit (KOB-323) : jusqu'à
 /// [`MARGE_FIN`] après l'annulation, un segment commencé avant est encore
 /// de la fin. Au-delà, c'est de la parole qui a continué après la reprise :
@@ -611,7 +619,7 @@ fn dit_pendant_une_fin_annulee(
 ) -> bool {
     fins.iter().any(|&(arret, annule, voix)| {
         let marge = !(voix && moi);
-        dit_a > arret
+        dit_apres_l_arret(commence_a, dit_a, arret)
             && (dit_a <= annule || (marge && commence_a <= annule && dit_a <= annule + MARGE_FIN))
     })
 }
@@ -1822,14 +1830,16 @@ impl<R: Runtime> Chef<R> {
         let moi = s.source == kobi_stt::Source::Moi;
         let Some(r) = &mut self.reunion else {
             // Réunion close avant que la transcription ait rattrapé l'arrêt :
-            // ce qui a été dit avant va encore dans sa transcription (KOB-281).
+            // ce qui a été dit avant va encore dans sa transcription (KOB-281),
+            // y compris un énoncé commencé avant et fini après (KOB-364).
             // Sauf ce qui a été dit pendant une fin annulée (KOB-309).
             let debut = self
                 .reunion_close
                 .as_ref()
                 .and_then(|(debut, arret, fins)| {
-                    (dit_a <= *arret && !dit_pendant_une_fin_annulee(fins, moi, commence_a, dit_a))
-                        .then_some(*debut)
+                    (!dit_apres_l_arret(commence_a, dit_a, *arret)
+                        && !dit_pendant_une_fin_annulee(fins, moi, commence_a, dit_a))
+                    .then_some(*debut)
                 });
             if let Some(debut) = debut {
                 horodater(&mut s, debut, dit_a);
@@ -1846,9 +1856,13 @@ impl<R: Runtime> Chef<R> {
             return;
         }
         // Dit avant la fin mais transcrit après (charge, file d'attente) :
-        // gardé jusqu'au compte rendu. Ce qui est dit après (le « annule »
+        // gardé jusqu'au compte rendu, comme un énoncé encore en cours à
+        // l'arrêt au clic (KOB-364). Ce qui est dit après (le « annule »
         // d'« Annuler »…) ne l'est pas (KOB-198).
-        if r.fin_demandee && r.arret.is_none_or(|arret| dit_a > arret) {
+        if r.fin_demandee
+            && r.arret
+                .is_none_or(|arret| dit_apres_l_arret(commence_a, dit_a, arret))
+        {
             if r.annulable_jusqu.is_some() {
                 r.apres_l_arret.push((s, dit_a));
             }
@@ -3551,6 +3565,87 @@ mod tests {
         }
     }
 
+    /// KOB-364 : un énoncé commencé avant l'arrêt au clic et fini après
+    /// entre au compte rendu, en entier ; un énoncé commencé après l'arrêt
+    /// n'y entre pas.
+    #[test]
+    fn enonce_a_cheval_sur_l_arret_garde() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            // Pistes en retard : le compte rendu attend leur transcription.
+            let avant = Instant::now() - Duration::from_secs(30);
+            c.recevoir(Message::Avancement(kobi_stt::Source::Moi, Some(avant)));
+            c.commande(Intention::TerminerReunion);
+            let arret = c.reunion.as_ref().unwrap().arret.unwrap();
+            let a_cheval = Segment {
+                start: 0.0,
+                end: 12.0,
+                source: kobi_stt::Source::Moi,
+                text: "Point un validé, point deux reporté.".into(),
+                is_final: true,
+            };
+            c.recevoir(Message::Segment(a_cheval, arret + Duration::from_secs(1)));
+            c.recevoir(Message::Segment(
+                dit("Après l'arrêt."),
+                arret + Duration::from_secs(3),
+            ));
+            c.recevoir(Message::Avancement(kobi_stt::Source::Moi, None));
+            c.recevoir(Message::Avancement(kobi_stt::Source::Eux, None));
+            c.tick();
+            let r = c.reunion.as_ref().unwrap();
+            assert!(r.compte_rendu_demande);
+            assert!(
+                r.pour_compte_rendu
+                    .contains("Point un validé, point deux reporté."),
+                "{}",
+                r.pour_compte_rendu
+            );
+            assert!(
+                !r.pour_compte_rendu.contains("Après l'arrêt."),
+                "{}",
+                r.pour_compte_rendu
+            );
+        });
+    }
+
+    /// KOB-364 : sous charge, l'énoncé à cheval sur l'arrêt arrive après
+    /// « Annuler » : il reste à la réunion reprise, comme s'il était arrivé
+    /// avant. La règle, partagée avec la réunion close : un segment fini
+    /// après l'arrêt en est s'il a commencé moins de [`MARGE_FIN`] avant.
+    #[test]
+    fn enonce_a_cheval_arrive_apres_annuler() {
+        let a_cheval = |arret: Instant, dit_a: Instant| Segment {
+            start: 0.0,
+            end: (dit_a - arret).as_secs_f64() + 20.0,
+            source: kobi_stt::Source::Moi,
+            text: "Vingt secondes de décisions.".into(),
+            is_final: true,
+        };
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            c.commande(Intention::TerminerReunion);
+            let arret = c.reunion.as_ref().unwrap().arret.unwrap();
+            std::thread::sleep(Duration::from_millis(20));
+            c.commande(Intention::Reprendre);
+            let dit_a = arret + Duration::from_millis(10);
+            c.recevoir(Message::Segment(a_cheval(arret, dit_a), dit_a));
+            let r = c.reunion.as_ref().unwrap();
+            assert!(
+                r.a_noter.contains("Vingt secondes de décisions."),
+                "{}",
+                r.a_noter
+            );
+        });
+        let arret = Instant::now();
+        let s = |x: u64| Duration::from_secs(x);
+        assert!(!dit_apres_l_arret(arret - s(20), arret + s(1), arret));
+        assert!(!dit_apres_l_arret(arret - s(2), arret - s(1), arret));
+        assert!(dit_apres_l_arret(arret - s(1), arret + s(1), arret));
+        assert!(dit_apres_l_arret(arret + s(1), arret + s(2), arret));
+    }
+
     /// KOB-261 : ce qui a été dit avant la pause mais transcrit après est
     /// gardé, y compris si la réunion se termine pendant la pause ; ce qui
     /// est dit après la pause ne l'est pas.
@@ -4309,17 +4404,18 @@ mod tests {
             c.commande(Intention::DemarrerReunion);
             let avant = Instant::now() - Duration::from_millis(50);
             c.commande(Intention::TerminerReunion);
+            let arret = c.reunion.as_ref().unwrap().arret.unwrap();
             std::thread::sleep(Duration::from_millis(20));
             let pendant = Instant::now();
             std::thread::sleep(Duration::from_millis(20));
             c.commande(Intention::Reprendre);
             assert!(!c.fin_annulable());
             c.recevoir(Message::Segment(dit("Pendant la fin."), pendant));
-            // Début placé bien avant (silence d'avant la parole, Nemotron) :
-            // jugé sur la fin, écarté aussi.
+            // Début placé avant l'arrêt, de moins que le silence transmis
+            // (Nemotron) : jugé sur la fin, écarté aussi.
             let mut long = dit("Reprends.");
             long.start = 0.0;
-            long.end = 30.0;
+            long.end = (pendant - arret + MARGE_FIN - Duration::from_millis(100)).as_secs_f64();
             c.recevoir(Message::Segment(long, pendant));
             c.recevoir(Message::Segment(dit("Avant l'arrêt."), avant));
             // KOB-323 : commencée pendant la fin, finie après le clic (le

@@ -703,6 +703,17 @@ fn oui_ou_non(texte: &str) -> Option<&'static str> {
     }
 }
 
+/// Jusqu'où la piste a transcrit **et publié** sa parole (KOB-364) : tout
+/// l'audio reçu (`t`), sauf l'énoncé en cours (`partiel`, son début) tant que
+/// la porte est ouverte. Porte fermée, un partiel resté sans final est
+/// abandonné par le moteur (KOB-274) : il ne retient rien.
+pub(crate) fn transcrit_jusqu_a(t: f64, porte_ouverte: bool, partiel: Option<f64>) -> f64 {
+    match partiel {
+        Some(debut) if porte_ouverte => t.min(debut),
+        _ => t,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn transcrire(
     stt: &mut impl SttEngine,
@@ -751,6 +762,10 @@ fn transcrire(
                     if entendu(&s.text) {
                         if let Some(d) = diag {
                             d.note(&format!("écho de Kobi ignoré : « {} »", s.text));
+                        }
+                        // L'énoncé en cours est fini, même écarté (KOB-364).
+                        if s.is_final {
+                            rattrapage.partiel = None;
                         }
                         continue;
                     }
@@ -1446,7 +1461,18 @@ impl<R: Runtime> Fil<R> {
         }
         // Tout l'audio reçu jusqu'ici est transcrit.
         let jusqu_a = self.origine + Duration::from_secs_f64(self.t.max(0.0));
-        crate::chef::avancer(&self.app, kobi_stt::Source::Moi, Some(jusqu_a));
+        // Sauf l'énoncé en cours, qui n'a pas encore son final : une fin de
+        // réunion au milieu l'attend (KOB-364).
+        let publie = self.origine
+            + Duration::from_secs_f64(
+                transcrit_jusqu_a(
+                    self.t,
+                    self.porte.ouverte(),
+                    self.rattrapage.partiel.as_ref().map(|(_, debut)| *debut),
+                )
+                .max(0.0),
+            );
+        crate::chef::avancer(&self.app, kobi_stt::Source::Moi, Some(publie));
         if en_direct {
             self.executer(actions, jusqu_a);
             // Sous charge, la transcription peut aller moins vite que la
@@ -1728,6 +1754,16 @@ mod tests {
     use super::*;
     use crate::interpellation::modele_nemotron;
     use std::path::Path;
+
+    /// KOB-364 : la piste n'est pas « à jour » au-delà du début de l'énoncé
+    /// en cours ; porte fermée, un partiel abandonné ne la retient pas.
+    #[test]
+    fn avancement_retenu_par_l_enonce_en_cours() {
+        assert_eq!(transcrit_jusqu_a(20.0, true, Some(8.0)), 8.0);
+        assert_eq!(transcrit_jusqu_a(20.0, false, Some(8.0)), 20.0);
+        assert_eq!(transcrit_jusqu_a(20.0, true, None), 20.0);
+        assert_eq!(transcrit_jusqu_a(20.0, true, Some(25.0)), 20.0);
+    }
 
     /// KOB-265 : l'ordre de fin déjà exécuté à l'avance ne repart pas, ni
     /// l'interpellation qui l'annonce dans le même lot ; annoncée plus tôt,
