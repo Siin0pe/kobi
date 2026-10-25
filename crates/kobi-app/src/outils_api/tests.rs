@@ -236,6 +236,30 @@ fn grep_coupe_les_lignes_trop_longues() {
     assert!(coupee.len() <= LIGNE_MAX + " … (ligne coupée)".len());
 }
 
+/// KOB-346 : un dossier ignoré se parcourt quand il est le départ demandé,
+/// ou une codebase déclarée ; ses sous-dossiers ignorés restent ignorés.
+#[test]
+fn depart_nomme_comme_un_dossier_ignore_parcouru() {
+    let dir = codebase();
+    let l = lecteur(&dir);
+    let target = dir.path().join("target");
+    let r = l
+        .chercher(&json!({ "pattern": "TODO", "path": target }))
+        .unwrap();
+    assert!(r.contains("genere.rs"), "{r}");
+    let r = l
+        .lister(&json!({ "pattern": "**/*.rs", "path": target }))
+        .unwrap();
+    assert!(r.contains("genere.rs"), "{r}");
+    // Une codebase déclarée nommée `target`.
+    let declaree = Lecteur::new(std::slice::from_ref(&target));
+    let r = declaree.chercher(&json!({ "pattern": "TODO" })).unwrap();
+    assert!(r.contains("genere.rs"), "{r}");
+    // Depuis la racine, `target` reste ignoré.
+    let r = l.chercher(&json!({ "pattern": "TODO" })).unwrap();
+    assert!(!r.contains("genere.rs"), "{r}");
+}
+
 #[test]
 fn glob_liste_les_chemins() {
     let dir = codebase();
