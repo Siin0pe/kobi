@@ -133,20 +133,28 @@ pub fn nettement_anglaise(question: &str) -> bool {
     // Une phrase citée (« Traduis "where is the station" en espagnol ») ne
     // dit pas la langue de la demande (KOB-290) ; une question entière entre
     // guillemets, si.
+    // Seulement si le reste dit quelque chose : « Summarize "the notes" »
+    // garde sa citation (KOB-301).
     let hors_citations = sans_citations(question);
-    let question = if hors_citations.chars().any(char::is_alphabetic) {
+    let question = if compter(&hors_citations) != (0, 0) {
         hors_citations.as_str()
     } else {
         question
     };
-    let minuscules = question.to_lowercase();
+    let (en, fr) = compter(question);
+    en >= 2 && en > 2 * fr
+}
+
+/// Mots outils anglais et français du texte.
+fn compter(texte: &str) -> (usize, usize) {
+    let minuscules = texte.to_lowercase();
     let mots: Vec<&str> = minuscules
         .split(|c: char| !c.is_alphabetic())
         .filter(|m| !m.is_empty())
         .collect();
     let en = mots.iter().filter(|m| ANGLAIS.contains(m)).count();
     let fr = mots.iter().filter(|m| FRANCAIS.contains(m)).count();
-    en >= 2 && en > 2 * fr
+    (en, fr)
 }
 
 /// Le texte sans ce qui est entre guillemets doubles (`"…"`, `“…”`, `«…»`).
@@ -236,5 +244,7 @@ mod tests {
         }
         assert!(nettement_anglaise("\"what day is it today\""));
         assert!(nettement_anglaise("what does \"pricing\" mean here?"));
+        // KOB-301 : le reste ne dit rien, la citation compte.
+        assert!(nettement_anglaise("Summarize \"the notes from today\""));
     }
 }

@@ -61,6 +61,10 @@ pub const EVENEMENT_RETARD: &str = "transcription_retard";
 /// Au-delà de ce retard (s), Kobi le signale : un ordre dit maintenant ne
 /// sera entendu qu'après.
 const SEUIL_RETARD: f64 = 15.0;
+/// Retard (s) à partir duquel la transcription colle les phrases, souvent sans
+/// ponctuation : un ordre de réunion collé au nom compte alors comme un appel
+/// (KOB-289, KOB-301).
+const RETARD_PHRASES_COLLEES: f64 = 3.0;
 /// Le retard est signalé de nouveau à chaque palier de ce nombre de secondes.
 const PALIER_RETARD: f64 = 30.0;
 
@@ -1320,8 +1324,11 @@ impl<R: Runtime> Fil<R> {
             // Sous charge, la transcription peut aller moins vite que la
             // parole : un ordre dit maintenant ne serait entendu qu'après
             // (KOB-250).
-            self.signaler_retard(self.origine.elapsed().as_secs_f64() - self.t);
-            self.ecouteur.sous_charge = self.retard.is_some();
+            let retard = self.origine.elapsed().as_secs_f64() - self.t;
+            self.signaler_retard(retard);
+            // Nemotron colle les phrases dès quelques secondes de retard,
+            // bien avant le signal de KOB-250 (15 s) (KOB-289, KOB-301).
+            self.ecouteur.sous_charge = retard >= RETARD_PHRASES_COLLEES;
         }
 
         if self.bilan.elapsed() >= BILAN {
