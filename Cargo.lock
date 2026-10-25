@@ -3094,6 +3094,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "bzip2 0.5.2",
+ "glob",
  "jiff",
  "keyring",
  "kobi-audio",
@@ -3104,6 +3105,7 @@ dependencies = [
  "kobi-session",
  "kobi-stt",
  "kobi-tts",
+ "regex",
  "reqwest",
  "rmcp",
  "serde",
@@ -3117,6 +3119,7 @@ dependencies = [
  "tokio",
  "toml 0.9.12+spec-1.1.0",
  "tracing",
+ "walkdir",
  "winreg",
 ]
 
