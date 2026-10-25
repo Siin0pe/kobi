@@ -554,10 +554,6 @@ impl Ecouteur {
                 actions.push(self.envoyer(texte.trim(), t));
             }
             // Le nom, dit après l'arrêt, ramène à l'écoute ordinaire ; le
-            // reste est ignoré. Dit avant (l'ordre de fin lui-même, transcrit
-            // en retard après une fin anticipée), il ne ferme pas « Annuler »
-            // (KOB-287).
-            // Le nom, dit après l'arrêt, ramène à l'écoute ordinaire ; le
             // reste est ignoré. Dit avant l'arrêt et transcrit pendant
             // « Annuler », rien ne part : ni l'ordre de fin lui-même (KOB-287),
             // ni un ordre de reprise qui relancerait la réunion terminée
