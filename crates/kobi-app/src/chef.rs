@@ -2317,6 +2317,7 @@ impl<R: Runtime> Chef<R> {
                 let Some(mut ui) = self.cartes.remove(&carte) else {
                     self.cartes_ouvertes.remove(&carte);
                     self.cartes_des_notes.remove(&carte);
+                    self.notes_acceptees.remove(&carte);
                     return;
                 };
                 let ui_fermee = Some(ui.clone());
