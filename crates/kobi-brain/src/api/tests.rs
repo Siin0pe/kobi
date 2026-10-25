@@ -1107,3 +1107,66 @@ async fn surcharge_dans_le_flux_reessayee() {
     assert!(fin(&tous(brain.ask(question("quatre"))).await).is_err());
     assert_eq!(serveur.recues().len(), 8);
 }
+
+/// KOB-319 : `max_etapes` allers-retours d'outils au plus, tous gardés ;
+/// la requête suivante interdit les outils (`tool_choice: none`, même
+/// liste d'outils) et rend la réponse finale.
+#[tokio::test]
+async fn limite_d_allers_retours() {
+    let mut scripts: Vec<Script> = (1..=3)
+        .map(|i| appel(&format!("toolu_{i}"), "lire", r#"{"chemin": "a.md"}"#))
+        .collect();
+    scripts.push(texte("Voilà ce que", " j'ai trouvé."));
+    let serveur = Serveur::lancer(scripts).await;
+    let outils = Arc::new(OutilsTest::default());
+    let mut brain = ApiBrain::new(ApiConfig {
+        cle: CLE.into(),
+        url: serveur.url.clone(),
+        outils: outils.clone(),
+        max_etapes: 3,
+        ..Default::default()
+    })
+    .unwrap();
+    let resume = fin(&tous(brain.ask(question("cherche"))).await).unwrap();
+    assert_eq!(resume.text, "Voilà ce que j'ai trouvé.");
+    assert_eq!(outils.appels.lock().unwrap().len(), 3);
+    let r = serveur.recues();
+    assert_eq!(r.len(), 4);
+    for (i, requete) in r.iter().enumerate() {
+        assert_eq!(requete.corps["tools"], r[0].corps["tools"], "requête {i}");
+        let attendu = if i == 3 {
+            json!({"type": "none"})
+        } else {
+            Value::Null
+        };
+        assert_eq!(requete.corps["tool_choice"], attendu, "requête {i}");
+    }
+    // Les trois lots d'outils sont dans la conversation finale.
+    assert_eq!(r[3].corps["messages"].as_array().unwrap().len(), 7);
+}
+
+/// Si Claude demande encore un outil à la dernière étape, rien n'est
+/// exécuté et le tour échoue.
+#[tokio::test]
+async fn outil_demande_malgre_l_interdiction() {
+    let serveur = Serveur::lancer(vec![
+        appel("toolu_1", "lire", r#"{"chemin": "a.md"}"#),
+        appel("toolu_2", "lire", r#"{"chemin": "b.md"}"#),
+    ])
+    .await;
+    let outils = Arc::new(OutilsTest::default());
+    let mut brain = ApiBrain::new(ApiConfig {
+        cle: CLE.into(),
+        url: serveur.url.clone(),
+        outils: outils.clone(),
+        max_etapes: 1,
+        ..Default::default()
+    })
+    .unwrap();
+    match fin(&tous(brain.ask(question("cherche"))).await) {
+        Err(BrainError::Api(m)) => assert!(m.contains("allers-retours"), "{m}"),
+        autre => panic!("{autre:?}"),
+    }
+    assert_eq!(*outils.appels.lock().unwrap(), ["lire"]);
+    assert_eq!(serveur.recues().len(), 2);
+}
