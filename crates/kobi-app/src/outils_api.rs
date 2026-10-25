@@ -243,8 +243,12 @@ impl Lecteur {
             _ => brut.to_path_buf(),
         };
         // Avant toute résolution : résoudre un chemin réseau ouvrirait déjà
-        // la connexion (KOB-344).
-        if chemin_reseau(chemin) || chemin_reseau(&brut.to_string_lossy()) {
+        // la connexion (KOB-344). Sans dossier permis, rien ne se résout.
+        if self.dossiers.is_empty() {
+            return Err(format!("{chemin} : aucun dossier permis"));
+        }
+        if chemin_reseau(chemin) || chemin_reseau(&brut.to_string_lossy()) || !prefixe_local(&brut)
+        {
             return Err(format!(
                 "{chemin} : chemin réseau ou de périphérique refusé (seuls les dossiers permis se lisent : {})",
                 self.liste()
@@ -812,6 +816,10 @@ impl kobi_brain::Outillage for OutillageKobi {
 /// le même sous tous les systèmes.
 fn chemin_reseau(chemin: &str) -> bool {
     let c = chemin.replace('/', "\\");
+    // `\??\UNC\…`, `\??\pipe\…` : passés tels quels à NT.
+    if c.starts_with("\\??\\") {
+        return true;
+    }
     if !c.starts_with("\\\\") {
         return false;
     }
@@ -820,6 +828,19 @@ fn chemin_reseau(chemin: &str) -> bool {
         b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && b[2] == b'\\'
     });
     !disque_local
+}
+
+/// Sous Windows, liste blanche : un chemin absolu n'a pour préfixe qu'un
+/// disque local (`C:`, `\\?\C:`) ; tout autre préfixe (UNC, périphérique,
+/// verbatim) est refusé avant résolution (KOB-344). Ailleurs, rien à juger.
+fn prefixe_local(chemin: &Path) -> bool {
+    use std::path::{Component, Prefix};
+    match chemin.components().next() {
+        Some(Component::Prefix(p)) => {
+            matches!(p.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_))
+        }
+        _ => true,
+    }
 }
 
 #[cfg(test)]

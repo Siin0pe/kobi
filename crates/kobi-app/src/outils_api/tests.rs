@@ -62,8 +62,6 @@ fn read_numerote_et_decoupe() {
     assert!(l.lire(&json!({})).unwrap_err().contains("file_path"));
 }
 
-/// Rien ne se lit hors des dossiers permis : chemin absolu, `..`, lien
-/// symbolique qui sort.
 /// KOB-344 : un chemin réseau ou de périphérique Windows est refusé avant
 /// toute résolution (qui ouvrirait la connexion SMB et enverrait le hash
 /// NTLM) ; jugé sur le texte, il se teste sous Linux. Le chemin verbatim d'un
@@ -79,6 +77,9 @@ fn chemins_reseau_refuses_avant_toute_resolution() {
         r"\\?\Volume{0000}\x",
         r"\\localhost\c$\Windows",
         r"/\attaquant\partage",
+        r"\??\UNC\attaquant\partage\x",
+        "/??/pipe/nom",
+        r"\??\GLOBALROOT\Device\Mup\x",
     ] {
         assert!(chemin_reseau(reseau), "{reseau}");
     }
@@ -97,13 +98,29 @@ fn chemins_reseau_refuses_avant_toute_resolution() {
         let e = r.unwrap_err();
         assert!(e.contains("chemin réseau"), "{e}");
     };
-    for chemin in [r"\\attaquant\partage\x", "//attaquant/partage/x"] {
+    for chemin in [
+        r"\\attaquant\partage\x",
+        "//attaquant/partage/x",
+        r"\??\UNC\attaquant\partage\x",
+    ] {
         refuse(l.lire(&json!({ "file_path": chemin })));
         refuse(l.chercher(&json!({ "pattern": "x", "path": chemin })));
         refuse(l.lister(&json!({ "pattern": "*", "path": chemin })));
     }
+    // Sans dossier permis : rien ne se résout, pas même un chemin qui
+    // échapperait au contrôle du texte.
+    let vide = Lecteur::new(&[]);
+    for chemin in [r"\??\UNC\attaquant\p\x", "COM1", "/etc/passwd"] {
+        let e = vide.lire(&json!({ "file_path": chemin })).unwrap_err();
+        assert!(e.contains("aucun dossier permis"), "{e}");
+    }
+    // Liste blanche des préfixes (seuls les chemins Windows en ont).
+    assert!(prefixe_local(Path::new("/code/kobi")));
+    assert!(prefixe_local(Path::new("src/main.rs")));
 }
 
+/// Rien ne se lit hors des dossiers permis : chemin absolu, `..`, lien
+/// symbolique qui sort.
 #[test]
 fn rien_hors_des_dossiers_permis() {
     let dir = codebase();
