@@ -77,7 +77,7 @@ pub const CLES: &[(&str, Application, &str)] = &[
     (
         "notes.mode",
         AuRedemarrage,
-        "Prise de notes : blocks, end ou continuous.",
+        "Prise de notes : blocks, end ou continuous (expérimental : Kobi peut proposer une action, sur carte).",
     ),
     (
         "notes.interval_min",

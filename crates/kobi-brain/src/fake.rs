@@ -248,6 +248,7 @@ mod tests {
             .update_notes(NotesUpdate {
                 transcript: "…".into(),
                 notes: "- décision A".into(),
+                ..Default::default()
             })
             .wait()
             .await

@@ -176,14 +176,17 @@ pub(crate) fn texte_ask(ask: &Ask) -> String {
     )
 }
 
-/// Message d'un bloc de notes.
+/// Message d'un bloc de notes ; en continu, avec la consigne des
+/// propositions (KOB-72).
 pub(crate) fn texte_notes(update: &NotesUpdate) -> String {
-    message(
-        "notes",
-        &update.transcript,
-        &update.notes,
+    let mut body = String::from(
         "Mets les notes à jour et renvoie-les en entier, en markdown brut, sans bloc de code autour.",
-    )
+    );
+    if update.propositions {
+        body.push_str("\n\n");
+        body.push_str(CONSIGNE_PROPOSITIONS);
+    }
+    message("notes", &update.transcript, &update.notes, &body)
 }
 
 /// Message de fin de réunion.
@@ -199,6 +202,15 @@ pub(crate) fn texte_compte_rendu(report: &ReportRequest) -> String {
     }
     message("compte rendu", &report.transcript, &report.notes, &body)
 }
+
+/// Notes en continu (KOB-72, expérimental) : Claude peut proposer une
+/// action. Elle passe par la carte de Kobi : rien n'est fait sans un oui.
+pub const CONSIGNE_PROPOSITIONS: &str = "\
+Mode continu (expérimental) : si cette nouvelle transcription décide ou demande clairement \
+une action concrète que tes outils savent faire (créer un ticket, une page, un rappel…) et \
+qu'elle n'est pas déjà faite ni proposée dans les notes, propose-la en appelant l'outil qui \
+l'écrit, une seule par bloc. Kobi montre une carte à l'utilisateur et n'agit qu'après son « oui » ; \
+refusée, n'insiste pas. N'invente aucune action, ne pilote pas la réunion. Puis renvoie les notes.";
 
 /// Outils internes de Claude Code qui ne sont pas des sources à montrer.
 const INTERNAL_TOOLS: &[&str] = &["ToolSearch", "TodoWrite"];

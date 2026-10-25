@@ -56,15 +56,20 @@ const TITRE_PAROLE_MAX: usize = 8_000;
 /// Demandes de titre au plus, quand Claude ne trouve pas.
 const TITRE_ESSAIS: u8 = 3;
 
-/// Notes en mode fin de réunion (`notes.mode = end`, KOB-71) : rien n'est
-/// demandé à Claude pendant la réunion, tout passe par le compte rendu. Lu
-/// au début de chaque réunion.
-fn notes_a_la_fin() -> bool {
-    kobi_session::config::default_path().is_some_and(|p| {
-        kobi_session::config::load_or_create(&p).config.notes.mode
-            == kobi_session::config::NotesMode::End
-    })
+/// Mode de prise de notes (`notes.mode`), lu au début de chaque réunion. En
+/// fin de réunion (`end`, KOB-71), rien n'est demandé à Claude pendant la
+/// réunion, tout passe par le compte rendu. En continu (`continuous`,
+/// KOB-72, expérimental), un bloc part toutes les [`PHRASES_CONTINU`]
+/// phrases et Claude peut proposer une action, sur carte.
+fn mode_de_notes() -> kobi_session::config::NotesMode {
+    kobi_session::config::default_path()
+        .map(|p| kobi_session::config::load_or_create(&p).config.notes.mode)
+        .unwrap_or_default()
 }
+
+/// Phrases par bloc en notes continues (KOB-72) : assez peu pour réagir
+/// vite, assez pour ne pas appeler Claude à chaque phrase.
+const PHRASES_CONTINU: usize = 3;
 
 /// Titre automatique réglé (`meetings.titre_auto`). Lu au début de chaque
 /// réunion, pas à chaque tick sous le verrou du chef (KOB-265).
@@ -391,6 +396,11 @@ struct EnCours {
     /// `notes.mode = end` (KOB-71) : ni bloc de notes ni titre pendant la
     /// réunion ; le titre est demandé avec le compte rendu.
     a_la_fin: bool,
+    /// `notes.mode = continuous` (KOB-72) : blocs de [`PHRASES_CONTINU`]
+    /// phrases, et propositions d'action sur carte.
+    continu: bool,
+    /// Phrases arrivées dans `a_noter` depuis le dernier bloc envoyé.
+    phrases_a_noter: usize,
     /// `meetings.titre_auto`, lu au début de la réunion (KOB-265).
     titre_auto: bool,
     /// Latence de chaque interpellation, résumée à la fin du compte rendu
@@ -1282,6 +1292,7 @@ impl<R: Runtime> Chef<R> {
         // La conversation du quotidien s'arrête là ; la réunion prend le relais.
         self.fermer_conversation();
         tracing::info!(ms = debut.elapsed().as_millis() as u64, "réunion démarrée");
+        let mode = mode_de_notes();
         self.reunion = Some(EnCours {
             dossier: None,
             debut,
@@ -1307,7 +1318,9 @@ impl<R: Runtime> Chef<R> {
             debut_parole: String::new(),
             titre_demande: false,
             titre_essais: 0,
-            a_la_fin: notes_a_la_fin(),
+            a_la_fin: mode == kobi_session::config::NotesMode::End,
+            continu: mode == kobi_session::config::NotesMode::Continuous,
+            phrases_a_noter: 0,
             titre_auto: titre_auto_actif(),
             latences: Default::default(),
         });
@@ -1625,6 +1638,7 @@ impl<R: Runtime> Chef<R> {
             return;
         }
         r.a_noter.push_str(&ligne);
+        r.phrases_a_noter += 1;
         if !r.titre_demande && r.debut_parole.len() < TITRE_PAROLE_MAX {
             r.debut_parole.push_str(&ligne);
         }
@@ -2460,12 +2474,11 @@ impl<R: Runtime> Chef<R> {
                 });
             }
         }
-        if r.pause
-            || r.fin_demandee
-            || r.a_la_fin
-            || r.envoye.is_some()
-            || Instant::now() < r.prochain_bloc
-        {
+        // En continu, le bloc part dès qu'il a ses phrases ; le reste part
+        // à l'heure, comme en mode blocs.
+        let du = Instant::now() >= r.prochain_bloc
+            || (r.continu && r.phrases_a_noter >= PHRASES_CONTINU);
+        if r.pause || r.fin_demandee || r.a_la_fin || r.envoye.is_some() || !du {
             return;
         }
         r.prochain_bloc = Instant::now() + self.intervalle;
@@ -2473,11 +2486,17 @@ impl<R: Runtime> Chef<R> {
             return;
         }
         let bloc = std::mem::take(&mut r.a_noter);
+        r.phrases_a_noter = 0;
         r.envoye = Some(bloc.clone());
-        tracing::info!(octets = bloc.len(), "bloc de notes envoyé");
+        tracing::info!(
+            octets = bloc.len(),
+            continu = r.continu,
+            "bloc de notes envoyé"
+        );
         self.cerveau.demander(Demande::Notes {
             transcript: bloc,
             notes: r.notes.clone(),
+            propositions: r.continu,
         });
     }
 }
@@ -3172,6 +3191,36 @@ mod tests {
                 r.pour_compte_rendu
             );
         });
+    }
+
+    /// KOB-72 : en continu, le bloc part dès sa troisième phrase, avant
+    /// l'heure, et demande des propositions ; en mode blocs, il attend
+    /// l'heure.
+    #[test]
+    fn notes_en_continu_par_trois_phrases() {
+        for continu in [true, false] {
+            let (app, _dir) = chef_en_essai();
+            avec_chef(&app, |c| {
+                c.commande(Intention::DemarrerReunion);
+                c.reunion.as_mut().unwrap().continu = continu;
+                for texte in ["Budget validé.", "Lieu : Annecy."] {
+                    c.recevoir(Message::Segment(dit(texte), Instant::now()));
+                }
+                c.tick();
+                assert!(c.reunion.as_ref().unwrap().envoye.is_none());
+                c.recevoir(Message::Segment(
+                    dit("Il faut envoyer le devis."),
+                    Instant::now(),
+                ));
+                c.tick();
+                let r = c.reunion.as_ref().unwrap();
+                assert_eq!(r.envoye.is_some(), continu, "continu : {continu}");
+                if continu {
+                    assert!(r.envoye.as_ref().unwrap().contains("devis"));
+                    assert_eq!(r.phrases_a_noter, 0);
+                }
+            });
+        }
     }
 
     /// KOB-71 : en mode fin de réunion, aucun bloc de notes ni titre ne part

@@ -129,6 +129,9 @@ pub enum Demande {
     Notes {
         transcript: String,
         notes: String,
+        /// Notes en continu (KOB-72) : Claude peut proposer une action, qui
+        /// passe par une carte.
+        propositions: bool,
     },
     CompteRendu {
         transcript: String,
@@ -311,7 +314,12 @@ impl Cerveau {
             taches.clone(),
             delais,
         ));
-        tokio::spawn(prise_de_notes(fabrique, rx_n, sortie.clone()));
+        tokio::spawn(prise_de_notes(
+            fabrique,
+            rx_n,
+            sortie.clone(),
+            cartes.clone(),
+        ));
         Self {
             questions,
             arrets,
@@ -1296,10 +1304,39 @@ fn sans_cloture(texte: &str) -> &str {
     }
 }
 
+/// Suit un tour de notes ou de compte rendu jusqu'à sa fin. En continu
+/// (KOB-72), une action que Claude propose ouvre une carte, comme dans la
+/// conversation ; sinon elle est refusée sans carte : Kobi n'agit pas
+/// pendant la prise de notes.
+async fn suivre_notes(
+    mut turn: kobi_brain::Turn,
+    propositions: bool,
+    sortie: &Sortie,
+    cartes: &Cartes,
+) -> Result<kobi_brain::TurnSummary, BrainError> {
+    while let Some(evenement) = turn.next().await {
+        match evenement {
+            BrainEvent::Done(fin) => return Ok(fin),
+            BrainEvent::Error(e) => return Err(e),
+            BrainEvent::Permission(demande) if propositions => {
+                tracing::info!(outil = %demande.request.tool_name, "notes en continu : action proposée");
+                carte(0, demande, sortie, cartes);
+            }
+            BrainEvent::Permission(demande) => {
+                tracing::info!(outil = %demande.request.tool_name, "refusé sans carte : prise de notes");
+                demande.deny("Kobi n'agit pas pendant la prise de notes.");
+            }
+            _ => {}
+        }
+    }
+    Err(BrainError::Crashed("tour de notes sans fin".into()))
+}
+
 async fn prise_de_notes(
     fabrique: Fabrique,
     mut rx: mpsc::UnboundedReceiver<Demande>,
     sortie: Sortie,
+    cartes: Cartes,
 ) {
     let mut session: Option<Session> = None;
     while let Some(demande) = rx.recv().await {
@@ -1340,10 +1377,20 @@ async fn prise_de_notes(
             ));
             continue;
         }
-        let (turn, compte_rendu) = match demande {
-            Demande::Notes { transcript, notes } => {
-                (s.update_notes(NotesUpdate { transcript, notes }), false)
-            }
+        let (turn, compte_rendu, propositions) = match demande {
+            Demande::Notes {
+                transcript,
+                notes,
+                propositions,
+            } => (
+                s.update_notes(NotesUpdate {
+                    transcript,
+                    notes,
+                    propositions,
+                }),
+                false,
+                propositions,
+            ),
             Demande::CompteRendu { transcript, notes } => (
                 s.final_report(ReportRequest {
                     transcript,
@@ -1351,10 +1398,16 @@ async fn prise_de_notes(
                     pending_actions: Vec::new(),
                 }),
                 true,
+                false,
             ),
             _ => continue,
         };
-        let resultat = turn.wait_timeout(NOTES_MAX).await;
+        let resultat = tokio::time::timeout(
+            NOTES_MAX,
+            suivre_notes(turn, propositions, &sortie, &cartes),
+        )
+        .await
+        .unwrap_or(Err(BrainError::Timeout(NOTES_MAX)));
         if matches!(
             resultat,
             Err(BrainError::Crashed(_) | BrainError::Timeout(_))
@@ -2300,6 +2353,68 @@ mod tests {
             }));
     }
 
+    /// KOB-72 : en continu, une action proposée pendant les notes ouvre une
+    /// carte ; le oui la laisse faire, les notes finissent. Hors continu,
+    /// elle est refusée sans carte.
+    #[tokio::test]
+    async fn notes_en_continu_une_proposition_ouvre_une_carte() {
+        for propositions in [true, false] {
+            let (s, recus) = sortie();
+            let journal = Arc::new(Mutex::new(None));
+            let j = journal.clone();
+            let fabrique: Fabrique = Arc::new(move |role| {
+                let b = match role {
+                    Role::Notes => FakeBrain::new().then(vec![
+                        Step::Permission(PermissionRequest {
+                            tool_name: "mcp__linear__save_issue".into(),
+                            input: serde_json::json!({"title": "Envoyer le devis"}),
+                            tool_use_id: None,
+                        }),
+                        Step::Text("- Devis à envoyer".into()),
+                    ]),
+                    _ => FakeBrain::new(),
+                };
+                if role == Role::Notes {
+                    *j.lock().unwrap() = Some(b.journal());
+                }
+                Box::pin(async move { Ok(Box::new(b) as Session) })
+            });
+            let c = Cerveau::lancer(fabrique, s);
+            c.demander(Demande::Notes {
+                transcript: "[00:10 moi] il faut envoyer le devis".into(),
+                notes: String::new(),
+                propositions,
+            });
+            if propositions {
+                attendre(&recus, |r| matches!(r, Retour::Carte { tour: 0, .. })).await;
+                let carte = recus
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .find_map(|(_, r)| match r {
+                        Retour::Carte { carte, outil, .. } => {
+                            assert_eq!(outil, "mcp__linear__save_issue");
+                            Some(*carte)
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                c.demander(Demande::Decision {
+                    carte,
+                    accepte: true,
+                });
+            }
+            attendre(&recus, |r| matches!(r, Retour::Notes(Ok(_)))).await;
+            assert_eq!(
+                recu(&recus, |r| matches!(r, Retour::Carte { .. })),
+                propositions
+            );
+            let decisions = journal.lock().unwrap().as_ref().unwrap().decisions();
+            assert_eq!(decisions.len(), 1);
+            assert_eq!(decisions[0].1 == kobi_brain::Decision::Allow, propositions);
+        }
+    }
+
     #[tokio::test]
     async fn chaque_outil_part_au_fil_d_activite() {
         let (s, recus) = sortie();
@@ -2396,6 +2511,7 @@ mod tests {
         c.demander(Demande::Notes {
             transcript: "[00:10 moi] budget".into(),
             notes: String::new(),
+            propositions: false,
         });
         attendre(&recus, |r| matches!(r, Retour::Notes(Ok(_)))).await;
         c.demander(Demande::NouvelleReunion);
@@ -2524,6 +2640,7 @@ mod tests {
         c.demander(Demande::Notes {
             transcript: "[00:10 moi] budget".into(),
             notes: "- budget".into(),
+            propositions: false,
         });
         c.demander(question(1, "un"));
         attendre(&recus, |r| matches!(r, Retour::Notes(Ok(_)))).await;

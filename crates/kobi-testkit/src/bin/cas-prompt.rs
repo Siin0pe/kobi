@@ -105,6 +105,7 @@ async fn run_case(args: &Args, case: &Case, dir: &Path) -> Outcome {
         Kind::Notes => brain.update_notes(NotesUpdate {
             transcript: case.transcript.clone(),
             notes: case.notes.clone(),
+            ..Default::default()
         }),
         Kind::Report => brain.final_report(ReportRequest {
             transcript: case.transcript.clone(),

@@ -118,6 +118,8 @@ pub enum NotesMode {
     #[default]
     Blocks,
     End,
+    /// Expérimental (KOB-72) : blocs de quelques phrases, et Kobi peut
+    /// proposer une action, sur carte.
     Continuous,
 }
 
