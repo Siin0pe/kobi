@@ -78,6 +78,8 @@ export class RecIndicator {
   /** Réunion qui vient de finir (étiquette « réunion terminée »), pour la retraduire. */
   private ended: MeetingInfo | null = null;
   private readonly offLangue: () => void;
+  /** « PAUSE · micro coupé » affiché un instant (KOB-310). */
+  private rappel = 0;
 
   constructor() {
     this.root = el('div', 'rec');
@@ -343,8 +345,30 @@ export class RecIndicator {
     this.tick();
   }
 
+  /**
+   * Raccourci pendant la pause (KOB-310) : il n'a rien fait, le micro y est
+   * coupé exprès. L'étiquette dit « PAUSE · micro coupé » un instant, avec un
+   * petit geste, puis redevient « PAUSE ».
+   */
+  rappelPause(): void {
+    if (!this.info?.paused) return;
+    window.clearTimeout(this.rappel);
+    this.label.textContent = t('kobi.meeting.pauseMicroCoupe');
+    if (!this.reduced) {
+      this.root.animate(
+        [{ translate: '0 0' }, { translate: '-4px 0', offset: 0.2 }, { translate: '4px 0', offset: 0.45 }, { translate: '-2px 0', offset: 0.7 }, { translate: '0 0' }],
+        { duration: 380, easing: 'ease-out' },
+      );
+    }
+    this.rappel = window.setTimeout(() => {
+      this.rappel = 0;
+      if (this.info) this.textes(this.info);
+    }, 2500);
+  }
+
   destroy(): void {
     this.offLangue();
+    window.clearTimeout(this.rappel);
     window.clearTimeout(this.timer);
     this.stopEnding();
   }

@@ -146,3 +146,22 @@ test('micro perdu sans autre micro : REC le montre jusqu’à son retour, caché
   await expect(micro).toBeHidden();
   await expectNoErrors(errors);
 });
+
+test('raccourci pendant la pause : REC dit « PAUSE · micro coupé » un instant, puis « PAUSE » (KOB-310)', async ({ page }) => {
+  await mockTauri(page);
+  const errors = await openUi(page, '');
+  await emit(page, 'state', { etat: 'pause', activite: null, mascotte: 'idle', transcrit: false });
+  await emit(page, 'enregistrement', { actif: true, pause: true, debut_ms: Date.now() - 5 * 60_000, notes: 1, titre: null });
+  const label = page.locator('.rec .rec-label');
+  await expect(label).toHaveText('PAUSE');
+  await page.clock.install();
+  await emit(page, 'pause_rappel', null);
+  await expect(label).toHaveText('PAUSE · micro coupé');
+  await page.clock.runFor(2600);
+  await expect(label).toHaveText('PAUSE');
+  // Hors pause, le rappel ne change rien.
+  await emit(page, 'enregistrement', { actif: true, pause: false, debut_ms: Date.now() - 5 * 60_000, notes: 1, titre: null });
+  await emit(page, 'pause_rappel', null);
+  await expect(label).toHaveText('REC');
+  await expectNoErrors(errors);
+});

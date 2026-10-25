@@ -808,6 +808,8 @@
   "kobi.meeting.ariaTermineeAnnuler": "Réunion terminée. Annuler pour reprendre la même réunion",
   "kobi.meeting.retard": "retard {duree}",
   "kobi.meeting.retardAide": "La transcription a {duree} de retard. Pour arrêter tout de suite : {arret}.",
+  "kobi.meeting.pauseMicroCoupe": "PAUSE · micro coupé",
+  "kobi.meeting.pauseMicroCoupeAria": "Réunion en pause : le micro est coupé. Reprenez la réunion pour me parler.",
   "kobi.meeting.microPerdu": "micro perdu",
   "kobi.meeting.microPerduAide": "Le micro s’est arrêté : votre voix n’est plus transcrite. Kobi le rouvre dès qu’un micro est disponible.",
   "kobi.meeting.consentKicker": "Réunion · transcription locale",
@@ -897,6 +899,7 @@
   "coque.chef.tacheAnnulee": "Tâche annulée.",
   "coque.chef.aiAnnule": "J'ai annulé « {question} ».",
   "coque.chef.delaiCarte": "Pas de réponse : je n'ai rien fait.",
+  "coque.chef.depuisLesNotes": "Depuis les notes",
   "coque.chef.jeLeFais": "Je le fais ?",
   "coque.chef.resumeJeLeFais": "{resume}. Je le fais ?",
   "coque.chef.enAttenteReseau": {

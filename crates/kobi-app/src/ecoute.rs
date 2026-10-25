@@ -173,6 +173,9 @@ pub enum Commande {
     ReponseAttendue(Duration),
 }
 
+/// Raccourci sans effet pendant la pause de la réunion : REC le dit (KOB-310).
+pub const EVENEMENT_PAUSE_RAPPEL: &str = "pause_rappel";
+
 /// Canal vers le fil d'écoute.
 pub struct Ecoute(Mutex<Sender<Commande>>);
 
@@ -1287,12 +1290,14 @@ impl<R: Runtime> Fil<R> {
                     return;
                 }
                 // Réunion en pause : le micro y est fermé exprès, rien n'est
-                // en panne. Pas d'erreur « micro indisponible » ; REC dit déjà
-                // « PAUSE », l'activité garde la trace du geste. L'écoute de
-                // Kobi, coupée ou non, n'est pas touchée (KOB-304).
+                // en panne. Pas d'erreur « micro indisponible » ; REC dit
+                // « PAUSE · micro coupé » un instant (KOB-310), l'activité
+                // garde la trace du geste. L'écoute de Kobi, coupée ou non,
+                // n'est pas touchée (KOB-304).
                 if raccourci_sans_micro(etat(&self.app).etat) {
                     tracing::info!("raccourci pendant la pause de la réunion : micro fermé");
                     self.note("raccourci pendant la pause de la réunion : micro fermé");
+                    let _ = self.app.emit(EVENEMENT_PAUSE_RAPPEL, ());
                     crate::activite::noter(
                         &self.app,
                         crate::activite::Genre::Reunion,

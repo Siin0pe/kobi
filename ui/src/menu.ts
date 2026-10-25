@@ -73,6 +73,8 @@ export interface MenuContext {
   compact: boolean;
   /** Kobi répond à voix haute dans le contexte courant (KOB-142). */
   voice: boolean;
+  /** La réunion finit (« Annuler » encore possible) : la pause n'y fait rien (KOB-310). */
+  ending?: boolean;
 }
 
 interface Entry {
@@ -82,6 +84,8 @@ interface Entry {
   /** Touches du raccourci, noms techniques (`Shift`, `Space`), traduits à l'affichage. */
   hint?: string[];
   danger?: boolean;
+  /** Grisée : sans effet dans l'état courant. */
+  disabled?: boolean;
 }
 
 /** Nom d'une touche dans la langue courante. */
@@ -100,7 +104,7 @@ export function entries(c: MenuContext): Array<Entry | null> {
       : { id: 'enregistrer', label: t('kobi.menu.enregistrer'), icon: 'enregistrer', hint: ['Ctrl', 'Shift', 'R'] },
     c.recording
       ? { id: 'pause', label: c.paused ? t('kobi.menu.reprendreEnregistrement') : t('kobi.menu.pauseEnregistrement'), icon: c.paused ? 'reprendre' : 'pause' }
-      : { id: 'pause', label: c.paused ? t('kobi.menu.reprendreEcoute') : t('kobi.menu.pauseEcoute'), icon: c.paused ? 'reprendre' : 'pause' },
+      : { id: 'pause', label: c.paused ? t('kobi.menu.reprendreEcoute') : t('kobi.menu.pauseEcoute'), icon: c.paused ? 'reprendre' : 'pause', disabled: c.ending },
     null,
     // L'app Kobi (KOB-159) : section par défaut, Carnet, Réglages.
     { id: 'app', label: t('kobi.menu.app'), icon: 'app' },
@@ -143,6 +147,13 @@ export function remplirMenu(heading: HTMLElement, list: HTMLElement, c: MenuCont
       hint.setAttribute('aria-hidden', 'true');
       b.append(hint);
       b.setAttribute('aria-keyshortcuts', entry.hint.join('+'));
+    }
+    if (entry.disabled) {
+      // Sans effet ici : grisée, ni clic ni place dans le parcours au clavier.
+      b.disabled = true;
+      b.setAttribute('aria-disabled', 'true');
+      list.append(b);
+      continue;
     }
     b.addEventListener('click', () => choisir(entry.id));
     b.addEventListener('pointermove', () => {
@@ -324,6 +335,7 @@ export class KobiMenu {
       paused: meeting ? Boolean(meeting.paused) : this.listeningPaused,
       compact: this.stage.isCompact,
       voice: this.voice,
+      ending: this.stage.root.dataset.session === 'fin',
     };
   }
 
