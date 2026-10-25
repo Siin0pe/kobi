@@ -973,6 +973,8 @@
   "coque.pannes.cleRefuseeMessage": "L'API Anthropic refuse la clé enregistrée. Vérifie-la ou remplace-la dans les Réglages, section Clé API, puis repose ta question. {suite}",
   "coque.pannes.surchargeTitre": "Claude est surchargé",
   "coque.pannes.surchargeMessage": "Les serveurs d'Anthropic sont très sollicités : repose ta question dans un instant. {suite}",
+  "coque.pannes.coupureTitre": "Connexion coupée",
+  "coque.pannes.coupureMessage": "La connexion a été coupée pendant la réponse : repose ta question. {suite}",
   "coque.pannes.horsLigneTitre": "Pas d'Internet",
   "coque.pannes.horsLigneMessage": "Je garde ta question et je la pose dès que la connexion revient. {suite}",
   "coque.pannes.tropLongtemps": "trop longtemps",
