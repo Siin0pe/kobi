@@ -57,8 +57,9 @@ struct Partage {
     /// Arrivée de la première phrase de l'énoncé en cours.
     t0: Mutex<Option<Instant>>,
     /// Énoncé (numéro + 1, 0 : aucun) qui a encore à dire : posé par
-    /// [`Parleur::dire`], levé par sa propre fin ou son erreur. La fin
-    /// tardive d'un énoncé périmé ne le lève pas (KOB-365).
+    /// [`Parleur::dire`], levé par sa propre fin (qui suit toujours ses
+    /// phrases, même en échec). La fin tardive d'un énoncé périmé ne le
+    /// lève pas (KOB-365).
     a_dire: AtomicU64,
     rappel: Rappel,
 }
@@ -125,7 +126,9 @@ impl Parleur {
             let mut t0 = self.partage.t0.lock().unwrap_or_else(|e| e.into_inner());
             t0.get_or_insert_with(Instant::now);
         }
-        self.partage.a_dire.store(enonce + 1, Ordering::SeqCst);
+        // Les numéros ne font que croître : un `dire` en retard sur un
+        // énoncé déjà remplacé n'écrase pas le suivant.
+        self.partage.a_dire.fetch_max(enonce + 1, Ordering::SeqCst);
         {
             let mut texte = self.partage.texte.lock().unwrap_or_else(|e| e.into_inner());
             texte.push_str(phrase);
