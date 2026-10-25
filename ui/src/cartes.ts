@@ -22,6 +22,8 @@ export interface CarteUi {
 
 /** Cartes encore en attente de chaque scène, dans l'ordre d'arrivée. */
 const enAttente = new WeakMap<Stage, Map<string, ActionCard>>();
+/** Carte affichée de chaque scène. */
+const affichee = new WeakMap<Stage, string>();
 
 /**
  * Affiche une carte publiée par la coque. Plusieurs cartes peuvent attendre
@@ -37,13 +39,20 @@ export function applyCarte(stage: Stage, c: CarteUi): void {
   if (c.status === 'pending') {
     file.delete(c.id);
     file.set(c.id, action);
+    affichee.set(stage, c.id);
     stage.setState('suggest', { action });
     return;
   }
   file.delete(c.id);
+  // Une carte cachée (autre carte devant, réponse en cours) se ferme sans
+  // toucher à ce qui est montré.
+  if (affichee.get(stage) !== c.id || stage.currentState !== 'suggest') return;
+  affichee.delete(stage);
   const suivante = [...file.values()].pop();
-  if (suivante) stage.setState('suggest', { action: suivante });
-  else if (c.status === 'confirmed') stage.setState('done', { action });
+  if (suivante) {
+    affichee.set(stage, suivante.id);
+    stage.setState('suggest', { action: suivante });
+  } else if (c.status === 'confirmed') stage.setState('done', { action });
   else stage.setState('idle');
 }
 
