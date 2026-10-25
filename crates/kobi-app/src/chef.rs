@@ -1711,6 +1711,7 @@ impl<R: Runtime> Chef<R> {
         let question = question.clone();
         self.taches.remove(&tour);
         self.interrompus.insert(tour);
+        self.hors_notes.remove(&tour);
         self.cerveau.demander(Demande::Annuler { tour });
         if let Some(b) = self.bulle(tour) {
             b.statut = "fini";
@@ -1732,6 +1733,7 @@ impl<R: Runtime> Chef<R> {
                 b.statut = "fini";
             }
             self.interrompus.insert(tour);
+            self.hors_notes.remove(&tour);
             self.cerveau.demander(Demande::Interrompre { tour });
             self.emettre_historique();
         }
@@ -1847,6 +1849,7 @@ impl<R: Runtime> Chef<R> {
             {
                 tracing::info!(tour, "phrase qui ne s'adressait pas à Kobi : silence");
                 self.tour_peut_etre = None;
+                self.hors_notes.remove(&tour);
                 if let Some(r) = &mut self.reunion {
                     r.latences.abandon(tour);
                 }
@@ -1958,6 +1961,7 @@ impl<R: Runtime> Chef<R> {
             }
             Retour::Erreur { tour, message } => {
                 tracing::warn!(tour, %message, "tour en erreur");
+                self.hors_notes.remove(&tour);
                 if let Some(r) = &mut self.reunion {
                     r.latences.abandon(tour);
                 }
@@ -3644,6 +3648,16 @@ mod tests {
             ] {
                 assert!(!notes.contains(texte), "{texte} : {notes}");
             }
+            assert!(c.hors_notes.is_empty());
+            // Sans réponse (erreur), le tour ne reste pas retenu.
+            c.commande(Intention::Pause);
+            c.question("et sinon ?".into(), true);
+            let tour = c.tour;
+            assert!(c.hors_notes.contains(&tour));
+            c.recevoir(Message::Cerveau(Retour::Erreur {
+                tour,
+                message: "réseau".into(),
+            }));
             assert!(c.hors_notes.is_empty());
         });
     }
