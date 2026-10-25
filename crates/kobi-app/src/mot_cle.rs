@@ -556,9 +556,12 @@ impl Ecouteur {
                 actions.push(Action::Interpeller);
                 actions.push(self.envoyer(texte.trim(), t));
             }
-            // Le nom ramène à l'écoute ordinaire ; le reste est ignoré.
-            Attente::Annulation { .. } => {
-                if reperer(texte).is_some() {
+            // Le nom, dit après l'arrêt, ramène à l'écoute ordinaire ; le
+            // reste est ignoré. Dit avant (l'ordre de fin lui-même, transcrit
+            // en retard après une fin anticipée), il ne ferme pas « Annuler »
+            // (KOB-287).
+            Attente::Annulation { depuis, .. } => {
+                if t >= depuis && reperer(texte).is_some() {
                     self.attente = Attente::Nom;
                     actions = self.segment(texte, finale, t);
                 }
@@ -1228,6 +1231,22 @@ mod tests {
             Some(&Envoyer(
                 "Tell me a long story about a little robot who learns to cook pancakes".into()
             ))
+        );
+    }
+
+    /// KOB-287 : fin anticipée sous retard, l'ordre de fin, dit avant
+    /// l'arrêt, arrive après : il ne ferme pas « Annuler » ; « reprends »
+    /// sans le nom part encore.
+    #[test]
+    fn ordre_de_fin_en_retard_garde_annuler() {
+        let mut e = Ecouteur::new(false);
+        e.annulable(100.0, 10.0);
+        assert!(e.segment("Kobi, termine la", false, 80.0).is_empty());
+        assert!(e.segment("Kobi, termine la réunion", true, 80.0).is_empty());
+        assert!(e.en_annulation());
+        assert_eq!(
+            e.segment("reprends", true, 105.0),
+            [Interpeller, Envoyer("reprends".into())]
         );
     }
 
