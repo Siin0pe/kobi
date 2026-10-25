@@ -1246,11 +1246,6 @@ impl<R: Runtime> Fil<R> {
             }
             Commande::Raccourci => {
                 self.note("raccourci clavier");
-                if self.en_pause {
-                    self.en_pause = false;
-                    tracing::info!(pause = false, "écoute continue : reprise par le raccourci");
-                    crate::menu::ecoute_reprise(&self.app);
-                }
                 if self.stt.is_err() {
                     self.stt = charger_stt();
                 }
@@ -1261,16 +1256,24 @@ impl<R: Runtime> Fil<R> {
                     return;
                 }
                 // Réunion en pause : le micro y est fermé exprès, rien n'est
-                // en panne. Pas d'erreur « micro indisponible », mais le dire
-                // (KOB-304).
+                // en panne. Pas d'erreur « micro indisponible » ; REC dit déjà
+                // « PAUSE », l'activité garde la trace du geste. L'écoute de
+                // Kobi, coupée ou non, n'est pas touchée (KOB-304).
                 if raccourci_sans_micro(etat(&self.app).etat) {
                     tracing::info!("raccourci pendant la pause de la réunion : micro fermé");
                     self.note("raccourci pendant la pause de la réunion : micro fermé");
-                    let app = self.app.clone();
-                    let titre = kobi_i18n::tr("coque.ecoute.pauseReunion", &[]);
-                    let message = kobi_i18n::tr("coque.ecoute.pauseReunionAide", &[]);
-                    std::thread::spawn(move || erreur(&app, &titre, &message));
+                    crate::activite::noter(
+                        &self.app,
+                        crate::activite::Genre::Reunion,
+                        &kobi_i18n::tr("coque.ecoute.pauseReunion", &[]),
+                        Some(&kobi_i18n::tr("coque.ecoute.pauseReunionAide", &[])),
+                    );
                     return;
+                }
+                if self.en_pause {
+                    self.en_pause = false;
+                    tracing::info!(pause = false, "écoute continue : reprise par le raccourci");
+                    crate::menu::ecoute_reprise(&self.app);
                 }
                 // Micro perdu : même réouverture que la boucle, qui garde la
                 // session (KOB-278).
