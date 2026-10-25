@@ -203,13 +203,19 @@ struct Partage {
     /// La conversation commence par un bloc de compaction : chaque requête
     /// porte l'en-tête bêta.
     compacte: AtomicBool,
+    /// Un résumé est en cours, en tâche de fond (KOB-350).
+    en_resume: AtomicBool,
+    /// Le dernier résumé n'a pas pu se faire (refus, réponse coupée…) : la
+    /// conversation repart à neuf au tour suivant (KOB-349).
+    reprise_demandee: AtomicBool,
 }
 
 /// Conversation d'une réunion sur l'API Messages, vue comme un [`Brain`].
 pub struct ApiBrain {
     partage: Arc<Partage>,
     busy: Arc<AtomicBool>,
-    tache: Option<tokio::task::JoinHandle<()>>,
+    /// Tours, et résumés qui les suivent : arrêtés avec le cerveau.
+    taches: Vec<tokio::task::JoinHandle<()>>,
 }
 
 impl ApiBrain {
@@ -233,9 +239,11 @@ impl ApiBrain {
                 contexte: std::sync::atomic::AtomicU64::new(0),
                 avis: std::sync::Mutex::new(None),
                 compacte: AtomicBool::new(false),
+                en_resume: AtomicBool::new(false),
+                reprise_demandee: AtomicBool::new(false),
             }),
             busy: Arc::new(AtomicBool::new(false)),
-            tache: None,
+            taches: Vec::new(),
         })
     }
 
@@ -245,10 +253,17 @@ impl ApiBrain {
         }
         let (events, turn) = Turn::channel();
         let (partage, busy) = (self.partage.clone(), self.busy.clone());
-        self.tache = Some(tokio::spawn(async move {
+        self.taches.retain(|t| !t.is_finished());
+        self.taches.push(tokio::spawn(async move {
             let fin = tour(&partage, texte, &events).await;
             busy.store(false, Ordering::SeqCst);
+            let fini = matches!(fin, BrainEvent::Done(_));
             let _ = events.send(fin).await;
+            // Résumé après la réponse, jamais avant : il ne retarde ni une
+            // réponse, ni le compte rendu (KOB-350).
+            if fini {
+                resumer_si_besoin(&partage).await;
+            }
         }));
         turn
     }
@@ -257,7 +272,7 @@ impl ApiBrain {
 /// Cerveau abandonné : le tour en cours s'arrête avec lui.
 impl Drop for ApiBrain {
     fn drop(&mut self) {
-        if let Some(t) = &self.tache {
+        for t in &self.taches {
             t.abort();
         }
     }
@@ -294,20 +309,24 @@ impl Brain for ApiBrain {
 async fn tour(partage: &Partage, texte: String, events: &mpsc::Sender<BrainEvent>) -> BrainEvent {
     let mut historique = partage.historique.lock().await;
     let contexte = partage.contexte.load(Ordering::SeqCst);
-    if contexte > partage.config.contexte_max && !historique.is_empty() {
+    let max = partage.config.contexte_max;
+    // Reprise à neuf : sans compaction dès le seuil ; avec compaction, si le
+    // résumé est impossible, ou près d'une limite dure (deux fois le seuil),
+    // le résumé de fond n'étant pas arrivé à temps (KOB-349).
+    let reprise = contexte > max
+        && (!partage.config.compaction
+            || partage.reprise_demandee.swap(false, Ordering::SeqCst)
+            || contexte > 2 * max);
+    if reprise && !historique.is_empty() {
         tracing::info!(
             contexte,
             messages = historique.len(),
             "conversation de la réunion trop longue : elle repart des notes courantes"
         );
-        let resume = partage.config.compaction && compacter(partage, &mut historique, events).await;
-        if !resume {
-            historique.clear();
-            partage.compacte.store(false, Ordering::SeqCst);
-        }
+        historique.clear();
+        partage.compacte.store(false, Ordering::SeqCst);
         partage.contexte.store(0, Ordering::SeqCst);
-        *partage.avis.lock().unwrap_or_else(|e| e.into_inner()) =
-            Some(if resume { AVIS_RESUME } else { AVIS_REPRISE }.to_owned());
+        *partage.avis.lock().unwrap_or_else(|e| e.into_inner()) = Some(AVIS_REPRISE.to_owned());
     }
     let debut = historique.len();
     // Après une écriture gardée, le dernier message est celui des
@@ -637,43 +656,107 @@ async fn requete(
     requete_corps(partage, &corps(partage, historique, sans_outil), events).await
 }
 
-/// Résume la conversation par l'API (compaction à la demande, KOB-332) et
-/// la remplace par le bloc rendu, tel quel. `false` sans résumé : la
-/// conversation reste inchangée.
-async fn compacter(
-    partage: &Partage,
-    historique: &mut Vec<Value>,
-    events: &mpsc::Sender<BrainEvent>,
-) -> bool {
+/// Issue d'une demande de résumé.
+enum Resume {
+    /// Le bloc de compaction, à renvoyer tel quel.
+    Bloc(Value),
+    /// Échec passager (abandon, surcharge, réseau) : on réessaiera après le
+    /// tour suivant, la conversation reste entière (KOB-349).
+    Passager,
+    /// Pas de résumé possible (refus, réponse coupée…) : reprise à neuf.
+    Impossible,
+}
+
+/// Résumé de fond après un tour réussi (KOB-332, KOB-350) : sur une copie
+/// de la conversation, sans la bloquer. Le bloc remplace ensuite le début
+/// résumé si celui-ci n'a pas changé ; les tours arrivés entre-temps le
+/// suivent, tels quels (compaction à la demande, « en tâche de fond »).
+async fn resumer_si_besoin(partage: &Partage) {
+    let config = &partage.config;
+    if !config.compaction
+        || partage.contexte.load(Ordering::SeqCst) <= config.contexte_max
+        || partage.en_resume.swap(true, Ordering::SeqCst)
+    {
+        return;
+    }
+    let copie = partage.historique.lock().await.clone();
+    let issue = if copie.is_empty() {
+        Resume::Passager
+    } else {
+        compacter(partage, &copie).await
+    };
+    match issue {
+        Resume::Bloc(bloc) => {
+            let mut historique = partage.historique.lock().await;
+            let n = copie.len();
+            if historique.len() >= n && historique[..n] == copie[..] {
+                tracing::info!(
+                    messages = n,
+                    suite = historique.len() - n,
+                    "conversation de la réunion résumée par l'API"
+                );
+                historique.splice(..n, [json!({ "role": "assistant", "content": [bloc] })]);
+                partage.compacte.store(true, Ordering::SeqCst);
+                partage.contexte.store(0, Ordering::SeqCst);
+                *partage.avis.lock().unwrap_or_else(|e| e.into_inner()) =
+                    Some(AVIS_RESUME.to_owned());
+            } else {
+                tracing::info!("conversation changée pendant le résumé : résumé écarté");
+            }
+        }
+        Resume::Passager => tracing::info!("résumé reporté après le tour suivant"),
+        Resume::Impossible => partage.reprise_demandee.store(true, Ordering::SeqCst),
+    }
+    partage.en_resume.store(false, Ordering::SeqCst);
+}
+
+/// Demande à l'API le résumé de `historique` (compaction à la demande).
+async fn compacter(partage: &Partage, historique: &[Value]) -> Resume {
     let mut corps = corps(partage, historique, false);
     if let Some(o) = corps.as_object_mut() {
         o.remove("fallbacks");
     }
     corps["compaction"] = json!({ "type": "summarize", "instructions": CONSIGNES_RESUME });
-    let reponse = match requete_corps(partage, &corps, events).await {
+    // Aucun tour n'écoute ce résumé : ses événements partent dans le vide,
+    // sans que le canal se ferme (ce qui vaudrait abandon).
+    let (events, mut vide) = mpsc::channel(64);
+    let vidage = tokio::spawn(async move { while vide.recv().await.is_some() {} });
+    let reponse = requete_corps(partage, &corps, &events).await;
+    drop(events);
+    let _ = vidage.await;
+    let reponse = match reponse {
         Ok(r) => r,
         Err(e) => {
-            tracing::warn!(erreur = %e, "compaction impossible : reprise à neuf");
-            return false;
+            tracing::warn!(erreur = %e, "résumé impossible pour l'instant");
+            return Resume::Passager;
         }
     };
+    // Coût du résumé : l'API le rend dans `usage.iterations`, le premier
+    // niveau valant 0 (KOB-351).
+    let iterations = reponse.usage.get("iterations").and_then(Value::as_array);
+    let somme = |cle: &str| {
+        iterations
+            .into_iter()
+            .flatten()
+            .filter_map(|i| i[cle].as_u64())
+            .sum::<u64>()
+    };
+    let (entree, sortie) = (somme("input_tokens"), somme("output_tokens"));
+    tracing::info!(
+        modele = %partage.config.modele,
+        entree,
+        sortie,
+        "API Messages : tokens du résumé"
+    );
     let bloc = reponse
         .blocs()
         .into_iter()
         .find(|b| b["type"] == "compaction" && b["content"].is_string());
     match (reponse.stop_reason.as_deref(), bloc) {
-        (Some("compaction"), Some(bloc)) => {
-            tracing::info!(
-                messages = historique.len(),
-                "conversation de la réunion résumée par l'API"
-            );
-            *historique = vec![json!({ "role": "assistant", "content": [bloc] })];
-            partage.compacte.store(true, Ordering::SeqCst);
-            true
-        }
+        (Some("compaction"), Some(bloc)) => Resume::Bloc(bloc),
         (raison, _) => {
-            tracing::warn!(?raison, "pas de résumé : reprise à neuf");
-            false
+            tracing::warn!(?raison, "pas de résumé : la conversation repartira à neuf");
+            Resume::Impossible
         }
     }
 }

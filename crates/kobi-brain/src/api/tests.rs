@@ -1275,6 +1275,19 @@ fn cerveau_compact(serveur: &Serveur, compaction: bool) -> ApiBrain {
     .unwrap()
 }
 
+/// Attend que le faux serveur ait reçu `n` requêtes (le résumé part en
+/// tâche de fond après le tour), puis laisse au bloc le temps d'être posé.
+async fn attendre_requetes(serveur: &Serveur, n: usize) {
+    for _ in 0..500 {
+        if serveur.recues().len() >= n {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("{} requêtes reçues, {n} attendues", serveur.recues().len());
+}
+
 /// KOB-332 : au-delà du seuil, la conversation est résumée par l'API ; le
 /// bloc rendu remplace l'historique tel quel, en tête, et chaque requête
 /// suivante porte l'en-tête bêta.
@@ -1292,6 +1305,8 @@ async fn conversation_resumee_par_l_api() {
         .unwrap()
         .avis
         .is_none());
+    // Le résumé part après la réponse (KOB-350).
+    attendre_requetes(&serveur, 2).await;
     let deux = fin(&tous(brain.ask(question("deux"))).await).unwrap();
     assert_eq!(deux.text, "B.");
     assert_eq!(deux.avis.as_deref(), Some(AVIS_RESUME));
@@ -1339,6 +1354,7 @@ async fn sans_resume_reprise_a_neuf() {
     let serveur = Serveur::lancer(vec![texte("A", "."), arret("refusal"), texte("B", ".")]).await;
     let mut brain = cerveau_compact(&serveur, true);
     fin(&tous(brain.ask(question("un"))).await).unwrap();
+    attendre_requetes(&serveur, 2).await;
     let deux = fin(&tous(brain.ask(question("deux"))).await).unwrap();
     assert_eq!(deux.avis.as_deref(), Some(AVIS_REPRISE));
     let r = serveur.recues();
@@ -1361,4 +1377,118 @@ async fn compaction_desactivee_par_defaut() {
     let r = serveur.recues();
     assert_eq!(r.len(), 2);
     assert!(r.iter().all(|x| x.corps.get("compaction").is_none()));
+}
+
+/// KOB-349 : un échec passager du résumé (surcharge, ici trois 529) garde
+/// toute la conversation ; le résumé est retenté après le tour suivant.
+#[tokio::test]
+async fn resume_passager_garde_la_conversation() {
+    let serveur = Serveur::lancer(vec![
+        texte("A", "."),
+        erreur(529, "overloaded_error", "compaction_unavailable"),
+        erreur(529, "overloaded_error", "compaction_unavailable"),
+        erreur(529, "overloaded_error", "compaction_unavailable"),
+        texte("B", "."),
+        resume("Résumé."),
+        texte("C", "."),
+    ])
+    .await;
+    let mut brain = cerveau_compact(&serveur, true);
+    fin(&tous(brain.ask(question("un"))).await).unwrap();
+    attendre_requetes(&serveur, 4).await;
+    let deux = fin(&tous(brain.ask(question("deux"))).await).unwrap();
+    // Rien d'effacé, pas d'avis.
+    assert!(deux.avis.is_none());
+    let r = serveur.recues();
+    assert_eq!(r[4].corps["messages"].as_array().unwrap().len(), 3);
+    // Nouvel essai de résumé après ce tour, réussi cette fois.
+    attendre_requetes(&serveur, 6).await;
+    assert_eq!(serveur.recues()[5].corps["compaction"]["type"], "summarize");
+    let trois = fin(&tous(brain.ask(question("trois"))).await).unwrap();
+    assert_eq!(trois.avis.as_deref(), Some(AVIS_RESUME));
+    let m = serveur.recues()[6].corps["messages"].clone();
+    assert_eq!(m.as_array().unwrap().len(), 2, "{m}");
+    assert_eq!(m[0]["content"][0]["type"], "compaction");
+}
+
+/// KOB-350 : le résumé ne retarde pas la réponse, et un tour posé pendant
+/// le résumé passe ; le bloc remplace ensuite le seul début résumé, le tour
+/// arrivé entre-temps le suit.
+#[tokio::test]
+async fn resume_hors_du_chemin_critique() {
+    let mut lent = resume("Résumé.");
+    lent.pause = Some(Duration::from_secs(2));
+    let serveur = Serveur::lancer(vec![
+        texte("A", "."),
+        lent,
+        texte("B", "."),
+        texte("C", "."),
+    ])
+    .await;
+    let mut brain = cerveau_compact(&serveur, true);
+    let debut = std::time::Instant::now();
+    fin(&tous(brain.ask(question("un"))).await).unwrap();
+    assert!(debut.elapsed() < Duration::from_millis(1500));
+    // Pendant le résumé (2 s), une autre question passe, conversation
+    // entière.
+    attendre_requetes(&serveur, 2).await;
+    let deux = fin(&tous(brain.ask(question("deux"))).await).unwrap();
+    assert_eq!(deux.text, "B.");
+    assert_eq!(
+        serveur.recues()[2].corps["messages"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+    // Le résumé arrivé, le bloc prend la place des deux premiers messages ;
+    // la question « deux » et sa réponse le suivent.
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    fin(&tous(brain.ask(question("trois"))).await).unwrap();
+    let m = serveur.recues()[3].corps["messages"].clone();
+    let m = m.as_array().unwrap();
+    assert_eq!(m.len(), 4, "{m:?}");
+    assert_eq!(m[0]["content"][0]["type"], "compaction");
+    assert!(m[1]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("deux"));
+    assert!(m[3]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("trois"));
+}
+
+/// Près d'une limite dure (deux fois le seuil), la conversation repart à
+/// neuf même si le résumé n'est pas arrivé.
+#[tokio::test]
+async fn limite_dure_reprise_a_neuf() {
+    let serveur = Serveur::lancer(vec![
+        texte("A", "."),
+        erreur(529, "overloaded_error", "x"),
+        erreur(529, "overloaded_error", "x"),
+        erreur(529, "overloaded_error", "x"),
+        texte("B", "."),
+    ])
+    .await;
+    let mut brain = ApiBrain::new(ApiConfig {
+        cle: CLE.into(),
+        url: serveur.url.clone(),
+        // 812 tokens > 2 × 400.
+        contexte_max: 400,
+        compaction: true,
+        ..Default::default()
+    })
+    .unwrap();
+    fin(&tous(brain.ask(question("un"))).await).unwrap();
+    attendre_requetes(&serveur, 4).await;
+    let deux = fin(&tous(brain.ask(question("deux"))).await).unwrap();
+    assert_eq!(deux.avis.as_deref(), Some(AVIS_REPRISE));
+    assert_eq!(
+        serveur.recues()[4].corps["messages"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
 }
