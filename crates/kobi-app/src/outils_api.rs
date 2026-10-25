@@ -247,7 +247,10 @@ impl Lecteur {
         if self.dossiers.is_empty() {
             return Err(format!("{chemin} : aucun dossier permis"));
         }
-        if chemin_reseau(chemin) || chemin_reseau(&brut.to_string_lossy()) || !prefixe_local(&brut)
+        if chemin_reseau(chemin)
+            || chemin_reseau(&brut.to_string_lossy())
+            || !prefixe_local(&brut)
+            || lien_vers_le_reseau(&brut)
         {
             return Err(format!(
                 "{chemin} : chemin réseau ou de périphérique refusé (seuls les dossiers permis se lisent : {})",
@@ -857,6 +860,49 @@ fn chemin_reseau(chemin: &str) -> bool {
     });
     !disque_local
 }
+
+/// Un composant du chemin est-il un lien symbolique qui vise, directement ou
+/// par d'autres liens, un chemin réseau ou de périphérique (KOB-352) ? Sous
+/// Windows, `canonicalize` le suivrait et ouvrirait la connexion SMB. Rien
+/// n'est résolu ici : chaque lien est lu (`read_link`), jamais suivi ; les
+/// liens en chaîne sont lus jusqu'à [`LIENS_MAX`], au-delà le chemin est
+/// refusé.
+fn lien_vers_le_reseau(chemin: &Path) -> bool {
+    fn lire(chemin: &Path, profondeur: usize) -> bool {
+        if profondeur > LIENS_MAX {
+            return true;
+        }
+        let mut courant = PathBuf::new();
+        for composant in chemin.components() {
+            courant.push(composant);
+            let Ok(meta) = std::fs::symlink_metadata(&courant) else {
+                continue;
+            };
+            if !meta.file_type().is_symlink() {
+                continue;
+            }
+            let Ok(cible) = std::fs::read_link(&courant) else {
+                return true;
+            };
+            let cible_texte = cible.to_string_lossy();
+            if chemin_reseau(&cible_texte) || !prefixe_local(&cible) {
+                return true;
+            }
+            let cible = match courant.parent() {
+                Some(parent) if cible.is_relative() => parent.join(&cible),
+                _ => cible,
+            };
+            if lire(&cible, profondeur + 1) {
+                return true;
+            }
+        }
+        false
+    }
+    lire(chemin, 0)
+}
+
+/// Liens lus en chaîne au plus (KOB-352).
+const LIENS_MAX: usize = 16;
 
 /// Sous Windows, liste blanche : un chemin absolu n'a pour préfixe qu'un
 /// disque local (`C:`, `\\?\C:`) ; tout autre préfixe (UNC, périphérique,

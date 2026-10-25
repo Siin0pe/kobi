@@ -128,6 +128,38 @@ fn chemins_reseau_refuses_avant_toute_resolution() {
     }
 }
 
+/// KOB-352 : un lien symbolique local qui vise un chemin réseau, même par
+/// un autre lien ou au milieu du chemin, est refusé sans être suivi ; un lien
+/// local qui reste dans la codebase se lit encore.
+#[cfg(unix)]
+#[test]
+fn lien_vers_un_chemin_reseau_refuse_sans_le_suivre() {
+    use std::os::unix::fs::symlink;
+    let dir = codebase();
+    let racine = dir.path();
+    symlink("//attaquant/partage/x", racine.join("piege")).unwrap();
+    symlink("piege", racine.join("relais")).unwrap();
+    symlink("//attaquant/partage", racine.join("dossier")).unwrap();
+    symlink("README.md", racine.join("lisez-moi")).unwrap();
+    let l = lecteur(&dir);
+    for chemin in ["piege", "relais", "dossier/x"] {
+        let e = l.lire(&json!({ "file_path": chemin })).unwrap_err();
+        assert!(e.contains("chemin réseau"), "{chemin} : {e}");
+        let e = l
+            .chercher(&json!({ "pattern": "x", "path": chemin }))
+            .unwrap_err();
+        assert!(e.contains("chemin réseau"), "{chemin} : {e}");
+    }
+    assert!(l
+        .lire(&json!({ "file_path": "lisez-moi" }))
+        .unwrap()
+        .contains("Kobi"));
+    // Une boucle de liens : refusée, sans tourner sans fin.
+    symlink("boucle-b", racine.join("boucle-a")).unwrap();
+    symlink("boucle-a", racine.join("boucle-b")).unwrap();
+    assert!(l.lire(&json!({ "file_path": "boucle-a" })).is_err());
+}
+
 /// Rien ne se lit hors des dossiers permis : chemin absolu, `..`, lien
 /// symbolique qui sort.
 #[test]
