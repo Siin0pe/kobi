@@ -150,6 +150,9 @@ pub enum Commande {
     PauseReunion(Instant),
     /// La réunion reprend : la pause d'avant ne compte plus (KOB-297).
     RepriseReunion,
+    /// « Annuler » est fait ou clos : la fenêtre ne se rouvre plus à la
+    /// prochaine ouverture du micro (KOB-299).
+    FinAnnulation,
     /// Kobi vient de répondre : la conversation attend la suite.
     Suite,
     /// La dernière carte de validation s'est fermée : sa fenêtre aussi, la
@@ -1203,6 +1206,7 @@ impl<R: Runtime> Fil<R> {
             }
             Commande::PauseReunion(quand) => self.pause_reunion = Some(quand),
             Commande::RepriseReunion => self.pause_reunion = None,
+            Commande::FinAnnulation => self.arret_annulable = None,
             Commande::Raccourci => {
                 self.note("raccourci clavier");
                 if self.en_pause {
