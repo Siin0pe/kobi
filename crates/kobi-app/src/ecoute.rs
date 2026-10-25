@@ -153,6 +153,10 @@ pub enum Commande {
     /// « Annuler » est fait ou clos : la fenêtre ne se rouvre plus à la
     /// prochaine ouverture du micro (KOB-299).
     FinAnnulation,
+    /// « Annuler » est clos sans annulation : la fin est définitive. Ce qui
+    /// a été dit avant l'arrêt, même transcrit bien après, ne parle plus à
+    /// Kobi (KOB-326).
+    FinConfirmee,
     /// Kobi vient de répondre : la conversation attend la suite.
     Suite,
     /// La dernière carte de validation s'est fermée : sa fenêtre aussi, la
@@ -855,6 +859,10 @@ struct Fil<R: Runtime> {
     differees: Vec<Commande>,
     /// Instant réel de la dernière fin de réunion annulable (KOB-287).
     arret_annulable: Option<Instant>,
+    /// Instant réel de la dernière fin confirmée (KOB-326), remis dans
+    /// l'horloge de l'écouteur à chaque trame : elle repart à l'ouverture
+    /// du micro.
+    arret_clos: Option<Instant>,
     /// Ouverture du micro toujours en cours au tour précédent (KOB-285).
     ouverture: Option<Ouverture>,
     /// Instant de la pause de la réunion, tant que le micro reste ouvert
@@ -893,6 +901,7 @@ impl<R: Runtime> Fil<R> {
             micro_perdu: false,
             differees: Vec::new(),
             arret_annulable: None,
+            arret_clos: None,
             ouverture: None,
             pause_reunion: None,
             decalage: 0.0,
@@ -1241,6 +1250,10 @@ impl<R: Runtime> Fil<R> {
             }
             Commande::PauseReunion(quand) => self.pause_reunion = Some(quand),
             Commande::RepriseReunion => self.pause_reunion = None,
+            Commande::FinConfirmee => {
+                self.arret_clos = self.arret_annulable.take().or(self.arret_clos);
+                self.ecouteur.fin_annulation();
+            }
             Commande::FinAnnulation => {
                 self.arret_annulable = None;
                 // Et la fenêtre de l'écouteur, ouverte micro ouvert (KOB-302).
@@ -1380,6 +1393,7 @@ impl<R: Runtime> Fil<R> {
             false
         };
         let ouverte_avant = self.porte.ouverte();
+        self.ecouteur.arret_clos = self.arret_clos.map(|a| instant_audio(self.origine, a));
         let (actions, finals) = transcrire(
             stt,
             &mut self.porte,

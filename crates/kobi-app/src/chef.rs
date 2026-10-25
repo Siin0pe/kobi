@@ -847,8 +847,15 @@ impl<R: Runtime> Chef<R> {
             }
             Message::TranscriptionIncomplete(secondes) => self.transcription_incomplete(secondes),
             Message::QuestionDifferee(q) => {
-                self.questions_differees.push(q);
-                self.poser_questions_differees();
+                // Rien d'une réunion passée ne part dans la nouvelle (KOB-326).
+                if self.reunion_apres_l_arret() {
+                    tracing::info!(
+                        "question d'avant l'arrêt arrivée dans la réunion suivante : écartée"
+                    );
+                } else {
+                    self.questions_differees.push(q);
+                    self.poser_questions_differees();
+                }
             }
             Message::SansQuestion => {
                 self.transition(&[Evenement::PasDeQuestion]);
@@ -1445,7 +1452,7 @@ impl<R: Runtime> Chef<R> {
         if r.annulable_jusqu.take().is_none() {
             return;
         }
-        let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::FinAnnulation);
+        let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::FinConfirmee);
         tracing::info!("fin de la réunion confirmée");
         if r.arret.is_some() {
             self.arret_definitif = r.arret;
@@ -1457,10 +1464,15 @@ impl<R: Runtime> Chef<R> {
         }
     }
 
-    /// Questions dites avant l'arrêt (KOB-307) : posées une fois « Annuler »
-    /// fermé, la fin annulée ou confirmée. Celles qui parlent de piloter la
-    /// réunion n'arrivent pas jusqu'ici (`mot_cle::differable`) : ni le chef
-    /// ni Claude ne relancent ni ne refont la fin depuis elles.
+    /// Une réunion a démarré après la dernière fin confirmée (KOB-326) : une
+    /// question d'avant cette fin n'y a pas sa place.
+    fn reunion_apres_l_arret(&self) -> bool {
+        self.reunion
+            .as_ref()
+            .zip(self.arret_definitif)
+            .is_some_and(|(r, arret)| r.debut > arret)
+    }
+
     /// Question dite avant l'arrêt d'une réunion terminée (KOB-326) : la
     /// fenêtre « Annuler » s'est fermée avant que la transcription la
     /// rattrape. Elle ne part que sur la session en lecture seule, comme
@@ -1475,7 +1487,7 @@ impl<R: Runtime> Chef<R> {
         }
         // L'écouteur a déjà fait écouter Kobi : rien ne part maintenant.
         self.transition(&[Evenement::PasDeQuestion]);
-        if crate::mot_cle::differable(texte) {
+        if crate::mot_cle::differable(texte) && !self.reunion_apres_l_arret() {
             tracing::info!(
                 longueur = texte.len(),
                 "question dite avant l'arrêt, transcrite après « Annuler » : différée"
@@ -1491,6 +1503,10 @@ impl<R: Runtime> Chef<R> {
         true
     }
 
+    /// Questions dites avant l'arrêt (KOB-307) : posées une fois « Annuler »
+    /// fermé, la fin annulée ou confirmée. Celles qui parlent de piloter la
+    /// réunion n'arrivent pas jusqu'ici (`mot_cle::differable`) : ni le chef
+    /// ni Claude ne relancent ni ne refont la fin depuis elles.
     fn poser_questions_differees(&mut self) {
         if self.questions_differees.is_empty() || self.fin_annulable() {
             return;
@@ -3936,6 +3952,20 @@ mod tests {
                 dit_a: None,
             });
             assert_eq!(c.tour, tour + 2);
+            // Le retard dure jusqu'à la réunion suivante : rien de l'ancienne
+            // n'y part, différé ou pas.
+            c.questions_differees.clear();
+            c.reunion = None;
+            c.commande(Intention::DemarrerReunion);
+            let tour = c.tour;
+            c.recevoir(dite("quel est le budget ?", avant));
+            c.recevoir(Message::QuestionDifferee("et le planning ?".into()));
+            assert!(
+                c.questions_differees.is_empty(),
+                "{:?}",
+                c.questions_differees
+            );
+            assert_eq!(c.tour, tour);
         });
     }
 

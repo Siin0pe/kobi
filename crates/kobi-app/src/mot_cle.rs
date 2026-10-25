@@ -535,6 +535,10 @@ pub struct Ecouteur {
     /// La transcription est en retard sur la parole (KOB-250) : Nemotron
     /// colle alors les phrases, souvent sans ponctuation (KOB-276, KOB-289).
     pub sous_charge: bool,
+    /// Instant de l'audio de la dernière fin de réunion confirmée (KOB-326) :
+    /// ce qui a été dit avant, transcrit après la fenêtre « Annuler » (forte
+    /// charge), est jugé comme pendant elle, sans toucher à l'attente.
+    pub arret_clos: Option<f64>,
 }
 
 impl Default for Ecouteur {
@@ -547,6 +551,7 @@ impl Default for Ecouteur {
             debut: None,
             carte: None,
             sous_charge: false,
+            arret_clos: None,
         }
     }
 }
@@ -566,6 +571,15 @@ impl Ecouteur {
 
     /// Un segment de la transcription, à l'instant `t` de l'audio.
     pub fn segment(&mut self, texte: &str, finale: bool, t: f64) -> Vec<Action> {
+        // Dit avant l'arrêt d'une réunion terminée : ni interpellation, ni
+        // question sur la conversation, ni suite ; au plus une question
+        // différée, sur la session en lecture seule (KOB-326).
+        if self.arret_clos.is_some_and(|arret| t < arret) {
+            return self
+                .dit_avant_l_arret(texte, finale, t)
+                .into_iter()
+                .collect();
+        }
         let mut actions = Vec::new();
         match self.attente {
             Attente::Ignore => {
@@ -591,21 +605,8 @@ impl Ecouteur {
                 if t >= depuis && reperer(texte).is_some() {
                     self.attente = Attente::Nom;
                     actions = self.segment(texte, finale, t);
-                } else if finale && reperer(texte).is_some() {
-                    // Dit avant l'arrêt (KOB-307) : la question est jugée
-                    // telle que l'écouteur l'enverrait (phrase d'avant
-                    // collée, ordre collé sous charge compris), sur un essai
-                    // qui ne touche pas à l'état de l'écouteur. Une question
-                    // ordinaire est différée ; rien qui touche à la fin.
-                    let mut essai = self.clone();
-                    essai.attente = Attente::Nom;
-                    if let [Action::Interpeller, Action::Envoyer(q)] =
-                        essai.segment(texte, finale, t).as_slice()
-                    {
-                        if differable(q) {
-                            actions.push(Action::Differer(q.clone()));
-                        }
-                    }
+                } else {
+                    actions.extend(self.dit_avant_l_arret(texte, finale, t));
                 }
             }
             // « Merci Kobi » n'est pas une interpellation.
@@ -679,6 +680,26 @@ impl Ecouteur {
             }
         }
         actions
+    }
+
+    /// Dit avant l'arrêt de la réunion (KOB-307, KOB-326) : la question est
+    /// jugée telle que l'écouteur l'enverrait (phrase d'avant collée, ordre
+    /// collé sous charge compris), sur un essai qui ne touche pas à l'état
+    /// de l'écouteur. Une question ordinaire est différée ; rien qui touche
+    /// à la fin, et rien sans le nom.
+    fn dit_avant_l_arret(&self, texte: &str, finale: bool, t: f64) -> Option<Action> {
+        if !finale || reperer(texte).is_none() {
+            return None;
+        }
+        let mut essai = self.clone();
+        essai.attente = Attente::Nom;
+        essai.arret_clos = None;
+        match essai.segment(texte, finale, t).as_slice() {
+            [Action::Interpeller, Action::Envoyer(q)] if differable(q) => {
+                Some(Action::Differer(q.clone()))
+            }
+            _ => None,
+        }
     }
 
     /// Longueur maximale de la question en cours (KOB-237) : après un appel
@@ -1396,6 +1417,43 @@ mod tests {
         );
         assert_eq!(format!("{e:?}"), avant);
         assert!(e.segment("on en reparle lundi", true, 78.0).is_empty());
+    }
+
+    /// KOB-326 : la fenêtre « Annuler » est close avant que la transcription
+    /// ait rattrapé l'arrêt (forte charge). Ce qui a été dit avant ne parle
+    /// pas à Kobi : ni interpellation, ni question, ni suite ouverte par la
+    /// réponse lue, quel que soit l'état ; au plus une question ordinaire,
+    /// différée. Après l'arrêt, l'écoute est ordinaire.
+    #[test]
+    fn dit_avant_un_arret_clos_ne_parle_pas_a_kobi() {
+        let mut e = Ecouteur::new(true);
+        e.annulable(100.0, 10.0);
+        e.fin_annulation();
+        e.arret_clos = Some(100.0);
+        // Kobi vient de répondre (question différée) : la suite s'ouvre,
+        // dans l'horloge de l'audio encore en retard.
+        e.suite(60.0);
+        let avant = format!("{e:?}");
+        for phrase in [
+            "donc on garde le budget",
+            "Kobi, relance la réunion",
+            "Kobi, reprends l'enregistrement",
+            "Kobi",
+            "reprends",
+        ] {
+            assert!(e.segment(phrase, false, 70.0).is_empty(), "{phrase}");
+            assert!(e.segment(phrase, true, 70.0).is_empty(), "{phrase}");
+        }
+        assert_eq!(
+            e.segment("Kobi, note l'action budget", true, 75.0),
+            [Differer("note l'action budget".into())]
+        );
+        assert_eq!(format!("{e:?}"), avant, "l'état n'a pas bougé");
+        // Après l'arrêt : comme d'habitude.
+        assert_eq!(
+            e.segment("Kobi, quelle heure est-il ?", true, 130.0),
+            [Interpeller, Envoyer("quelle heure est-il ?".into())]
+        );
     }
 
     /// KOB-302 : « Annuler » fait (clic) ou clos ; une phrase sans le nom
