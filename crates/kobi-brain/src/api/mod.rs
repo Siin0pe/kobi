@@ -563,7 +563,11 @@ async fn requete(
     let config = &partage.config;
     let corps = corps(partage, historique);
     let mut essai = 0;
-    let mut reponse = loop {
+    let abandon = || BrainError::Crashed("tour abandonné".into());
+    // Un essai : la requête, puis la lecture du flux. Une surcharge, qu'elle
+    // arrive en statut HTTP ou dans le flux avant tout contenu (KOB-315),
+    // est réessayée.
+    'essais: loop {
         let mut req = partage
             .client
             .post(format!("{}/v1/messages", config.url.trim_end_matches('/')))
@@ -573,14 +577,18 @@ async fn requete(
         if corps.get("fallbacks").is_some() {
             req = req.header("anthropic-beta", BETA_REPLI);
         }
-        let abandon = || BrainError::Crashed("tour abandonné".into());
         // Tour lâché pendant l'attente : la requête est abandonnée.
         let resultat = tokio::select! {
             r = req.body(corps.to_string()).send() => r,
             _ = events.closed() => return Err(abandon()),
         };
         let attente = match resultat {
-            Ok(r) if r.status().is_success() => break r,
+            Ok(r) if r.status().is_success() => {
+                match lire(r, events, essai < config.tentatives).await? {
+                    Some(message) => return Ok(message),
+                    None => Duration::from_secs(1 << essai),
+                }
+            }
             Ok(r)
                 if STATUTS_REESSAYES.contains(&r.status().as_u16())
                     && essai < config.tentatives =>
@@ -604,7 +612,20 @@ async fn requete(
             _ = events.closed() => return Err(abandon()),
         }
         essai += 1;
-    };
+        continue 'essais;
+    }
+}
+
+/// Erreurs du flux réessayées si elles arrivent avant tout contenu.
+const ERREURS_FLUX_REESSAYEES: &[&str] = &["overloaded_error", "api_error"];
+
+/// Lit le flux d'une réponse en relayant le texte. `Ok(None)` : surcharge
+/// annoncée dans le flux avant tout bloc, à réessayer (si `reessai`).
+async fn lire(
+    mut reponse: reqwest::Response,
+    events: &mpsc::Sender<BrainEvent>,
+    reessai: bool,
+) -> Result<Option<Reponse>, BrainError> {
     let mut decoupeur = Decoupeur::default();
     let mut message = Reponse::default();
     while !message.fini {
@@ -622,9 +643,18 @@ async fn requete(
             Err(e) => return Err(BrainError::Crashed(format!("flux interrompu : {e}"))),
         };
         for donnee in decoupeur.pousser(&morceau) {
-            let apport = message
-                .appliquer(&donnee)
-                .map_err(|e| BrainError::Api(format!("{} : {}", e.genre, e.message)))?;
+            let apport = match message.appliquer(&donnee) {
+                Ok(a) => a,
+                Err(e)
+                    if reessai
+                        && ERREURS_FLUX_REESSAYEES.contains(&e.genre.as_str())
+                        && message.blocs().is_empty() =>
+                {
+                    tracing::warn!(genre = %e.genre, "API Anthropic : surcharge dans le flux");
+                    return Ok(None);
+                }
+                Err(e) => return Err(BrainError::Api(format!("{} : {}", e.genre, e.message))),
+            };
             let event = match apport {
                 Apport::Texte(t) if !t.is_empty() => BrainEvent::Text(t),
                 Apport::Vie => BrainEvent::Vie,
@@ -638,7 +668,7 @@ async fn requete(
             "flux terminé sans fin de message".into(),
         ));
     }
-    Ok(message)
+    Ok(Some(message))
 }
 
 /// Erreur lisible d'une réponse HTTP en échec. La clé n'y figure jamais :

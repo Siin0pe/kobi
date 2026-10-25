@@ -462,6 +462,9 @@ async fn tour_en_echec_retire_de_la_conversation() {
         arret("max_tokens"),
         flux(&[
             json!({"type":"message_start","message":{"id":"msg","usage":{"input_tokens":5}}}),
+            // Après du contenu déjà montré : pas de nouvel essai (KOB-315).
+            json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
+            json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Déb"}}),
             json!({"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}),
         ]),
         texte("Enfin", "."),
@@ -1028,4 +1031,50 @@ async fn conversation_trop_longue_repart_de_zero() {
         .map(|r| r.corps["messages"].as_array().unwrap().len())
         .collect();
     assert_eq!(longueurs, [1, 1]);
+}
+
+/// KOB-315 : une surcharge annoncée dans le flux (HTTP 200 puis `error`)
+/// avant tout contenu est réessayée ; après du contenu, ou au-delà des
+/// essais, le tour échoue.
+#[tokio::test]
+async fn surcharge_dans_le_flux_reessayee() {
+    let surcharge = |genre: &str| {
+        flux(&[
+            json!({"type":"message_start","message":{"id":"msg","usage":{"input_tokens":5}}}),
+            json!({"type":"error","error":{"type":genre,"message":"Overloaded"}}),
+        ])
+    };
+    let apres_contenu = flux(&[
+        json!({"type":"message_start","message":{"id":"msg","usage":{"input_tokens":5}}}),
+        json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
+        json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Début"}}),
+        json!({"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}),
+    ]);
+    let serveur = Serveur::lancer(vec![
+        // Tour 1 : deux surcharges, puis la réponse.
+        surcharge("overloaded_error"),
+        surcharge("api_error"),
+        texte("Ok", "."),
+        // Tour 2 : surcharge après du texte déjà montré, pas de nouvel essai.
+        apres_contenu,
+        // Tour 3 : trois surcharges, au-delà des deux nouvelles tentatives.
+        surcharge("overloaded_error"),
+        surcharge("overloaded_error"),
+        surcharge("overloaded_error"),
+        // Tour 4 : une autre erreur de flux n'est pas réessayée.
+        surcharge("invalid_request_error"),
+    ])
+    .await;
+    let mut brain = cerveau(&serveur, Arc::new(SansOutils));
+    assert_eq!(
+        fin(&tous(brain.ask(question("un"))).await).unwrap().text,
+        "Ok."
+    );
+    assert_eq!(serveur.recues().len(), 3);
+    assert!(fin(&tous(brain.ask(question("deux"))).await).is_err());
+    assert_eq!(serveur.recues().len(), 4);
+    assert!(fin(&tous(brain.ask(question("trois"))).await).is_err());
+    assert_eq!(serveur.recues().len(), 7);
+    assert!(fin(&tous(brain.ask(question("quatre"))).await).is_err());
+    assert_eq!(serveur.recues().len(), 8);
 }
