@@ -134,10 +134,12 @@ pub enum Message {
     Interpelle,
     /// Question en cours de transcription.
     QuestionPartielle(String),
-    /// Question finie (dite, ou tapée si `voix` est faux).
+    /// Question finie (dite, ou tapée si `voix` est faux). `dit_a` : quand
+    /// elle a été dite (l'audio de l'écoute), pour une question dite.
     Question {
         texte: String,
         voix: bool,
+        dit_a: Option<Instant>,
     },
     /// Bouton « Publier » du Carnet (KOB-75) : la bulle montre `affiche`,
     /// Claude reçoit `consigne` (le document et où le publier). L'écriture
@@ -148,7 +150,7 @@ pub enum Message {
     },
     /// Phrase dite qui cite Kobi sans qu'on sache si elle lui parle
     /// (KOB-168) : Claude peut ne rien répondre, Kobi reste alors silencieux.
-    QuestionPeutEtre(String),
+    QuestionPeutEtre(String, Instant),
     /// L'interpellation n'a pas été suivie d'une question.
     SansQuestion,
     /// Question dite avant l'arrêt, transcrite pendant « Annuler » : gardée
@@ -484,6 +486,10 @@ pub struct Chef<R: Runtime> {
     /// Questions dites avant l'arrêt, à poser une fois « Annuler » fermé
     /// (KOB-307).
     questions_differees: Vec<String>,
+    /// Arrêt de la dernière réunion terminée pour de bon (« Annuler » clos) :
+    /// une question dite avant, même transcrite bien plus tard, ne part
+    /// jamais sur la conversation, qui pilote la réunion (KOB-326).
+    arret_definitif: Option<Instant>,
     /// Jusqu'où les pistes ont transcrit leur audio (KOB-198).
     avancement: Avancement,
 }
@@ -766,6 +772,7 @@ impl<R: Runtime> Chef<R> {
             compte_rendu_a_ecrire: false,
             comptes_rendus_abandonnes: 0,
             questions_differees: Vec::new(),
+            arret_definitif: None,
             avancement: Avancement::default(),
             reunion_close: None,
         }
@@ -854,14 +861,21 @@ impl<R: Runtime> Chef<R> {
                 self.transition(&[Evenement::PasDeQuestion]);
                 self.fermer_conversation();
             }
-            Message::Question { texte, voix } => self.question(texte, voix),
+            Message::Question { texte, voix, dit_a } => {
+                if !self.dit_avant_l_arret(dit_a, &texte) {
+                    self.question(texte, voix);
+                }
+            }
             Message::Publier { affiche, consigne } => {
                 tracing::info!("publication demandée depuis le Carnet");
                 self.transition(&[Evenement::Interpellation]);
                 let _ = self.app.emit(EVENEMENT_QUESTION, &affiche);
                 self.envoyer(affiche, Some(consigne), false);
             }
-            Message::QuestionPeutEtre(texte) => {
+            Message::QuestionPeutEtre(texte, dit_a) => {
+                if self.dit_avant_l_arret(Some(dit_a), &texte) {
+                    return;
+                }
                 self.peut_etre = true;
                 self.question(texte, true);
                 self.peut_etre = false;
@@ -1433,6 +1447,10 @@ impl<R: Runtime> Chef<R> {
         }
         let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::FinAnnulation);
         tracing::info!("fin de la réunion confirmée");
+        if r.arret.is_some() {
+            self.arret_definitif = r.arret;
+        }
+        let Some(r) = &mut self.reunion else { return };
         match r.compte_rendu_garde.take() {
             Some(resultat) => self.compte_rendu(resultat),
             None => self.emettre_enregistrement(),
@@ -1443,6 +1461,36 @@ impl<R: Runtime> Chef<R> {
     /// fermé, la fin annulée ou confirmée. Celles qui parlent de piloter la
     /// réunion n'arrivent pas jusqu'ici (`mot_cle::differable`) : ni le chef
     /// ni Claude ne relancent ni ne refont la fin depuis elles.
+    /// Question dite avant l'arrêt d'une réunion terminée (KOB-326) : la
+    /// fenêtre « Annuler » s'est fermée avant que la transcription la
+    /// rattrape. Elle ne part que sur la session en lecture seule, comme
+    /// pendant « Annuler » (KOB-307), si elle y est permise ; sinon elle ne
+    /// part pas. Vrai si elle est ainsi prise en charge.
+    fn dit_avant_l_arret(&mut self, dit_a: Option<Instant>, texte: &str) -> bool {
+        let avant = dit_a
+            .zip(self.arret_definitif)
+            .is_some_and(|(dit, arret)| dit <= arret);
+        if !avant {
+            return false;
+        }
+        // L'écouteur a déjà fait écouter Kobi : rien ne part maintenant.
+        self.transition(&[Evenement::PasDeQuestion]);
+        if crate::mot_cle::differable(texte) {
+            tracing::info!(
+                longueur = texte.len(),
+                "question dite avant l'arrêt, transcrite après « Annuler » : différée"
+            );
+            self.questions_differees.push(texte.to_owned());
+            self.poser_questions_differees();
+        } else {
+            tracing::info!(
+                longueur = texte.len(),
+                "question dite avant l'arrêt, transcrite après « Annuler » : écartée"
+            );
+        }
+        true
+    }
+
     fn poser_questions_differees(&mut self) {
         if self.questions_differees.is_empty() || self.fin_annulable() {
             return;
@@ -3826,6 +3874,68 @@ mod tests {
                 message: "réseau".into(),
             }));
             assert!(c.hors_notes.is_empty());
+        });
+    }
+
+    /// KOB-326 : la fenêtre « Annuler » se ferme avant que la transcription
+    /// ait rattrapé l'arrêt ; une question dite avant, transcrite après, ne
+    /// part jamais sur la conversation, quel que soit le retard : différée
+    /// sur la session en lecture seule si elle y est permise, sinon rien.
+    /// Dite après l'arrêt, ou tapée, elle part comme d'habitude.
+    #[test]
+    fn question_d_avant_l_arret_transcrite_apres_la_fenetre() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            c.recevoir(Message::Segment(dit("Premier point."), Instant::now()));
+            let avant = Instant::now() - Duration::from_millis(50);
+            c.commande(Intention::TerminerReunion);
+            c.reunion.as_mut().unwrap().annulable_jusqu = Some(Instant::now() - VIDANGE);
+            c.tick();
+            assert!(!c.fin_annulable());
+            let tour = c.tour;
+            let dite = |texte: &str, dit_a| Message::Question {
+                texte: texte.into(),
+                voix: true,
+                dit_a: Some(dit_a),
+            };
+            // Ordres sur la réunion : rien ne part, la réunion n'est pas relancée.
+            for ordre in [
+                "relance la réunion",
+                "démarre la réunion",
+                "reprends",
+                "termine la réunion",
+            ] {
+                c.recevoir(dite(ordre, avant));
+            }
+            c.recevoir(Message::QuestionPeutEtre(
+                "reprends l'enregistrement".into(),
+                avant,
+            ));
+            // L'écouteur fait écouter Kobi avant la question : il n'y reste pas.
+            c.recevoir(Message::Interpelle);
+            c.recevoir(dite("relance la réunion", avant));
+            assert_ne!(c.activite(), Some("ecoute"));
+            assert_eq!(c.tour, tour, "rien n'est parti sur la conversation");
+            assert!(c.reunion.as_ref().is_none_or(|r| r.fin_demandee));
+            assert!(
+                c.questions_differees.is_empty(),
+                "{:?}",
+                c.questions_differees
+            );
+            // Une question ordinaire attend la session en lecture seule.
+            c.recevoir(dite("quel est le budget ?", avant));
+            assert_eq!(c.tour, tour);
+            assert_eq!(c.questions_differees, ["quel est le budget ?"]);
+            // Dite après l'arrêt, ou tapée : la conversation, comme toujours.
+            c.recevoir(dite("quelle heure est-il ?", Instant::now()));
+            assert_eq!(c.tour, tour + 1);
+            c.recevoir(Message::Question {
+                texte: "et demain ?".into(),
+                voix: false,
+                dit_a: None,
+            });
+            assert_eq!(c.tour, tour + 2);
         });
     }
 

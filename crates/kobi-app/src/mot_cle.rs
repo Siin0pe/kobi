@@ -463,7 +463,7 @@ enum Attente {
 /// (KOB-307) ? Pas si elle touche à la fin ou à la reprise de la réunion
 /// (comme le chef la jugerait), répond à une carte ou commande la voix : dite
 /// avant l'arrêt, elle ne vaut plus après.
-fn differable(question: &str) -> bool {
+pub(crate) fn differable(question: &str) -> bool {
     use crate::intentions::{annule_la_fin, fin_de_reunion_dite, intention, Intention};
     !question.trim().is_empty()
         && !crate::intentions::parle_de_la_reunion(question)

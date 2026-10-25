@@ -1300,7 +1300,7 @@ impl<R: Runtime> Fil<R> {
                     }
                 }
                 let actions = self.ecouteur.raccourci(self.t);
-                self.executer(actions);
+                self.executer(actions, Instant::now());
             }
         }
     }
@@ -1427,7 +1427,7 @@ impl<R: Runtime> Fil<R> {
         let jusqu_a = self.origine + Duration::from_secs_f64(self.t.max(0.0));
         crate::chef::avancer(&self.app, kobi_stt::Source::Moi, Some(jusqu_a));
         if en_direct {
-            self.executer(actions);
+            self.executer(actions, jusqu_a);
             // Sous charge, la transcription peut aller moins vite que la
             // parole : un ordre dit maintenant ne serait entendu qu'après
             // (KOB-250).
@@ -1575,7 +1575,9 @@ impl<R: Runtime> Fil<R> {
         }
     }
 
-    fn executer(&mut self, actions: Vec<Action>) {
+    /// Publie les actions de l'écouteur ; `dit_a` : l'instant de l'audio
+    /// d'où elles viennent (KOB-326).
+    fn executer(&mut self, actions: Vec<Action>, dit_a: Instant) {
         let actions = sans_ordres_deja_executes(actions, |q| self.deja_execute(q));
         for action in actions {
             let message = match action {
@@ -1591,6 +1593,7 @@ impl<R: Runtime> Fil<R> {
                     Message::Question {
                         texte: q,
                         voix: true,
+                        dit_a: Some(dit_a),
                     }
                 }
                 Action::EnvoyerPeutEtre(q) => {
@@ -1598,7 +1601,7 @@ impl<R: Runtime> Fil<R> {
                         longueur = q.len(),
                         "phrase qui cite Kobi, peut-être pour lui"
                     );
-                    Message::QuestionPeutEtre(q)
+                    Message::QuestionPeutEtre(q, dit_a)
                 }
                 Action::Abandonner => {
                     tracing::info!("interpellation sans question");
