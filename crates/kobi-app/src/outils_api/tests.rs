@@ -305,6 +305,27 @@ fn lien_vers_un_chemin_reseau_refuse_sous_windows() {
         let e = l.lire(&json!({ "file_path": chemin })).unwrap_err();
         assert!(e.contains("chemin réseau"), "{chemin} : {e}");
     }
+    // KOB-367 : la cible absolue d'un lien est lue en `\\?\C:\…` ; la suite
+    // du chemin donné (non verbatim, que Win32 traduit) est encore jugée.
+    // Donné verbatim, Win32 ne traduit rien : permis.
+    fs::create_dir_all(racine.join("vendor")).unwrap();
+    symlink_dir(racine.join("vendor"), racine.join("lib")).unwrap();
+    assert!(
+        std::fs::read_link(racine.join("lib"))
+            .unwrap()
+            .to_string_lossy()
+            .starts_with(r"\\?\"),
+        "cible lue sans le préfixe verbatim : le cas de KOB-367 n'est pas reproduit"
+    );
+    for nom in [r"lib\COM1", r"lib\CON.txt", r"lib\nul"] {
+        assert!(lien_vers_le_reseau(&racine.join(nom), true), "{nom}");
+    }
+    let verbatim = PathBuf::from(format!(r"\\?\{}", racine.join(r"lib\COM1").display()));
+    assert!(
+        !lien_vers_le_reseau(&verbatim, true),
+        "{}",
+        verbatim.display()
+    );
 }
 
 /// Rien ne se lit hors des dossiers permis : chemin absolu, `..`, lien
