@@ -455,26 +455,6 @@ enum Attente {
     Annulation { depuis: f64, jusqu: f64 },
 }
 
-/// L'ordre touche-t-il à la fin ou à la reprise de la réunion (« continue »,
-/// « reprends », « annule », « on reprend », « termine la réunion »,
-/// « pause ») ? Dit avant l'arrêt et transcrit pendant « Annuler », il ne
-/// part jamais (suite de KOB-299).
-fn touche_la_fin(texte: &str) -> bool {
-    use crate::intentions::{annule_la_fin, fin_de_reunion_dite, intention, Intention};
-    annule_la_fin(texte)
-        || fin_de_reunion_dite(texte)
-        || matches!(
-            intention(texte),
-            Some(
-                Intention::DemarrerReunion
-                    | Intention::Pause
-                    | Intention::Reprendre
-                    | Intention::TerminerReunion
-                    | Intention::Annuler
-            )
-        )
-}
-
 /// Silence qui clôt une conversation, en secondes.
 pub const CONVERSATION: f64 = 20.0;
 
@@ -577,23 +557,15 @@ impl Ecouteur {
             // reste est ignoré. Dit avant (l'ordre de fin lui-même, transcrit
             // en retard après une fin anticipée), il ne ferme pas « Annuler »
             // (KOB-287).
-            Attente::Annulation { depuis, jusqu } => {
+            // Le nom, dit après l'arrêt, ramène à l'écoute ordinaire ; le
+            // reste est ignoré. Dit avant l'arrêt et transcrit pendant
+            // « Annuler », rien ne part : ni l'ordre de fin lui-même (KOB-287),
+            // ni un ordre de reprise qui relancerait la réunion terminée
+            // (suite de KOB-299).
+            Attente::Annulation { depuis, .. } => {
                 if t >= depuis && reperer(texte).is_some() {
                     self.attente = Attente::Nom;
                     actions = self.segment(texte, finale, t);
-                } else if finale
-                    && reperer(texte).is_some()
-                    && !touche_la_fin(texte)
-                    && interpellation(texte).is_some_and(|(_, q)| !touche_la_fin(&q))
-                {
-                    // Dit avant l'arrêt, transcrit pendant « Annuler » : un
-                    // ordre comme un autre (« Kobi, note l'action X »),
-                    // puis l'annulation reprend (KOB-299). Jamais un ordre
-                    // qui touche à la fin : dit avant l'arrêt, il ne doit ni
-                    // la défaire ni la refaire.
-                    self.attente = Attente::Nom;
-                    actions = self.segment(texte, finale, t);
-                    self.attente = Attente::Annulation { depuis, jusqu };
                 }
             }
             // « Merci Kobi » n'est pas une interpellation.
@@ -1292,32 +1264,14 @@ mod tests {
         );
     }
 
-    /// KOB-299 : un autre ordre dit avant l'arrêt, transcrit pendant
-    /// « Annuler », part encore ; l'annulation reste ouverte.
+    /// Suite de KOB-299 : pendant « Annuler », rien de ce qui a été dit
+    /// avant l'arrêt ne part, quelle que soit la forme de l'ordre, pour ne
+    /// jamais relancer ni refaire la fin ; « reprends » dit après l'arrêt,
+    /// si. Un ordre ordinaire dit avant l'arrêt non plus, pour l'instant :
+    /// la question réellement envoyée (phrase d'avant collée, ordre collé
+    /// sous charge) n'est pas encore jugée.
     #[test]
-    fn ordre_dit_avant_l_arret_part_pendant_annuler() {
-        let mut e = Ecouteur::new(false);
-        e.annulable(100.0, 10.0);
-        assert!(e.segment("Kobi, note l'action", false, 75.0).is_empty());
-        assert_eq!(
-            e.segment("Kobi, note l'action budget", true, 75.0),
-            [Interpeller, Envoyer("note l'action budget".into())]
-        );
-        assert!(e.en_annulation());
-        // Sans le nom, dit avant l'arrêt : rien.
-        assert!(e.segment("on en reparle lundi", true, 78.0).is_empty());
-        assert_eq!(
-            e.segment("reprends", true, 105.0),
-            [Interpeller, Envoyer("reprends".into())]
-        );
-    }
-
-    /// Suite de KOB-299 : pendant « Annuler », un ordre qui touche à la fin,
-    /// dit avant l'arrêt et transcrit après, ne part jamais, quelle que soit
-    /// sa forme ; les autres ordres passent, et « reprends » dit après
-    /// l'arrêt aussi.
-    #[test]
-    fn ordre_sur_la_fin_dit_avant_l_arret_ne_part_pas() {
+    fn rien_de_dit_avant_l_arret_ne_part_pendant_annuler() {
         for ordre in [
             "Kobi, continue",
             "Kobi, continue sur le budget",
@@ -1333,9 +1287,14 @@ mod tests {
             "Kobi, mets la réunion en pause",
             "Kobi, démarre la réunion",
             "Kobi, undo",
+            "on en reparlera la semaine prochaine avec toute l'équipe Kobe reprends",
+            "Kobi, s'il te plaît",
+            "Kobi, quelle heure est-il ?",
         ] {
             let mut e = Ecouteur::new(false);
+            e.sous_charge = true;
             e.annulable(100.0, 10.0);
+            assert!(e.segment("On continue", true, 79.0).is_empty(), "{ordre}");
             assert!(e.segment(ordre, true, 80.0).is_empty(), "{ordre}");
             assert!(e.en_annulation(), "{ordre}");
             assert_eq!(
@@ -1344,13 +1303,6 @@ mod tests {
                 "{ordre}"
             );
         }
-        let mut e = Ecouteur::new(false);
-        e.annulable(100.0, 10.0);
-        assert_eq!(
-            e.segment("Kobi, quelle heure est-il ?", true, 80.0),
-            [Interpeller, Envoyer("quelle heure est-il ?".into())]
-        );
-        assert!(e.en_annulation());
     }
 
     #[test]
