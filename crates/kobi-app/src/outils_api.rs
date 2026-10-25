@@ -267,6 +267,12 @@ impl Lecteur {
         // deux côtés.
         #[cfg(windows)]
         let brut = reduire_sur_le_texte(&brut);
+        // Win32 change `C:\…\COM1` en `\\.\COM1` : `canonicalize` ouvrirait
+        // le périphérique (KOB-353).
+        #[cfg(windows)]
+        if nom_de_peripherique(&brut) {
+            return Err(refus());
+        }
         if !prefixe_local(&brut) || lien_vers_le_reseau(&brut) {
             return Err(refus());
         }
@@ -1027,6 +1033,39 @@ fn racine_sans_disque(cible: &Path) -> bool {
             cible.components().next(),
             Some(std::path::Component::Prefix(_))
         )
+}
+
+/// Un composant est un nom de périphérique DOS réservé (`CON`, `NUL`,
+/// `COM1`, `lpt¹.txt`…), sans égard à la casse, à l'extension ni aux espaces
+/// de fin (KOB-353, Windows).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn nom_de_peripherique(chemin: &Path) -> bool {
+    chemin.components().any(|composant| {
+        let std::path::Component::Normal(nom) = composant else {
+            return false;
+        };
+        let nom = nom.to_string_lossy();
+        let base = nom
+            .split(['.', ':'])
+            .next()
+            .unwrap_or("")
+            .trim_end_matches(' ');
+        let base = base.to_ascii_uppercase();
+        if ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"].contains(&base.as_str()) {
+            return true;
+        }
+        let Some(numero) = base
+            .strip_prefix("COM")
+            .or_else(|| base.strip_prefix("LPT"))
+        else {
+            return false;
+        };
+        let mut chiffres = numero.chars();
+        matches!(
+            (chiffres.next(), chiffres.next()),
+            (Some('0'..='9' | '¹' | '²' | '³'), None)
+        )
+    })
 }
 
 /// Sous Windows, liste blanche : un chemin absolu n'a pour préfixe qu'un

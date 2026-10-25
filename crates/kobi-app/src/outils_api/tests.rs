@@ -183,6 +183,36 @@ fn lien_vers_un_chemin_reseau_refuse_sans_le_suivre() {
         .contains("Kobi"));
 }
 
+/// KOB-353 : les noms de périphériques DOS sont reconnus dans tout
+/// composant, avec extension, casse ou espaces ; les noms voisins passent.
+#[test]
+fn noms_de_peripheriques_dos() {
+    for chemin in [
+        "/code/kobi/COM1",
+        "/code/kobi/nul",
+        "/code/kobi/CON.txt",
+        "/code/kobi/aux .log",
+        "/code/kobi/lpt9.tar.gz",
+        "/code/kobi/COM¹",
+        "/code/NUL/x.rs",
+        "/code/kobi/prn:flux",
+        "/code/kobi/CONOUT$",
+    ] {
+        assert!(nom_de_peripherique(Path::new(chemin)), "{chemin}");
+    }
+    for chemin in [
+        "/code/kobi/COM10",
+        "/code/kobi/COM",
+        "/code/kobi/console.rs",
+        "/code/kobi/nul_part.md",
+        "/code/kobi/.con",
+        "/code/kobi/lpt",
+        "/code/kobi/src/main.rs",
+    ] {
+        assert!(!nom_de_peripherique(Path::new(chemin)), "{chemin}");
+    }
+}
+
 /// KOB-352 : `.` et `..` se retirent sur le texte, sans remonter au-dessus
 /// de la racine, verbatim compris (utilisé sous Windows).
 #[test]
