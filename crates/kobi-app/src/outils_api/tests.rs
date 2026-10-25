@@ -220,7 +220,7 @@ fn noms_de_peripheriques_dos() {
         assert!(!nom_de_peripherique(OsStr::new(nom)), "{nom}");
     }
     assert!(chemin_verbatim(r"\\?\C:\code"));
-    assert!(chemin_verbatim("//?/C:/code"));
+    assert!(!chemin_verbatim("//?/C:/code"));
     assert!(!chemin_verbatim(r"C:\code"));
     assert!(!chemin_verbatim("/code"));
 }

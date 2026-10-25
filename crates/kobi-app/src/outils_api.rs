@@ -1044,7 +1044,8 @@ fn racine_sans_disque(cible: &Path) -> bool {
 
 /// `\\?\…` : Win32 n'y change rien, ni `..` ni nom de périphérique.
 fn chemin_verbatim(chemin: &str) -> bool {
-    chemin.replace('/', "\\").starts_with("\\\\?\\")
+    // `//?/` n'est pas verbatim : Win32 le normalise.
+    chemin.starts_with("\\\\?\\")
 }
 
 /// Un nom de périphérique DOS réservé (`CON`, `NUL`, `COM1`, `lpt¹.txt`…),
