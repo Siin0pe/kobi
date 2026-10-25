@@ -974,6 +974,8 @@
   "coque.pannes.absentMessage": "Install Claude Code (claude.ai/code) or check that it starts in a terminal, then ask your question again. {suite}",
   "coque.pannes.cleRefuseeTitre": "API key refused",
   "coque.pannes.cleRefuseeMessage": "The Anthropic API refuses the saved key. Check or replace it in Settings, API key section, then ask your question again. {suite}",
+  "coque.pannes.surchargeTitre": "Claude is overloaded",
+  "coque.pannes.surchargeMessage": "Anthropic's servers are very busy: ask your question again in a moment. {suite}",
   "coque.pannes.horsLigneTitre": "No Internet",
   "coque.pannes.horsLigneMessage": "I'm keeping your question and will ask it as soon as the connection is back. {suite}",
   "coque.pannes.tropLongtemps": "too long",
