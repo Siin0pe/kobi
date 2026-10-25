@@ -1379,17 +1379,22 @@ impl<R: Runtime> Chef<R> {
     }
 
     /// Questions dites avant l'arrêt (KOB-307) : posées une fois « Annuler »
-    /// fermé, la fin annulée ou confirmée. Aucune ne peut plus alors relancer
-    /// ni refaire la fin, ni par le chef ni par Claude.
+    /// fermé, la fin annulée ou confirmée. Celles qui parlent de piloter la
+    /// réunion n'arrivent pas jusqu'ici (`mot_cle::differable`) : ni le chef
+    /// ni Claude ne relancent ni ne refont la fin depuis elles.
     fn poser_questions_differees(&mut self) {
         if self.questions_differees.is_empty() || self.fin_annulable() {
             return;
         }
-        for q in std::mem::take(&mut self.questions_differees) {
-            tracing::info!(longueur = q.len(), "question dite avant l'arrêt, posée");
-            self.transition(&[Evenement::Interpellation]);
-            self.question(q, true);
+        // Une à la fois, Kobi au calme : la réponse de l'une ne passe pas
+        // sous celle de la suivante.
+        if !matches!(self.activite(), Some("calme") | None) {
+            return;
         }
+        let q = self.questions_differees.remove(0);
+        tracing::info!(longueur = q.len(), "question dite avant l'arrêt, posée");
+        self.transition(&[Evenement::Interpellation]);
+        self.question(q, true);
     }
 
     /// « Annuler » : la même réunion reprend (même dossier, compteur

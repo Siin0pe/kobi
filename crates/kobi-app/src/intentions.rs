@@ -37,6 +37,37 @@ pub enum Intention {
     MontrerEnGrand,
 }
 
+/// La phrase parle-t-elle de piloter la réunion, sous quelque forme que ce
+/// soit (« est-ce que tu peux terminer la réunion ? », « une pause de dix
+/// minutes ») ? Règle prudente, par débuts de mots : une question dite avant
+/// l'arrêt et posée après « Annuler » ne doit pas pouvoir, par Claude, arrêter,
+/// mettre en pause ou relancer une réunion (KOB-307).
+pub fn parle_de_la_reunion(texte: &str) -> bool {
+    const DEBUTS: &[&str] = &[
+        " termin",
+        " arret",
+        " pause",
+        " repren",
+        " relanc",
+        " redemarr",
+        " demarr",
+        " enregistr",
+        " compte rendu",
+        " clotur",
+        " reunion",
+        " meeting",
+        " stop",
+        " resum",
+        " record",
+        " continu",
+        " annul",
+        " fini",
+        " paus",
+    ];
+    let n = normaliser(texte);
+    DEBUTS.iter().any(|d| n.contains(d))
+}
+
 /// Question en minuscules, sans accents ni ponctuation, mots séparés par une
 /// espace, avec une espace de chaque côté (pour chercher des mots entiers).
 fn normaliser(texte: &str) -> String {

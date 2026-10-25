@@ -466,6 +466,7 @@ enum Attente {
 fn differable(question: &str) -> bool {
     use crate::intentions::{annule_la_fin, fin_de_reunion_dite, intention, Intention};
     !question.trim().is_empty()
+        && !crate::intentions::parle_de_la_reunion(question)
         && !annule_la_fin(question)
         && !fin_de_reunion_dite(question)
         && !matches!(
@@ -1348,6 +1349,24 @@ mod tests {
                 [Interpeller, Envoyer("reprends".into())],
                 "{ordre}"
             );
+        }
+    }
+
+    /// KOB-307 : une question qui parle de piloter la réunion, sous une forme
+    /// que le chef ne reconnaît pas (Claude pourrait l'arrêter, la mettre en
+    /// pause ou la relancer), n'est pas différée.
+    #[test]
+    fn question_qui_parle_de_la_reunion_pas_differee() {
+        for ordre in [
+            "Kobi, est-ce que tu peux terminer la réunion et m'envoyer le compte rendu ?",
+            "Kobi, est-ce qu'on peut faire une pause de dix minutes ?",
+            "Kobi, est-ce que tu peux redémarrer l'enregistrement ?",
+            "Kobi, on arrête là pour aujourd'hui ?",
+            "Kobi, tu peux clôturer ?",
+        ] {
+            let mut e = Ecouteur::new(false);
+            e.annulable(100.0, 10.0);
+            assert!(e.segment(ordre, true, 80.0).is_empty(), "{ordre}");
         }
     }
 
