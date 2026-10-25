@@ -1042,6 +1042,20 @@ fn read_binaire_tardif_et_ligne_coupee() {
             "é".repeat(999)
         )
     );
+
+    // Sur plusieurs tampons de 8 Kio : le `\n` seul au début du second ne
+    // fait pas oublier la coupe, une ligne de 20 Ko non plus.
+    let etalee = dir.path().join("minifie.js");
+    let (a, b) = ("a".repeat(8192), "b".repeat(20_000));
+    fs::write(&etalee, format!("{a}\n{b}\nfin\n")).unwrap();
+    assert_eq!(
+        l.lire(&json!({ "file_path": etalee })).unwrap(),
+        format!(
+            "1\t{} … (ligne coupée)\n2\t{} … (ligne coupée)\n3\tfin\n",
+            &a[..LIGNE_MAX],
+            &b[..LIGNE_MAX]
+        )
+    );
 }
 
 /// Beaucoup de lignes ou de correspondances : résultats bornés.

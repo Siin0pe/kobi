@@ -599,7 +599,8 @@ fn lire_ligne(lecteur: &mut impl std::io::BufRead, ligne: &mut Vec<u8>) -> std::
         ligne.extend_from_slice(&tampon[..garde]);
         lecteur.consume(fin);
         lue.octets += fin;
-        if trouve {
+        // Binaire : inutile de parcourir la suite.
+        if trouve || lue.nul {
             return Ok(lue);
         }
     }
