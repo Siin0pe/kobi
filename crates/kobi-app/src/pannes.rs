@@ -31,6 +31,8 @@ pub enum Panne {
     Absent,
     /// Backend clé API : la clé enregistrée est refusée (401, 403).
     CleRefusee,
+    /// Serveurs d'Anthropic surchargés ou en panne passagère (529, 5xx).
+    Surcharge,
     /// Pas d'accès à Internet.
     HorsLigne,
     /// Autre erreur renvoyée par Claude.
@@ -55,6 +57,16 @@ const RESEAU: &[&str] = &[
     "api injoignable",
 ];
 
+/// Signes d'une surcharge passagère des serveurs d'Anthropic (KOB-362).
+const SURCHARGE: &[&str] = &[
+    "overloaded",
+    "http 529",
+    "http 500",
+    "http 502",
+    "http 503",
+    "http 504",
+];
+
 /// Signes d'une limite d'usage.
 const LIMITE: &[&str] = &[
     "usage limit",
@@ -74,6 +86,8 @@ pub fn classer_message(message: &str) -> Panne {
         Panne::LimiteUsage
     } else if contient(RESEAU) {
         Panne::HorsLigne
+    } else if contient(SURCHARGE) {
+        Panne::Surcharge
     } else if m.contains("clé api refusée") || m.contains("accès refusé") {
         Panne::CleRefusee
     } else if m.contains("pas connecté") || m.contains("auth login") || m.contains("not logged in")
@@ -110,7 +124,7 @@ pub fn classer(e: &BrainError) -> Panne {
             _ => Panne::Absent,
         },
         BrainError::Api(m) => match classer_message(m) {
-            p @ (Panne::LimiteUsage | Panne::HorsLigne) => p,
+            p @ (Panne::LimiteUsage | Panne::HorsLigne | Panne::Surcharge) => p,
             _ => Panne::Autre,
         },
         BrainError::Busy => Panne::Autre,
@@ -176,6 +190,10 @@ pub fn expliquer(panne: &Panne, detail: &str) -> (&'static str, String) {
             kobi_i18n::tr("coque.pannes.cleRefuseeTitre", &[]),
             kobi_i18n::tr("coque.pannes.cleRefuseeMessage", &[("suite", c)]),
         ),
+        Panne::Surcharge => (
+            kobi_i18n::tr("coque.pannes.surchargeTitre", &[]),
+            kobi_i18n::tr("coque.pannes.surchargeMessage", &[("suite", c)]),
+        ),
         Panne::HorsLigne => (
             kobi_i18n::tr("coque.pannes.horsLigneTitre", &[]),
             kobi_i18n::tr("coque.pannes.horsLigneMessage", &[("suite", c)]),
@@ -209,7 +227,13 @@ pub fn expliquer(panne: &Panne, detail: &str) -> (&'static str, String) {
         ),
         Panne::Autre => (
             kobi_i18n::tr("coque.pannes.autreTitre", &[]),
-            format!("{detail} {continue_}"),
+            // Le détail est une phrase à part : un point s'il n'en a pas
+            // (KOB-362).
+            if detail.trim_end().ends_with(['.', '!', '?', '…']) {
+                format!("{} {continue_}", detail.trim_end())
+            } else {
+                format!("{}. {continue_}", detail.trim_end())
+            },
         ),
     };
     (statique(titre), message)
@@ -397,6 +421,50 @@ mod tests {
             ),
             "The Anthropic API refuses the saved key. Check or replace it in Settings, API key \
              section, then ask your question again. Listening and recording carry on."
+        );
+    }
+
+    /// KOB-362 : une surcharge (529, 5xx) a son Oups, sans le message brut
+    /// de l'API ; une erreur inconnue garde son détail, suivi d'un point.
+    #[test]
+    fn surcharge_et_ponctuation_de_l_oups() {
+        use kobi_i18n::Langue;
+        for m in [
+            "erreur d'API : HTTP 529 : Overloaded",
+            "erreur d'API : overloaded_error : Overloaded",
+            "erreur d'API : HTTP 503 : Service Unavailable",
+        ] {
+            assert_eq!(classer_message(m), Panne::Surcharge, "{m}");
+            let (titre, message) = pour_l_utilisateur(m);
+            assert_eq!(titre, "Claude est surchargé");
+            assert!(
+                !message.contains("Overloaded") && !message.contains("HTTP"),
+                "{message}"
+            );
+        }
+        assert_eq!(
+            classer(&BrainError::Api("HTTP 529 : Overloaded".into())),
+            Panne::Surcharge
+        );
+        let (_, message) = pour_l_utilisateur("erreur d'API : HTTP 400 : prompt is too long");
+        assert_eq!(
+            message,
+            "erreur d'API : HTTP 400 : prompt is too long. L'écoute et l'enregistrement continuent."
+        );
+        let (_, message) = pour_l_utilisateur("erreur d'API : Invalid request.");
+        assert_eq!(
+            message,
+            "erreur d'API : Invalid request. L'écoute et l'enregistrement continuent."
+        );
+        let suite = kobi_i18n::t(Langue::En, "coque.pannes.continue", &[]);
+        assert_eq!(
+            kobi_i18n::t(
+                Langue::En,
+                "coque.pannes.surchargeMessage",
+                &[("suite", &suite)]
+            ),
+            "Anthropic's servers are very busy: ask your question again in a moment. \
+             Listening and recording carry on."
         );
     }
 
