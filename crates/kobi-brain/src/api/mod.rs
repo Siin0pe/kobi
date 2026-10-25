@@ -261,7 +261,9 @@ async fn tour(partage: &Partage, texte: String, events: &mpsc::Sender<BrainEvent
         .map(Vec::len);
     let mut garde = None;
     let fin = boucle(partage, &mut historique, texte, events, &mut garde).await;
-    if matches!(fin, BrainEvent::Error(_)) {
+    // Un tour que l'appelant a lâché n'a jamais été montré : il est retiré
+    // comme un échec, même s'il a fini (KOB-314).
+    if matches!(fin, BrainEvent::Error(_)) || events.is_closed() {
         match garde {
             Some(n) => historique.truncate(n),
             None => {
@@ -517,7 +519,12 @@ async fn requete(
         if corps.get("fallbacks").is_some() {
             req = req.header("anthropic-beta", BETA_REPLI);
         }
-        let resultat = req.body(corps.to_string()).send().await;
+        let abandon = || BrainError::Crashed("tour abandonné".into());
+        // Tour lâché pendant l'attente : la requête est abandonnée.
+        let resultat = tokio::select! {
+            r = req.body(corps.to_string()).send() => r,
+            _ = events.closed() => return Err(abandon()),
+        };
         let attente = match resultat {
             Ok(r) if r.status().is_success() => break r,
             Ok(r)
@@ -538,13 +545,24 @@ async fn requete(
             Err(e) => return Err(BrainError::Unavailable(format!("API injoignable : {e}"))),
         };
         tracing::warn!(essai, ?attente, "API Anthropic : nouvel essai");
-        tokio::time::sleep(attente).await;
+        tokio::select! {
+            _ = tokio::time::sleep(attente) => {}
+            _ = events.closed() => return Err(abandon()),
+        }
         essai += 1;
     };
     let mut decoupeur = Decoupeur::default();
     let mut message = Reponse::default();
     while !message.fini {
-        let morceau = match reponse.chunk().await {
+        // Tour lâché pendant le flux (délai, Stop) : la lecture s'arrête et
+        // la connexion se ferme (KOB-314).
+        let morceau = tokio::select! {
+            m = reponse.chunk() => m,
+            _ = events.closed() => {
+                return Err(BrainError::Crashed("tour abandonné".into()))
+            }
+        };
+        let morceau = match morceau {
             Ok(Some(m)) => m,
             Ok(None) => break,
             Err(e) => return Err(BrainError::Crashed(format!("flux interrompu : {e}"))),
