@@ -74,15 +74,33 @@ const LIMITE: &[&str] = &[
     "limit reached",
     "rate_limit",
     "too many requests",
-    "429",
     "quota",
 ];
+
+/// Limite par minute du backend clé API (HTTP 429, `rate_limit_error`) :
+/// elle passe d'elle-même, ce n'est pas la limite d'usage d'un abonnement
+/// (KOB-369). Ses messages viennent de `kobi-brain` (« HTTP 429 : … »,
+/// « rate_limit_error : … »), jamais de Claude Code.
+fn limite_par_minute(m: &str) -> bool {
+    m.contains("http 429") || m.starts_with("rate_limit_error")
+}
+
+/// « 429 » seul (un code), pas au milieu d'un nombre (« 204291 tokens »).
+fn code_429(m: &str) -> bool {
+    m.match_indices("429").any(|(i, _)| {
+        let avant = m[..i].chars().next_back();
+        let apres = m[i + 3..].chars().next();
+        !avant.is_some_and(|c| c.is_ascii_digit()) && !apres.is_some_and(|c| c.is_ascii_digit())
+    })
+}
 
 /// Classe un message d'erreur (texte d'une [`BrainError`] ou d'un résultat).
 pub fn classer_message(message: &str) -> Panne {
     let m = message.to_lowercase();
     let contient = |mots: &[&str]| mots.iter().any(|mot| m.contains(mot));
-    if contient(LIMITE) {
+    if limite_par_minute(&m) {
+        Panne::Surcharge
+    } else if contient(LIMITE) || code_429(&m) {
         Panne::LimiteUsage
     } else if contient(RESEAU) {
         Panne::HorsLigne
@@ -466,6 +484,45 @@ mod tests {
             "Anthropic's servers are very busy: ask your question again in a moment. \
              Listening and recording carry on."
         );
+    }
+
+    /// KOB-369 : la limite par minute de la clé API passe d'elle-même
+    /// (surcharge passagère) ; « 429 » au milieu d'un nombre ne dit rien ;
+    /// la limite d'usage de Claude Code reste reconnue.
+    #[test]
+    fn limite_par_minute_et_429_dans_un_nombre() {
+        let api = |m: &str| BrainError::Api(m.into());
+        assert_eq!(
+            classer(&api(
+                "HTTP 429 : Number of request tokens has exceeded your per-minute rate limit"
+            )),
+            Panne::Surcharge
+        );
+        assert_eq!(
+            classer(&api(
+                "rate_limit_error : This request would exceed the rate limit"
+            )),
+            Panne::Surcharge
+        );
+        let (titre, message) = pour_l_utilisateur(
+            "erreur d'API : HTTP 400 : prompt is too long: 204291 tokens > 200000 maximum",
+        );
+        assert_eq!(titre, "Claude n'a pas répondu");
+        assert!(message.contains("204291 tokens"), "{message}");
+        // Claude Code : limite d'usage du compte.
+        assert_eq!(
+            classer(&api(
+                r#"API Error: 429 {"type":"error","error":{"type":"rate_limit_error"}}"#
+            )),
+            Panne::LimiteUsage
+        );
+        assert_eq!(
+            classer(&api("Claude AI usage limit reached|1792339200")),
+            Panne::LimiteUsage
+        );
+        assert!(code_429("error 429"));
+        assert!(!code_429("204291 tokens"));
+        assert!(!code_429("14290"));
     }
 
     /// KOB-210 : l'Oups en anglais, mêmes variables qu'en français.
