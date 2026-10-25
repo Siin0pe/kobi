@@ -126,6 +126,14 @@ struct Track {
     /// Dernières secondes d'audio reçu ([`QUEUE_SANS_TEXTE`]), rejouées dans le flux après
     /// une fin d'énoncé (KOB-342).
     queue: std::collections::VecDeque<f32>,
+    /// Échantillons reçus depuis le dernier `reset` (ou flux neuf), sans
+    /// l'audio rejoué : seul cet audio peut repartir au `reset` suivant.
+    depuis_reset: usize,
+    /// Échantillons rejoués dans le flux en cours : la règle 3 de sherpa les
+    /// compte dans la longueur de l'énoncé.
+    rejoue: usize,
+    /// Rejeux faits (KOB-342), pour les tests.
+    rejeux: usize,
 }
 
 /// Moteur Nemotron, voir le module.
@@ -212,12 +220,16 @@ impl NemotronEngine {
                 last_text: String::new(),
                 debut_a_poser: false,
                 queue: std::collections::VecDeque::new(),
+                depuis_reset: 0,
+                rejoue: 0,
+                rejeux: 0,
             }
         })
     }
 
     /// Décode tout ce qui est prêt et renvoie les segments produits.
-    fn drain(&mut self, source: Source) -> Vec<Segment> {
+    /// `fin` : le flux est déclaré fini (`finish`), rien n'y est plus ajouté.
+    fn drain(&mut self, source: Source, fin: bool) -> Vec<Segment> {
         let recognizer = &self.recognizer;
         let track = self.tracks.get_mut(&source).expect("flux créé");
         while recognizer.is_ready(&track.stream) {
@@ -250,15 +262,22 @@ impl NemotronEngine {
             // `endpoint_silence` sans parole), repart dans le flux neuf.
             // Pas après une fin d'énoncé par longueur (règle 3, parole
             // continue) : elle redonnerait des mots déjà rendus.
-            if track.pos - track.utterance_start < LONGUEUR_MAX_ENONCE - 0.5 {
-                let garde = if text.is_empty() {
-                    QUEUE_SANS_TEXTE
-                } else {
-                    QUEUE_APRES_TEXTE
-                };
-                let saut = track.queue.len().saturating_sub(garde);
-                let queue: Vec<f32> = track.queue.iter().skip(saut).copied().collect();
-                track.stream.accept_waveform(SAMPLE_RATE as i32, &queue);
+            // Jamais sur un flux déclaré fini (`finish`), et seulement
+            // l'audio reçu depuis le `reset` précédent : rien d'une phrase
+            // déjà rendue ne revient, et un long silence ne se rejoue pas
+            // en boucle.
+            let longueur =
+                track.pos - track.utterance_start + track.rejoue as f64 / SAMPLE_RATE as f64;
+            let rejeu = if fin || longueur >= LONGUEUR_MAX_ENONCE - 0.5 {
+                Vec::new()
+            } else {
+                a_rejouer(&track.queue, track.depuis_reset, text.is_empty())
+            };
+            track.rejoue = rejeu.len();
+            track.depuis_reset = 0;
+            if !rejeu.is_empty() {
+                track.rejeux += 1;
+                track.stream.accept_waveform(SAMPLE_RATE as i32, &rejeu);
                 while recognizer.is_ready(&track.stream) {
                     recognizer.decode(&track.stream);
                 }
@@ -284,9 +303,41 @@ const QUEUE_APRES_TEXTE: usize = SAMPLE_RATE as usize;
 /// Audio rejoué après une fin d'énoncé sans texte (règle 1 : silence long).
 /// Le modèle la détecte en retard, parfois quand la phrase suivante a déjà
 /// commencé depuis près d'une seconde (« Point numéro cinq » perdu après une
-/// question) ; rien n'a été rendu depuis le dernier `reset`, donc rejouer
-/// plus large ne peut redonner aucun mot.
+/// question) ; rien n'a été rendu depuis le dernier `reset`.
 const QUEUE_SANS_TEXTE: usize = 5 * SAMPLE_RATE as usize / 2;
+/// Énergie (RMS) au-dessus de laquelle 20 ms contiennent de la parole.
+const SEUIL_PAROLE: f32 = 0.003;
+
+/// Audio à rejouer après une fin d'énoncé (KOB-342) : la fin de la queue,
+/// au plus [`QUEUE_APRES_TEXTE`] après du texte, [`QUEUE_SANS_TEXTE`] sinon,
+/// et jamais plus que les `depuis_reset` derniers échantillons. Sans texte,
+/// on ne rejoue qu'à partir de la première parole (moins 0,2 s), et rien sur
+/// un silence : la fin d'énoncé suivante ne rejouerait que du silence.
+fn a_rejouer(
+    queue: &std::collections::VecDeque<f32>,
+    depuis_reset: usize,
+    sans_texte: bool,
+) -> Vec<f32> {
+    let garde = if sans_texte {
+        QUEUE_SANS_TEXTE
+    } else {
+        QUEUE_APRES_TEXTE
+    };
+    let n = garde.min(depuis_reset).min(queue.len());
+    let fin: Vec<f32> = queue.iter().skip(queue.len() - n).copied().collect();
+    if !sans_texte {
+        return fin;
+    }
+    let pas = SAMPLE_RATE as usize / 50;
+    let parole = fin.chunks(pas).position(|bloc| {
+        let rms = (bloc.iter().map(|x| x * x).sum::<f32>() / bloc.len() as f32).sqrt();
+        rms > SEUIL_PAROLE
+    });
+    match parole {
+        Some(i) => fin[(i * pas).saturating_sub(SAMPLE_RATE as usize / 5)..].to_vec(),
+        None => Vec::new(),
+    }
+}
 
 /// Règle 3 de fin d'énoncé : longueur maximale, en secondes.
 const LONGUEUR_MAX_ENONCE: f64 = 30.0;
@@ -352,12 +403,13 @@ impl SttEngine for NemotronEngine {
             .stream
             .accept_waveform(SAMPLE_RATE as i32, &frame.samples);
         track.queue.extend(frame.samples.iter().copied());
+        track.depuis_reset += frame.samples.len();
         if track.queue.len() > QUEUE_SANS_TEXTE {
             let trop = track.queue.len() - QUEUE_SANS_TEXTE;
             track.queue.drain(..trop);
         }
         track.pos = track.pos.max(frame.end());
-        Ok(self.drain(frame.source))
+        Ok(self.drain(frame.source, false))
     }
 
     /// KOB-190 : après un silence non transmis, une phrase qui arrive dans
@@ -376,6 +428,8 @@ impl SttEngine for NemotronEngine {
         track.stream = self.recognizer.create_stream();
         // L'audio d'avant ne doit pas revenir dans le flux neuf (KOB-342).
         track.queue.clear();
+        track.depuis_reset = 0;
+        track.rejoue = 0;
         track.stream.set_option(
             "language",
             self.config.language.as_deref().unwrap_or("auto"),
@@ -394,6 +448,8 @@ impl SttEngine for NemotronEngine {
         track.stream = self.recognizer.create_stream();
         // L'audio d'avant ne doit pas revenir dans le flux neuf (KOB-342).
         track.queue.clear();
+        track.depuis_reset = 0;
+        track.rejoue = 0;
         track.stream.set_option(
             "language",
             self.config.language.as_deref().unwrap_or("auto"),
@@ -471,7 +527,7 @@ impl SttEngine for NemotronEngine {
             let track = self.tracks.get_mut(&source).expect("flux créé");
             track.stream.accept_waveform(SAMPLE_RATE as i32, &padding);
             track.stream.input_finished();
-            let mut segments = self.drain(source);
+            let mut segments = self.drain(source, true);
             let track = self.tracks.get_mut(&source).expect("flux créé");
             // Ce qui reste après la dernière fin de phrase devient final.
             if !track.last_text.is_empty() {
@@ -588,13 +644,28 @@ mod tests {
         assert!(out.emissions.iter().any(|e| !e.segment.is_final));
     }
 
-    /// KOB-311, avec le modèle : une phrase dite après 8 s de silence,
-    /// transmis puis non transmis, ne commence ni bien avant la parole
-    /// (silence transmis : au plus la règle 1, 2,4 s, et un bloc), ni après.
-    /// Une phrase sans silence avant, au début du flux, garde son début et sa
-    /// fin (d'où l'app tire `dit_a`). Ignoré sans modèle :
-    /// `KOBI_NEMOTRON_DIR=<dossier du paquet> cargo test -p kobi-stt
-    /// --features nemotron -- --ignored`.
+    /// KOB-342 : ce qui repart après une fin d'énoncé.
+    #[test]
+    fn audio_rejoue_apres_une_fin_d_enonce() {
+        let sr = SAMPLE_RATE as usize;
+        let mut queue: std::collections::VecDeque<f32> = std::collections::VecDeque::new();
+        // 2 s de silence, puis 0,5 s de « parole ».
+        queue.extend(vec![0.0f32; 2 * sr]);
+        queue.extend(vec![0.1f32; sr / 2]);
+        // Après du texte : la dernière seconde, bornée à l'audio reçu depuis
+        // le reset.
+        assert_eq!(a_rejouer(&queue, 10 * sr, false).len(), sr);
+        assert_eq!(a_rejouer(&queue, sr / 4, false).len(), sr / 4);
+        // Sans texte : à partir de la parole, moins 0,2 s.
+        assert_eq!(a_rejouer(&queue, 10 * sr, true).len(), sr / 2 + sr / 5);
+        // Que du silence : rien.
+        let silence: std::collections::VecDeque<f32> = vec![0.0f32; 3 * sr].into();
+        assert!(a_rejouer(&silence, 10 * sr, true).is_empty());
+        // Rien reçu depuis le reset : rien.
+        assert!(a_rejouer(&queue, 0, true).is_empty());
+        assert!(a_rejouer(&queue, 0, false).is_empty());
+    }
+
     /// Mots d'un texte, en minuscules et sans ponctuation.
     fn mots(texte: &str) -> Vec<String> {
         texte
@@ -620,7 +691,10 @@ mod tests {
             let mut config = NemotronConfig::new(&dir);
             config.language = Some("fr".into());
             let mut engine = NemotronEngine::new(config).unwrap();
-            let mut audio = parole.clone();
+            // 1 s de silence d'abord : au tout début du flux, le modèle perd
+            // souvent le premier mot (sans rapport avec KOB-342).
+            let mut audio = vec![0.0f32; SAMPLE_RATE as usize];
+            audio.extend(&parole);
             if let Some(silence) = avec_silence {
                 audio.extend(vec![0.0f32; (silence * SAMPLE_RATE as f64) as usize]);
                 audio.extend(&parole);
@@ -646,7 +720,10 @@ mod tests {
         // La phrase seule : la référence.
         let reference = finals(None).concat();
         assert!(reference.len() >= 3, "{reference:?}");
-        for silence in [0.4, 0.8, 1.0, 1.5] {
+        // 0,6 et 0,7 s : sans le rejeu, le second énoncé perd « Ne vous » ou
+        // « Ne » (mesuré au vrai modèle) ; les autres durées gardent le
+        // reste du comportement (phrases collées à 0,4 s, rien perdu au-delà).
+        for silence in [0.4, 0.6, 0.7, 0.8, 1.0, 1.5] {
             let textes = finals(Some(silence));
             let tout = textes.concat();
             // La phrase entière revient deux fois, ni plus ni moins de mots
@@ -666,8 +743,63 @@ mod tests {
                 );
             }
         }
+
+        // Dates, long silence porte ouverte, et fin du flux juste après une
+        // phrase : le rejeu ne fait reculer aucune date, ne tourne pas en
+        // boucle sur le silence, et n'ajoute rien à un flux déclaré fini.
+        let mut config = NemotronConfig::new(&dir);
+        config.language = Some("fr".into());
+        let mut engine = NemotronEngine::new(config).unwrap();
+        let mut audio = vec![0.0f32; SAMPLE_RATE as usize];
+        audio.extend(&parole);
+        audio.extend(vec![0.0f32; SAMPLE_RATE as usize]);
+        audio.extend(&parole);
+        audio.extend(vec![0.0f32; 20 * SAMPLE_RATE as usize]);
+        audio.extend(&parole);
+        let mut finals = Vec::new();
+        for (i, bloc) in audio.chunks(1600).enumerate() {
+            let frame = AudioFrame {
+                source: Source::Moi,
+                samples: bloc.to_vec(),
+                t: i as f64 * 0.1,
+            };
+            finals.extend(
+                engine
+                    .push(&frame)
+                    .unwrap()
+                    .into_iter()
+                    .filter(|s| s.is_final),
+            );
+        }
+        // Fin du flux sans silence après la dernière phrase.
+        finals.extend(engine.finish().unwrap());
+        for paire in finals.windows(2) {
+            assert!(
+                paire[1].start >= paire[0].end - 1e-6,
+                "dates qui reculent : {:?}",
+                finals.iter().map(|s| (s.start, s.end)).collect::<Vec<_>>()
+            );
+        }
+        let tout: Vec<String> = finals.iter().flat_map(|s| mots(&s.text)).collect();
+        assert!(
+            tout.len().abs_diff(3 * reference.len()) <= 2,
+            "{} mots pour {} attendus : {tout:?}",
+            tout.len(),
+            3 * reference.len()
+        );
+        // Deux phrases suivies d'une fin d'énoncé, plus au plus un rejeu
+        // pendant les 20 s de silence : pas de boucle.
+        let rejeux = engine.tracks[&Source::Moi].rejeux;
+        assert!(rejeux <= 4, "{rejeux} rejeux");
     }
 
+    /// KOB-311, avec le modèle : une phrase dite après 8 s de silence,
+    /// transmis puis non transmis, ne commence ni bien avant la parole
+    /// (silence transmis : au plus la règle 1, 2,4 s, et un bloc), ni après.
+    /// Une phrase sans silence avant, au début du flux, garde son début et sa
+    /// fin (d'où l'app tire `dit_a`). Ignoré sans modèle :
+    /// `KOBI_NEMOTRON_DIR=<dossier du paquet> cargo test -p kobi-stt
+    /// --features nemotron -- --ignored`.
     #[test]
     #[ignore = "demande KOBI_NEMOTRON_DIR"]
     fn debut_d_enonce_apres_le_silence_avec_le_modele() {
