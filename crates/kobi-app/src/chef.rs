@@ -55,6 +55,8 @@ const TITRE_MOTS_MIN: usize = 20;
 const TITRE_PAROLE_MAX: usize = 8_000;
 /// Demandes de titre au plus, quand Claude ne trouve pas.
 const TITRE_ESSAIS: u8 = 3;
+/// Attente au plus d'une annonce de service derrière une réponse (KOB-365).
+const ANNONCE_ATTENTE: Duration = Duration::from_secs(30);
 
 /// Mode de prise de notes (`notes.mode`), lu au début de chaque réunion. En
 /// fin de réunion (`end`, KOB-71), rien n'est demandé à Claude pendant la
@@ -463,6 +465,9 @@ pub struct Chef<R: Runtime> {
     /// La conversation attend la suite à la fin de la voix, pas avant
     /// (KOB-133) : la fenêtre de 20 s repart quand Kobi se tait.
     suite_apres_voix: bool,
+    /// Annonce de service (« compte rendu prêt ») qui attend la fin de la
+    /// réponse en cours pour ne pas la couper (KOB-365), et depuis quand.
+    annonce: Option<(String, Instant)>,
     /// Dernière question répondue et sa réponse (« répète », « plus court »…).
     derniere: Option<(String, String)>,
     /// Tâches longues en cours : début et question (« où en est… ? ») ;
@@ -819,6 +824,7 @@ impl<R: Runtime> Chef<R> {
             conversation: None,
             voix: None,
             suite_apres_voix: false,
+            annonce: None,
             derniere: None,
             taches: BTreeMap::new(),
             annoncees: Default::default(),
@@ -2001,6 +2007,10 @@ impl<R: Runtime> Chef<R> {
         crate::voix::taire(&self.app, "interruption");
         self.voix = None;
         self.suite_apres_voix = false;
+        // On vient de faire taire Kobi : pas d'annonce juste après.
+        if self.annonce.take().is_some() {
+            tracing::info!("voix : annonce abandonnée après une interruption");
+        }
         self.calme_a = None;
         match self.activite() {
             Some("reflechit") => {
@@ -2613,10 +2623,7 @@ impl<R: Runtime> Chef<R> {
                             .emit(EVENEMENT_COMPTE_RENDU, compte_rendu_ui(&reunion, &texte));
                         // Annoncé une fois à voix haute, si la voix est active (KOB-204),
                         // sans couper la réponse en cours (KOB-365).
-                        crate::voix::annoncer(
-                            &self.app,
-                            &kobi_i18n::tr("coque.chef.compteRenduPret", &[]),
-                        );
+                        self.annoncer(kobi_i18n::tr("coque.chef.compteRenduPret", &[]));
                     }
                     (_, Err(e)) => tracing::warn!(erreur = %e, "compte rendu illisible"),
                     _ => {}
@@ -2786,7 +2793,35 @@ impl<R: Runtime> Chef<R> {
     }
 
     /// Délais : retour au calme, blocs de notes.
+    /// Annonce de service à voix haute (KOB-365) : tout de suite si Kobi ne
+    /// répond pas, sinon après la réponse en cours (écrite ou encore dite),
+    /// sans jamais la couper.
+    fn annoncer(&mut self, texte: String) {
+        if self.voix.is_none() && !crate::voix::occupee(&self.app) {
+            crate::voix::dire(&self.app, &texte);
+        } else {
+            self.annonce = Some((texte, Instant::now()));
+        }
+    }
+
+    /// Annonce en attente : dite quand la voix est libre, abandonnée au-delà
+    /// de [`ANNONCE_ATTENTE`] (l'écran la montre déjà).
+    fn annonce_en_attente(&mut self) {
+        let Some((_, depuis)) = &self.annonce else {
+            return;
+        };
+        if depuis.elapsed() >= ANNONCE_ATTENTE {
+            self.annonce = None;
+            tracing::info!("voix : annonce sautée, réponse toujours en cours");
+        } else if self.voix.is_none() && !crate::voix::occupee(&self.app) {
+            if let Some((texte, _)) = self.annonce.take() {
+                crate::voix::dire(&self.app, &texte);
+            }
+        }
+    }
+
     pub fn tick(&mut self) {
+        self.annonce_en_attente();
         self.cartes_expirees();
         self.poser_questions_differees();
         let parle = crate::voix::parle(&self.app);
@@ -3307,6 +3342,41 @@ mod tests {
             avec_chef(&app, |c| c.commande(Intention::Reprendre)),
             "Aucune réunion en cours."
         );
+    }
+
+    /// KOB-365 : une annonce de service attend la fin de la réponse en
+    /// cours (écrite ou encore dite), puis part au tic ; une interruption
+    /// l'abandonne ; trop longue, elle est sautée.
+    #[test]
+    fn annonce_apres_la_reponse_en_cours() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            // Pas de réponse en cours : dite tout de suite.
+            c.annoncer("Compte rendu prêt.".into());
+            assert!(c.annonce.is_none());
+            // Une réponse s'écrit : l'annonce attend.
+            c.voix = Some((7, crate::voix::Reponse::new(&c.app)));
+            c.annoncer("Compte rendu prêt.".into());
+            c.tick();
+            assert!(c.annonce.is_some(), "pas pendant la réponse");
+            // Réponse finie, voix libre : dite au tic.
+            c.voix = None;
+            c.tick();
+            assert!(c.annonce.is_none());
+            // Interrompue : abandonnée.
+            c.voix = Some((8, crate::voix::Reponse::new(&c.app)));
+            c.annoncer("Compte rendu prêt.".into());
+            c.interrompre();
+            assert!(c.annonce.is_none());
+            // Toujours occupée au-delà du délai : sautée.
+            c.voix = Some((9, crate::voix::Reponse::new(&c.app)));
+            c.annonce = Some((
+                "Compte rendu prêt.".into(),
+                Instant::now() - ANNONCE_ATTENTE,
+            ));
+            c.tick();
+            assert!(c.annonce.is_none());
+        });
     }
 
     /// KOB-85 : une interpellation pendant la réunion est mesurée, et le

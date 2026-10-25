@@ -518,43 +518,16 @@ pub fn dire<R: Runtime>(app: &AppHandle<R>, texte: &str) {
     r.fin(app, texte);
 }
 
-/// Attente au plus d'une réponse en cours avant une annonce de service.
-const ANNONCE_ATTENTE: Duration = Duration::from_secs(30);
-
-/// Annonce de service (« compte rendu prêt », KOB-365) : ne coupe pas la
-/// réponse que Kobi est en train de dire, contrairement à [`dire`] ; elle
-/// part à la fin de celle-ci, ou est sautée si elle dure plus de
-/// [`ANNONCE_ATTENTE`] (l'écran la montre déjà).
-pub fn annoncer<R: Runtime>(app: &AppHandle<R>, texte: &str) {
-    if !parle(app) {
-        dire(app, texte);
-        return;
-    }
-    let (app, texte) = (app.clone(), texte.to_owned());
-    let lancee = std::thread::Builder::new()
-        .name("voix-annonce".into())
-        .spawn(move || {
-            if attendre_le_silence(|| parle(&app), ANNONCE_ATTENTE, Duration::from_millis(100)) {
-                dire(&app, &texte);
-            } else {
-                tracing::info!("voix : annonce sautée, réponse toujours en cours");
-            }
-        });
-    if let Err(e) = lancee {
-        tracing::warn!(erreur = %e, "voix : annonce impossible");
-    }
-}
-
-/// Attend que `parle` soit faux, au plus `attente` ; vrai si c'est le cas.
-fn attendre_le_silence(parle: impl Fn() -> bool, attente: Duration, pas: Duration) -> bool {
-    let debut = Instant::now();
-    while parle() {
-        if debut.elapsed() >= attente {
-            return false;
-        }
-        std::thread::sleep(pas);
-    }
-    true
+/// La voix a-t-elle encore quelque chose à dire : un son qui joue, ou des
+/// phrases confiées dont la fin n'est pas encore venue (synthèse en cours,
+/// avant le premier son). Une annonce de service attend ce silence pour ne
+/// pas couper une réponse (KOB-365).
+pub fn occupee<R: Runtime>(app: &AppHandle<R>) -> bool {
+    parle(app)
+        || app.try_state::<Voix>().is_some_and(|v| {
+            let r = v.recent.lock().unwrap_or_else(|e| e.into_inner());
+            r.debut.is_some() && r.fin.is_none()
+        })
 }
 
 /// La voix joue-t-elle ? (le retour au calme attend la fin).
@@ -782,38 +755,17 @@ mod tests {
         app
     }
 
-    /// KOB-365 : l'annonce attend la fin de la réponse en cours ; si elle
-    /// dure trop, l'annonce est sautée.
+    /// KOB-365 : des phrases confiées sans fin de la voix, même avant le
+    /// premier son, occupent la voix ; la fin la libère.
     #[test]
-    fn annonce_apres_la_reponse_en_cours() {
-        use std::cell::Cell;
-        let appels = Cell::new(0);
-        let parle = || {
-            appels.set(appels.get() + 1);
-            appels.get() <= 3
-        };
-        assert!(attendre_le_silence(
-            parle,
-            Duration::from_secs(5),
-            Duration::from_millis(1)
-        ));
-        assert_eq!(appels.get(), 4, "attendu jusqu'au silence");
-        let debut = Instant::now();
-        assert!(!attendre_le_silence(
-            || true,
-            Duration::from_millis(30),
-            Duration::from_millis(5)
-        ));
-        assert!(debut.elapsed() < Duration::from_secs(1));
-        // Silence d'emblée : aucune attente.
-        assert!(attendre_le_silence(
-            || false,
-            Duration::ZERO,
-            Duration::from_secs(10)
-        ));
-        // Sans parleur, l'annonce ne fait rien de mal.
+    fn voix_occupee_jusqu_a_sa_fin() {
         let a = app(VoiceConfig::default());
-        annoncer(a.handle(), "Compte rendu prêt.");
+        let h = a.handle();
+        assert!(!occupee(h));
+        h.state::<Voix>().recent.lock().unwrap().debut = Some(Instant::now());
+        assert!(occupee(h), "phrases confiées, pas encore de son");
+        h.state::<Voix>().recent.lock().unwrap().fin = Some(Instant::now());
+        assert!(!occupee(h));
     }
 
     #[test]
