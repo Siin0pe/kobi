@@ -611,9 +611,12 @@ fn corps(partage: &Partage, historique: &[Value], sans_outil: bool) -> Value {
     });
     if !partage.outils.is_empty() {
         corps["tools"] = Value::Array(partage.outils.clone());
-        // Dernier aller-retour : la liste d'outils reste la même (cache et
-        // réflexion en dépendent), seul `tool_choice` interdit de s'en
-        // servir.
+        // Dernier aller-retour : la liste d'outils reste la même (la
+        // réflexion préservée et le cache du système et des outils en
+        // dépendent), seul `tool_choice` interdit de s'en servir. Changer
+        // `tool_choice` invalide le cache des messages : cette requête-là
+        // réécrit la conversation au tarif d'écriture. C'est accepté, elle ne
+        // vient qu'après `max_etapes` allers-retours (KOB-348).
         if sans_outil {
             corps["tool_choice"] = json!({ "type": "none" });
         }
