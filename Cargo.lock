@@ -3159,10 +3159,12 @@ name = "kobi-brain"
 version = "0.1.0"
 dependencies = [
  "kobi-perms",
+ "reqwest",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

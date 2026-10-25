@@ -6,10 +6,16 @@ license.workspace = true
 
 [dependencies]
 kobi-perms = { path = "../kobi-perms" }
+# Backend clé API (KOB-101) : mêmes réglages que rmcp dans kobi-app.
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["net"] }
 
 [[bin]]
 name = "claude-essai"

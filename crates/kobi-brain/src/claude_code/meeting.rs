@@ -166,6 +166,40 @@ fn message(kind: &str, transcript: &str, notes: &str, body: &str) -> String {
     text
 }
 
+/// Message d'une interpellation (commun aux deux backends).
+pub(crate) fn texte_ask(ask: &Ask) -> String {
+    message(
+        "interpellation",
+        &ask.transcript,
+        &ask.notes,
+        &format!("## Question\n{}", ask.question),
+    )
+}
+
+/// Message d'un bloc de notes.
+pub(crate) fn texte_notes(update: &NotesUpdate) -> String {
+    message(
+        "notes",
+        &update.transcript,
+        &update.notes,
+        "Mets les notes à jour et renvoie-les en entier, en markdown brut, sans bloc de code autour.",
+    )
+}
+
+/// Message de fin de réunion.
+pub(crate) fn texte_compte_rendu(report: &ReportRequest) -> String {
+    let mut body =
+        "La réunion est terminée. Écris le compte rendu complet, en markdown brut, sans bloc de code autour."
+            .to_owned();
+    if !report.pending_actions.is_empty() {
+        body.push_str("\n\n## Actions non faites ou échouées\n");
+        for action in &report.pending_actions {
+            body.push_str(&format!("- {action}\n"));
+        }
+    }
+    message("compte rendu", &report.transcript, &report.notes, &body)
+}
+
 /// Outils internes de Claude Code qui ne sont pas des sources à montrer.
 const INTERNAL_TOOLS: &[&str] = &["ToolSearch", "TodoWrite"];
 
@@ -305,39 +339,15 @@ impl Brain for ClaudeCodeBrain {
     }
 
     fn ask(&mut self, ask: Ask) -> Turn {
-        self.submit(message(
-            "interpellation",
-            &ask.transcript,
-            &ask.notes,
-            &format!("## Question\n{}", ask.question),
-        ))
+        self.submit(texte_ask(&ask))
     }
 
     fn update_notes(&mut self, update: NotesUpdate) -> Turn {
-        self.submit(message(
-            "notes",
-            &update.transcript,
-            &update.notes,
-            "Mets les notes à jour et renvoie-les en entier, en markdown brut, sans bloc de code autour.",
-        ))
+        self.submit(texte_notes(&update))
     }
 
     fn final_report(&mut self, report: ReportRequest) -> Turn {
-        let mut body =
-            "La réunion est terminée. Écris le compte rendu complet, en markdown brut, sans bloc de code autour."
-                .to_owned();
-        if !report.pending_actions.is_empty() {
-            body.push_str("\n\n## Actions non faites ou échouées\n");
-            for action in &report.pending_actions {
-                body.push_str(&format!("- {action}\n"));
-            }
-        }
-        self.submit(message(
-            "compte rendu",
-            &report.transcript,
-            &report.notes,
-            &body,
-        ))
+        self.submit(texte_compte_rendu(&report))
     }
 }
 
