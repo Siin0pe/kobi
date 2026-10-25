@@ -14,6 +14,7 @@
 //!   seule (question différée), seuls les outils connus en lecture sont
 //!   proposés et rien ne demande de carte.
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -261,6 +262,46 @@ fn couper(mut s: String) -> String {
     s
 }
 
+/// Longueur maximale d'un nom d'outil pour l'API Messages.
+const NOM_MAX: usize = 64;
+
+/// Nom d'un outil MCP pour l'API Messages (KOB-317) : `mcp__<serveur>__<outil>`
+/// comme chez Claude Code, mais seulement en `[a-zA-Z0-9_-]` et en
+/// [`NOM_MAX`] caractères au plus, sans doublon avec `pris`. Un nom trop
+/// long garde une empreinte du vrai nom ; un doublon reçoit un numéro.
+fn nom_pour_l_api(serveur: &str, outil: &str, pris: &BTreeMap<String, (String, String)>) -> String {
+    let brut = format!("mcp__{serveur}__{outil}");
+    let propre: String = brut
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let reduit = |base: &str, suffixe: &str| -> String {
+        let garde = NOM_MAX - suffixe.len();
+        format!("{}{suffixe}", &base[..base.len().min(garde)])
+    };
+    let mut nom = if propre.len() > NOM_MAX {
+        // FNV-1a : stable d'une version de Rust à l'autre (cache de prompt).
+        let empreinte = brut.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
+            (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3)
+        });
+        reduit(&propre, &format!("_{:08x}", empreinte as u32))
+    } else {
+        propre.clone()
+    };
+    let mut n = 2;
+    while pris.contains_key(&nom) || matches!(nom.as_str(), "Read" | "Grep" | "Glob") {
+        nom = reduit(&propre, &format!("_{n}"));
+        n += 1;
+    }
+    nom
+}
+
 /// Serveur MCP connecté pour la réunion.
 struct ServeurMcp {
     nom: String,
@@ -290,6 +331,8 @@ pub struct OutillageKobi {
     /// Nature et politique de chaque outil, tirées des réglages (dernier
     /// test de connexion), jamais des annotations reçues en direct.
     catalogue: Catalogue,
+    /// Nom donné à Claude → serveur et vrai nom de l'outil (KOB-317).
+    noms: BTreeMap<String, (String, String)>,
     acces: Acces,
 }
 
@@ -305,6 +348,7 @@ impl OutillageKobi {
     ) -> Self {
         let mut definitions = Lecteur::definitions();
         let mut connectes = Vec::new();
+        let mut noms = BTreeMap::new();
         for (nom, client, outils) in serveurs {
             // Lecture seule : aucun serveur de l'utilisateur, seulement le MCP
             // de Kobi (comme la question différée de Claude Code).
@@ -321,8 +365,10 @@ impl OutillageKobi {
                 {
                     continue;
                 }
+                let nom_api = nom_pour_l_api(&nom, outil, &noms);
+                noms.insert(nom_api.clone(), (nom.clone(), outil.to_owned()));
                 definitions.push(json!({
-                    "name": format!("mcp__{nom}__{outil}"),
+                    "name": nom_api,
                     "description": o["description"].as_str().unwrap_or_default(),
                     "input_schema": o.get("inputSchema").cloned()
                         .unwrap_or_else(|| json!({ "type": "object" })),
@@ -341,6 +387,7 @@ impl OutillageKobi {
             serveurs: connectes,
             definitions,
             catalogue,
+            noms,
             acces,
         }
     }
@@ -350,6 +397,11 @@ impl OutillageKobi {
         for s in self.serveurs {
             let _ = s.client.cancel().await;
         }
+    }
+
+    /// Serveur et vrai nom de l'outil MCP proposé sous `nom`.
+    fn outil_mcp(&self, nom: &str) -> Option<(&str, &str)> {
+        self.noms.get(nom).map(|(s, o)| (s.as_str(), o.as_str()))
     }
 
     async fn appel_mcp(
@@ -362,7 +414,7 @@ impl OutillageKobi {
             .serveurs
             .iter()
             .find(|s| s.nom == serveur && s.outils.iter().any(|o| o == outil))
-            .ok_or_else(|| format!("outil inconnu : mcp__{serveur}__{outil}"))?;
+            .ok_or_else(|| format!("outil inconnu : {serveur} / {outil}"))?;
         let mut params = rmcp::model::CallToolRequestParams::new(outil.to_owned());
         params.arguments = entree.as_object().cloned();
         let resultat = s
@@ -394,7 +446,14 @@ impl kobi_brain::Outillage for OutillageKobi {
     }
 
     fn action(&self, nom: &str, entree: &Value) -> kobi_brain::Action {
-        kobi_brain::claude_code::outils::action(nom, entree)
+        match self.outil_mcp(nom) {
+            Some((serveur, outil)) => kobi_brain::Action::Mcp {
+                serveur: serveur.to_owned(),
+                outil: outil.to_owned(),
+                params: entree.clone(),
+            },
+            None => kobi_brain::claude_code::outils::action(nom, entree),
+        }
     }
 
     /// Lecture des dossiers : libre. Outil MCP proposé : verdict du
@@ -406,15 +465,7 @@ impl kobi_brain::Outillage for OutillageKobi {
             return Autorisation::Libre;
         }
         // Un nom que Kobi n'a pas proposé n'existe pas : refusé sans carte.
-        let Some((serveur, outil)) = nom
-            .strip_prefix("mcp__")
-            .and_then(|r| r.split_once("__"))
-            .filter(|(serveur, outil)| {
-                self.serveurs
-                    .iter()
-                    .any(|s| s.nom == *serveur && s.outils.iter().any(|o| o == outil))
-            })
-        else {
+        let Some((serveur, outil)) = self.outil_mcp(nom) else {
             return Autorisation::Refus;
         };
         match self.acces {
@@ -435,10 +486,11 @@ impl kobi_brain::Outillage for OutillageKobi {
         entree: &'a Value,
     ) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send + 'a>> {
         Box::pin(async move {
-            if let Some((serveur, outil)) =
-                nom.strip_prefix("mcp__").and_then(|r| r.split_once("__"))
-            {
+            if let Some((serveur, outil)) = self.outil_mcp(nom) {
                 return self.appel_mcp(serveur, outil, entree).await;
+            }
+            if nom.starts_with("mcp__") {
+                return Err(format!("outil inconnu : {nom}"));
             }
             let lecteur = self.lecteur.clone();
             let (nom, entree) = (nom.to_owned(), entree.clone());
