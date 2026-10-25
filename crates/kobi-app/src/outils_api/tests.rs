@@ -64,6 +64,46 @@ fn read_numerote_et_decoupe() {
 
 /// Rien ne se lit hors des dossiers permis : chemin absolu, `..`, lien
 /// symbolique qui sort.
+/// KOB-344 : un chemin réseau ou de périphérique Windows est refusé avant
+/// toute résolution (qui ouvrirait la connexion SMB et enverrait le hash
+/// NTLM) ; jugé sur le texte, il se teste sous Linux. Le chemin verbatim d'un
+/// disque local, que rend `canonicalize` sous Windows, passe.
+#[test]
+fn chemins_reseau_refuses_avant_toute_resolution() {
+    for reseau in [
+        r"\\attaquant.example\partage\x",
+        "//attaquant.example/partage/x",
+        r"\\?\UNC\attaquant\partage\x",
+        r"\\.\pipe\nom",
+        r"\\?\GLOBALROOT\Device\x",
+        r"\\?\Volume{0000}\x",
+        r"\\localhost\c$\Windows",
+        r"/\attaquant\partage",
+    ] {
+        assert!(chemin_reseau(reseau), "{reseau}");
+    }
+    for local in [
+        r"\\?\C:\code\kobi\src\main.rs",
+        r"C:\code\kobi",
+        "/code/kobi/src",
+        "src/main.rs",
+        "../secret",
+    ] {
+        assert!(!chemin_reseau(local), "{local}");
+    }
+    let dir = codebase();
+    let l = lecteur(&dir);
+    let refuse = |r: Result<String, String>| {
+        let e = r.unwrap_err();
+        assert!(e.contains("chemin réseau"), "{e}");
+    };
+    for chemin in [r"\\attaquant\partage\x", "//attaquant/partage/x"] {
+        refuse(l.lire(&json!({ "file_path": chemin })));
+        refuse(l.chercher(&json!({ "pattern": "x", "path": chemin })));
+        refuse(l.lister(&json!({ "pattern": "*", "path": chemin })));
+    }
+}
+
 #[test]
 fn rien_hors_des_dossiers_permis() {
     let dir = codebase();
