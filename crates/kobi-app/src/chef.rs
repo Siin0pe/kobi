@@ -1493,14 +1493,19 @@ impl<R: Runtime> Chef<R> {
         // Dit avant la fin mais transcrit après (charge, file d'attente) :
         // gardé jusqu'au compte rendu. Ce qui est dit après (le « annule »
         // d'« Annuler »…) ne l'est pas (KOB-198).
-        if r.fin_demandee && r.arret.is_none_or(|arret| dit_a > arret) {
+        // Jugé sur le début, comme la pause : la dernière phrase avant
+        // l'arrêt finit après lui (marge de fin du moteur, KOB-309).
+        if r.fin_demandee && r.arret.is_none_or(|arret| commence_a > arret) {
             return;
         }
         // Dit pendant une fin ensuite annulée, transcrit après l'annulation :
         // pas plus dans les notes que si la fin avait tenu (KOB-309).
+        // Seulement s'il y tient tout entier : une phrase commencée juste
+        // avant le clic, ou dite pendant que « reprends » se transcrivait,
+        // est gardée.
         if r.fins_annulees
             .iter()
-            .any(|&(arret, annule)| commence_a > arret && commence_a <= annule)
+            .any(|&(arret, annule)| commence_a > arret && dit_a <= annule)
         {
             return;
         }
