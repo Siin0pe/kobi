@@ -1206,7 +1206,11 @@ impl<R: Runtime> Fil<R> {
             }
             Commande::PauseReunion(quand) => self.pause_reunion = Some(quand),
             Commande::RepriseReunion => self.pause_reunion = None,
-            Commande::FinAnnulation => self.arret_annulable = None,
+            Commande::FinAnnulation => {
+                self.arret_annulable = None;
+                // Et la fenêtre de l'écouteur, ouverte micro ouvert (KOB-302).
+                self.ecouteur.fin_annulation();
+            }
             Commande::Raccourci => {
                 self.note("raccourci clavier");
                 if self.en_pause {
