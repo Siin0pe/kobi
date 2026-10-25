@@ -267,13 +267,9 @@ impl Lecteur {
         // deux côtés.
         #[cfg(windows)]
         let brut = reduire_sur_le_texte(&brut);
-        // Win32 change `C:\…\COM1` en `\\.\COM1` : `canonicalize` ouvrirait
-        // le périphérique (KOB-353).
-        #[cfg(windows)]
-        if nom_de_peripherique(&brut) {
-            return Err(refus());
-        }
-        if !prefixe_local(&brut) || lien_vers_le_reseau(&brut) {
+        // Sous Windows, le parcours refuse aussi un nom de périphérique DOS,
+        // du chemin comme des cibles de liens (KOB-353).
+        if !prefixe_local(&brut) || lien_vers_le_reseau(&brut, cfg!(windows)) {
             return Err(refus());
         }
         let resolu = brut.canonicalize().map_err(|e| format!("{chemin} : {e}"))?;
@@ -946,7 +942,12 @@ fn chemin_reseau(chemin: &str) -> bool {
 /// **remplacé** par sa cible, et `..` s'applique au chemin déjà résolu
 /// (physique), pas au nom du lien. Plus de [`LIENS_MAX`] liens en tout
 /// (boucle, chaîne sans fin) : refusé.
-fn lien_vers_le_reseau(chemin: &Path) -> bool {
+///
+/// Avec `peripheriques` (Windows), un composant qui est un nom de
+/// périphérique DOS sous un chemin non verbatim est refusé avant d'être
+/// ouvert : Win32 changerait `C:\…\COM1` en `\\.\COM1` (KOB-353). Même au
+/// milieu du chemin, puisque chaque préfixe est ouvert ici.
+fn lien_vers_le_reseau(chemin: &Path, peripheriques: bool) -> bool {
     use std::collections::VecDeque;
     use std::path::Component;
     let mut a_lire: VecDeque<PathBuf> = chemin
@@ -967,6 +968,12 @@ fn lien_vers_le_reseau(chemin: &Path) -> bool {
                 continue;
             }
             Some(Component::Normal(_)) => {}
+        }
+        if peripheriques
+            && !chemin_verbatim(&resolu.to_string_lossy())
+            && nom_de_peripherique(morceau.as_os_str())
+        {
+            return true;
         }
         let candidat = resolu.join(&morceau);
         let est_un_lien =
@@ -1035,37 +1042,36 @@ fn racine_sans_disque(cible: &Path) -> bool {
         )
 }
 
-/// Un composant est un nom de périphérique DOS réservé (`CON`, `NUL`,
-/// `COM1`, `lpt¹.txt`…), sans égard à la casse, à l'extension ni aux espaces
-/// de fin (KOB-353, Windows).
-#[cfg_attr(not(windows), allow(dead_code))]
-fn nom_de_peripherique(chemin: &Path) -> bool {
-    chemin.components().any(|composant| {
-        let std::path::Component::Normal(nom) = composant else {
-            return false;
-        };
-        let nom = nom.to_string_lossy();
-        let base = nom
-            .split(['.', ':'])
-            .next()
-            .unwrap_or("")
-            .trim_end_matches(' ');
-        let base = base.to_ascii_uppercase();
-        if ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"].contains(&base.as_str()) {
-            return true;
-        }
-        let Some(numero) = base
-            .strip_prefix("COM")
-            .or_else(|| base.strip_prefix("LPT"))
-        else {
-            return false;
-        };
-        let mut chiffres = numero.chars();
-        matches!(
-            (chiffres.next(), chiffres.next()),
-            (Some('0'..='9' | '¹' | '²' | '³'), None)
-        )
-    })
+/// `\\?\…` : Win32 n'y change rien, ni `..` ni nom de périphérique.
+fn chemin_verbatim(chemin: &str) -> bool {
+    chemin.replace('/', "\\").starts_with("\\\\?\\")
+}
+
+/// Un nom de périphérique DOS réservé (`CON`, `NUL`, `COM1`, `lpt¹.txt`…),
+/// sans égard à la casse, à l'extension, au flux ni aux espaces de fin
+/// (KOB-353, Windows).
+fn nom_de_peripherique(nom: &std::ffi::OsStr) -> bool {
+    let nom = nom.to_string_lossy();
+    let base = nom
+        .split(['.', ':'])
+        .next()
+        .unwrap_or("")
+        .trim_end_matches(' ');
+    let base = base.to_ascii_uppercase();
+    if ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"].contains(&base.as_str()) {
+        return true;
+    }
+    let Some(numero) = base
+        .strip_prefix("COM")
+        .or_else(|| base.strip_prefix("LPT"))
+    else {
+        return false;
+    };
+    let mut chiffres = numero.chars();
+    matches!(
+        (chiffres.next(), chiffres.next()),
+        (Some('0'..='9' | '¹' | '²' | '³'), None)
+    )
 }
 
 /// Sous Windows, liste blanche : un chemin absolu n'a pour préfixe qu'un

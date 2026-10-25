@@ -183,34 +183,65 @@ fn lien_vers_un_chemin_reseau_refuse_sans_le_suivre() {
         .contains("Kobi"));
 }
 
-/// KOB-353 : les noms de périphériques DOS sont reconnus dans tout
-/// composant, avec extension, casse ou espaces ; les noms voisins passent.
+/// KOB-353 : les noms de périphériques DOS sont reconnus avec extension,
+/// flux, casse, exposant ou espaces de fin ; les noms voisins passent.
 #[test]
 fn noms_de_peripheriques_dos() {
-    for chemin in [
-        "/code/kobi/COM1",
-        "/code/kobi/nul",
-        "/code/kobi/CON.txt",
-        "/code/kobi/aux .log",
-        "/code/kobi/lpt9.tar.gz",
-        "/code/kobi/COM¹",
-        "/code/NUL/x.rs",
-        "/code/kobi/prn:flux",
-        "/code/kobi/CONOUT$",
+    use std::ffi::OsStr;
+    for nom in [
+        "COM1",
+        "com0",
+        "nul",
+        "CON.txt",
+        "aux .log",
+        "lpt9.tar.gz",
+        "COM¹",
+        "LPT²",
+        "com³",
+        "NUL.",
+        "prn:flux",
+        "CON::$DATA",
+        "CONIN$",
+        "CONOUT$",
     ] {
-        assert!(nom_de_peripherique(Path::new(chemin)), "{chemin}");
+        assert!(nom_de_peripherique(OsStr::new(nom)), "{nom}");
     }
-    for chemin in [
-        "/code/kobi/COM10",
-        "/code/kobi/COM",
-        "/code/kobi/console.rs",
-        "/code/kobi/nul_part.md",
-        "/code/kobi/.con",
-        "/code/kobi/lpt",
-        "/code/kobi/src/main.rs",
+    for nom in [
+        "COM10",
+        "COM",
+        "COM1 x.txt",
+        "console.rs",
+        "nul_part.md",
+        ".con",
+        "lpt",
+        "COMA",
+        "main.rs",
     ] {
-        assert!(!nom_de_peripherique(Path::new(chemin)), "{chemin}");
+        assert!(!nom_de_peripherique(OsStr::new(nom)), "{nom}");
     }
+    assert!(chemin_verbatim(r"\\?\C:\code"));
+    assert!(chemin_verbatim("//?/C:/code"));
+    assert!(!chemin_verbatim(r"C:\code"));
+    assert!(!chemin_verbatim("/code"));
+}
+
+/// KOB-353 : le parcours (actif sous Windows) refuse un nom de périphérique
+/// dans le chemin, au milieu comme à la fin, et dans la cible relative d'un
+/// lien ; sans le jugement des périphériques (ailleurs), rien ne change.
+#[cfg(unix)]
+#[test]
+fn parcours_refuse_les_noms_de_peripheriques() {
+    let dir = codebase();
+    let racine = dir.path();
+    fs::create_dir_all(racine.join("outils")).unwrap();
+    std::os::unix::fs::symlink("COM1", racine.join("outils/port")).unwrap();
+    std::os::unix::fs::symlink("../sous/AUX/x", racine.join("outils/relais")).unwrap();
+    for chemin in ["outils/port", "outils/relais", "NUL.txt", "code/nul/x.rs"] {
+        let chemin = racine.join(chemin);
+        assert!(lien_vers_le_reseau(&chemin, true), "{}", chemin.display());
+        assert!(!lien_vers_le_reseau(&chemin, false), "{}", chemin.display());
+    }
+    assert!(!lien_vers_le_reseau(&racine.join("src/main.rs"), true));
 }
 
 /// KOB-352 : `.` et `..` se retirent sur le texte, sans remonter au-dessus
