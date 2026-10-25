@@ -165,6 +165,19 @@ fn reunion<R: Runtime>(app: &AppHandle<R>) -> Option<bool> {
     }
 }
 
+/// Réunion terminée, fin encore annulable (« Annuler », KOB-245) ? Le chef
+/// fait foi ; sans lui (tests), l'état de la session.
+fn fin_en_cours<R: Runtime>(app: &AppHandle<R>) -> bool {
+    match app.try_state::<ChefPartage<R>>() {
+        Some(chef) => chef
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .fin_annulable(),
+        None => etat(app).etat == "fin",
+    }
+}
+
 fn en_reunion<R: Runtime>(app: &AppHandle<R>) -> bool {
     reunion(app).is_some()
 }
@@ -242,6 +255,14 @@ pub fn appliquer_entree<R: Runtime>(app: &AppHandle<R>, entree: Entree) -> Resul
             Ok(Effet::Fait)
         }
         Entree::Pause => {
+            // Pendant « Annuler », la réunion n'est plus « ouverte » pour le
+            // menu : « Pause » coupait alors l'écoute de Kobi, et une fin
+            // annulée reprenait sans rien entendre (KOB-308). Rien à mettre
+            // en pause : la réunion est finie.
+            if fin_en_cours(app) {
+                tracing::info!("menu : pause pendant la fin de réunion, sans effet");
+                return Ok(Effet::Fait);
+            }
             match reunion(app) {
                 Some(false) => {
                     par_le_chef(app, Intention::Pause, &[Evenement::Pause])?;
@@ -483,6 +504,20 @@ mod tests {
         appliquer_entree(h, Entree::Pause).unwrap();
         appliquer_entree(h, Entree::Enregistrer).unwrap();
         assert_eq!(etat(h).etat, "veille");
+    }
+
+    /// KOB-308 : « Pause » pendant la fin de réunion (« Annuler ») ne coupe
+    /// pas l'écoute de Kobi.
+    #[test]
+    fn pause_pendant_la_fin_ne_coupe_pas_l_ecoute() {
+        let app = app();
+        let h = app.handle();
+        appliquer_entree(h, Entree::Enregistrer).unwrap();
+        crate::session::appliquer(h, &[Evenement::TerminerReunion]).unwrap();
+        assert_eq!(etat(h).etat, "fin");
+        assert_eq!(appliquer_entree(h, Entree::Pause), Ok(Effet::Fait));
+        assert!(!ecoute_en_pause(h), "l'écoute reste ouverte");
+        assert_eq!(etat(h).etat, "fin");
     }
 
     #[test]
