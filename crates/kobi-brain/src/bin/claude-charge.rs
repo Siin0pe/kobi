@@ -177,18 +177,69 @@ fn interpellation(lines: &[Line], unseen_from: f64, now: f64, question: &str) ->
 
 // --- règle de mesure -------------------------------------------------------
 
-/// Verrou commun : création atomique d'un dossier, supprimé à la fin.
-struct BenchLock(PathBuf);
+/// Verrou commun des mesures, le même que `kobi-bench` (KOB-312) :
+/// - sous Unix, un `flock` exclusif sur le fichier `~/Kobi-bench/.bench.lock`,
+///   comme `flock ~/Kobi-bench/.bench.lock …` (train, agents). Le fichier
+///   n'est jamais supprimé, le noyau relâche le verrou d'un processus mort ;
+///   le détenteur est écrit à côté (`.bench.lock.owner`) ;
+/// - sous Windows, un dossier créé de façon atomique, supprimé à la fin.
+///
+/// Recopié de `kobi_bench::protocol::BenchLock` : `kobi-bench` dépend déjà de
+/// `kobi-brain` (KOB-368).
+struct BenchLock {
+    #[cfg(windows)]
+    path: PathBuf,
+    /// Le fichier dont le `flock` est tenu, jusqu'à la destruction.
+    #[cfg(unix)]
+    _file: File,
+}
+
+const OWNER: &str = "KOB-123 claude-charge";
 
 impl BenchLock {
+    #[cfg(unix)]
+    fn acquire(path: PathBuf) -> std::io::Result<Self> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        if path.is_dir() {
+            return Err(std::io::Error::other(format!(
+                "{} est un dossier, ancien verrou : le supprimer s'il n'est plus utilisé \
+                 (le verrou est désormais un flock sur ce fichier)",
+                path.display()
+            )));
+        }
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)?;
+        let mut owner = path.clone().into_os_string();
+        owner.push(".owner");
+        match file.try_lock() {
+            Ok(()) => {}
+            Err(std::fs::TryLockError::WouldBlock) => {
+                let who = std::fs::read_to_string(&owner)
+                    .unwrap_or_else(|_| "flock d'un autre outil".into());
+                eprintln!("verrou {} pris ({}), attente…", path.display(), who.trim());
+                file.lock()?;
+            }
+            Err(std::fs::TryLockError::Error(e)) => return Err(e),
+        }
+        writeln!(File::create(owner)?, "{OWNER} pid {}", std::process::id())?;
+        Ok(Self { _file: file })
+    }
+
+    #[cfg(windows)]
     fn acquire(path: PathBuf) -> std::io::Result<Self> {
         let mut announced = false;
         loop {
             match std::fs::create_dir(&path) {
                 Ok(()) => {
                     let mut owner = File::create(path.join("owner"))?;
-                    writeln!(owner, "KOB-123 claude-charge pid {}", std::process::id())?;
-                    return Ok(Self(path));
+                    writeln!(owner, "{OWNER} pid {}", std::process::id())?;
+                    return Ok(Self { path });
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                     if !announced {
@@ -203,9 +254,11 @@ impl BenchLock {
     }
 }
 
+/// Sous Unix, le `flock` tombe avec le fichier fermé ; le fichier reste.
+#[cfg(windows)]
 impl Drop for BenchLock {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        let _ = std::fs::remove_dir_all(&self.path);
     }
 }
 
@@ -624,5 +677,38 @@ mod tests {
     #[test]
     fn mediane_et_p90() {
         assert_eq!(stats(&[3.0, 1.0, 2.0]), (2.0, 3.0));
+    }
+
+    /// KOB-368 : le verrou est le `flock` commun sur un fichier, comme
+    /// `flock ~/Kobi-bench/.bench.lock …` et kobi-bench ; un ancien verrou en
+    /// dossier est une erreur claire, pas une attente sans fin.
+    #[cfg(unix)]
+    #[test]
+    fn verrou_flock_commun() {
+        let dir = std::env::temp_dir().join(format!("kob368-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let chemin = dir.join(".bench.lock");
+        // `flock -n` d'un autre processus : 0 si libre, 1 si tenu.
+        let libre = || {
+            Command::new("flock")
+                .arg("-n")
+                .arg(&chemin)
+                .arg("true")
+                .status()
+                .unwrap()
+                .success()
+        };
+        let verrou = BenchLock::acquire(chemin.clone()).unwrap();
+        assert!(chemin.is_file());
+        assert!(!libre(), "verrou tenu, flock(1) doit attendre");
+        drop(verrou);
+        assert!(chemin.is_file(), "le fichier verrou n'est jamais supprimé");
+        assert!(libre(), "verrou relâché");
+        let ancien = dir.join("ancien.lock");
+        std::fs::create_dir_all(&ancien).unwrap();
+        let e = BenchLock::acquire(ancien).err().expect("dossier : erreur");
+        assert!(e.to_string().contains("ancien verrou"), "{e}");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
