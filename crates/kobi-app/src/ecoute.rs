@@ -150,9 +150,14 @@ pub enum Commande {
     PauseReunion(Instant),
     /// La réunion reprend : la pause d'avant ne compte plus (KOB-297).
     RepriseReunion,
-    /// « Annuler » est fait ou clos : la fenêtre ne se rouvre plus à la
-    /// prochaine ouverture du micro (KOB-299).
+    /// « Annuler » est fait (la réunion reprend) : la fenêtre ne se rouvre
+    /// plus à la prochaine ouverture du micro (KOB-299). Clos sans
+    /// annulation : [`Commande::FinConfirmee`].
     FinAnnulation,
+    /// « Annuler » est clos sans annulation : la fin est définitive. Ce qui
+    /// a été dit avant l'arrêt, même transcrit bien après, ne parle plus à
+    /// Kobi (KOB-326).
+    FinConfirmee,
     /// Kobi vient de répondre : la conversation attend la suite.
     Suite,
     /// La dernière carte de validation s'est fermée : sa fenêtre aussi, la
@@ -855,6 +860,10 @@ struct Fil<R: Runtime> {
     differees: Vec<Commande>,
     /// Instant réel de la dernière fin de réunion annulable (KOB-287).
     arret_annulable: Option<Instant>,
+    /// Instant réel de la dernière fin confirmée (KOB-326), remis dans
+    /// l'horloge de l'écouteur à chaque trame : elle repart à l'ouverture
+    /// du micro.
+    arret_clos: Option<Instant>,
     /// Ouverture du micro toujours en cours au tour précédent (KOB-285).
     ouverture: Option<Ouverture>,
     /// Instant de la pause de la réunion, tant que le micro reste ouvert
@@ -893,6 +902,7 @@ impl<R: Runtime> Fil<R> {
             micro_perdu: false,
             differees: Vec::new(),
             arret_annulable: None,
+            arret_clos: None,
             ouverture: None,
             pause_reunion: None,
             decalage: 0.0,
@@ -1241,6 +1251,10 @@ impl<R: Runtime> Fil<R> {
             }
             Commande::PauseReunion(quand) => self.pause_reunion = Some(quand),
             Commande::RepriseReunion => self.pause_reunion = None,
+            Commande::FinConfirmee => {
+                self.arret_clos = self.arret_annulable.take().or(self.arret_clos);
+                self.ecouteur.fin_annulation();
+            }
             Commande::FinAnnulation => {
                 self.arret_annulable = None;
                 // Et la fenêtre de l'écouteur, ouverte micro ouvert (KOB-302).
@@ -1300,7 +1314,7 @@ impl<R: Runtime> Fil<R> {
                     }
                 }
                 let actions = self.ecouteur.raccourci(self.t);
-                self.executer(actions);
+                self.executer(actions, Instant::now());
             }
         }
     }
@@ -1380,6 +1394,7 @@ impl<R: Runtime> Fil<R> {
             false
         };
         let ouverte_avant = self.porte.ouverte();
+        self.ecouteur.arret_clos = self.arret_clos.map(|a| instant_audio(self.origine, a));
         let (actions, finals) = transcrire(
             stt,
             &mut self.porte,
@@ -1427,7 +1442,7 @@ impl<R: Runtime> Fil<R> {
         let jusqu_a = self.origine + Duration::from_secs_f64(self.t.max(0.0));
         crate::chef::avancer(&self.app, kobi_stt::Source::Moi, Some(jusqu_a));
         if en_direct {
-            self.executer(actions);
+            self.executer(actions, jusqu_a);
             // Sous charge, la transcription peut aller moins vite que la
             // parole : un ordre dit maintenant ne serait entendu qu'après
             // (KOB-250).
@@ -1575,7 +1590,9 @@ impl<R: Runtime> Fil<R> {
         }
     }
 
-    fn executer(&mut self, actions: Vec<Action>) {
+    /// Publie les actions de l'écouteur ; `dit_a` : l'instant de l'audio
+    /// d'où elles viennent (KOB-326).
+    fn executer(&mut self, actions: Vec<Action>, dit_a: Instant) {
         let actions = sans_ordres_deja_executes(actions, |q| self.deja_execute(q));
         for action in actions {
             let message = match action {
@@ -1591,6 +1608,7 @@ impl<R: Runtime> Fil<R> {
                     Message::Question {
                         texte: q,
                         voix: true,
+                        dit_a: Some(dit_a),
                     }
                 }
                 Action::EnvoyerPeutEtre(q) => {
@@ -1598,7 +1616,7 @@ impl<R: Runtime> Fil<R> {
                         longueur = q.len(),
                         "phrase qui cite Kobi, peut-être pour lui"
                     );
-                    Message::QuestionPeutEtre(q)
+                    Message::QuestionPeutEtre(q, dit_a)
                 }
                 Action::Abandonner => {
                     tracing::info!("interpellation sans question");

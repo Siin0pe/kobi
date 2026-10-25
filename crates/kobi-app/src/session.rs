@@ -171,7 +171,14 @@ fn terminer<R: Runtime>(app: AppHandle<R>) -> Result<EtatUi, String> {
 /// Message tapé dans le champ sous la mascotte : même conversation que la voix.
 #[tauri::command]
 fn envoyer_texte<R: Runtime>(app: AppHandle<R>, texte: String) {
-    publier(&app, Message::Question { texte, voix: false });
+    publier(
+        &app,
+        Message::Question {
+            texte,
+            voix: false,
+            dit_a: None,
+        },
+    );
 }
 
 /// Échap : la réponse en cours s'arrête net.
