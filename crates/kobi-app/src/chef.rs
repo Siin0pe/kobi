@@ -946,6 +946,13 @@ impl<R: Runtime> Chef<R> {
             self.transition(&[Evenement::Interpellation]);
         }
         let _ = self.app.emit(EVENEMENT_QUESTION, &texte);
+        // Question dite avant l'arrêt, posée après (KOB-307) : rien ne se
+        // fait sur place, ni ordre, ni carte, ni rappel, ni titre ; elle part
+        // telle quelle sur la session en lecture seule (KOB-328).
+        if self.differee {
+            self.envoyer(texte, None, voix);
+            return;
+        }
         // Une carte de validation attend : « oui » ou « non » lui répondent.
         if let Some(id) = self.validations.cible().map(str::to_owned) {
             if let Some(accepte) = crate::intentions::reponse_validation(&texte) {
@@ -1526,9 +1533,10 @@ impl<R: Runtime> Chef<R> {
     }
 
     /// Questions dites avant l'arrêt (KOB-307) : posées une fois « Annuler »
-    /// fermé, la fin annulée ou confirmée. Celles qui parlent de piloter la
-    /// réunion n'arrivent pas jusqu'ici (`mot_cle::differable`) : ni le chef
-    /// ni Claude ne relancent ni ne refont la fin depuis elles.
+    /// fermé, la fin annulée ou confirmée. Les ordres que le chef reconnaît
+    /// n'arrivent pas jusqu'ici (`mot_cle::differable`) ; les autres partent
+    /// sans rien faire sur place, sur la session en lecture seule, qui ne
+    /// peut ni piloter la réunion ni écrire (KOB-328).
     fn poser_questions_differees(&mut self) {
         if self.questions_differees.is_empty() || self.fin_annulable() {
             return;
@@ -3957,12 +3965,10 @@ mod tests {
                 dit_a: Some(dit_a),
             };
             // Ordres sur la réunion : rien ne part, la réunion n'est pas relancée.
-            for ordre in [
-                "relance la réunion",
-                "démarre la réunion",
-                "reprends",
-                "termine la réunion",
-            ] {
+            // (« relance la réunion », que le chef ne reconnaît pas, est
+            // différé : la session en lecture seule ne peut pas piloter,
+            // KOB-328.)
+            for ordre in ["démarre la réunion", "reprends", "termine la réunion"] {
                 c.recevoir(dite(ordre, avant));
             }
             c.recevoir(Message::QuestionPeutEtre(
@@ -3971,7 +3977,7 @@ mod tests {
             ));
             // L'écouteur fait écouter Kobi avant la question : il n'y reste pas.
             c.recevoir(Message::Interpelle);
-            c.recevoir(dite("relance la réunion", avant));
+            c.recevoir(dite("termine la réunion", avant));
             assert_ne!(c.activite(), Some("ecoute"));
             assert_eq!(c.tour, tour, "rien n'est parti sur la conversation");
             assert!(c.reunion.as_ref().is_none_or(|r| r.fin_demandee));
@@ -4008,6 +4014,35 @@ mod tests {
             );
             assert_eq!(c.tour, tour);
         });
+    }
+
+    /// KOB-328 : une question différée que le chef reconnaîtrait sur place
+    /// (« appelle cette réunion … », « rappelle-moi … ») ne fait rien sur
+    /// place : elle part sur la session en lecture seule.
+    #[test]
+    fn question_differee_sans_rien_faire_sur_place() {
+        let (fabrique, roles) = fabrique_qui_note();
+        let (app, _dir) = chef_en_essai_avec(fabrique);
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            c.commande(Intention::TerminerReunion);
+            c.recevoir(Message::QuestionDifferee(
+                "appelle cette réunion Budget 2027".into(),
+            ));
+            c.commande(Intention::Reprendre);
+            let tour = c.tour;
+            c.tick();
+            assert!(c.questions_differees.is_empty());
+            assert_eq!(c.tour, tour + 1, "partie à Claude");
+            let r = c.reunion.as_ref().unwrap();
+            assert!(!r.titre_manuel, "réunion renommée sur place");
+            assert!(r.titre.as_deref() != Some("Budget 2027"));
+        });
+        assert!(
+            session_differee_demandee(&roles),
+            "{:?}",
+            roles.lock().unwrap()
+        );
     }
 
     /// KOB-228 : un compte rendu demandé pendant qu'un bloc est à la prise

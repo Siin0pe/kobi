@@ -466,7 +466,6 @@ enum Attente {
 pub(crate) fn differable(question: &str) -> bool {
     use crate::intentions::{annule_la_fin, fin_de_reunion_dite, intention, Intention};
     !question.trim().is_empty()
-        && !crate::intentions::parle_de_la_reunion(question)
         && !annule_la_fin(question)
         && !fin_de_reunion_dite(question)
         && !matches!(
@@ -1358,6 +1357,7 @@ mod tests {
             "Kobi.",
             // Ordre collé sous charge (KOB-289) : jugé tel qu'il partirait.
             "on en reparlera la semaine prochaine avec toute l'équipe Kobe reprends",
+            "Kobi, on arrête là pour aujourd'hui ?",
         ] {
             let mut e = Ecouteur::new(false);
             e.sous_charge = true;
@@ -1373,21 +1373,36 @@ mod tests {
         }
     }
 
-    /// KOB-307 : une question qui parle de piloter la réunion, sous une forme
-    /// que le chef ne reconnaît pas (Claude pourrait l'arrêter, la mettre en
-    /// pause ou la relancer), n'est pas différée.
+    /// KOB-328 : une question qui parle de la réunion sous une forme que le
+    /// chef ne reconnaît pas est différée comme les autres. Elle part sur la
+    /// session en lecture seule, qui n'a aucun outil pour piloter la réunion
+    /// (KOB-307) : Claude répond, sans pouvoir l'arrêter ni la relancer.
+    /// Avant, elle était jetée sans rien dire, comme « qu'avait-on décidé à
+    /// la réunion de lundi ? ». Une phrase courte avec « résumé » reste
+    /// écartée : « resume » y est un ordre de reprise (`annule_la_fin`).
     #[test]
-    fn question_qui_parle_de_la_reunion_pas_differee() {
-        for ordre in [
-            "Kobi, est-ce que tu peux terminer la réunion et m'envoyer le compte rendu ?",
-            "Kobi, est-ce qu'on peut faire une pause de dix minutes ?",
-            "Kobi, est-ce que tu peux redémarrer l'enregistrement ?",
-            "Kobi, on arrête là pour aujourd'hui ?",
-            "Kobi, tu peux clôturer ?",
+    fn question_qui_parle_de_la_reunion_differee() {
+        for (dit, question) in [
+            (
+                "Kobi, qu'avait-on décidé à la réunion de lundi ?",
+                "qu'avait-on décidé à la réunion de lundi ?",
+            ),
+            (
+                "Kobi, envoie-moi le compte rendu de la réunion d'hier",
+                "envoie-moi le compte rendu de la réunion d'hier",
+            ),
+            (
+                "Kobi, est-ce que tu peux redémarrer l'enregistrement ?",
+                "est-ce que tu peux redémarrer l'enregistrement ?",
+            ),
         ] {
             let mut e = Ecouteur::new(false);
             e.annulable(100.0, 10.0);
-            assert!(e.segment(ordre, true, 80.0).is_empty(), "{ordre}");
+            assert_eq!(
+                e.segment(dit, true, 80.0),
+                [Differer(question.into())],
+                "{dit}"
+            );
         }
     }
 
@@ -1436,7 +1451,7 @@ mod tests {
         let avant = format!("{e:?}");
         for phrase in [
             "donc on garde le budget",
-            "Kobi, relance la réunion",
+            "Kobi, termine la réunion",
             "Kobi, reprends l'enregistrement",
             "Kobi",
             "reprends",
