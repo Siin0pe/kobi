@@ -763,6 +763,10 @@ fn transcrire(
                         if let Some(d) = diag {
                             d.note(&format!("écho de Kobi ignoré : « {} »", s.text));
                         }
+                        // L'énoncé en cours est fini, même écarté (KOB-364).
+                        if s.is_final {
+                            rattrapage.partiel = None;
+                        }
                         continue;
                     }
                     let suite = ecouteur.segment(&s.text, s.is_final, t);
