@@ -200,6 +200,12 @@ fn ordre_de_reunion(suite: &str) -> bool {
             ))
 }
 
+/// L'ordre court sur la réunion qui suit le nom et finit le segment, s'il y
+/// en a un (KOB-276).
+fn ordre_colle(texte: &str) -> Option<&str> {
+    reperer(texte).filter(|suite| ordre_de_reunion(suite))
+}
+
 /// Ce qui suit « Kobi » dans le texte, ou `None` s'il n'y est pas.
 pub fn reperer(texte: &str) -> Option<&str> {
     trouver(texte)
@@ -353,26 +359,13 @@ pub fn interpellation(texte: &str) -> Option<(Adresse, String)> {
         Adresse::Appel
     } else if cite_avant || (sujet && !toi) {
         Adresse::Cite
-    } else if ordre_de_reunion(nettoyer(apres)) {
-        // Le nom suivi d'un ordre court sur la réunion, qui finit le segment
-        // (« … le mentionnera Kobe termine la réunion ») : sous charge,
-        // Nemotron colle la phrase d'avant, souvent sans ponctuation
-        // (KOB-276).
-        Adresse::Appel
     } else {
         // Au milieu d'une phrase, sans virgules autour : pas un appel net,
         // même avec « tu » (une conversation de groupe en est pleine, KOB-237).
         Adresse::Doute
     };
 
-    let ordre_colle = !appel_en_tete
-        && !en_fin
-        && !(virgule_avant && virgule_apres)
-        && !cite_avant
-        && adresse == Adresse::Appel;
-    let question = if ordre_colle {
-        nettoyer(apres).to_string()
-    } else if est_pour_et {
+    let question = if est_pour_et {
         let apres = apres.trim_start();
         nettoyer(&format!("et{}", apres.get(3..).unwrap_or_default())).to_string()
     } else if en_tete {
@@ -510,6 +503,9 @@ pub struct Ecouteur {
     debut: Option<f64>,
     /// Fin de l'attente d'une carte de validation (`reponse_attendue`).
     carte: Option<f64>,
+    /// La transcription est en retard sur la parole (KOB-250) : Nemotron
+    /// colle alors les phrases, souvent sans ponctuation (KOB-276, KOB-289).
+    pub sous_charge: bool,
 }
 
 impl Default for Ecouteur {
@@ -521,6 +517,7 @@ impl Default for Ecouteur {
             precedent: None,
             debut: None,
             carte: None,
+            sous_charge: false,
         }
     }
 }
@@ -566,6 +563,18 @@ impl Ecouteur {
             // « Merci Kobi » n'est pas une interpellation.
             Attente::Nom if fin_de_conversation(texte) => self.phrase_sans_nom(texte, finale, t),
             Attente::Nom | Attente::Phrase { .. } => match interpellation(texte) {
+                // Sous charge, un ordre court sur la réunion collé à la phrase
+                // d'avant, sans ponctuation (« … le mentionnera Kobe termine
+                // la réunion »), sur un segment final : un appel. Hors charge,
+                // une phrase de cette forme décrit Kobi (« Normalement Kobi
+                // termine la réunion ») et reste un doute (KOB-276, KOB-289).
+                Some((Adresse::Doute, _))
+                    if finale && self.sous_charge && ordre_colle(texte).is_some() =>
+                {
+                    let q = ordre_colle(texte).unwrap_or_default().to_owned();
+                    let texte = phrase_du_nom(texte);
+                    self.phrase_avec_nom(texte, Adresse::Appel, &q, finale, t, &mut actions)
+                }
                 // L'adresse se juge sur la phrase qui porte le nom (KOB-276).
                 Some((adresse, q)) => {
                     let texte = phrase_du_nom(texte);
@@ -1870,8 +1879,6 @@ mod tests {
             "Le budget est validé et le compte rendu le mentionnera. Kobe. termine la réunion.",
             "Le budget est validé et le compte rendu le mentionnera. Kobi, termine la réunion.",
             "Bon, on a fini ? Kobi, termine la réunion",
-            // Sans ponctuation, comme dans l'essai du 24/10.
-            "Le budget de la ligne vingt est validé, et le compte rendu, le mentionnera Kobe termine la réunion",
         ] {
             assert_eq!(
                 interpellation(texte),
@@ -1901,9 +1908,27 @@ mod tests {
             phrase_du_nom("J'ai vu M. Kobi hier soir."),
             "J'ai vu M. Kobi hier soir."
         );
+    }
+
+    /// KOB-276, KOB-289 : un ordre court sur la réunion collé à la phrase
+    /// d'avant, sans ponctuation, est un appel sous charge (transcription en
+    /// retard, segment final) ; hors charge, ou sur un partiel, une phrase de
+    /// cette forme décrit Kobi et ne fait rien.
+    #[test]
+    fn ordre_colle_seulement_sous_charge() {
+        let ordre = vec![
+            Action::Interpeller,
+            Action::Envoyer("termine la réunion".into()),
+        ];
+        // Le segment réel de l'essai du 24/10, sous retard.
+        let reel = "Le budget de la ligne vingt est validé, et le compte rendu, le mentionnera Kobe termine la réunion";
+        let mut e = Ecouteur::new(false);
+        e.sous_charge = true;
+        assert_eq!(e.segment(reel, true, 10.0), ordre);
         // Précédé d'un segment tout proche, sans point final : la question
         // reste l'ordre seul.
         let mut e = Ecouteur::new(false);
+        e.sous_charge = true;
         e.segment("Le budget de la ligne dix-neuf est validé", true, 5.0);
         assert_eq!(
             e.segment(
@@ -1911,19 +1936,35 @@ mod tests {
                 true,
                 6.0
             ),
-            vec![
-                Action::Interpeller,
-                Action::Envoyer("termine la réunion".into())
-            ]
+            ordre
         );
-        // Un ordre long, ou cité, au milieu d'une phrase : pas un appel.
+        // Sous charge, un partiel n'en fait pas un appel.
+        let mut e = Ecouteur::new(false);
+        e.sous_charge = true;
+        assert!(!e.segment(reel, false, 10.0).contains(&Action::Interpeller));
+        // Hors charge, des phrases qui décrivent Kobi ne font rien.
+        for texte in [
+            reel,
+            "Normalement Kobi termine la réunion",
+            "Quand on a fini, Kobi met la réunion en pause",
+        ] {
+            let mut e = Ecouteur::new(false);
+            assert_eq!(e.segment(texte, true, 10.0), vec![], "{texte}");
+            assert_ne!(
+                interpellation(texte).map(|(a, _)| a),
+                Some(Adresse::Appel),
+                "{texte}"
+            );
+        }
+        // Un ordre long, ou cité, reste dehors, même sous charge.
         for texte in [
             "il paraît que Kobe termine la réunion demain avec toute l'équipe",
             "j'ai dit à Kobi termine la réunion",
         ] {
-            assert_ne!(
-                interpellation(texte).map(|(a, _)| a),
-                Some(Adresse::Appel),
+            let mut e = Ecouteur::new(false);
+            e.sous_charge = true;
+            assert!(
+                !e.segment(texte, true, 10.0).contains(&Action::Interpeller),
                 "{texte}"
             );
         }
