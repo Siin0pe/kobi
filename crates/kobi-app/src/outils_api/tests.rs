@@ -972,8 +972,8 @@ fn confinement_fichiers_speciaux() {
 }
 
 /// KOB-321 : un très gros fichier n'est jamais chargé en entier. Read lit
-/// ligne à ligne et le dit ; une ligne géante est coupée ; les résultats
-/// restent bornés ; Grep ignore le fichier.
+/// ligne à ligne et le dit ; une ligne géante de zéros, binaire, est refusée
+/// sans être chargée (KOB-347) ; Grep ignore le fichier.
 #[test]
 fn gros_fichier_lu_par_morceaux() {
     use std::io::Write;
@@ -997,23 +997,50 @@ fn gros_fichier_lu_par_morceaux() {
         .lire(&json!({ "file_path": gros, "offset": 9_999, "limit": 2 }))
         .unwrap()
         .starts_with("9999\tligne 09999\n10000\tligne 10000\n"));
-    // La ligne 10 001 fait près de 60 Mo : coupée à LIGNE_MAX.
-    let r = l
-        .lire(&json!({ "file_path": gros, "offset": 10_001, "limit": 1 }))
-        .unwrap();
-    assert!(r.starts_with("10001\t"), "{}", &r[..10]);
-    assert!(r.len() < LIGNE_MAX * 4 + 200, "{}", r.len());
-    // Au-delà de ce qui est parcouru : rien, mais pas d'erreur.
-    let r = l
-        .lire(&json!({ "file_path": gros, "offset": 20_000 }))
-        .unwrap();
-    assert!(
-        r.starts_with("(fichier vide ou fin de fichier dépassée)"),
-        "{r}"
-    );
+    // La ligne 10 001 fait près de 60 Mo de zéros : binaire, même passée
+    // en lignes à sauter.
+    for offset in [10_001, 20_000] {
+        let e = l
+            .lire(&json!({ "file_path": gros, "offset": offset, "limit": 1 }))
+            .unwrap_err();
+        assert!(e.contains("pas un fichier texte"), "{e}");
+    }
     assert_eq!(
         l.chercher(&json!({ "pattern": "premiere" })).unwrap(),
         "Aucun résultat."
+    );
+}
+
+/// KOB-347 : un octet NUL après le premier tampon est vu ; une ligne trop
+/// longue est coupée sur une frontière de caractère, et le dit ; une ligne
+/// d'exactement `LIGNE_MAX` octets reste entière.
+#[test]
+fn read_binaire_tardif_et_ligne_coupee() {
+    let dir = codebase();
+    let l = lecteur(&dir);
+    let tardif = dir.path().join("journal.log");
+    let mut contenu = "texte\n".repeat(1500).into_bytes();
+    contenu.extend_from_slice(b"donnee\0\x01\n");
+    fs::write(&tardif, contenu).unwrap();
+    let e = l.lire(&json!({ "file_path": tardif })).unwrap_err();
+    assert!(e.contains("pas un fichier texte"), "{e}");
+    // Ce qui précède reste lisible.
+    assert_eq!(
+        l.lire(&json!({ "file_path": tardif, "limit": 1 })).unwrap(),
+        "1\ttexte\n"
+    );
+
+    let longue = dir.path().join("config.json");
+    // 5001 octets : la coupe à 2000 tombe au milieu d'un « é ».
+    let ligne = format!("x{}", "é".repeat(2500));
+    let pile = "y".repeat(LIGNE_MAX);
+    fs::write(&longue, format!("{ligne}\n{pile}\r\nfin\n")).unwrap();
+    assert_eq!(
+        l.lire(&json!({ "file_path": longue })).unwrap(),
+        format!(
+            "1\tx{} … (ligne coupée)\n2\t{pile}\n3\tfin\n",
+            "é".repeat(999)
+        )
     );
 }
 
