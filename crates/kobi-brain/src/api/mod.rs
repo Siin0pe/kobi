@@ -50,6 +50,17 @@ const MODELES_AVEC_REPLI: &[&str] = &["claude-sonnet-5-5", "claude-opus-5-5"];
 /// Remarque du journal d'activité quand la conversation repart à neuf
 /// (KOB-316).
 pub const AVIS_REPRISE: &str = "Conversation trop longue, reprise à neuf.";
+/// Remarque du journal d'activité quand la conversation est résumée par
+/// l'API (compaction, KOB-332).
+pub const AVIS_RESUME: &str = "Conversation trop longue, résumée.";
+/// Compaction à la demande (KOB-332).
+const BETA_COMPACTION: &str = "compact-2026-09-04";
+/// Consignes du résumé : ce que la suite de la réunion doit garder.
+const CONSIGNES_RESUME: &str =
+    "Résume cette conversation de réunion pour la suite. Garde tout ce qui \
+compte : les décisions, les actions (qui fait quoi, faites, refusées ou en attente), les questions \
+ouvertes, les questions posées à Kobi et ses réponses, et l'état des notes. Garde les noms, les \
+chiffres et les dates exacts. N'appelle aucun outil ; réponds seulement par le résumé.";
 /// Statuts HTTP réessayés (limite, surcharge, panne passagère).
 const STATUTS_REESSAYES: &[u16] = &[429, 500, 502, 503, 504, 529];
 
@@ -137,6 +148,11 @@ pub struct ApiConfig {
     /// message porte déjà les notes courantes et la transcription nouvelle
     /// (KOB-316).
     pub contexte_max: u64,
+    /// Au-delà de `contexte_max`, résumer la conversation par l'API
+    /// (compaction à la demande, bêta) plutôt que repartir à neuf. Désactivé
+    /// par défaut : à décider après un essai réel (KOB-332). Sans résumé
+    /// (refus, réponse coupée…), la conversation repart à neuf.
+    pub compaction: bool,
 }
 
 impl Default for ApiConfig {
@@ -153,6 +169,7 @@ impl Default for ApiConfig {
             tentatives: 2,
             delai_carte: kobi_perms::DEFAULT_TIMEOUT,
             contexte_max: 150_000,
+            compaction: false,
         }
     }
 }
@@ -183,6 +200,9 @@ struct Partage {
     /// Remarque pour le journal d'activité, rendue avec le prochain tour
     /// réussi.
     avis: std::sync::Mutex<Option<String>>,
+    /// La conversation commence par un bloc de compaction : chaque requête
+    /// porte l'en-tête bêta.
+    compacte: AtomicBool,
 }
 
 /// Conversation d'une réunion sur l'API Messages, vue comme un [`Brain`].
@@ -212,6 +232,7 @@ impl ApiBrain {
                 historique: Mutex::new(Vec::new()),
                 contexte: std::sync::atomic::AtomicU64::new(0),
                 avis: std::sync::Mutex::new(None),
+                compacte: AtomicBool::new(false),
             }),
             busy: Arc::new(AtomicBool::new(false)),
             tache: None,
@@ -273,9 +294,14 @@ async fn tour(partage: &Partage, texte: String, events: &mpsc::Sender<BrainEvent
             messages = historique.len(),
             "conversation de la réunion trop longue : elle repart des notes courantes"
         );
-        historique.clear();
+        let resume = partage.config.compaction && compacter(partage, &mut historique, events).await;
+        if !resume {
+            historique.clear();
+            partage.compacte.store(false, Ordering::SeqCst);
+        }
         partage.contexte.store(0, Ordering::SeqCst);
-        *partage.avis.lock().unwrap_or_else(|e| e.into_inner()) = Some(AVIS_REPRISE.to_owned());
+        *partage.avis.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(if resume { AVIS_RESUME } else { AVIS_REPRISE }.to_owned());
     }
     let debut = historique.len();
     // Après une écriture gardée, le dernier message est celui des
@@ -602,8 +628,57 @@ async fn requete(
     sans_outil: bool,
     events: &mpsc::Sender<BrainEvent>,
 ) -> Result<Reponse, BrainError> {
+    requete_corps(partage, &corps(partage, historique, sans_outil), events).await
+}
+
+/// Résume la conversation par l'API (compaction à la demande, KOB-332) et
+/// la remplace par le bloc rendu, tel quel. `false` sans résumé : la
+/// conversation reste inchangée.
+async fn compacter(
+    partage: &Partage,
+    historique: &mut Vec<Value>,
+    events: &mpsc::Sender<BrainEvent>,
+) -> bool {
+    let mut corps = corps(partage, historique, false);
+    if let Some(o) = corps.as_object_mut() {
+        o.remove("fallbacks");
+    }
+    corps["compaction"] = json!({ "type": "summarize", "instructions": CONSIGNES_RESUME });
+    let reponse = match requete_corps(partage, &corps, events).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(erreur = %e, "compaction impossible : reprise à neuf");
+            return false;
+        }
+    };
+    let bloc = reponse
+        .blocs()
+        .into_iter()
+        .find(|b| b["type"] == "compaction" && b["content"].is_string());
+    match (reponse.stop_reason.as_deref(), bloc) {
+        (Some("compaction"), Some(bloc)) => {
+            tracing::info!(
+                messages = historique.len(),
+                "conversation de la réunion résumée par l'API"
+            );
+            *historique = vec![json!({ "role": "assistant", "content": [bloc] })];
+            partage.compacte.store(true, Ordering::SeqCst);
+            true
+        }
+        (raison, _) => {
+            tracing::warn!(?raison, "pas de résumé : reprise à neuf");
+            false
+        }
+    }
+}
+
+/// Envoie un corps de requête et lit la réponse en flux.
+async fn requete_corps(
+    partage: &Partage,
+    corps: &Value,
+    events: &mpsc::Sender<BrainEvent>,
+) -> Result<Reponse, BrainError> {
     let config = &partage.config;
-    let corps = corps(partage, historique, sans_outil);
     let mut essai = 0;
     let abandon = || BrainError::Crashed("tour abandonné".into());
     // Un essai : la requête, puis la lecture du flux. Une surcharge, qu'elle
@@ -616,8 +691,15 @@ async fn requete(
             .header("x-api-key", &config.cle)
             .header("anthropic-version", VERSION_API)
             .header("content-type", "application/json");
+        let mut betas = Vec::new();
         if corps.get("fallbacks").is_some() {
-            req = req.header("anthropic-beta", BETA_REPLI);
+            betas.push(BETA_REPLI);
+        }
+        if corps.get("compaction").is_some() || partage.compacte.load(Ordering::SeqCst) {
+            betas.push(BETA_COMPACTION);
+        }
+        if !betas.is_empty() {
+            req = req.header("anthropic-beta", betas.join(","));
         }
         // Tour lâché pendant l'attente : la requête est abandonnée.
         let resultat = tokio::select! {

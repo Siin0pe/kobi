@@ -905,6 +905,7 @@
   },
   "coque.cleApi.invalide": "Cette clé ne ressemble pas à une clé API Anthropic : elle commence par « {prefixe} », sans espace.",
   "coque.activite.repriseConversation": "Conversation trop longue, reprise à neuf (backend clé API).",
+  "coque.activite.resumeConversation": "Conversation trop longue, résumée (backend clé API).",
   "coque.chef.compteRenduSecours": "# Compte rendu\n\nLe compte rendu n'a pas pu être écrit ({erreur}).\n\n## Notes\n\n{notes}",
   "coque.chef.compteRenduVide": "# Compte rendu\n\nAucune parole n’a été transcrite pendant cette réunion : il n’y a rien à résumer.",
   "coque.chef.compteRenduIncomplet": "> Transcription incomplète au moment de ce compte rendu : la machine était chargée et la fin de la réunion n’était pas encore transcrite. La suite s’ajoute à la transcription de la réunion, dans le Carnet.",
