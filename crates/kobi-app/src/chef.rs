@@ -467,7 +467,7 @@ pub struct Chef<R: Runtime> {
     suite_apres_voix: bool,
     /// Annonces de service qui attendent pour ne pas couper la réponse en
     /// cours (KOB-365, KOB-366), dans l'ordre : « compte rendu prêt »,
-    /// rappel échu, « Je le fais ? » d'une carte, carte expirée.
+    /// rappel échu, carte expirée.
     annonces: std::collections::VecDeque<Annonce>,
     /// Dernière question répondue et sa réponse (« répète », « plus court »…).
     derniere: Option<(String, String)>,
@@ -550,11 +550,8 @@ struct Annonce {
     texte: String,
     depuis: Instant,
     /// Coupures de la voix au moment de l'annonce : si l'utilisateur a coupé
-    /// la voix depuis, elle n'est plus de mise (sauf celle d'une carte).
+    /// la voix depuis, elle n'est plus de mise.
     coupures: u64,
-    /// « Je le fais ? » de la carte `id` : dite seulement tant qu'elle est la
-    /// carte affichée.
-    carte: Option<String>,
 }
 
 /// Jusqu'où chaque piste a transcrit son audio, sur l'horloge du système
@@ -2036,11 +2033,9 @@ impl<R: Runtime> Chef<R> {
         crate::voix::taire(&self.app, "interruption");
         self.voix = None;
         self.suite_apres_voix = false;
-        // On vient de faire taire Kobi : pas d'annonce juste après, sauf la
-        // demande d'une carte, qui attend toujours sa réponse.
-        let avant = self.annonces.len();
-        self.annonces.retain(|a| a.carte.is_some());
-        if self.annonces.len() < avant {
+        // On vient de faire taire Kobi : pas d'annonce juste après.
+        if !self.annonces.is_empty() {
+            self.annonces.clear();
             tracing::info!("voix : annonce abandonnée après une interruption");
         }
         self.calme_a = None;
@@ -2064,11 +2059,11 @@ impl<R: Runtime> Chef<R> {
     /// carte affichée est annoncée ; les suivantes le seront à leur tour
     /// (KOB-218).
     fn validation_ouverte(&mut self, id: String, resume: &str) {
-        let annonce = self.validations.ouvrir(id.clone(), resume);
+        let annonce = self.validations.ouvrir(id, resume);
         self.calme_a = None;
         self.transition(&[Evenement::PermissionDemandee]);
         if let Some(resume) = annonce {
-            self.annoncer_validation(id, &resume);
+            self.annoncer_validation(&resume);
         }
         // « Oui » ou « non » sans le nom, tant que la carte attend (KOB-197).
         let _ = crate::ecoute::commander(
@@ -2099,9 +2094,7 @@ impl<R: Runtime> Chef<R> {
             self.annoncer(message);
         }
         if let Some(resume) = suivante {
-            if let Some(cible) = self.validations.cible().map(str::to_owned) {
-                self.annoncer_validation(cible, &resume);
-            }
+            self.annoncer_validation(&resume);
             // La carte suivante attend à son tour sa réponse (KOB-197).
             let _ = crate::ecoute::commander(
                 &self.app,
@@ -2112,14 +2105,18 @@ impl<R: Runtime> Chef<R> {
 
     /// La carte se lit à l'écran : la voix demande seulement « Je le fais ? ».
     /// Fenêtre de Kobi cachée, la voix est le seul canal : elle relit la
-    /// demande (KOB-215). Sans couper ce qui se dit (KOB-366).
-    fn annoncer_validation(&mut self, carte: String, resume: &str) {
+    /// demande (KOB-215). Tout de suite, pas en annonce : la carte vient le
+    /// plus souvent du tour qui répond, dont l'énoncé reste ouvert tant
+    /// qu'elle attend ; attendre la voix libre la ferait attendre pour rien
+    /// (KOB-366). La carte ne dit pas de quel tour elle vient : celle d'un
+    /// tour détaché coupe encore la réponse d'un autre.
+    fn annoncer_validation(&self, resume: &str) {
         let phrase = if self.voix_seul_canal() {
             kobi_i18n::tr("coque.chef.resumeJeLeFais", &[("resume", resume)])
         } else {
             kobi_i18n::tr("coque.chef.jeLeFais", &[])
         };
-        self.mettre_en_file(phrase, Some(carte));
+        crate::voix::dire(&self.app, &phrase);
     }
 
     /// La fenêtre de Kobi n'est pas à l'écran : ce qui s'affiche ne se voit pas.
@@ -2837,53 +2834,29 @@ impl<R: Runtime> Chef<R> {
     /// Kobi ne répond pas, sinon après la réponse en cours (écrite ou encore
     /// dite), sans jamais la couper.
     fn annoncer(&mut self, texte: String) {
-        self.mettre_en_file(texte, None);
-    }
-
-    /// Annonce mise en file, et dite tout de suite si la voix est libre.
-    fn mettre_en_file(&mut self, texte: String, carte: Option<String>) {
         self.annonces.push_back(Annonce {
             texte,
             depuis: Instant::now(),
             coupures: crate::voix::interruptions(&self.app),
-            carte,
         });
         self.annonce_en_attente();
     }
 
-    /// La voix est libre pour `annonce`. La demande d'une carte n'attend que
-    /// le silence : la réponse en cours est souvent celle du tour qui
-    /// demande la carte, et elle attend justement le « oui » (KOB-366).
-    fn voix_libre_pour(&self, annonce: &Annonce) -> bool {
-        !crate::voix::occupee(&self.app) && (annonce.carte.is_some() || self.voix.is_none())
-    }
-
-    /// Annonces en attente : la première prête est dite quand la voix est
-    /// libre (une carte peut passer devant une annonce qui attend la fin de
-    /// la réponse) ; abandonnée si l'utilisateur a coupé la voix depuis, ou
-    /// au-delà de [`ANNONCE_ATTENTE`] (l'écran la montre déjà). Celle d'une
-    /// carte n'est dite que si la carte attend encore à l'écran ; au-delà du
-    /// délai, elle passe quand même, la carte expirant bientôt.
+    /// Annonces en attente, dans l'ordre : la première est dite quand la
+    /// voix est libre ; abandonnée si l'utilisateur a coupé la voix depuis,
+    /// ou au-delà de [`ANNONCE_ATTENTE`] (l'écran la montre déjà).
     fn annonce_en_attente(&mut self) {
         let coupures = crate::voix::interruptions(&self.app);
-        let cible = self.validations.cible().map(str::to_owned);
-        self.annonces.retain(|a| match &a.carte {
-            Some(carte) => cible.as_deref() == Some(carte.as_str()),
-            None => {
-                let garde = a.coupures == coupures && a.depuis.elapsed() < ANNONCE_ATTENTE;
-                if !garde {
-                    tracing::info!(
-                        "voix : annonce abandonnée (voix coupée ou réponse trop longue)"
-                    );
-                }
-                garde
+        let avant = self.annonces.len();
+        self.annonces
+            .retain(|a| a.coupures == coupures && a.depuis.elapsed() < ANNONCE_ATTENTE);
+        if self.annonces.len() < avant {
+            tracing::info!("voix : annonce abandonnée (voix coupée ou réponse trop longue)");
+        }
+        if self.voix.is_none() && !crate::voix::occupee(&self.app) {
+            if let Some(annonce) = self.annonces.pop_front() {
+                crate::voix::dire(&self.app, &annonce.texte);
             }
-        });
-        let prete = self.annonces.iter().position(|a| {
-            (a.carte.is_some() && a.depuis.elapsed() >= ANNONCE_ATTENTE) || self.voix_libre_pour(a)
-        });
-        if let Some(annonce) = prete.and_then(|i| self.annonces.remove(i)) {
-            crate::voix::dire(&self.app, &annonce.texte);
         }
     }
 
@@ -3443,7 +3416,6 @@ mod tests {
                 texte: "Compte rendu prêt.".into(),
                 depuis: Instant::now() - ANNONCE_ATTENTE,
                 coupures: crate::voix::interruptions(&c.app),
-                carte: None,
             });
             c.tick();
             assert!(c.annonces.is_empty());
@@ -3483,10 +3455,8 @@ mod tests {
     }
 
     /// KOB-366 : un rappel échu et « Pas de réponse : refusé » attendent la
-    /// fin de la réponse en cours, comme « compte rendu prêt ». « Je le
-    /// fais ? » n'attend pas la réponse (souvent celle du tour qui demande la
-    /// carte) ; il passe devant, survit à une interruption, et tombe si la
-    /// carte n'est plus à l'écran.
+    /// fin de la réponse en cours, comme « compte rendu prêt », puis sont
+    /// dits dans l'ordre ; une interruption les abandonne.
     #[test]
     fn annonces_sans_couper_la_reponse() {
         let (app, _dir) = chef_en_essai();
@@ -3498,35 +3468,27 @@ mod tests {
                 texte: "Appeler Paul".into(),
                 echeance_ms: None,
             }));
-            c.tick();
-            assert_eq!(c.annonces.len(), 1, "le rappel attend la fin de la réponse");
-            // Carte demandée par le tour en cours : dite sans attendre la
-            // fin de la réponse, avant le rappel.
+            // Carte expirée, fenêtre cachée : la voix est le seul canal.
             c.validation_ouverte("v1".into(), "Créer budget.md");
+            c.annoncer(kobi_i18n::tr("coque.chef.delaiCarte", &[]));
+            c.tick();
+            assert_eq!(c.annonces.len(), 2, "rien pendant la réponse");
+            assert!(c.annonces[0].texte.contains("Appeler Paul"));
+            // Réponse finie : une annonce par tic, dans l'ordre.
+            c.voix = None;
+            c.tick();
             assert_eq!(c.annonces.len(), 1);
-            assert!(c.annonces[0].carte.is_none(), "{:?}", c.annonces);
-            // Interruption : le rappel tombe, la demande d'une carte resterait.
-            c.annonces.push_back(Annonce {
-                texte: "Je le fais ?".into(),
-                depuis: Instant::now(),
-                coupures: crate::voix::interruptions(&c.app),
-                carte: Some("v1".into()),
-            });
-            c.interrompre();
-            assert_eq!(c.annonces.len(), 1);
-            assert_eq!(c.annonces[0].carte.as_deref(), Some("v1"));
-            // La carte n'est plus à l'écran : sa demande tombe.
-            c.validation_fermee("v1", crate::validation::Reponse::Accepte);
-            c.annonces.push_back(Annonce {
-                texte: "Je le fais ?".into(),
-                depuis: Instant::now(),
-                coupures: crate::voix::interruptions(&c.app),
-                carte: Some("v1".into()),
-            });
+            c.tick();
+            assert!(c.annonces.is_empty());
+            // Interrompue : tout est abandonné.
             c.voix = Some((8, crate::voix::Reponse::new(&c.app)));
-            c.annoncer("Compte rendu prêt.".into());
-            assert_eq!(c.annonces.len(), 1, "{:?}", c.annonces);
-            assert!(c.annonces[0].carte.is_none());
+            c.recevoir(Message::Rappel(crate::rappels::RappelUi {
+                id: "r2".into(),
+                texte: "Relancer Marie".into(),
+                echeance_ms: None,
+            }));
+            c.interrompre();
+            assert!(c.annonces.is_empty());
         });
     }
 
