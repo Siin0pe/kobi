@@ -186,6 +186,15 @@ impl Notes {
         self.ecrites.lock().unwrap().push(note.texte);
         "ok".into()
     }
+
+    #[tool(
+        description = "Efface les notes.",
+        annotations(destructive_hint = true)
+    )]
+    fn effacer(&self) -> String {
+        self.ecrites.lock().unwrap().clear();
+        "effacé".into()
+    }
 }
 
 #[tool_handler]
@@ -248,8 +257,9 @@ fn noms(o: &OutillageKobi) -> Vec<String> {
 }
 
 /// KOB-102 et KOB-320 : tous les outils MCP sont proposés et appelés ; la
-/// lecture connue passe, l'écriture demande une carte. Les outils internes
-/// passent par le même point d'entrée.
+/// lecture connue passe, l'écriture demande une carte, un nom non proposé
+/// est refusé sans carte. Les outils internes passent par le même point
+/// d'entrée.
 #[tokio::test]
 async fn outils_mcp_et_autorisations() {
     use kobi_perms::mcp::Politique;
@@ -268,6 +278,7 @@ async fn outils_mcp_et_autorisations() {
             "Grep",
             "Glob",
             "mcp__notes__ecrire_note",
+            "mcp__notes__effacer",
             "mcp__notes__lire_notes"
         ]
     );
@@ -282,8 +293,14 @@ async fn outils_mcp_et_autorisations() {
         ("mcp__notes__lire_notes", Autorisation::Libre),
         ("mcp__notes__ecrire_note", Autorisation::Carte),
         ("mcp__notes__effacer", Autorisation::Carte),
-        ("mcp__autre__lire_notes", Autorisation::Carte),
-        ("Bash", Autorisation::Carte),
+        // Jamais proposés : refus sans carte.
+        ("mcp__notes__inconnu", Autorisation::Refus),
+        ("mcp__autre__lire_notes", Autorisation::Refus),
+        ("mcp__notes__LIRE_NOTES", Autorisation::Refus),
+        ("mcp__notes__lire_notes__x", Autorisation::Refus),
+        ("mcp_notes__lire_notes", Autorisation::Refus),
+        ("Bash", Autorisation::Refus),
+        ("read", Autorisation::Refus),
     ] {
         assert_eq!(o.autorisation(nom), attendu, "{nom}");
     }
@@ -323,15 +340,38 @@ async fn outils_mcp_et_autorisations() {
 }
 
 /// KOB-320 : la nature vient du catalogue, pas des annotations reçues en
-/// direct. Un outil annoncé en lecture mais absent du catalogue (jamais
-/// testé) demande une carte, comme chez Claude Code.
+/// direct. Un outil annoncé `readOnlyHint` mais absent du catalogue de son
+/// serveur (ajouté depuis le dernier test), ou d'un serveur jamais testé,
+/// demande une carte, comme chez Claude Code.
 #[tokio::test]
 async fn annotation_seule_ne_suffit_pas() {
+    use kobi_perms::mcp::{Politique, Serveur};
     let (client, outils, _) = serveur_notes().await;
-    let lecture_annoncee = outils
+    assert!(outils
         .iter()
-        .any(|o| o["name"] == "lire_notes" && o["annotations"]["readOnlyHint"] == true);
-    assert!(lecture_annoncee);
+        .any(|o| o["name"] == "lire_notes" && o["annotations"]["readOnlyHint"] == true));
+    // Serveur connu, `lire_notes` absent de son catalogue.
+    let mut connu = Catalogue::default();
+    connu.serveurs.insert(
+        "notes".into(),
+        Serveur {
+            politique: Politique::Demander,
+            outils: [("ecrire_note".to_owned(), Nature::Ecriture)].into(),
+        },
+    );
+    let o = OutillageKobi::new(
+        &[],
+        vec![("notes".into(), client, outils)],
+        connu,
+        Acces::Complet,
+    );
+    assert_eq!(
+        o.autorisation("mcp__notes__lire_notes"),
+        Autorisation::Carte
+    );
+    o.fermer().await;
+    // Serveur jamais testé.
+    let (client, outils, _) = serveur_notes().await;
     let o = OutillageKobi::new(
         &[],
         vec![("notes".into(), client, outils)],
@@ -365,36 +405,52 @@ async fn serveur_sans_demander() {
     o.fermer().await;
 }
 
-/// Question différée (KOB-307) : seuls les outils connus en lecture sont
-/// proposés ; une écriture est refusée sans carte, même sur un serveur
-/// « faire sans demander ».
+/// Question différée (KOB-307) : aucun serveur de l'utilisateur, comme
+/// chez Claude Code ; du MCP de Kobi, seuls les outils connus en lecture
+/// sont proposés, le reste est refusé sans carte, même « sans demander ».
 #[tokio::test]
 async fn lecture_seule_sans_carte() {
     use kobi_perms::mcp::Politique;
-    let (client, outils, ecrites) = serveur_notes().await;
+    let kobi = crate::mcp_config::SERVEUR_KOBI;
+    let (utilisateur, outils_u, ecrites_u) = serveur_notes().await;
+    let (propre, outils_k, ecrites_k) = serveur_notes().await;
+    let mut cat = catalogue(Politique::SansDemander);
+    let notes = cat.serveurs["notes"].clone();
+    cat.serveurs.insert(kobi.into(), notes);
     let o = OutillageKobi::new(
         &[],
-        vec![("notes".into(), client, outils)],
-        catalogue(Politique::SansDemander),
+        vec![
+            ("notes".into(), utilisateur, outils_u),
+            (kobi.into(), propre, outils_k),
+        ],
+        cat,
         Acces::LectureSeule,
     );
-    assert_eq!(noms(&o), ["Read", "Grep", "Glob", "mcp__notes__lire_notes"]);
     assert_eq!(
-        o.autorisation("mcp__notes__lire_notes"),
+        noms(&o),
+        ["Read", "Grep", "Glob", &format!("mcp__{kobi}__lire_notes")]
+    );
+    assert_eq!(
+        o.autorisation(&format!("mcp__{kobi}__lire_notes")),
         Autorisation::Libre
     );
     for refuse in [
-        "mcp__notes__ecrire_note",
-        "mcp__notes__effacer",
-        "mcp__autre__x",
-        "Bash",
+        "mcp__notes__lire_notes".to_owned(),
+        format!("mcp__{kobi}__ecrire_note"),
+        format!("mcp__{kobi}__effacer"),
+        "Bash".to_owned(),
     ] {
-        assert_eq!(o.autorisation(refuse), Autorisation::Refus, "{refuse}");
+        assert_eq!(o.autorisation(&refuse), Autorisation::Refus, "{refuse}");
     }
-    assert!(o
-        .appeler("mcp__notes__ecrire_note", &json!({ "texte": "x" }))
-        .await
-        .is_err());
-    assert!(ecrites.lock().unwrap().is_empty());
+    for nom in [
+        "mcp__notes__lire_notes".to_owned(),
+        format!("mcp__{kobi}__ecrire_note"),
+    ] {
+        assert!(
+            o.appeler(&nom, &json!({ "texte": "x" })).await.is_err(),
+            "{nom}"
+        );
+    }
+    assert!(ecrites_u.lock().unwrap().is_empty() && ecrites_k.lock().unwrap().is_empty());
     o.fermer().await;
 }

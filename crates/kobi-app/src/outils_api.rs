@@ -276,8 +276,9 @@ pub enum Acces {
     /// Conversation et notes : la lecture passe, l'écriture demande une
     /// carte (sauf serveur réglé « faire sans demander »).
     Complet,
-    /// Question différée (KOB-307) : seuls les outils connus en lecture
-    /// sont proposés ; rien ne demande de carte, le reste est refusé.
+    /// Question différée (KOB-307) : aucun serveur de l'utilisateur ; du
+    /// MCP de Kobi, seuls les outils connus en lecture sont proposés. Rien
+    /// ne demande de carte, le reste est refusé.
     LectureSeule,
 }
 
@@ -305,6 +306,12 @@ impl OutillageKobi {
         let mut definitions = Lecteur::definitions();
         let mut connectes = Vec::new();
         for (nom, client, outils) in serveurs {
+            // Lecture seule : aucun serveur de l'utilisateur, seulement le MCP
+            // de Kobi (comme la question différée de Claude Code).
+            if acces == Acces::LectureSeule && nom != crate::mcp_config::SERVEUR_KOBI {
+                tracing::info!(serveur = %nom, "serveur MCP écarté : session en lecture seule");
+                continue;
+            }
             let mut proposes = Vec::new();
             for o in &outils {
                 let Some(outil) = o["name"].as_str() else {
@@ -390,27 +397,35 @@ impl kobi_brain::Outillage for OutillageKobi {
         kobi_brain::claude_code::outils::action(nom, entree)
     }
 
-    /// Lecture des dossiers : libre. Outil MCP : verdict du catalogue,
-    /// comme pour Claude Code (inconnu = carte) ; en lecture seule, ce qui
-    /// demanderait une carte est refusé.
+    /// Lecture des dossiers : libre. Outil MCP proposé : verdict du
+    /// catalogue, comme pour Claude Code (hors catalogue = carte) ; en
+    /// lecture seule, ce qui demanderait une carte est refusé. Outil non
+    /// proposé : refusé sans carte.
     fn autorisation(&self, nom: &str) -> Autorisation {
         if matches!(nom, "Read" | "Grep" | "Glob") {
             return Autorisation::Libre;
         }
-        let libre = nom
+        // Un nom que Kobi n'a pas proposé n'existe pas : refusé sans carte.
+        let Some((serveur, outil)) = nom
             .strip_prefix("mcp__")
             .and_then(|r| r.split_once("__"))
-            .is_some_and(|(serveur, outil)| {
-                let verdict = self.catalogue.verdict(serveur, outil);
-                match self.acces {
-                    Acces::Complet => verdict == Verdict::Libre,
-                    Acces::LectureSeule => self.catalogue.nature(serveur, outil) == Nature::Lecture,
-                }
-            });
-        match (libre, self.acces) {
-            (true, _) => Autorisation::Libre,
-            (false, Acces::Complet) => Autorisation::Carte,
-            (false, Acces::LectureSeule) => Autorisation::Refus,
+            .filter(|(serveur, outil)| {
+                self.serveurs
+                    .iter()
+                    .any(|s| s.nom == *serveur && s.outils.iter().any(|o| o == outil))
+            })
+        else {
+            return Autorisation::Refus;
+        };
+        match self.acces {
+            Acces::Complet if self.catalogue.verdict(serveur, outil) == Verdict::Libre => {
+                Autorisation::Libre
+            }
+            Acces::Complet => Autorisation::Carte,
+            Acces::LectureSeule if self.catalogue.nature(serveur, outil) == Nature::Lecture => {
+                Autorisation::Libre
+            }
+            Acces::LectureSeule => Autorisation::Refus,
         }
     }
 

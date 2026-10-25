@@ -187,7 +187,11 @@ async fn lire_requete(sock: &mut tokio::net::TcpStream) -> Option<Recue> {
 
 /// Outil de test : `lire` rend le contenu d'un faux fichier, `casse`
 /// échoue.
-struct OutilsTest;
+#[derive(Default)]
+struct OutilsTest {
+    /// Outils vraiment exécutés.
+    appels: StdMutex<Vec<String>>,
+}
 
 impl Outillage for OutilsTest {
     fn definitions(&self) -> Vec<Value> {
@@ -228,6 +232,7 @@ impl Outillage for OutilsTest {
         entree: &'a Value,
     ) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send + 'a>> {
         Box::pin(async move {
+            self.appels.lock().unwrap().push(nom.to_owned());
             match nom {
                 "lire" => Ok(format!("contenu de {}", entree["chemin"].as_str().unwrap())),
                 "ecrire" => Ok("écrit".into()),
@@ -330,7 +335,7 @@ async fn boucle_d_outils_jusqu_a_la_reponse() {
         texte("Le README ", "parle de Kobi."),
     ])
     .await;
-    let mut brain = cerveau(&serveur, Arc::new(OutilsTest));
+    let mut brain = cerveau(&serveur, Arc::new(OutilsTest::default()));
     let events = tous(brain.ask(question("que dit le README ?"))).await;
     assert!(events.iter().any(|e| matches!(e,
         BrainEvent::ToolCall { id, name, action: Action::LireFichier { chemin }, .. }
@@ -374,7 +379,7 @@ async fn outil_en_echec_rendu_en_erreur() {
         texte("Je n'ai pas pu ", "lire."),
     ])
     .await;
-    let mut brain = cerveau(&serveur, Arc::new(OutilsTest));
+    let mut brain = cerveau(&serveur, Arc::new(OutilsTest::default()));
     assert!(fin(&tous(brain.ask(question("lis"))).await).is_ok());
     let recues = serveur.recues();
     let resultat = |i: usize| {
@@ -580,7 +585,7 @@ fn resultat_rendu(serveur: &Serveur) -> Value {
 #[tokio::test]
 async fn carte_acceptee() {
     let serveur = Serveur::lancer(vec![appel("toolu_1", "ecrire", "{}"), texte("Fait", ".")]).await;
-    let mut brain = cerveau(&serveur, Arc::new(OutilsTest));
+    let mut brain = cerveau(&serveur, Arc::new(OutilsTest::default()));
     let (events, cartes) = avec_cartes(brain.ask(question("écris")), Reponse::Oui).await;
     assert_eq!(cartes, 1);
     assert_eq!(fin(&events).unwrap().text, "Fait.");
@@ -598,7 +603,8 @@ async fn carte_refusee() {
         texte("D'accord", "."),
     ])
     .await;
-    let mut brain = cerveau(&serveur, Arc::new(OutilsTest));
+    let outils = Arc::new(OutilsTest::default());
+    let mut brain = cerveau(&serveur, outils.clone());
     let (events, _) = avec_cartes(
         brain.ask(question("écris")),
         Reponse::Non("Refusé par l'utilisateur."),
@@ -608,6 +614,156 @@ async fn carte_refusee() {
     let r = resultat_rendu(&serveur);
     assert_eq!(r["is_error"], true);
     assert_eq!(r["content"], "Refusé par l'utilisateur.");
+    assert!(outils.appels.lock().unwrap().is_empty());
+}
+
+/// Carte abandonnée (la demande lâchée sans réponse) : refus, sans attendre
+/// le délai.
+#[tokio::test]
+async fn carte_abandonnee() {
+    let serveur = Serveur::lancer(vec![appel("toolu_1", "ecrire", "{}"), texte("Rien", ".")]).await;
+    let outils = Arc::new(OutilsTest::default());
+    let mut brain = cerveau(&serveur, outils.clone());
+    let mut turn = brain.ask(question("écris"));
+    let debut = std::time::Instant::now();
+    while let Some(e) = turn.next().await {
+        // La demande est lâchée aussitôt reçue.
+        if let BrainEvent::Permission(demande) = e {
+            drop(demande);
+        }
+    }
+    assert!(debut.elapsed() < Duration::from_secs(10));
+    let r = resultat_rendu(&serveur);
+    assert_eq!(r["is_error"], true);
+    assert!(r["content"].as_str().unwrap().contains("abandonnée"), "{r}");
+    assert!(outils.appels.lock().unwrap().is_empty());
+}
+
+/// Deux appels dans un même message : une carte chacun ; seul le « oui »
+/// s'exécute, et les deux résultats repartent dans un seul message.
+#[tokio::test]
+async fn deux_cartes_un_oui_un_non() {
+    let deux = flux(&[
+        json!({"type":"message_start","message":{"id":"msg","usage":{"input_tokens":5}}}),
+        json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"ecrire","input":{}}}),
+        json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"n\": 1}"}}),
+        json!({"type":"content_block_stop","index":0}),
+        json!({"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_2","name":"ecrire","input":{}}}),
+        json!({"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"n\": 2}"}}),
+        json!({"type":"content_block_stop","index":1}),
+        json!({"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":9}}),
+        json!({"type":"message_stop"}),
+    ]);
+    let serveur = Serveur::lancer(vec![deux, texte("Un sur deux", ".")]).await;
+    let outils = Arc::new(OutilsTest::default());
+    let mut brain = cerveau(&serveur, outils.clone());
+    let mut turn = brain.ask(question("écris deux fois"));
+    let mut cartes = Vec::new();
+    while let Some(e) = turn.next().await {
+        if let BrainEvent::Permission(demande) = e {
+            cartes.push(demande.request.input["n"].as_i64().unwrap());
+            if demande.request.input["n"] == 1 {
+                demande.allow();
+            } else {
+                demande.deny("Non.");
+            }
+        }
+    }
+    assert_eq!(cartes, [1, 2]);
+    assert_eq!(*outils.appels.lock().unwrap(), ["ecrire"]);
+    let messages = serveur.recues()[1].corps["messages"].clone();
+    let resultats = messages.as_array().unwrap().last().unwrap()["content"].clone();
+    assert_eq!(resultats.as_array().unwrap().len(), 2);
+    assert_eq!(resultats[0]["content"], "écrit");
+    assert_eq!(resultats[1]["is_error"], true);
+}
+
+/// Tour lâché pendant la carte : refus, rien d'exécuté, tour retiré, et le
+/// cerveau reprend la question suivante.
+#[tokio::test]
+async fn tour_lache_pendant_la_carte() {
+    let serveur =
+        Serveur::lancer(vec![appel("toolu_1", "ecrire", "{}"), texte("Suite", ".")]).await;
+    let outils = Arc::new(OutilsTest::default());
+    let mut brain = cerveau(&serveur, outils.clone());
+    let mut turn = brain.ask(question("écris"));
+    let demande = loop {
+        if let Some(BrainEvent::Permission(d)) = turn.next().await {
+            break d;
+        }
+    };
+    drop(turn);
+    // La carte reste ouverte côté interface, mais le tour est parti.
+    let mut essais = 0;
+    let suivant = loop {
+        match brain.ask(question("autre chose")).wait().await {
+            Err(BrainError::Busy) if essais < 100 => {
+                essais += 1;
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            autre => break autre,
+        }
+    };
+    assert_eq!(suivant.unwrap().text, "Suite.");
+    demande.allow();
+    assert!(outils.appels.lock().unwrap().is_empty());
+    let r = serveur.recues();
+    assert_eq!(r[1].corps["messages"].as_array().unwrap().len(), 1);
+}
+
+/// KOB-320 : une écriture confirmée puis faite reste dans la conversation
+/// même si le tour échoue ensuite ; la question suivante s'ajoute à ses
+/// résultats, et Claude sait qu'elle a eu lieu.
+#[tokio::test]
+async fn ecriture_faite_gardee_apres_un_echec() {
+    let serveur = Serveur::lancer(vec![
+        appel("toolu_1", "ecrire", "{}"),
+        erreur(400, "invalid_request_error", "échec après l'écriture"),
+        texte("C'est déjà fait", "."),
+    ])
+    .await;
+    let outils = Arc::new(OutilsTest::default());
+    let mut brain = cerveau(&serveur, outils.clone());
+    let (events, _) = avec_cartes(brain.ask(question("écris")), Reponse::Oui).await;
+    assert!(fin(&events).is_err());
+    let (events, _) = avec_cartes(brain.ask(question("c'est fait ?")), Reponse::Oui).await;
+    assert_eq!(fin(&events).unwrap().text, "C'est déjà fait.");
+    assert_eq!(*outils.appels.lock().unwrap(), ["ecrire"]);
+    let messages = serveur.recues()[2].corps["messages"].clone();
+    let m = messages.as_array().unwrap();
+    assert_eq!(m.len(), 3, "{messages}");
+    // Réflexion puis appel, renvoyés tels quels.
+    assert_eq!(m[1]["content"][1]["type"], "tool_use");
+    assert_eq!(m[2]["content"][0]["type"], "tool_result");
+    assert_eq!(m[2]["content"][0]["content"], "écrit");
+    assert!(m[2]["content"][1]["text"]
+        .as_str()
+        .unwrap()
+        .contains("c'est fait ?"));
+}
+
+/// Sans écriture faite, un échec retire tout le tour, texte compris, même
+/// quand il s'était ajouté aux résultats d'une écriture gardée.
+#[tokio::test]
+async fn echec_sans_ecriture_retire_le_texte_ajoute() {
+    let serveur = Serveur::lancer(vec![
+        appel("toolu_1", "ecrire", "{}"),
+        erreur(400, "invalid_request_error", "un"),
+        erreur(400, "invalid_request_error", "deux"),
+        texte("Ok", "."),
+    ])
+    .await;
+    let mut brain = cerveau(&serveur, Arc::new(OutilsTest::default()));
+    let (e, _) = avec_cartes(brain.ask(question("écris")), Reponse::Oui).await;
+    assert!(fin(&e).is_err());
+    let (e, _) = avec_cartes(brain.ask(question("deux")), Reponse::Oui).await;
+    assert!(fin(&e).is_err());
+    let (e, _) = avec_cartes(brain.ask(question("trois")), Reponse::Oui).await;
+    assert!(fin(&e).is_ok());
+    let m = serveur.recues()[3].corps["messages"].clone();
+    let dernier = &m.as_array().unwrap()[2]["content"];
+    assert_eq!(dernier.as_array().unwrap().len(), 2, "{m}");
+    assert!(dernier[1]["text"].as_str().unwrap().contains("trois"));
 }
 
 /// Sans réponse dans le délai : refus.
@@ -617,7 +773,7 @@ async fn carte_sans_reponse() {
     let mut brain = ApiBrain::new(ApiConfig {
         cle: CLE.into(),
         url: serveur.url.clone(),
-        outils: Arc::new(OutilsTest),
+        outils: Arc::new(OutilsTest::default()),
         delai_carte: Duration::from_millis(50),
         ..Default::default()
     })
@@ -641,7 +797,7 @@ async fn carte_sans_reponse() {
 async fn outil_interdit_sans_carte() {
     let serveur =
         Serveur::lancer(vec![appel("toolu_1", "interdit", "{}"), texte("Non", ".")]).await;
-    let mut brain = cerveau(&serveur, Arc::new(OutilsTest));
+    let mut brain = cerveau(&serveur, Arc::new(OutilsTest::default()));
     let (events, cartes) = avec_cartes(brain.ask(question("fais")), Reponse::Oui).await;
     assert_eq!(cartes, 0);
     assert!(fin(&events).is_ok());
@@ -658,7 +814,7 @@ async fn lecture_sans_carte_et_cache_visible() {
         texte("Lu", "."),
     ])
     .await;
-    let mut brain = cerveau(&serveur, Arc::new(OutilsTest));
+    let mut brain = cerveau(&serveur, Arc::new(OutilsTest::default()));
     let (events, cartes) = avec_cartes(brain.ask(question("lis")), Reponse::Oui).await;
     assert_eq!(cartes, 0);
     let usage = fin(&events).unwrap().usage.unwrap();

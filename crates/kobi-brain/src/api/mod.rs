@@ -245,13 +245,34 @@ impl Brain for ApiBrain {
 }
 
 /// Joue un tour et rend son événement de fin. En cas d'échec, la
-/// conversation revient à son état d'avant le tour.
+/// conversation revient à son état d'avant le tour, sauf ce qui suit une
+/// écriture confirmée et faite : Claude doit savoir qu'elle a eu lieu, pour
+/// ne pas la refaire au tour suivant (KOB-320).
 async fn tour(partage: &Partage, texte: String, events: &mpsc::Sender<BrainEvent>) -> BrainEvent {
     let mut historique = partage.historique.lock().await;
     let debut = historique.len();
-    let fin = boucle(partage, &mut historique, texte, events).await;
+    // Après une écriture gardée, le dernier message est celui des
+    // résultats d'outils : le texte du tour s'y ajoute (l'API veut des
+    // rôles alternés).
+    let ajoute_a = historique
+        .last()
+        .filter(|m| m["role"] == "user")
+        .and_then(|m| m["content"].as_array())
+        .map(Vec::len);
+    let mut garde = None;
+    let fin = boucle(partage, &mut historique, texte, events, &mut garde).await;
     if matches!(fin, BrainEvent::Error(_)) {
-        historique.truncate(debut);
+        match garde {
+            Some(n) => historique.truncate(n),
+            None => {
+                historique.truncate(debut);
+                if let (Some(n), Some(dernier)) = (ajoute_a, historique.last_mut()) {
+                    if let Some(c) = dernier["content"].as_array_mut() {
+                        c.truncate(n);
+                    }
+                }
+            }
+        }
     }
     fin
 }
@@ -261,12 +282,17 @@ async fn boucle(
     historique: &mut Vec<Value>,
     texte: String,
     events: &mpsc::Sender<BrainEvent>,
+    garde: &mut Option<usize>,
 ) -> BrainEvent {
     let config = &partage.config;
-    historique.push(json!({
-        "role": "user",
-        "content": [{ "type": "text", "text": texte }],
-    }));
+    let bloc = json!({ "type": "text", "text": texte });
+    match historique.last_mut().filter(|m| m["role"] == "user") {
+        Some(dernier) => match dernier["content"].as_array_mut() {
+            Some(c) => c.push(bloc),
+            None => historique.push(json!({ "role": "user", "content": [bloc] })),
+        },
+        None => historique.push(json!({ "role": "user", "content": [bloc] })),
+    }
     let mut usage = Usage::default();
     for _ in 0..=config.max_etapes {
         if events.is_closed() {
@@ -306,10 +332,16 @@ async fn boucle(
             });
         }
         let mut resultats = Vec::new();
+        let mut ecriture = false;
         for appel in &appels {
-            resultats.push(executer(partage, appel, events).await);
+            let (resultat, confirme) = executer(partage, appel, events).await;
+            ecriture |= confirme;
+            resultats.push(resultat);
         }
         historique.push(json!({ "role": "user", "content": resultats }));
+        if ecriture {
+            *garde = Some(historique.len());
+        }
     }
     BrainEvent::Error(BrainError::Api(format!(
         "plus de {} appels d'outils dans un tour",
@@ -317,8 +349,13 @@ async fn boucle(
     )))
 }
 
-/// Exécute un appel d'outil et rend son bloc `tool_result`.
-async fn executer(partage: &Partage, appel: &Value, events: &mpsc::Sender<BrainEvent>) -> Value {
+/// Exécute un appel d'outil et rend son bloc `tool_result`, et s'il
+/// s'agissait d'un appel confirmé par une carte puis lancé.
+async fn executer(
+    partage: &Partage,
+    appel: &Value,
+    events: &mpsc::Sender<BrainEvent>,
+) -> (Value, bool) {
     let id = appel["id"].as_str().unwrap_or_default().to_owned();
     let nom = appel["name"].as_str().unwrap_or_default().to_owned();
     let entree = appel["input"].clone();
@@ -331,12 +368,17 @@ async fn executer(partage: &Partage, appel: &Value, events: &mpsc::Sender<BrainE
             action: outils.action(&nom, &entree),
         })
         .await;
+    let mut confirme = false;
     let resultat = if entree_illisible(appel) {
         Err(json!({ "INVALID_JSON": entree }).to_string())
-    } else if let Err(refus) = autoriser(partage, &id, &nom, &entree, events).await {
-        Err(refus)
     } else {
-        outils.appeler(&nom, &entree).await
+        match autoriser(partage, &id, &nom, &entree, events).await {
+            Err(refus) => Err(refus),
+            Ok(carte) => {
+                confirme = carte;
+                outils.appeler(&nom, &entree).await
+            }
+        }
     };
     let _ = events.send(BrainEvent::OutilRendu { id: id.clone() }).await;
     let (contenu, erreur) = match resultat {
@@ -347,21 +389,22 @@ async fn executer(partage: &Partage, appel: &Value, events: &mpsc::Sender<BrainE
     if erreur {
         bloc["is_error"] = Value::Bool(true);
     }
-    bloc
+    (bloc, confirme)
 }
 
 /// Carte de confirmation avant un outil qui écrit (mêmes règles et même
-/// carte que le backend Claude Code, KOB-320). `Err` : le refus, rendu à
-/// Claude comme résultat de l'outil.
+/// carte que le backend Claude Code, KOB-320). `Ok(true)` : accepté sur
+/// carte ; `Ok(false)` : libre ; `Err` : le refus, rendu à Claude comme
+/// résultat de l'outil. Un tour lâché pendant la carte vaut refus.
 async fn autoriser(
     partage: &Partage,
     id: &str,
     nom: &str,
     entree: &Value,
     events: &mpsc::Sender<BrainEvent>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     match partage.config.outils.autorisation(nom) {
-        Autorisation::Libre => return Ok(()),
+        Autorisation::Libre => return Ok(false),
         Autorisation::Refus => return Err(format!("{nom} n'est pas permis dans cette session.")),
         Autorisation::Carte => {}
     }
@@ -374,14 +417,17 @@ async fn autoriser(
         return Err("Question abandonnée.".into());
     }
     let delai = partage.config.delai_carte;
-    match tokio::time::timeout(delai, reponse).await {
-        Ok(Ok(Decision::Allow)) => Ok(()),
-        Ok(Ok(Decision::Deny(raison))) => Err(raison),
-        Ok(Err(_)) => Err("Demande abandonnée par Kobi.".into()),
-        Err(_) => Err(format!(
-            "Pas de confirmation en {} s : refusé.",
-            delai.as_secs()
-        )),
+    tokio::select! {
+        decision = tokio::time::timeout(delai, reponse) => match decision {
+            Ok(Ok(Decision::Allow)) => Ok(true),
+            Ok(Ok(Decision::Deny(raison))) => Err(raison),
+            Ok(Err(_)) => Err("Demande abandonnée par Kobi.".into()),
+            Err(_) => Err(format!(
+                "Pas de confirmation en {} s : refusé.",
+                delai.as_secs()
+            )),
+        },
+        _ = events.closed() => Err("Question abandonnée.".into()),
     }
 }
 
@@ -390,7 +436,14 @@ fn texte_final(historique: &[Value]) -> String {
     historique
         .iter()
         .rev()
-        .take_while(|m| m["role"] == "assistant" || m["content"][0]["type"] == "tool_result")
+        // Jusqu'au message qui porte le texte du tour (résultats d'outils
+        // seuls avant lui).
+        .take_while(|m| {
+            m["role"] == "assistant"
+                || !m["content"]
+                    .as_array()
+                    .is_some_and(|c| c.iter().any(|b| b["type"] == "text"))
+        })
         .filter(|m| m["role"] == "assistant")
         .map(|m| {
             m["content"]
