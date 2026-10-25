@@ -360,3 +360,49 @@ fn machine_label() -> String {
     let ram_gb = (sys.total_memory() as f64 / 1024f64.powi(3)).round();
     format!("{}, {ram_gb:.0} Go", cpu.join(" "))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// WER de Nemotron mesuré sur la première minute du corpus synthétique
+    /// français, le 25/10/2026 (KOB-45).
+    const WER_REFERENCE: f64 = 8.4;
+
+    /// KOB-45 : taux d'erreur de Nemotron sur la première minute du corpus
+    /// synthétique français (voix Piper, `bench/corpus/generate.py`), au plus
+    /// un point au-dessus de la mesure de référence. Jamais le corpus réel :
+    /// il ne sort pas du banc. Ignoré sans modèle ni corpus :
+    /// `KOBI_MODELES=~/Kobi/models KOBI_CORPUS=~/Kobi-bench/corpus cargo test
+    /// -p kobi-bench --features nemotron -- --ignored wer_nemotron`.
+    #[test]
+    #[ignore = "demande KOBI_MODELES et KOBI_CORPUS (corpus synthétique Piper)"]
+    fn wer_nemotron_corpus_synthetique_fr() {
+        let models = PathBuf::from(std::env::var_os("KOBI_MODELES").expect("KOBI_MODELES"));
+        let corpus = PathBuf::from(std::env::var_os("KOBI_CORPUS").expect("KOBI_CORPUS"));
+        assert!(
+            !corpus.to_string_lossy().contains("corpus-reel"),
+            "le corpus réel ne sert qu'au banc"
+        );
+        let reunions = load_corpus(&corpus, &["fr".into()], Some(60.0)).unwrap();
+        let r = &reunions[0];
+        let (mut moteur, _) =
+            build_engine("nemotron-560ms", &models, Device::Cpu, 3, &r.reference).unwrap();
+        let sortie = WavReplayer::new(r.tracks.clone())
+            .speed(0.0)
+            .run(moteur.as_mut())
+            .unwrap();
+        let mesure = evaluate(
+            &r.reference,
+            &sortie,
+            Default::default(),
+            common_lang(&r.reference),
+        );
+        let wer = mesure.wer * 100.0;
+        println!("WER {wer:.1} % (référence {WER_REFERENCE:.1} %)");
+        assert!(
+            wer <= WER_REFERENCE + 1.0,
+            "WER {wer:.1} % : plus d'un point au-dessus de la référence ({WER_REFERENCE:.1} %)"
+        );
+    }
+}

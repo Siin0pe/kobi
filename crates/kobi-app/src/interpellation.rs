@@ -114,6 +114,12 @@ pub fn declencher<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
 }
 
 pub fn charger_stt() -> Result<NemotronEngine, String> {
+    // `stt.engine` : `auto` ou `nemotron` ; une autre valeur est refusée
+    // avec un message clair, plutôt qu'ignorée (KOB-45).
+    let reglage = kobi_session::config::default_path()
+        .map(|p| kobi_session::config::load_or_create(&p).config)
+        .unwrap_or_default();
+    reglage.stt.verifier()?;
     let dir = modele_nemotron()
         .ok_or_else(|| kobi_i18n::tr("coque.interpellation.nemotronIntrouvable", &[]))?;
     let mut config = NemotronConfig::new(&dir);

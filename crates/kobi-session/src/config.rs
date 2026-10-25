@@ -230,6 +230,27 @@ pub struct SttConfig {
     pub extra: toml::Table,
 }
 
+/// Moteurs de transcription connus (`stt.engine`) : `auto` choisit le
+/// gagnant du benchmark, aujourd'hui Nemotron (KOB-45, KOB-212).
+pub const MOTEURS_STT: &[&str] = &["auto", "nemotron"];
+
+impl SttConfig {
+    /// Le moteur demandé est-il connu ? Sinon, un message qui dit les
+    /// valeurs possibles (KOB-45).
+    pub fn verifier(&self) -> Result<(), String> {
+        if MOTEURS_STT.contains(&self.engine.as_str()) {
+            return Ok(());
+        }
+        Err(kobi_i18n::tr(
+            "session.cles.moteurSttInconnu",
+            &[
+                ("moteur", &self.engine),
+                ("valeurs", &MOTEURS_STT.join(", ")),
+            ],
+        ))
+    }
+}
+
 impl Default for SttConfig {
     fn default() -> Self {
         Self {
