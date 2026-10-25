@@ -1228,6 +1228,7 @@ impl<R: Runtime> Fil<R> {
             // parole : un ordre dit maintenant ne serait entendu qu'après
             // (KOB-250).
             self.signaler_retard(self.origine.elapsed().as_secs_f64() - self.t);
+            self.ecouteur.sous_charge = self.retard.is_some();
         }
 
         if self.bilan.elapsed() >= BILAN {
