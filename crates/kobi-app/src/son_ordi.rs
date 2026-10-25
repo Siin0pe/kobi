@@ -394,7 +394,7 @@ impl<R: Runtime> Fil<R> {
         let duree = samples.len() as f64 / kobi_stt::SAMPLE_RATE as f64;
         let Some(stt) = &mut self.stt else { return };
         let mut finis = Vec::new();
-        for (debut, samples) in porte.trame(t, samples) {
+        for (debut, samples) in passer_la_porte(porte, stt, t, samples) {
             let morceau = kobi_stt::AudioFrame {
                 source: kobi_stt::Source::Eux,
                 samples,
@@ -595,9 +595,95 @@ pub fn regler_son_ordi<R: Runtime>(
     Ok(etat_ui(&app))
 }
 
+/// Découpe une trame par la porte. Une parole qui reprend après un silence
+/// non transmis repart d'un énoncé neuf, comme au micro (KOB-190) : son
+/// début est celui de la parole (pré-roulage de la porte), pas celui d'avant
+/// le silence, que le filtre de pause juge (KOB-277, KOB-313).
+fn passer_la_porte(
+    porte: &mut Porte,
+    stt: &mut impl kobi_stt::SttEngine,
+    t: f64,
+    samples: Vec<f32>,
+) -> Vec<(f64, Vec<f32>)> {
+    let etait_ouverte = porte.ouverte();
+    let sorties = porte.trame(t, samples);
+    if porte.ouverte() && !etait_ouverte {
+        stt.nouvel_enonce(kobi_stt::Source::Eux);
+    }
+    sorties
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// KOB-313 : chaque reprise de parole après un silence ouvre un énoncé
+    /// neuf sur la piste « eux », avant que son pré-roulage parte au moteur.
+    #[test]
+    fn nouvel_enonce_a_chaque_reprise_du_son_de_l_ordinateur() {
+        #[derive(Default)]
+        struct Faux {
+            /// Pour chaque énoncé neuf : sa source, et la première trame
+            /// envoyée ensuite.
+            enonces: Vec<(kobi_stt::Source, Option<f64>)>,
+        }
+        impl kobi_stt::SttEngine for Faux {
+            fn name(&self) -> &str {
+                "faux"
+            }
+            fn push(
+                &mut self,
+                frame: &kobi_stt::AudioFrame,
+            ) -> kobi_stt::Result<Vec<kobi_stt::Segment>> {
+                if let Some((_, premiere @ None)) = self.enonces.last_mut() {
+                    *premiere = Some(frame.t);
+                }
+                Ok(Vec::new())
+            }
+            fn finish(&mut self) -> kobi_stt::Result<Vec<kobi_stt::Segment>> {
+                Ok(Vec::new())
+            }
+            fn nouvel_enonce(&mut self, source: kobi_stt::Source) {
+                self.enonces.push((source, None));
+            }
+        }
+        let mut stt = Faux::default();
+        let mut porte = Porte::new(kobi_stt::SAMPLE_RATE);
+        let parole: Vec<f32> = (0..1600).map(|i| 0.2 * (i as f32 * 0.3).sin()).collect();
+        let silence = vec![0.0f32; 1600];
+        let plan = [(10, false), (6, true), (40, false), (6, true), (30, false)];
+        let mut t = 0.0;
+        for (n, fort) in plan {
+            for _ in 0..n {
+                let samples = if fort {
+                    parole.clone()
+                } else {
+                    silence.clone()
+                };
+                for (debut, morceau) in passer_la_porte(&mut porte, &mut stt, t, samples) {
+                    let frame = kobi_stt::AudioFrame {
+                        source: kobi_stt::Source::Eux,
+                        samples: morceau,
+                        t: debut,
+                    };
+                    stt.push(&frame).unwrap();
+                }
+                t += 0.1;
+            }
+        }
+        // Deux reprises de parole (à 1,0 s et 5,6 s), deux énoncés neufs
+        // pour « eux », chacun demandé avant d'envoyer l'audio de sa reprise :
+        // sa première trame est le début du pré-roulage (0,5 s avant).
+        assert_eq!(stt.enonces.len(), 2, "{:?}", stt.enonces);
+        for ((source, premiere), reprise) in stt.enonces.iter().zip([1.0, 5.6]) {
+            assert_eq!(*source, kobi_stt::Source::Eux);
+            let premiere = premiere.expect("audio envoyé après l'énoncé neuf");
+            assert!(
+                (premiere - (reprise - 0.5)).abs() < 0.15,
+                "première trame {premiere} pour une reprise à {reprise}"
+            );
+        }
+    }
 
     #[test]
     fn reglage_ecrit_et_relu() {
