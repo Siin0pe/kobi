@@ -152,6 +152,7 @@ pub const PANNEAUX: &[&str] = &[
     "son-ordi",
     "modele",
     "claude",
+    "cle-api",
     "demarrage",
     "langue",
     "animations",
@@ -654,6 +655,10 @@ mod tests {
         let ouvrir = trouver("app.open").unwrap();
         assert!(ouvrir
             .verifier(&json!({"section": "reglages", "panneau": "son-ordi"}))
+            .is_ok());
+        // KOB-104 : le panneau « Clé API ».
+        assert!(ouvrir
+            .verifier(&json!({"section": "reglages", "panneau": "cle-api"}))
             .is_ok());
         let e = ouvrir
             .verifier(&json!({"section": "reglages", "panneau": "inexistant"}))
