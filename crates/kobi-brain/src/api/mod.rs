@@ -767,7 +767,7 @@ async fn compacter(partage: &Partage, historique: &[Value]) -> Resume {
             // reproduirait à chaque essai : reprise à neuf.
             let definitive = match &e {
                 BrainError::Api(m) => m.starts_with("HTTP 4") && !m.starts_with("HTTP 429"),
-                BrainError::Unavailable(m) => !m.starts_with("API injoignable"),
+                BrainError::Unavailable(_) => true,
                 _ => false,
             };
             tracing::warn!(erreur = %e, definitive, "pas de résumé");
@@ -872,7 +872,9 @@ async fn requete_corps(
             Err(e) if essai < config.tentatives && (e.is_connect() || e.is_timeout()) => {
                 Duration::from_secs(1 << essai)
             }
-            Err(e) => return Err(BrainError::Unavailable(format!("API injoignable : {e}"))),
+            // Réseau : erreur d'API, pas de session cassée ; la conversation
+            // reste pour la question mise en attente (KOB-361).
+            Err(e) => return Err(BrainError::Api(format!("API injoignable : {e}"))),
         };
         tracing::warn!(essai, ?attente, "API Anthropic : nouvel essai");
         tokio::select! {
