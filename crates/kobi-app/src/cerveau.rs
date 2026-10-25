@@ -1314,13 +1314,21 @@ async fn suivre_notes(
     sortie: &Sortie,
     cartes: &Cartes,
 ) -> Result<kobi_brain::TurnSummary, BrainError> {
+    let mut proposee = false;
     while let Some(evenement) = turn.next().await {
         match evenement {
             BrainEvent::Done(fin) => return Ok(fin),
             BrainEvent::Error(e) => return Err(e),
-            BrainEvent::Permission(demande) if propositions => {
+            // Une proposition par bloc : les suivantes attendraient chacune
+            // leur carte et retiendraient les notes.
+            BrainEvent::Permission(demande) if propositions && !proposee => {
+                proposee = true;
                 tracing::info!(outil = %demande.request.tool_name, "notes en continu : action proposée");
                 carte(0, demande, sortie, cartes);
+            }
+            BrainEvent::Permission(demande) if propositions => {
+                tracing::info!(outil = %demande.request.tool_name, "refusé sans carte : une proposition par bloc");
+                demande.deny("Une seule proposition par bloc de notes.");
             }
             BrainEvent::Permission(demande) => {
                 tracing::info!(outil = %demande.request.tool_name, "refusé sans carte : prise de notes");
@@ -2358,20 +2366,27 @@ mod tests {
     /// elle est refusée sans carte.
     #[tokio::test]
     async fn notes_en_continu_une_proposition_ouvre_une_carte() {
-        for propositions in [true, false] {
+        // (continu, oui au clic) ; hors continu, pas de carte.
+        for (propositions, oui) in [(true, true), (true, false), (false, false)] {
             let (s, recus) = sortie();
             let journal = Arc::new(Mutex::new(None));
             let j = journal.clone();
+            let proposition = |titre: &str| {
+                Step::Permission(PermissionRequest {
+                    tool_name: "mcp__linear__save_issue".into(),
+                    input: serde_json::json!({"title": titre}),
+                    tool_use_id: None,
+                })
+            };
+            let script = vec![
+                proposition("Envoyer le devis"),
+                // Une seule proposition par bloc : la seconde est refusée.
+                proposition("Relancer le client"),
+                Step::Text("- Devis à envoyer".into()),
+            ];
             let fabrique: Fabrique = Arc::new(move |role| {
                 let b = match role {
-                    Role::Notes => FakeBrain::new().then(vec![
-                        Step::Permission(PermissionRequest {
-                            tool_name: "mcp__linear__save_issue".into(),
-                            input: serde_json::json!({"title": "Envoyer le devis"}),
-                            tool_use_id: None,
-                        }),
-                        Step::Text("- Devis à envoyer".into()),
-                    ]),
+                    Role::Notes => FakeBrain::new().then(script.clone()),
                     _ => FakeBrain::new(),
                 };
                 if role == Role::Notes {
@@ -2385,15 +2400,26 @@ mod tests {
                 notes: String::new(),
                 propositions,
             });
+            let decisions = || journal.lock().unwrap().as_ref().unwrap().decisions();
             if propositions {
                 attendre(&recus, |r| matches!(r, Retour::Carte { tour: 0, .. })).await;
+                // Le tour attend la décision : ni notes, ni action.
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                assert!(!recu(&recus, |r| matches!(r, Retour::Notes(_))));
+                assert!(decisions().is_empty());
                 let carte = recus
                     .lock()
                     .unwrap()
                     .iter()
                     .find_map(|(_, r)| match r {
-                        Retour::Carte { carte, outil, .. } => {
+                        Retour::Carte {
+                            carte,
+                            outil,
+                            entree,
+                            ..
+                        } => {
                             assert_eq!(outil, "mcp__linear__save_issue");
+                            assert_eq!(entree["title"], "Envoyer le devis");
                             Some(*carte)
                         }
                         _ => None,
@@ -2401,17 +2427,21 @@ mod tests {
                     .unwrap();
                 c.demander(Demande::Decision {
                     carte,
-                    accepte: true,
+                    accepte: oui,
                 });
             }
             attendre(&recus, |r| matches!(r, Retour::Notes(Ok(_)))).await;
-            assert_eq!(
-                recu(&recus, |r| matches!(r, Retour::Carte { .. })),
-                propositions
-            );
-            let decisions = journal.lock().unwrap().as_ref().unwrap().decisions();
-            assert_eq!(decisions.len(), 1);
-            assert_eq!(decisions[0].1 == kobi_brain::Decision::Allow, propositions);
+            let cartes = recus
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(_, r)| matches!(r, Retour::Carte { .. }))
+                .count();
+            assert_eq!(cartes, usize::from(propositions));
+            let decisions = decisions();
+            assert_eq!(decisions.len(), 2, "{decisions:?}");
+            assert_eq!(decisions[0].1 == kobi_brain::Decision::Allow, oui);
+            assert_ne!(decisions[1].1, kobi_brain::Decision::Allow);
         }
     }
 

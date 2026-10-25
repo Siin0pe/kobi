@@ -207,10 +207,11 @@ pub(crate) fn texte_compte_rendu(report: &ReportRequest) -> String {
 /// action. Elle passe par la carte de Kobi : rien n'est fait sans un oui.
 pub const CONSIGNE_PROPOSITIONS: &str = "\
 Mode continu (expérimental) : si cette nouvelle transcription décide ou demande clairement \
-une action concrète que tes outils savent faire (créer un ticket, une page, un rappel…) et \
-qu'elle n'est pas déjà faite ni proposée dans les notes, propose-la en appelant l'outil qui \
-l'écrit, une seule par bloc. Kobi montre une carte à l'utilisateur et n'agit qu'après son « oui » ; \
-refusée, n'insiste pas. N'invente aucune action, ne pilote pas la réunion. Puis renvoie les notes.";
+une action concrète qu'un outil des serveurs MCP de l'utilisateur sait faire (créer un ticket, \
+une page…) et qu'elle n'est pas déjà faite ni proposée dans les notes, propose-la en appelant \
+cet outil, une seule par bloc. Kobi montre une carte à l'utilisateur et n'agit qu'après son « oui » ; \
+refusée, n'insiste pas. Tes propres outils `mcp__kobi__*` restent interdits ici. N'invente aucune \
+action, ne pilote pas la réunion. Puis renvoie les notes.";
 
 /// Outils internes de Claude Code qui ne sont pas des sources à montrer.
 const INTERNAL_TOOLS: &[&str] = &["ToolSearch", "TodoWrite"];
