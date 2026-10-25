@@ -855,9 +855,21 @@ async fn texte_final_ne_remonte_pas_au_tour_precedent() {
         json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":0}}),
         json!({"type":"message_stop"}),
     ]);
+    // Le tour qui échoue contient du texte de Claude avant l'appel : c'est
+    // lui qu'un `texte_final` trop gourmand reprendrait.
+    let texte_et_appel = flux(&[
+        json!({"type":"message_start","message":{"id":"msg","usage":{"input_tokens":5}}}),
+        json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
+        json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Je publie."}}),
+        json!({"type":"content_block_stop","index":0}),
+        json!({"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"publier","input":{}}}),
+        json!({"type":"content_block_stop","index":1}),
+        json!({"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":5}}),
+        json!({"type":"message_stop"}),
+    ]);
     let serveur = Serveur::lancer(vec![
         texte("Ancienne", " réponse."),
-        appel("toolu_1", "publier", "{}"),
+        texte_et_appel,
         erreur(400, "invalid_request_error", "échec"),
         sans_texte,
     ])
