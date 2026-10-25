@@ -1493,19 +1493,16 @@ impl<R: Runtime> Chef<R> {
         // Dit avant la fin mais transcrit après (charge, file d'attente) :
         // gardé jusqu'au compte rendu. Ce qui est dit après (le « annule »
         // d'« Annuler »…) ne l'est pas (KOB-198).
-        // Jugé sur le début, comme la pause : la dernière phrase avant
-        // l'arrêt finit après lui (marge de fin du moteur, KOB-309).
-        if r.fin_demandee && r.arret.is_none_or(|arret| commence_a > arret) {
+        if r.fin_demandee && r.arret.is_none_or(|arret| dit_a > arret) {
             return;
         }
         // Dit pendant une fin ensuite annulée, transcrit après l'annulation :
-        // pas plus dans les notes que si la fin avait tenu (KOB-309).
-        // Seulement s'il y tient tout entier : une phrase commencée juste
-        // avant le clic, ou dite pendant que « reprends » se transcrivait,
-        // est gardée.
+        // pas plus dans les notes que si la fin avait tenu (KOB-309). Jugé
+        // sur la fin du segment, comme pendant la fin (KOB-198) : avec
+        // Nemotron, son début peut précéder le silence d'avant la parole.
         if r.fins_annulees
             .iter()
-            .any(|&(arret, annule)| commence_a > arret && dit_a <= annule)
+            .any(|&(arret, annule)| dit_a > arret && dit_a <= annule)
         {
             return;
         }
@@ -3364,6 +3361,12 @@ mod tests {
             c.commande(Intention::Reprendre);
             assert!(!c.fin_annulable());
             c.recevoir(Message::Segment(dit("Pendant la fin."), pendant));
+            // Début placé bien avant (silence d'avant la parole, Nemotron) :
+            // jugé sur la fin, écarté aussi.
+            let mut long = dit("Reprends.");
+            long.start = 0.0;
+            long.end = 30.0;
+            c.recevoir(Message::Segment(long, pendant));
             c.recevoir(Message::Segment(dit("Avant l'arrêt."), avant));
             c.recevoir(Message::Segment(
                 dit("Après la reprise."),
@@ -3371,6 +3374,7 @@ mod tests {
             ));
             let notes = &c.reunion.as_ref().unwrap().a_noter;
             assert!(!notes.contains("Pendant la fin."), "{notes}");
+            assert!(!notes.contains("Reprends."), "{notes}");
             assert!(notes.contains("Avant l'arrêt."), "{notes}");
             assert!(notes.contains("Après la reprise."), "{notes}");
         });
