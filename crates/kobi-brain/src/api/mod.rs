@@ -333,6 +333,22 @@ async fn boucle(
         };
         ajouter(&mut usage, &reponse.usage);
         let n = |cle: &str| reponse.usage.get(cle).and_then(Value::as_u64).unwrap_or(0);
+        // Coût suivi requête par requête (KOB-103) : le cache doit servir dès
+        // la deuxième question.
+        let (entree, cache_lu, cache_ecrit, sortie) = (
+            n("input_tokens"),
+            n("cache_read_input_tokens"),
+            n("cache_creation_input_tokens"),
+            n("output_tokens"),
+        );
+        tracing::info!(
+            modele = %config.modele,
+            entree,
+            cache_lu,
+            cache_ecrit,
+            sortie,
+            "API Messages : tokens de la requête"
+        );
         partage.contexte.store(
             n("input_tokens") + n("cache_read_input_tokens") + n("cache_creation_input_tokens"),
             Ordering::SeqCst,
