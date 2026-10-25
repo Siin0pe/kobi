@@ -567,6 +567,15 @@ mod tests {
         );
     }
 
+    /// KOB-371 : un échec d'envoi qui n'est pas réseau garde son détail.
+    #[test]
+    fn envoi_impossible_garde_son_detail() {
+        let m = "envoi impossible : error sending request for url (https://api.anthropic.com/v1/messages) : invalid peer certificate: UnknownIssuer";
+        assert_eq!(classer(&BrainError::Api(m.into())), Panne::Autre);
+        let (_, explication) = pour_l_utilisateur(&format!("erreur d'API : {m}"));
+        assert!(explication.contains("UnknownIssuer"), "{explication}");
+    }
+
     /// KOB-210 : l'Oups en anglais, mêmes variables qu'en français.
     #[test]
     fn oups_en_anglais() {

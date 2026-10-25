@@ -1359,6 +1359,41 @@ async fn api_injoignable_erreur_d_api() {
     }
 }
 
+/// KOB-371 : un échec TLS n'est pas une absence de réseau : « envoi
+/// impossible », avec sa cause ; une connexion refusée reste « API
+/// injoignable ».
+#[tokio::test]
+async fn echec_tls_n_est_pas_hors_ligne() {
+    // Un serveur en HTTP clair, appelé en HTTPS : la poignée de main échoue.
+    let serveur = Serveur::lancer(vec![]).await;
+    let url = serveur.url.replace("http://", "https://");
+    let mut brain = ApiBrain::new(ApiConfig {
+        cle: CLE.into(),
+        url,
+        tentatives: 0,
+        ..Default::default()
+    })
+    .unwrap();
+    match fin(&tous(brain.ask(question("un"))).await) {
+        Err(BrainError::Api(m)) => {
+            assert!(m.starts_with("envoi impossible : "), "{m}");
+            assert!(m.len() > "envoi impossible : ".len() + 20, "{m}");
+        }
+        autre => panic!("{autre:?}"),
+    }
+    let mut refuse = ApiBrain::new(ApiConfig {
+        cle: CLE.into(),
+        url: "http://127.0.0.1:1".into(),
+        tentatives: 0,
+        ..Default::default()
+    })
+    .unwrap();
+    match fin(&tous(refuse.ask(question("un"))).await) {
+        Err(BrainError::Api(m)) => assert!(m.starts_with("API injoignable : "), "{m}"),
+        autre => panic!("{autre:?}"),
+    }
+}
+
 /// Réponse de compaction : le bloc arrive entier dans `content_block_start`.
 fn resume(texte: &str) -> Script {
     flux(&[

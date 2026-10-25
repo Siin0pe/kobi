@@ -965,6 +965,7 @@
   "coque.pannes.patience": "On it, I'll let you know as soon as it's ready.",
   "coque.pannes.relance": "Claude stopped, I'm restarting it and asking your question again.",
   "coque.pannes.continue": "Listening and recording carry on.",
+  "coque.pannes.attenteAbandonnee": "Still unable to reach Claude after {minutes} minutes: I'm dropping this question, ask it again later.",
   "coque.pannes.jusquA": " until {heure}",
   "coque.pannes.limiteTitre": "Usage limit reached",
   "coque.pannes.limiteMessage": "Your Claude account has reached its usage limit{jusquA}. Try again later, or upgrade your plan. {suite}",

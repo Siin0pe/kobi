@@ -962,6 +962,7 @@
   "coque.pannes.patience": "Je m'en occupe, je te préviens dès que c'est prêt.",
   "coque.pannes.relance": "Claude s'est arrêté, je le relance et je repose ta question.",
   "coque.pannes.continue": "L'écoute et l'enregistrement continuent.",
+  "coque.pannes.attenteAbandonnee": "Toujours impossible de joindre Claude après {minutes} minutes : j'abandonne cette question, repose-la plus tard.",
   "coque.pannes.jusquA": " jusqu'à {heure}",
   "coque.pannes.limiteTitre": "Limite d'usage atteinte",
   "coque.pannes.limiteMessage": "Ton compte Claude a atteint sa limite d'usage{jusquA}. Réessaie plus tard, ou passe à une offre supérieure. {suite}",

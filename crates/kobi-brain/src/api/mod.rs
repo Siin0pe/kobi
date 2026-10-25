@@ -869,12 +869,25 @@ async fn requete_corps(
                     .unwrap_or(Duration::from_secs(1 << essai))
             }
             Ok(r) => return Err(erreur_http(r).await),
-            Err(e) if essai < config.tentatives && (e.is_connect() || e.is_timeout()) => {
+            Err(e) if essai < config.tentatives && hors_ligne(&e) => {
                 Duration::from_secs(1 << essai)
             }
             // Réseau : erreur d'API, pas de session cassée ; la conversation
             // reste pour la question mise en attente (KOB-361).
-            Err(e) => return Err(BrainError::Api(format!("API injoignable : {e}"))),
+            Err(e) if hors_ligne(&e) => {
+                return Err(BrainError::Api(format!(
+                    "API injoignable : {}",
+                    avec_causes(&e)
+                )))
+            }
+            // TLS, proxy, redirection… : pas une absence de réseau, le détail
+            // dit la cause (KOB-371).
+            Err(e) => {
+                return Err(BrainError::Api(format!(
+                    "envoi impossible : {}",
+                    avec_causes(&e)
+                )))
+            }
         };
         tracing::warn!(essai, ?attente, "API Anthropic : nouvel essai");
         tokio::select! {
@@ -884,6 +897,60 @@ async fn requete_corps(
         essai += 1;
         continue 'essais;
     }
+}
+
+/// L'envoi a échoué faute de réseau : délai dépassé, ou connexion refusée,
+/// coupée, réseau ou hôte injoignable, nom introuvable (KOB-371). Un échec
+/// TLS (certificat refusé par un proxy d'entreprise) passe aussi par la
+/// connexion pour reqwest, mais n'en est pas un.
+fn hors_ligne(e: &reqwest::Error) -> bool {
+    use std::io::ErrorKind::*;
+    if e.is_timeout() {
+        return true;
+    }
+    if !e.is_connect() {
+        return false;
+    }
+    let mut cause: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(e);
+    while let Some(c) = cause {
+        if let Some(io) = c.downcast_ref::<std::io::Error>() {
+            if matches!(
+                io.kind(),
+                ConnectionRefused
+                    | ConnectionReset
+                    | ConnectionAborted
+                    | NotConnected
+                    | TimedOut
+                    | HostUnreachable
+                    | NetworkUnreachable
+                    | NetworkDown
+                    | AddrNotAvailable
+            ) {
+                return true;
+            }
+        }
+        let texte = c.to_string().to_lowercase();
+        if texte.contains("dns error") || texte.contains("failed to lookup address") {
+            return true;
+        }
+        cause = c.source();
+    }
+    false
+}
+
+/// Une erreur et ses causes, sur une ligne (le `Display` de reqwest les tait).
+fn avec_causes(e: &dyn std::error::Error) -> String {
+    let mut texte = e.to_string();
+    let mut cause = e.source();
+    while let Some(c) = cause {
+        let c_texte = c.to_string();
+        if !texte.contains(&c_texte) {
+            texte.push_str(" : ");
+            texte.push_str(&c_texte);
+        }
+        cause = c.source();
+    }
+    texte
 }
 
 /// Erreurs du flux réessayées si elles arrivent avant tout texte montré.
