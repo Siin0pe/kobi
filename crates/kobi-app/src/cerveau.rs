@@ -2018,7 +2018,14 @@ mod tests {
         c.demander(question(1, "un"));
         attendre(&recus, |r| matches!(r, Retour::EnAttente { tour: 1, .. })).await;
         c.demander(question(2, "deux"));
-        attendre(&recus, |r| matches!(r, Retour::Erreur { tour: 2, .. })).await;
+        // Un essai toutes les `REESSAI_RESEAU` : plus de 5 min de temps
+        // virtuel, au-delà des 60 s de `attendre`.
+        for _ in 0..2400 {
+            if recu(&recus, |r| matches!(r, Retour::Erreur { tour: 2, .. })) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
         let erreurs: Vec<_> = recus
             .lock()
             .unwrap()
