@@ -445,6 +445,23 @@ async fn outil_en_echec_rendu_en_erreur() {
     assert!(resultat(2)["content"].as_str().unwrap().contains("chemin"));
 }
 
+/// KOB-331 : sans outil sur carte, les notes en continu ne demandent pas
+/// de proposition d'action à Claude.
+#[tokio::test]
+async fn notes_sans_consigne_de_proposition() {
+    let serveur = Serveur::lancer(vec![texte("- notes", ".")]).await;
+    let mut brain = cerveau(&serveur, Arc::new(SansOutils));
+    let notes = NotesUpdate {
+        transcript: "[00:10 moi] il faut envoyer le devis".into(),
+        notes: String::new(),
+        propositions: true,
+    };
+    fin(&tous(brain.update_notes(notes)).await).unwrap();
+    let corps = serveur.recues()[0].corps["messages"].to_string();
+    assert!(corps.contains("envoyer le devis"), "{corps}");
+    assert!(!corps.contains("Mode continu"), "{corps}");
+}
+
 /// La conversation de la réunion ne fait que s'allonger : la deuxième
 /// requête reprend la première mot pour mot (cache et réflexion valides).
 #[tokio::test]

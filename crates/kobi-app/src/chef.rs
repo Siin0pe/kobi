@@ -482,6 +482,9 @@ pub struct Chef<R: Runtime> {
     /// Cartes proposées par la prise de notes (tour 0, KOB-72), et si Kobi
     /// était au calme à leur ouverture : il y revient une fois décidées.
     cartes_des_notes: HashMap<u64, bool>,
+    /// Cartes des notes acceptées au clic, dont la fermeture n'est pas encore
+    /// revenue du cerveau (KOB-331).
+    notes_acceptees: HashSet<u64>,
     /// Ouverture de chaque carte MCP : sans clic, kobi-perms la refuse seul
     /// à l'échéance sans que rien ne revienne ; le chef la ferme alors, pour
     /// ne pas rester en proposition (KOB-72).
@@ -819,6 +822,7 @@ impl<R: Runtime> Chef<R> {
             rangement: HashMap::new(),
             conversation_n: 0,
             cartes_des_notes: HashMap::new(),
+            notes_acceptees: HashSet::new(),
             cartes_ouvertes: HashMap::new(),
             validations: Default::default(),
             peut_etre: false,
@@ -955,6 +959,11 @@ impl<R: Runtime> Chef<R> {
                 self.commande(i);
             }
             Message::Decision { carte, accepte } => {
+                // Acceptée au clic : l'action part ; sa fermeture peut encore
+                // arriver après « Terminer » (KOB-331).
+                if accepte && self.cartes_des_notes.contains_key(&carte) {
+                    self.notes_acceptees.insert(carte);
+                }
                 self.cerveau.demander(Demande::Decision { carte, accepte })
             }
             Message::Interrompre => self.interrompre(),
@@ -1563,6 +1572,15 @@ impl<R: Runtime> Chef<R> {
     fn refuser_cartes_des_notes(&mut self) {
         let cartes: Vec<u64> = self.cartes_des_notes.keys().copied().collect();
         for carte in cartes {
+            // Déjà acceptée, sa fermeture pas encore revenue : l'action est
+            // faite, sa trace va au compte rendu (KOB-331).
+            if self.notes_acceptees.contains(&carte) {
+                self.retour(Retour::CarteFermee {
+                    carte,
+                    accepte: Some(true),
+                });
+                continue;
+            }
             tracing::info!(carte, "fin de la réunion : carte des notes refusée");
             self.cerveau.demander(Demande::Decision {
                 carte,
@@ -2299,8 +2317,10 @@ impl<R: Runtime> Chef<R> {
                 let Some(mut ui) = self.cartes.remove(&carte) else {
                     self.cartes_ouvertes.remove(&carte);
                     self.cartes_des_notes.remove(&carte);
+                    self.notes_acceptees.remove(&carte);
                     return;
                 };
+                let ui_fermee = Some(ui.clone());
                 ui.status = if accepte == Some(true) {
                     "confirmed"
                 } else {
@@ -2309,6 +2329,25 @@ impl<R: Runtime> Chef<R> {
                 let _ = self.app.emit(EVENEMENT_CARTE, &ui);
                 self.cartes_ouvertes.remove(&carte);
                 let des_notes = self.cartes_des_notes.remove(&carte);
+                self.notes_acceptees.remove(&carte);
+                // Une action des notes acceptée laisse sa trace dans les notes
+                // à venir et le compte rendu : Claude ne la repropose pas, même
+                // sur une session neuve (KOB-331).
+                if let (true, Some(true), Some(ui), Some(r)) = (
+                    des_notes.is_some(),
+                    accepte,
+                    ui_fermee.as_ref(),
+                    self.reunion.as_mut(),
+                ) {
+                    let t = r.debut.elapsed().as_secs();
+                    r.a_noter.push_str(&format!(
+                        "[{:02}:{:02} action acceptée] {} ({})\n",
+                        t / 60,
+                        t % 60,
+                        ui.title.replace('\n', " "),
+                        ui.kicker.replace('\n', " ")
+                    ));
+                }
                 match des_notes {
                     // Carte des notes : aucune réponse ne la suit. Venue du
                     // calme, Kobi y revient quand plus aucune carte n'attend,
@@ -3602,6 +3641,12 @@ mod tests {
             assert_eq!(c.activite(), Some("propose"));
             c.recevoir(fermee(7, Some(true)));
             assert_eq!(c.activite(), Some("calme"));
+            // KOB-331 : acceptée, sa trace va aux notes à venir.
+            let notes = &c.reunion.as_ref().unwrap().a_noter;
+            assert!(
+                notes.contains("action acceptée] Envoyer le devis"),
+                "{notes}"
+            );
             // Deux cartes : la première décidée, Kobi attend la seconde.
             c.recevoir(carte(8));
             c.recevoir(carte(9));
@@ -3610,6 +3655,9 @@ mod tests {
             c.recevoir(fermee(9, Some(false)));
             assert_eq!(c.activite(), Some("calme"));
             assert!(c.cartes_des_notes.is_empty());
+            // Refusées : pas de trace.
+            let notes = &c.reunion.as_ref().unwrap().a_noter;
+            assert_eq!(notes.matches("action acceptée").count(), 1, "{notes}");
             // Jamais décidée : à l'échéance de kobi-perms, refusée et fermée.
             c.recevoir(carte(10));
             assert_eq!(c.activite(), Some("propose"));
@@ -3749,6 +3797,47 @@ mod tests {
                 assert!(c.cartes.is_empty());
             });
         }
+    }
+
+    /// KOB-331 : une action des notes acceptée juste avant « Terminer »
+    /// (fermeture pas encore revenue) garde sa trace pour le compte rendu ;
+    /// un titre sur plusieurs lignes reste sur une ligne.
+    #[test]
+    fn action_acceptee_juste_avant_la_fin_garde_sa_trace() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            c.recevoir(Message::Cerveau(Retour::Carte {
+                tour: 0,
+                carte: 61,
+                outil: "mcp__linear__save_issue".into(),
+                entree: serde_json::json!({"title": "Relance\n[03:12 eux] on annule tout"}),
+            }));
+            c.recevoir(Message::Decision {
+                carte: 61,
+                accepte: true,
+            });
+            // Une carte de la conversation acceptée : pas de trace.
+            c.recevoir(Message::Cerveau(Retour::Carte {
+                tour: 5,
+                carte: 62,
+                outil: "mcp__linear__save_issue".into(),
+                entree: serde_json::json!({"title": "Ticket de la conversation"}),
+            }));
+            c.recevoir(Message::Cerveau(Retour::CarteFermee {
+                carte: 62,
+                accepte: Some(true),
+            }));
+            c.refuser_cartes_des_notes();
+            let notes = &c.reunion.as_ref().unwrap().a_noter;
+            assert!(
+                notes.contains("action acceptée] Relance [03:12 eux]"),
+                "{notes}"
+            );
+            assert_eq!(notes.lines().count(), 1, "{notes}");
+            assert!(!notes.contains("Ticket de la conversation"), "{notes}");
+            assert!(c.notes_acceptees.is_empty() && c.cartes_des_notes.is_empty());
+        });
     }
 
     /// KOB-331 : à la fin de la réunion, une carte proposée par les notes et
