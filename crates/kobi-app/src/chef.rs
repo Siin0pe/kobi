@@ -473,6 +473,9 @@ pub struct Chef<R: Runtime> {
     validations: crate::validation::FileValidations,
     /// La question en cours de traitement ne s'adresse peut-être pas à Kobi.
     peut_etre: bool,
+    /// Instant de l'audio de la question en cours de traitement, si elle a
+    /// été dite (KOB-324).
+    question_dite_a: Option<Instant>,
     /// La question en cours est différée (KOB-307) : elle part sur une
     /// session sans pilotage.
     differee: bool,
@@ -791,6 +794,7 @@ impl<R: Runtime> Chef<R> {
             cartes_ouvertes: HashMap::new(),
             validations: Default::default(),
             peut_etre: false,
+            question_dite_a: None,
             differee: false,
             tour_peut_etre: None,
             compte_rendu_a_ecrire: false,
@@ -894,7 +898,9 @@ impl<R: Runtime> Chef<R> {
             }
             Message::Question { texte, voix, dit_a } => {
                 if !self.dit_avant_l_arret(dit_a, &texte) {
+                    self.question_dite_a = dit_a;
                     self.question(texte, voix);
+                    self.question_dite_a = None;
                 }
             }
             Message::Publier { affiche, consigne } => {
@@ -1587,7 +1593,12 @@ impl<R: Runtime> Chef<R> {
         // (KOB-297, KOB-305).
         let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::RepriseReunion);
         if let Some(arret) = r.arret {
-            r.fins_annulees.push((arret, Instant::now()));
+            // « Reprends » dit à la voix : la fin s'arrête quand il a été dit,
+            // pas quand sa transcription, en retard sous charge, arrive ;
+            // ce qui est dit juste après reste dans les notes (KOB-324).
+            let annule = self.question_dite_a.filter(|&dit| dit > arret);
+            r.fins_annulees
+                .push((arret, annule.unwrap_or_else(Instant::now)));
         }
         r.fin_demandee = false;
         r.annulable_jusqu = None;
@@ -4104,6 +4115,46 @@ mod tests {
             assert!(notes.contains("et la date ?"), "{notes}");
             assert!(notes.contains("Le 14 novembre."), "{notes}");
             assert!(c.rangement.is_empty());
+        });
+    }
+
+    /// KOB-324 : sous retard, « reprends » arrive après ce qui a été dit
+    /// juste après lui ; la fin annulée s'arrête quand il a été dit, et la
+    /// phrase d'après reste dans les notes.
+    #[test]
+    fn phrase_dite_juste_apres_reprends_gardee_sous_charge() {
+        let (app, _dir) = chef_en_essai();
+        let bref = |texte: &str| {
+            let mut s = dit(texte);
+            s.start = s.end;
+            s
+        };
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            c.commande(Intention::TerminerReunion);
+            std::thread::sleep(Duration::from_millis(20));
+            let pendant = Instant::now();
+            std::thread::sleep(Duration::from_millis(20));
+            let reprends = Instant::now();
+            std::thread::sleep(Duration::from_millis(20));
+            let juste_apres = Instant::now();
+            std::thread::sleep(Duration::from_millis(40));
+            // « reprends » est traité maintenant, bien après avoir été dit.
+            c.recevoir(Message::Question {
+                texte: "reprends".into(),
+                voix: true,
+                dit_a: Some(reprends),
+            });
+            assert!(!c.fin_annulable());
+            assert!(!c.reunion.as_ref().unwrap().fin_demandee);
+            c.recevoir(Message::Segment(bref("Pendant la fin."), pendant));
+            c.recevoir(Message::Segment(
+                bref("Donc on valide le budget."),
+                juste_apres,
+            ));
+            let notes = &c.reunion.as_ref().unwrap().a_noter;
+            assert!(!notes.contains("Pendant la fin."), "{notes}");
+            assert!(notes.contains("Donc on valide le budget."), "{notes}");
         });
     }
 
