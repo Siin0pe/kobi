@@ -185,6 +185,11 @@ export class RecIndicator {
     this.root.classList.add('is-ended');
     this.textesFin(info);
     this.notes.hidden = true;
+    // Plus rien n'est enregistré : ni micro perdu, ni retard, ni son de
+    // l'ordinateur sur l'étiquette d'une réunion finie (KOB-291).
+    this.micro.hidden = true;
+    this.retard.hidden = true;
+    this.eux.hidden = true;
     this.root.hidden = false;
     if (undoable) {
       // « Réunion terminée · Annuler » (KOB-245) : l'étiquette attend la fin
