@@ -2301,6 +2301,7 @@ impl<R: Runtime> Chef<R> {
                     self.cartes_des_notes.remove(&carte);
                     return;
                 };
+                let ui_fermee = Some(ui.clone());
                 ui.status = if accepte == Some(true) {
                     "confirmed"
                 } else {
@@ -2309,6 +2310,24 @@ impl<R: Runtime> Chef<R> {
                 let _ = self.app.emit(EVENEMENT_CARTE, &ui);
                 self.cartes_ouvertes.remove(&carte);
                 let des_notes = self.cartes_des_notes.remove(&carte);
+                // Une action des notes acceptée laisse sa trace dans les notes
+                // à venir et le compte rendu : Claude ne la repropose pas, même
+                // sur une session neuve (KOB-331).
+                if let (true, Some(true), Some(ui), Some(r)) = (
+                    des_notes.is_some(),
+                    accepte,
+                    ui_fermee.as_ref(),
+                    self.reunion.as_mut(),
+                ) {
+                    let t = r.debut.elapsed().as_secs();
+                    r.a_noter.push_str(&format!(
+                        "[{:02}:{:02} action acceptée] {} ({})\n",
+                        t / 60,
+                        t % 60,
+                        ui.title,
+                        ui.kicker
+                    ));
+                }
                 match des_notes {
                     // Carte des notes : aucune réponse ne la suit. Venue du
                     // calme, Kobi y revient quand plus aucune carte n'attend,
@@ -3602,6 +3621,12 @@ mod tests {
             assert_eq!(c.activite(), Some("propose"));
             c.recevoir(fermee(7, Some(true)));
             assert_eq!(c.activite(), Some("calme"));
+            // KOB-331 : acceptée, sa trace va aux notes à venir.
+            let notes = &c.reunion.as_ref().unwrap().a_noter;
+            assert!(
+                notes.contains("action acceptée] Envoyer le devis"),
+                "{notes}"
+            );
             // Deux cartes : la première décidée, Kobi attend la seconde.
             c.recevoir(carte(8));
             c.recevoir(carte(9));
@@ -3610,6 +3635,9 @@ mod tests {
             c.recevoir(fermee(9, Some(false)));
             assert_eq!(c.activite(), Some("calme"));
             assert!(c.cartes_des_notes.is_empty());
+            // Refusées : pas de trace.
+            let notes = &c.reunion.as_ref().unwrap().a_noter;
+            assert_eq!(notes.matches("action acceptée").count(), 1, "{notes}");
             // Jamais décidée : à l'échéance de kobi-perms, refusée et fermée.
             c.recevoir(carte(10));
             assert_eq!(c.activite(), Some("propose"));

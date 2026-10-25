@@ -273,7 +273,13 @@ impl Brain for ApiBrain {
     }
 
     fn update_notes(&mut self, update: NotesUpdate) -> Turn {
-        self.submit(texte_notes(&update))
+        // Pas d'outil sur carte ici (KOB-320) : une proposition d'action
+        // (notes en continu, KOB-72) ne serait qu'une consigne sur des outils
+        // absents (KOB-331).
+        self.submit(texte_notes(&NotesUpdate {
+            propositions: false,
+            ..update
+        }))
     }
 
     fn final_report(&mut self, report: ReportRequest) -> Turn {
