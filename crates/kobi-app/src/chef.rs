@@ -443,6 +443,10 @@ pub struct Chef<R: Runtime> {
     annoncees: std::collections::BTreeSet<u64>,
     /// Tours abandonnés : ce qui en revient encore est ignoré.
     interrompus: HashSet<u64>,
+    /// Tours posés pendant la fin de la réunion ou sa pause : ni la question
+    /// ni la réponse n'entrent dans les notes, même si la réponse arrive
+    /// après « Annuler » ou la reprise (KOB-325).
+    hors_notes: HashSet<u64>,
     /// Cartes de validation ouvertes (KOB-156), dans l'ordre de l'écran :
     /// « oui » ou « non » répond à celle affichée (KOB-218).
     validations: crate::validation::FileValidations,
@@ -735,6 +739,7 @@ impl<R: Runtime> Chef<R> {
             taches: BTreeMap::new(),
             annoncees: Default::default(),
             interrompus: HashSet::new(),
+            hors_notes: HashSet::new(),
             validations: Default::default(),
             peut_etre: false,
             differee: false,
@@ -1030,7 +1035,7 @@ impl<R: Runtime> Chef<R> {
         self.dernier = self.tour;
         self.calme_a = None;
         self.transition(&[Evenement::QuestionEnvoyee]);
-        self.ranger(Qui::Moi, &texte, voix);
+        self.ranger(self.tour, Qui::Moi, &texte, voix);
         self.voix = Some((self.tour, crate::voix::Reponse::new(&self.app)));
         let notes = self
             .reunion
@@ -1090,9 +1095,24 @@ impl<R: Runtime> Chef<R> {
     }
 
     /// Range un tour de la conversation du quotidien. En réunion, la
-    /// question et la réponse de Kobi vont aux notes et au compte rendu.
-    fn ranger(&mut self, qui: Qui, texte: &str, voix: bool) {
-        if let Some(r) = &mut self.reunion {
+    /// question et la réponse de Kobi vont aux notes et au compte rendu ;
+    /// posées pendant la fin ou la pause, elles vont au journal des
+    /// conversations, comme hors réunion (KOB-325).
+    fn ranger(&mut self, tour: u64, qui: Qui, texte: &str, voix: bool) {
+        let hors_notes = match qui {
+            Qui::Moi => {
+                let hors = self
+                    .reunion
+                    .as_ref()
+                    .is_some_and(|r| r.fin_demandee || r.pause);
+                if hors {
+                    self.hors_notes.insert(tour);
+                }
+                hors
+            }
+            Qui::Kobi => self.hors_notes.remove(&tour),
+        };
+        if let Some(r) = self.reunion.as_mut().filter(|_| !hors_notes) {
             let t = r.debut.elapsed().as_secs();
             let qui = match qui {
                 Qui::Moi => "interpellation de Kobi",
@@ -1638,8 +1658,8 @@ impl<R: Runtime> Chef<R> {
         let _ = self.app.emit(EVENEMENT_REPONSE, &reponse);
         crate::voix::dire(&self.app, &reponse);
         tracing::info!(tour = self.tour, "réponse locale");
-        self.ranger(Qui::Moi, &question, voix);
-        self.ranger(Qui::Kobi, &reponse, false);
+        self.ranger(self.tour, Qui::Moi, &question, voix);
+        self.ranger(self.tour, Qui::Kobi, &reponse, false);
         self.ajouter(Bulle {
             tour: self.tour,
             question,
@@ -1691,6 +1711,7 @@ impl<R: Runtime> Chef<R> {
         let question = question.clone();
         self.taches.remove(&tour);
         self.interrompus.insert(tour);
+        self.hors_notes.remove(&tour);
         self.cerveau.demander(Demande::Annuler { tour });
         if let Some(b) = self.bulle(tour) {
             b.statut = "fini";
@@ -1712,6 +1733,7 @@ impl<R: Runtime> Chef<R> {
                 b.statut = "fini";
             }
             self.interrompus.insert(tour);
+            self.hors_notes.remove(&tour);
             self.cerveau.demander(Demande::Interrompre { tour });
             self.emettre_historique();
         }
@@ -1827,6 +1849,7 @@ impl<R: Runtime> Chef<R> {
             {
                 tracing::info!(tour, "phrase qui ne s'adressait pas à Kobi : silence");
                 self.tour_peut_etre = None;
+                self.hors_notes.remove(&tour);
                 if let Some(r) = &mut self.reunion {
                     r.latences.abandon(tour);
                 }
@@ -1869,7 +1892,7 @@ impl<R: Runtime> Chef<R> {
                     self.tour_peut_etre = None;
                 }
                 self.retenir(tour, &texte);
-                self.ranger(Qui::Kobi, &texte, false);
+                self.ranger(tour, Qui::Kobi, &texte, false);
                 if let Some(b) = self.bulle(tour) {
                     b.reponse.clone_from(&texte);
                     b.statut = "fini";
@@ -1924,7 +1947,7 @@ impl<R: Runtime> Chef<R> {
                 }
                 self.taches.remove(&tour);
                 self.retenir(tour, &texte);
-                self.ranger(Qui::Kobi, &texte, false);
+                self.ranger(tour, Qui::Kobi, &texte, false);
                 let question = self.bulle(tour).map(|b| {
                     b.reponse.clone_from(&texte);
                     b.statut = "fini";
@@ -1938,6 +1961,7 @@ impl<R: Runtime> Chef<R> {
             }
             Retour::Erreur { tour, message } => {
                 tracing::warn!(tour, %message, "tour en erreur");
+                self.hors_notes.remove(&tour);
                 if let Some(r) = &mut self.reunion {
                     r.latences.abandon(tour);
                 }
@@ -3577,6 +3601,64 @@ mod tests {
             c.questions_differees.push("note l'action budget".into());
             c.commande(Intention::DemarrerReunion);
             assert!(c.questions_differees.is_empty());
+        });
+    }
+
+    /// KOB-325 : un échange avec Kobi pendant la fin de la réunion, ou sa
+    /// pause, n'entre pas dans les notes, même si la réponse arrive après
+    /// « Annuler » ou la reprise ; pendant la réunion, si.
+    #[test]
+    fn echange_pendant_la_fin_ou_la_pause_hors_des_notes() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            c.question("quel est le code du wifi ?".into(), true);
+            let tour = c.tour;
+            c.recevoir(Message::Cerveau(Retour::Fin {
+                tour,
+                texte: "C'est noté au tableau.".into(),
+            }));
+            // Pendant la fin, la réponse arrive après « Annuler ».
+            c.commande(Intention::TerminerReunion);
+            c.question("et mon mot de passe ?".into(), true);
+            let pendant_la_fin = c.tour;
+            c.commande(Intention::Reprendre);
+            assert!(!c.fin_annulable());
+            c.recevoir(Message::Cerveau(Retour::Fin {
+                tour: pendant_la_fin,
+                texte: "Secret absolu.".into(),
+            }));
+            // Pendant la pause, la réponse arrive après la reprise.
+            c.commande(Intention::Pause);
+            c.question("et le budget perso ?".into(), true);
+            let pendant_la_pause = c.tour;
+            c.commande(Intention::Reprendre);
+            c.recevoir(Message::Cerveau(Retour::Resultat {
+                tour: pendant_la_pause,
+                texte: "Confidentiel.".into(),
+            }));
+            let notes = &c.reunion.as_ref().unwrap().a_noter;
+            assert!(notes.contains("quel est le code du wifi ?"), "{notes}");
+            assert!(notes.contains("C'est noté au tableau."), "{notes}");
+            for texte in [
+                "et mon mot de passe ?",
+                "Secret absolu.",
+                "et le budget perso ?",
+                "Confidentiel.",
+            ] {
+                assert!(!notes.contains(texte), "{texte} : {notes}");
+            }
+            assert!(c.hors_notes.is_empty());
+            // Sans réponse (erreur), le tour ne reste pas retenu.
+            c.commande(Intention::Pause);
+            c.question("et sinon ?".into(), true);
+            let tour = c.tour;
+            assert!(c.hors_notes.contains(&tour));
+            c.recevoir(Message::Cerveau(Retour::Erreur {
+                tour,
+                message: "réseau".into(),
+            }));
+            assert!(c.hors_notes.is_empty());
         });
     }
 
