@@ -275,6 +275,59 @@ fn assembler(
         args.push("--add-dir".into());
         args.push(dossier.display().to_string());
     }
+    if let Some(mcp) = mcp {
+        args.push("--mcp-config".into());
+        args.push(mcp.fichier.display().to_string());
+    }
+    args.push("--append-system-prompt".into());
+    args.push(prompt(
+        systeme,
+        codebases,
+        memoire,
+        mcp.is_some(),
+        mcp.and_then(|m| m.prompt.as_deref()),
+        acces,
+    ));
+    args
+}
+
+/// Prompt système d'une session du backend clé API (KOB-103) : le même
+/// que celui d'une session Claude Code du même rôle. `mcp_kobi` : le MCP de
+/// Kobi est connecté (sinon le prompt ne parle pas de ses outils).
+pub fn prompt_de_session(
+    systeme: &str,
+    codebases: &[PathBuf],
+    memoire: Option<&Memoire>,
+    role: crate::cerveau::Role,
+    mcp_kobi: bool,
+    prompt_utilisateur: Option<&str>,
+) -> String {
+    let acces = match role {
+        crate::cerveau::Role::Conversation => Acces::Pilote,
+        crate::cerveau::Role::Notes => Acces::Notes,
+        crate::cerveau::Role::Differee => Acces::Lecture,
+    };
+    prompt(
+        systeme,
+        codebases,
+        memoire,
+        mcp_kobi,
+        prompt_utilisateur,
+        acces,
+    )
+}
+
+/// Prompt ajouté au prompt système : règles de lecture, conversation,
+/// mémoire, MCP de Kobi, serveurs de l'utilisateur, carte des dépôts.
+fn prompt(
+    systeme: &str,
+    codebases: &[PathBuf],
+    memoire: Option<&Memoire>,
+    mcp_kobi: bool,
+    prompt_utilisateur: Option<&str>,
+    acces: Acces,
+) -> String {
+    let pilote = acces == Acces::Pilote;
     // En liste blanche, un prompt à part : celui de la lecture parle de Bash
     // et des cartes, celui du MCP de Kobi du pilotage de la réunion.
     let lecture = if acces == Acces::Lecture {
@@ -292,9 +345,7 @@ fn assembler(
         prompt.push_str("\n\n");
         prompt.push_str(&m.prompt());
     }
-    if let Some(mcp) = mcp {
-        args.push("--mcp-config".into());
-        args.push(mcp.fichier.display().to_string());
+    if mcp_kobi {
         if acces != Acces::Lecture {
             prompt.push_str("\n\n");
             prompt.push_str(crate::mcp_config::PROMPT_MCP_KOBI);
@@ -303,17 +354,17 @@ fn assembler(
             prompt.push_str("\n\n");
             prompt.push_str(crate::mcp_config::PROMPT_PILOTAGE_REUNION);
         }
-        if let Some(utilisateur) = mcp.prompt.as_ref().filter(|_| acces != Acces::Lecture) {
-            prompt.push_str("\n\n");
-            prompt.push_str(utilisateur);
-        }
     }
-    args.push("--append-system-prompt".into());
+    // Serveurs de l'utilisateur, même si le MCP de Kobi manque (backend clé
+    // API) ; côté Claude Code, ils n'existent qu'avec lui.
+    if let Some(utilisateur) = prompt_utilisateur.filter(|_| acces != Acces::Lecture) {
+        prompt.push_str("\n\n");
+        prompt.push_str(utilisateur);
+    }
     // Carte des dépôts (KOB-153) : bloc à part, en fin de prompt.
     prompt.push_str("\n\n");
     prompt.push_str(&crate::depots::carte(codebases));
-    args.push(prompt);
-    args
+    prompt
 }
 
 /// Dossier de travail de la session : le premier dossier de code déclaré

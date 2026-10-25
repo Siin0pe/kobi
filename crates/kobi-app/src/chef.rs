@@ -1966,6 +1966,17 @@ impl<R: Runtime> Chef<R> {
             return;
         }
         match retour {
+            // Remise à zéro de la conversation du backend clé API (KOB-316) :
+            // une ligne dans l'activité.
+            Retour::Avis { texte } => {
+                tracing::info!(%texte, "avis du cerveau");
+                let texte = if texte == kobi_brain::api::AVIS_REPRISE {
+                    kobi_i18n::tr("coque.activite.repriseConversation", &[])
+                } else {
+                    texte
+                };
+                crate::activite::noter(&self.app, crate::activite::Genre::Reunion, &texte, None);
+            }
             // Phrase peut-être pas pour Kobi : rien ne s'affiche avant la fin.
             Retour::Texte { tour, .. } if self.tour_peut_etre == Some(tour) => {}
             Retour::Fin { tour, texte }
@@ -2699,19 +2710,43 @@ pub fn fabrique_claude(
         let (programme, memoire) = (programme.clone(), memoire());
         let reglages = reglages.clone();
         Box::pin(async move {
-            let programme = programme
-                .get_or_init(|| async {
-                    match kobi_brain::claude_code::detect::detect(Duration::from_secs(30)).await {
-                        kobi_brain::Detection::Ready { install, .. } => Ok(install.program),
-                        kobi_brain::Detection::NotLoggedIn(_) => Err(
-                            "Claude Code n'est pas connecté : lancer « claude auth login »".into(),
-                        ),
-                        autre => Err(format!("Claude Code indisponible : {autre:?}")),
-                    }
-                })
-                .await
-                .clone()
-                .map_err(kobi_brain::BrainError::Unavailable)?;
+            // Réglage `brain` relu à chaque session (KOB-103) : Claude Code,
+            // ou le backend clé API.
+            let reglage = crate::cerveau_api::reglage();
+            let programme = match reglage {
+                kobi_session::config::Brain::Api => Err(String::new()),
+                _ => programme
+                    .get_or_init(|| async {
+                        match kobi_brain::claude_code::detect::detect(Duration::from_secs(30)).await
+                        {
+                            kobi_brain::Detection::Ready { install, .. } => Ok(install.program),
+                            kobi_brain::Detection::NotLoggedIn(_) => Err(
+                                "Claude Code n'est pas connecté : lancer « claude auth login »"
+                                    .into(),
+                            ),
+                            autre => Err(format!("Claude Code indisponible : {autre:?}")),
+                        }
+                    })
+                    .await
+                    .clone(),
+            };
+            // La clé n'est lue dans le trousseau que si elle peut servir.
+            let cle = crate::cerveau_api::cle_utile(reglage, programme.is_ok());
+            match crate::cerveau_api::choisir(reglage, programme.is_ok(), cle.is_some()) {
+                crate::cerveau_api::Choix::Api => {
+                    let cle = cle.unwrap_or_default();
+                    let session = crate::cerveau_api::ouvrir(role, cle, codebases, memoire).await?;
+                    tracing::info!(?role, "session clé API ouverte");
+                    return Ok(Box::new(session) as Box<dyn kobi_brain::Brain + Send>);
+                }
+                crate::cerveau_api::Choix::SansCle => {
+                    return Err(kobi_brain::BrainError::Unavailable(
+                        "aucune clé API enregistrée : Réglages, panneau « Clé API »".into(),
+                    ))
+                }
+                crate::cerveau_api::Choix::ClaudeCode => {}
+            }
+            let programme = programme.map_err(kobi_brain::BrainError::Unavailable)?;
             let cwd = crate::lecture::dossier_de_travail(&codebases);
             if let Some(cwd) = &cwd {
                 let _ = std::fs::create_dir_all(cwd);

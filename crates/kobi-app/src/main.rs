@@ -10,6 +10,7 @@ mod app;
 mod bienvenue;
 mod carnet;
 mod cerveau;
+mod cerveau_api;
 mod chef;
 mod cle_api;
 mod commandes;
@@ -33,8 +34,6 @@ mod menu;
 mod menu_souris;
 mod mot_cle;
 mod notes;
-// Branché avec les permissions du backend clé API (KOB-103).
-#[allow(dead_code, reason = "branché avec KOB-103")]
 mod outils_api;
 mod pannes;
 mod permissions;

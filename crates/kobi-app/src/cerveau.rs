@@ -198,6 +198,11 @@ pub enum Retour {
     Relance {
         tour: u64,
     },
+    /// Remarque du cerveau pour le journal d'activité (backend clé API :
+    /// « Conversation trop longue, reprise à neuf. », KOB-316).
+    Avis {
+        texte: String,
+    },
     /// Le tour tarde : « je cherche encore ».
     Patience {
         tour: u64,
@@ -1064,6 +1069,7 @@ async fn suivre(
                         return Suivi::Detache(turn, texte, vigie);
                     }
                     Some(BrainEvent::Done(fin)) => {
+                        avis(&fin, sortie);
                         let texte = if fin.text.is_empty() { texte } else { fin.text };
                         sortie(Retour::Fin { tour, texte: texte.clone() });
                         return Suivi::Fini(Some(texte));
@@ -1170,6 +1176,7 @@ async fn finir(
             }
             BrainEvent::OutilRendu { .. } | BrainEvent::Vie => {}
             BrainEvent::Done(fin) => {
+                avis(&fin, sortie);
                 let texte = if fin.text.is_empty() { texte } else { fin.text };
                 sortie(Retour::Resultat { tour, texte });
                 return true;
@@ -1304,6 +1311,16 @@ fn sans_cloture(texte: &str) -> &str {
     }
 }
 
+/// Remarque du cerveau rendue avec la fin du tour : vers le journal
+/// d'activité.
+fn avis(fin: &kobi_brain::TurnSummary, sortie: &Sortie) {
+    if let Some(texte) = &fin.avis {
+        sortie(Retour::Avis {
+            texte: texte.clone(),
+        });
+    }
+}
+
 /// Suit un tour de notes ou de compte rendu jusqu'à sa fin. En continu
 /// (KOB-72), une action que Claude propose ouvre une carte, comme dans la
 /// conversation ; sinon elle est refusée sans carte : Kobi n'agit pas
@@ -1317,7 +1334,10 @@ async fn suivre_notes(
     let mut proposee = false;
     while let Some(evenement) = turn.next().await {
         match evenement {
-            BrainEvent::Done(fin) => return Ok(fin),
+            BrainEvent::Done(fin) => {
+                avis(&fin, sortie);
+                return Ok(fin);
+            }
             BrainEvent::Error(e) => return Err(e),
             // Une proposition par bloc : les suivantes attendraient chacune
             // leur carte et retiendraient les notes.
