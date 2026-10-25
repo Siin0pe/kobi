@@ -2210,17 +2210,28 @@ impl<R: Runtime> Chef<R> {
                 let ui = carte_ui(carte, &outil, &entree);
                 self.cartes.insert(carte, ui.clone());
                 self.cartes_ouvertes.insert(carte, Instant::now());
-                self.calme_a = None;
-                // Proposée par les notes en continu (KOB-72) : Kobi passe
-                // des notes à la proposition, même depuis le calme.
                 if tour == 0 {
+                    // Proposée par les notes en continu (KOB-72) : depuis le
+                    // calme, Kobi passe des notes à la proposition. Occupé
+                    // ailleurs (réponse, lecture, tâche), il n'en change pas,
+                    // ni son retour au calme (KOB-338) : la carte s'affiche.
+                    // Une autre carte des notes venue du calme attend déjà :
+                    // celle-ci y ramène aussi.
+                    let deja = self.activite() == Some("propose")
+                        && self.cartes_des_notes.values().any(|&calme| calme);
                     let calme = self.activite() == Some("calme");
-                    self.cartes_des_notes.insert(carte, calme);
+                    self.cartes_des_notes.insert(carte, calme || deja);
                     if calme {
-                        self.transition(&[Evenement::NotesCommencent]);
+                        self.calme_a = None;
+                        self.transition(&[
+                            Evenement::NotesCommencent,
+                            Evenement::PermissionDemandee,
+                        ]);
                     }
+                } else {
+                    self.calme_a = None;
+                    self.transition(&[Evenement::PermissionDemandee]);
                 }
-                self.transition(&[Evenement::PermissionDemandee]);
                 let _ = self.app.emit(EVENEMENT_CARTE, &ui);
             }
             Retour::CarteFermee { carte, accepte } => {
@@ -2234,18 +2245,32 @@ impl<R: Runtime> Chef<R> {
                     let _ = self.app.emit(EVENEMENT_CARTE, &ui);
                 }
                 self.cartes_ouvertes.remove(&carte);
-                let depuis_calme = self.cartes_des_notes.remove(&carte).unwrap_or(false);
+                let des_notes = self.cartes_des_notes.remove(&carte);
                 // Une autre carte attend encore : Kobi reste en proposition.
                 if self.cartes.is_empty() {
-                    self.transition(&[if accepte == Some(true) {
-                        Evenement::PermissionAccordee
-                    } else {
-                        Evenement::PermissionRefusee
-                    }]);
-                    // Aucune réponse ne suit une carte des notes : retour au
-                    // calme d'où elle venait.
-                    if depuis_calme && accepte == Some(true) {
-                        self.transition(&[Evenement::ReponseTerminee]);
+                    match des_notes {
+                        // Carte des notes : aucune réponse ne la suit. Venue du
+                        // calme, Kobi y revient, s'il est encore en
+                        // proposition (pas reparti sur une question entre-
+                        // temps) ; venue d'ailleurs, elle n'a rien changé
+                        // (KOB-338).
+                        Some(depuis_calme) => {
+                            if depuis_calme && self.activite() == Some("propose") {
+                                self.transition(&[if accepte == Some(true) {
+                                    Evenement::PermissionAccordee
+                                } else {
+                                    Evenement::PermissionRefusee
+                                }]);
+                                self.transition(&[Evenement::ReponseTerminee]);
+                            }
+                        }
+                        None => {
+                            self.transition(&[if accepte == Some(true) {
+                                Evenement::PermissionAccordee
+                            } else {
+                                Evenement::PermissionRefusee
+                            }]);
+                        }
                     }
                 }
             }
@@ -3519,6 +3544,77 @@ mod tests {
             c.tick();
             assert_eq!(c.activite(), Some("calme"));
             assert!(c.cartes.is_empty() && c.cartes_ouvertes.is_empty());
+        });
+    }
+
+    /// KOB-338 : une carte des notes qui arrive pendant une réponse ou une
+    /// tâche ne change pas ce que fait Kobi, ni après sa décision ; venue du
+    /// calme, puis une question posée entre-temps, la décision ne coupe pas
+    /// la réponse en cours.
+    #[test]
+    fn carte_des_notes_hors_du_calme_ne_bloque_pas_kobi() {
+        let carte = |carte| {
+            Message::Cerveau(Retour::Carte {
+                tour: 0,
+                carte,
+                outil: "mcp__linear__save_issue".into(),
+                entree: serde_json::json!({"title": "Envoyer le devis"}),
+            })
+        };
+        let fermee = |carte| {
+            Message::Cerveau(Retour::CarteFermee {
+                carte,
+                accepte: Some(true),
+            })
+        };
+        let demander = |c: &mut Chef<tauri::test::MockRuntime>, q: &str| {
+            c.recevoir(Message::Interpelle);
+            c.question(q.into(), true);
+            c.tour
+        };
+        // A : Kobi répond.
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            let tour = demander(c, "et le budget ?");
+            c.recevoir(Message::Cerveau(Retour::Texte {
+                tour,
+                texte: "Le budget".into(),
+            }));
+            assert_eq!(c.activite(), Some("repond"));
+            c.recevoir(carte(31));
+            assert_eq!(c.activite(), Some("repond"), "la carte a changé l'activité");
+            c.recevoir(fermee(31));
+            assert_eq!(c.activite(), Some("repond"), "bloqué après le oui");
+        });
+        // B : Kobi est au travail sur une tâche longue.
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            let tache = demander(c, "cherche les tickets");
+            c.recevoir(Message::Cerveau(Retour::Detache {
+                tour: tache,
+                annonce: true,
+            }));
+            assert_eq!(c.activite(), Some("occupe"));
+            c.recevoir(carte(32));
+            c.recevoir(fermee(32));
+            assert_eq!(c.activite(), Some("occupe"), "la tâche ne se voit plus");
+        });
+        // Inverse : la carte arrive au calme, puis une question part.
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            c.recevoir(carte(33));
+            assert_eq!(c.activite(), Some("propose"));
+            demander(c, "et la date ?");
+            assert_eq!(c.activite(), Some("reflechit"));
+            c.recevoir(fermee(33));
+            assert_eq!(
+                c.activite(),
+                Some("reflechit"),
+                "la réponse en cours coupée"
+            );
         });
     }
 
