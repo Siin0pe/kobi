@@ -33,6 +33,8 @@ struct Script {
     statut: u16,
     entetes: Vec<(&'static str, String)>,
     corps: String,
+    /// Pause après le premier événement du flux (flux lent).
+    pause: Option<Duration>,
 }
 
 fn flux(evenements: &[Value]) -> Script {
@@ -48,6 +50,7 @@ fn flux(evenements: &[Value]) -> Script {
         statut: 200,
         entetes: vec![("content-type", "text/event-stream".into())],
         corps,
+        pause: None,
     }
 }
 
@@ -59,6 +62,7 @@ fn erreur(statut: u16, genre: &str, message: &str) -> Script {
             ("retry-after", "0".into()),
         ],
         corps: json!({"type":"error","error":{"type":genre,"message":message}}).to_string(),
+        pause: None,
     }
 }
 
@@ -133,9 +137,22 @@ impl Serveur {
                     tete.push_str(&format!("{k}: {v}\r\n"));
                 }
                 tete.push_str("\r\n");
-                let _ = sock.write_all(tete.as_bytes()).await;
-                let _ = sock.write_all(s.corps.as_bytes()).await;
-                let _ = sock.shutdown().await;
+                // Chaque réponse s'écrit à part : un flux lent ne retient
+                // pas la connexion suivante.
+                tokio::spawn(async move {
+                    let _ = sock.write_all(tete.as_bytes()).await;
+                    let coupe = match s.pause {
+                        Some(_) => s.corps.find("\n\n").map_or(0, |i| i + 2),
+                        None => s.corps.len(),
+                    };
+                    let _ = sock.write_all(&s.corps.as_bytes()[..coupe]).await;
+                    if let Some(pause) = s.pause {
+                        let _ = sock.flush().await;
+                        tokio::time::sleep(pause).await;
+                    }
+                    let _ = sock.write_all(&s.corps.as_bytes()[coupe..]).await;
+                    let _ = sock.shutdown().await;
+                });
             }
         });
         Self { url, recues }
@@ -885,4 +902,34 @@ async fn texte_final_ne_remonte_pas_au_tour_precedent() {
         fin(&tous(brain.ask(question("trois"))).await).unwrap().text,
         ""
     );
+}
+
+/// KOB-314 : un tour lâché pendant le flux (délai, Stop) s'arrête aussitôt :
+/// aucun outil exécuté, conversation inchangée, et la question suivante
+/// n'attend pas la fin du flux abandonné.
+#[tokio::test]
+async fn tour_lache_pendant_le_flux() {
+    let mut lent = appel("toolu_1", "publier", "{}");
+    lent.pause = Some(Duration::from_secs(30));
+    let serveur = Serveur::lancer(vec![lent, texte("Suite", ".")]).await;
+    let outils = Arc::new(OutilsTest::default());
+    let mut brain = cerveau(&serveur, outils.clone());
+    let mut turn = brain.ask(question("publie"));
+    // Premier événement (début du message), puis l'appelant lâche le tour.
+    assert!(matches!(turn.next().await, Some(BrainEvent::Vie)));
+    drop(turn);
+    let debut = std::time::Instant::now();
+    let suivant = loop {
+        match brain.ask(question("autre chose")).wait().await {
+            Err(BrainError::Busy) if debut.elapsed() < Duration::from_secs(10) => {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            autre => break autre,
+        }
+    };
+    assert_eq!(suivant.unwrap().text, "Suite.");
+    assert!(debut.elapsed() < Duration::from_secs(10));
+    assert!(outils.appels.lock().unwrap().is_empty());
+    let r = serveur.recues();
+    assert_eq!(r[1].corps["messages"].as_array().unwrap().len(), 1);
 }
