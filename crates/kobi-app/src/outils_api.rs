@@ -237,6 +237,10 @@ impl Lecteur {
 
     /// Chemin résolu, s'il est dans un dossier permis.
     fn permis(&self, chemin: &str) -> Result<PathBuf, String> {
+        // Sous une base verbatim (`\\?\C:\…`), seul `\` sépare : `a/../x`
+        // y serait un seul nom (KOB-352).
+        #[cfg(windows)]
+        let chemin = &chemin.replace('/', "\\");
         let brut = Path::new(chemin);
         let brut = match (brut.is_absolute(), self.base.as_ref()) {
             (false, Some(base)) => base.join(brut),
@@ -247,12 +251,24 @@ impl Lecteur {
         if self.dossiers.is_empty() {
             return Err(format!("{chemin} : aucun dossier permis"));
         }
-        if chemin_reseau(chemin) || chemin_reseau(&brut.to_string_lossy()) || !prefixe_local(&brut)
-        {
-            return Err(format!(
+        let refus = || {
+            format!(
                 "{chemin} : chemin réseau ou de périphérique refusé (seuls les dossiers permis se lisent : {})",
                 self.liste()
-            ));
+            )
+        };
+        if chemin_reseau(chemin) || chemin_reseau(&brut.to_string_lossy()) {
+            return Err(refus());
+        }
+        // Sous Windows, un `..` du chemin demandé se réduit sur le texte avant
+        // tout lien suivi : le contrôle et `canonicalize` partent du même
+        // chemin réduit, verbatim compris (`absolute` laisse `\\?\` intact),
+        // sans toucher au disque (KOB-352). Ailleurs, `..` est physique des
+        // deux côtés.
+        #[cfg(windows)]
+        let brut = reduire_sur_le_texte(&brut);
+        if !prefixe_local(&brut) || lien_vers_le_reseau(&brut) {
+            return Err(refus());
         }
         let resolu = brut.canonicalize().map_err(|e| format!("{chemin} : {e}"))?;
         if self.dans_les_dossiers(&resolu) {
@@ -860,6 +876,102 @@ fn chemin_reseau(chemin: &str) -> bool {
         b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && b[2] == b'\\'
     });
     !disque_local
+}
+
+/// Un lien du chemin vise-t-il, directement ou par d'autres liens, un chemin
+/// réseau ou de périphérique (KOB-352) ? Sous Windows, `canonicalize` le
+/// suivrait et ouvrirait la connexion SMB. Le chemin est résolu comme le
+/// ferait le système, sans rien suivre : chaque lien est lu (`read_link`) et
+/// **remplacé** par sa cible, et `..` s'applique au chemin déjà résolu
+/// (physique), pas au nom du lien. Plus de [`LIENS_MAX`] liens en tout
+/// (boucle, chaîne sans fin) : refusé.
+fn lien_vers_le_reseau(chemin: &Path) -> bool {
+    use std::collections::VecDeque;
+    use std::path::Component;
+    let mut a_lire: VecDeque<PathBuf> = chemin
+        .components()
+        .map(|c| PathBuf::from(c.as_os_str()))
+        .collect();
+    let mut resolu = PathBuf::new();
+    let mut liens = 0;
+    while let Some(morceau) = a_lire.pop_front() {
+        match morceau.components().next() {
+            Some(Component::CurDir) | None => continue,
+            Some(Component::ParentDir) => {
+                resolu.pop();
+                continue;
+            }
+            Some(Component::Prefix(_) | Component::RootDir) => {
+                resolu.push(&morceau);
+                continue;
+            }
+            Some(Component::Normal(_)) => {}
+        }
+        let candidat = resolu.join(&morceau);
+        let est_un_lien =
+            std::fs::symlink_metadata(&candidat).is_ok_and(|m| m.file_type().is_symlink());
+        if !est_un_lien {
+            resolu = candidat;
+            continue;
+        }
+        liens += 1;
+        if liens > LIENS_MAX {
+            return true;
+        }
+        let Ok(cible) = std::fs::read_link(&candidat) else {
+            return true;
+        };
+        if chemin_reseau(&cible.to_string_lossy())
+            || !prefixe_local(&cible)
+            || racine_sans_disque(&cible)
+        {
+            return true;
+        }
+        // La cible prend la place du lien : absolue, elle repart de sa
+        // racine ; relative, du dossier où est le lien.
+        if cible.is_absolute() {
+            resolu = PathBuf::new();
+        }
+        for composant in cible.components().rev() {
+            a_lire.push_front(PathBuf::from(composant.as_os_str()));
+        }
+    }
+    false
+}
+
+/// `.` et `..` retirés sur le texte, sans remonter au-dessus de la racine ni
+/// du préfixe, sans rien lire sur le disque (KOB-352, Windows).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn reduire_sur_le_texte(chemin: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut reduit = PathBuf::new();
+    for composant in chemin.components() {
+        match composant {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if matches!(reduit.components().next_back(), Some(Component::Normal(_))) {
+                    reduit.pop();
+                }
+            }
+            autre => reduit.push(autre.as_os_str()),
+        }
+    }
+    reduit
+}
+
+/// Liens lus au plus pour un chemin, comme Linux (KOB-352).
+const LIENS_MAX: usize = 40;
+
+/// Sous Windows, une cible de lien qui a une racine sans disque
+/// (`\Device\Mup\…`, `\??\…` déjà vu) : NT la suit telle quelle, vers le
+/// réseau ou un périphérique (KOB-352). Ailleurs, une racine est locale.
+fn racine_sans_disque(cible: &Path) -> bool {
+    cfg!(windows)
+        && cible.has_root()
+        && !matches!(
+            cible.components().next(),
+            Some(std::path::Component::Prefix(_))
+        )
 }
 
 /// Sous Windows, liste blanche : un chemin absolu n'a pour préfixe qu'un

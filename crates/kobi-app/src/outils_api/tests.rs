@@ -128,6 +128,113 @@ fn chemins_reseau_refuses_avant_toute_resolution() {
     }
 }
 
+/// KOB-352 : un lien symbolique local qui vise un chemin réseau, même par
+/// un autre lien ou au milieu du chemin, est refusé sans être suivi ; un lien
+/// local qui reste dans la codebase se lit encore.
+#[cfg(unix)]
+#[test]
+fn lien_vers_un_chemin_reseau_refuse_sans_le_suivre() {
+    use std::os::unix::fs::symlink;
+    let dir = codebase();
+    let racine = dir.path();
+    symlink("//attaquant/partage/x", racine.join("piege")).unwrap();
+    symlink("piege", racine.join("relais")).unwrap();
+    symlink("//attaquant/partage", racine.join("dossier")).unwrap();
+    symlink("README.md", racine.join("lisez-moi")).unwrap();
+    let l = lecteur(&dir);
+    for chemin in ["piege", "relais", "dossier/x"] {
+        let e = l.lire(&json!({ "file_path": chemin })).unwrap_err();
+        assert!(e.contains("chemin réseau"), "{chemin} : {e}");
+        let e = l
+            .chercher(&json!({ "pattern": "x", "path": chemin }))
+            .unwrap_err();
+        assert!(e.contains("chemin réseau"), "{chemin} : {e}");
+    }
+    assert!(l
+        .lire(&json!({ "file_path": "lisez-moi" }))
+        .unwrap()
+        .contains("Kobi"));
+    // `..` dans une cible s'applique au chemin résolu, pas au nom du lien :
+    // `a/x` mène à `sub/evil`, qui vise le réseau.
+    fs::create_dir_all(racine.join("sub/deep")).unwrap();
+    symlink("sub/deep", racine.join("a")).unwrap();
+    symlink("../evil", racine.join("sub/deep/x")).unwrap();
+    symlink("//attaquant/p", racine.join("sub/evil")).unwrap();
+    let e = l.lire(&json!({ "file_path": "a/x" })).unwrap_err();
+    assert!(e.contains("chemin réseau"), "{e}");
+    // Un lien absolu local, dans la codebase : se lit.
+    symlink(racine.join("README.md"), racine.join("absolu")).unwrap();
+    assert!(l
+        .lire(&json!({ "file_path": "absolu" }))
+        .unwrap()
+        .contains("Kobi"));
+    // Une boucle de liens : refusée par le compte des liens, sans tourner
+    // sans fin.
+    symlink("boucle-b", racine.join("boucle-a")).unwrap();
+    symlink("boucle-a", racine.join("boucle-b")).unwrap();
+    let e = l.lire(&json!({ "file_path": "boucle-a" })).unwrap_err();
+    assert!(e.contains("chemin réseau"), "{e}");
+    // `a -> .` répété : un seul passage, borné par le compte des liens.
+    symlink(".", racine.join("ici")).unwrap();
+    let long = vec!["ici"; 30].join("/") + "/README.md";
+    assert!(l
+        .lire(&json!({ "file_path": long }))
+        .unwrap()
+        .contains("Kobi"));
+}
+
+/// KOB-352 : `.` et `..` se retirent sur le texte, sans remonter au-dessus
+/// de la racine, verbatim compris (utilisé sous Windows).
+#[test]
+fn reduction_sur_le_texte() {
+    assert_eq!(
+        reduire_sur_le_texte(Path::new("/base/a/../evil")),
+        Path::new("/base/evil")
+    );
+    assert_eq!(
+        reduire_sur_le_texte(Path::new("/base/./a/./b")),
+        Path::new("/base/a/b")
+    );
+    assert_eq!(reduire_sur_le_texte(Path::new("/../../x")), Path::new("/x"));
+}
+
+/// KOB-352, sous Windows : `a\..\evil` (ou `a/../evil`) se réduit sur le
+/// texte en `evil`, base verbatim comprise
+/// (comme le fait `canonicalize`), dont le lien vise le réseau : refusé ;
+/// `a\x`, dont le `..` de la cible est physique, aussi. La CI windows-latest
+/// peut créer des liens.
+#[cfg(windows)]
+#[test]
+fn lien_vers_un_chemin_reseau_refuse_sous_windows() {
+    // La base est verbatim : la réduction ne doit pas s'y arrêter.
+    assert_eq!(
+        reduire_sur_le_texte(Path::new(r"\\?\C:\base\a\..\.\evil")),
+        Path::new(r"\\?\C:\base\evil")
+    );
+    assert_eq!(
+        reduire_sur_le_texte(Path::new(r"\\?\C:\..\x")),
+        Path::new(r"\\?\C:\x")
+    );
+    use std::os::windows::fs::{symlink_dir, symlink_file};
+    let dir = codebase();
+    let racine = dir.path();
+    fs::create_dir_all(racine.join(r"sub\deep")).unwrap();
+    if symlink_dir(r"sub\deep", racine.join("a")).is_err() {
+        // Pas le droit de créer des liens sur ce poste : rien à vérifier,
+        // sauf en CI, qui doit pouvoir le faire.
+        assert!(std::env::var_os("CI").is_none(), "liens impossibles en CI");
+        return;
+    }
+    symlink_file(r"\\attaquant\p", racine.join("evil")).unwrap();
+    symlink_file(r"..\evil2", racine.join(r"sub\deep\x")).unwrap();
+    symlink_file(r"\\attaquant\q", racine.join(r"sub\evil2")).unwrap();
+    let l = lecteur(&dir);
+    for chemin in [r"a\..\evil", "a/../evil", r"a\x", "evil"] {
+        let e = l.lire(&json!({ "file_path": chemin })).unwrap_err();
+        assert!(e.contains("chemin réseau"), "{chemin} : {e}");
+    }
+}
+
 /// Rien ne se lit hors des dossiers permis : chemin absolu, `..`, lien
 /// symbolique qui sort.
 #[test]
