@@ -2218,7 +2218,11 @@ impl<R: Runtime> Chef<R> {
                     // Une autre carte des notes venue du calme attend déjà :
                     // celle-ci y ramène aussi.
                     let deja = self.activite() == Some("propose")
-                        && self.cartes_des_notes.values().any(|&calme| calme);
+                        && self.cartes_des_notes.values().any(|&calme| calme)
+                        && self
+                            .cartes
+                            .keys()
+                            .all(|k| *k == carte || self.cartes_des_notes.contains_key(k));
                     let calme = self.activite() == Some("calme");
                     self.cartes_des_notes.insert(carte, calme || deja);
                     if calme {
@@ -2246,25 +2250,37 @@ impl<R: Runtime> Chef<R> {
                 }
                 self.cartes_ouvertes.remove(&carte);
                 let des_notes = self.cartes_des_notes.remove(&carte);
-                // Une autre carte attend encore : Kobi reste en proposition.
-                if self.cartes.is_empty() {
-                    match des_notes {
-                        // Carte des notes : aucune réponse ne la suit. Venue du
-                        // calme, Kobi y revient, s'il est encore en
-                        // proposition (pas reparti sur une question entre-
-                        // temps) ; venue d'ailleurs, elle n'a rien changé
-                        // (KOB-338).
-                        Some(depuis_calme) => {
-                            if depuis_calme && self.activite() == Some("propose") {
-                                self.transition(&[if accepte == Some(true) {
-                                    Evenement::PermissionAccordee
-                                } else {
-                                    Evenement::PermissionRefusee
-                                }]);
-                                self.transition(&[Evenement::ReponseTerminee]);
-                            }
+                match des_notes {
+                    // Carte des notes : aucune réponse ne la suit. Venue du
+                    // calme, Kobi y revient quand plus aucune carte n'attend,
+                    // s'il est encore en proposition (pas reparti sur une
+                    // question entre-temps) ; venue d'ailleurs, elle n'a rien
+                    // changé (KOB-338).
+                    Some(depuis_calme) => {
+                        if self.cartes.is_empty()
+                            && depuis_calme
+                            && self.activite() == Some("propose")
+                        {
+                            self.transition(&[if accepte == Some(true) {
+                                Evenement::PermissionAccordee
+                            } else {
+                                Evenement::PermissionRefusee
+                            }]);
+                            self.transition(&[Evenement::ReponseTerminee]);
                         }
-                        None => {
+                    }
+                    // Carte de la conversation : c'est elle qui tient Kobi en
+                    // proposition. Sans autre carte de la conversation, sa
+                    // décision s'applique, même si une carte des notes attend ;
+                    // refusée, Kobi reste en proposition si celle-ci est venue
+                    // du calme (KOB-338).
+                    None => {
+                        let autre_conversation = self
+                            .cartes
+                            .keys()
+                            .any(|k| !self.cartes_des_notes.contains_key(k));
+                        let notes_du_calme = self.cartes_des_notes.values().any(|&calme| calme);
+                        if !autre_conversation && (accepte == Some(true) || !notes_du_calme) {
                             self.transition(&[if accepte == Some(true) {
                                 Evenement::PermissionAccordee
                             } else {
@@ -3600,6 +3616,13 @@ mod tests {
             c.recevoir(carte(32));
             c.recevoir(fermee(32));
             assert_eq!(c.activite(), Some("occupe"), "la tâche ne se voit plus");
+            // Le résultat de la tâche est livré.
+            c.recevoir(Message::Cerveau(Retour::Resultat {
+                tour: tache,
+                texte: "Trois tickets.".into(),
+            }));
+            c.tick();
+            assert!(c.a_livrer.is_empty(), "résultat jamais livré");
         });
         // Inverse : la carte arrive au calme, puis une question part.
         let (app, _dir) = chef_en_essai();
@@ -3616,6 +3639,56 @@ mod tests {
                 "la réponse en cours coupée"
             );
         });
+    }
+
+    /// KOB-338 : une carte de la conversation et une carte des notes ouvertes
+    /// ensemble ; quel que soit l'ordre des décisions, Kobi ne reste pas en
+    /// proposition sans carte, et la réponse à la carte de la conversation
+    /// n'est pas coupée.
+    #[test]
+    fn carte_de_la_conversation_et_carte_des_notes_ensemble() {
+        let carte = |tour, carte| {
+            Message::Cerveau(Retour::Carte {
+                tour,
+                carte,
+                outil: "mcp__linear__save_issue".into(),
+                entree: serde_json::json!({"title": "Envoyer le devis"}),
+            })
+        };
+        let fermee = |carte, oui: bool| {
+            Message::Cerveau(Retour::CarteFermee {
+                carte,
+                accepte: Some(oui),
+            })
+        };
+        for conversation_d_abord in [true, false] {
+            let (app, _dir) = chef_en_essai();
+            avec_chef(&app, |c| {
+                c.commande(Intention::DemarrerReunion);
+                c.recevoir(Message::Interpelle);
+                c.question("crée le ticket".into(), true);
+                let tour = c.tour;
+                c.recevoir(carte(tour, 41));
+                assert_eq!(c.activite(), Some("propose"));
+                c.recevoir(carte(0, 42));
+                if conversation_d_abord {
+                    c.recevoir(fermee(41, true));
+                    assert_eq!(
+                        c.activite(),
+                        Some("reflechit"),
+                        "la carte des notes retient Kobi"
+                    );
+                    c.recevoir(fermee(42, false));
+                    assert_eq!(c.activite(), Some("reflechit"), "réponse coupée");
+                } else {
+                    c.recevoir(fermee(42, true));
+                    assert_eq!(c.activite(), Some("propose"));
+                    c.recevoir(fermee(41, true));
+                    assert_eq!(c.activite(), Some("reflechit"), "resté en proposition");
+                }
+                assert!(c.cartes.is_empty());
+            });
+        }
     }
 
     /// KOB-331 : à la fin de la réunion, une carte proposée par les notes et
