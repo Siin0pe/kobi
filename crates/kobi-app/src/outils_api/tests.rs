@@ -198,6 +198,44 @@ fn grep_cherche_sans_les_dossiers_ignores_ni_les_binaires() {
         .contains("expression invalide"));
 }
 
+/// KOB-345 : une ligne trouvée trop longue (fichier minifié, JSON d'une
+/// ligne) est coupée, sur une frontière de caractère, et la sortie reste
+/// bornée.
+#[test]
+fn grep_coupe_les_lignes_trop_longues() {
+    let dir = tempfile::tempdir().unwrap();
+    let longue = format!("début {} fin", "é".repeat(400_000));
+    for i in 0..5 {
+        fs::write(dir.path().join(format!("min{i}.js")), &longue).unwrap();
+    }
+    let l = lecteur(&dir);
+    let sortie = l.chercher(&json!({ "pattern": "début" })).unwrap();
+    assert!(sortie.len() <= TAILLE_MAX + 200, "{}", sortie.len());
+    assert_eq!(
+        sortie.matches("(ligne coupée)").count(),
+        5,
+        "{}",
+        &sortie[..300]
+    );
+    assert!(!sortie.contains("fin\n"));
+    assert!(!sortie.contains('\u{FFFD}'));
+    // 1500 lignes de 1000 octets : arrêt sur la taille, pas sur le nombre.
+    let dir = tempfile::tempdir().unwrap();
+    let lignes = format!("{}\n", "x".repeat(1000)).repeat(1500);
+    fs::write(dir.path().join("gros.txt"), lignes).unwrap();
+    let sortie = lecteur(&dir).chercher(&json!({ "pattern": "x" })).unwrap();
+    assert!(sortie.contains("résultat trop long"), "{}", sortie.len());
+    // Une ligne courte, ou d'exactement LIGNE_MAX octets, reste entière ;
+    // un caractère de 4 octets n'est jamais coupé.
+    assert_eq!(ligne_bornee("court"), "court");
+    let pile = "x".repeat(LIGNE_MAX);
+    assert_eq!(ligne_bornee(&pile), pile.as_str());
+    let emojis = format!("x{}", "🦀".repeat(LIGNE_MAX));
+    let coupee = ligne_bornee(&emojis);
+    assert!(coupee.ends_with(" … (ligne coupée)"), "{coupee}");
+    assert!(coupee.len() <= LIGNE_MAX + " … (ligne coupée)".len());
+}
+
 #[test]
 fn glob_liste_les_chemins() {
     let dir = codebase();
@@ -865,6 +903,10 @@ fn resultats_bornes() {
     }
     let r = l.chercher(&json!({ "pattern": "cible" })).unwrap();
     assert_eq!(r.lines().count(), RESULTATS_MAX + 1);
+    assert!(
+        r.ends_with(&format!("arrêté à {RESULTATS_MAX} lignes")),
+        "{r}"
+    );
     let r = l.lister(&json!({ "pattern": "f*.txt" })).unwrap();
     assert_eq!(r.lines().count(), RESULTATS_MAX + 1);
 }

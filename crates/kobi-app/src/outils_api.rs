@@ -31,7 +31,7 @@ const LIGNES_LUES: usize = 2000;
 const TAILLE_MAX: usize = 100_000;
 /// Octets parcourus au plus dans un fichier (`Read`).
 const LECTURE_MAX: u64 = 50_000_000;
-/// Caractères gardés au plus d'une ligne (`Read`).
+/// Octets gardés au plus d'une ligne (`Read`, `Grep`).
 const LIGNE_MAX: usize = 2000;
 /// Fichiers plus gros : ignorés par `Grep`.
 const FICHIER_MAX: u64 = 2_000_000;
@@ -386,6 +386,9 @@ impl Lecteur {
         let mut lus = 0;
         let mut trop_de_fichiers = false;
         let mut plein = false;
+        // Taille déjà trouvée : au-delà de `TAILLE_MAX`, la suite serait
+        // coupée de toute façon (KOB-345).
+        let mut deja_trouve = 0;
         for depart in self.departs(entree)? {
             self.parcourir(&depart, &mut parcours, |fichier| {
                 let nom = fichier.file_name().unwrap_or_default().to_string_lossy();
@@ -411,7 +414,16 @@ impl Lecteur {
                 }
                 for (i, ligne) in String::from_utf8_lossy(&octets).lines().enumerate() {
                     if motif.is_match(ligne) {
-                        trouve.push(format!("{}:{}:{ligne}", fichier.display(), i + 1));
+                        let trouvee =
+                            format!("{}:{}:{}", fichier.display(), i + 1, ligne_bornee(ligne));
+                        // Arrêté avant de dépasser : le marqueur d'arrêt reste
+                        // dans ce qui est rendu.
+                        if deja_trouve + trouvee.len() + 1 > TAILLE_MAX - 200 {
+                            plein = true;
+                            return false;
+                        }
+                        deja_trouve += trouvee.len() + 1;
+                        trouve.push(trouvee);
                         if trouve.len() >= RESULTATS_MAX {
                             plein = true;
                             return false;
@@ -424,7 +436,9 @@ impl Lecteur {
                 break;
             }
         }
-        if plein {
+        if plein && trouve.len() < RESULTATS_MAX {
+            trouve.push("… arrêté : résultat trop long, précise le motif ou le dossier".into());
+        } else if plein {
             trouve.push(format!("… arrêté à {RESULTATS_MAX} lignes"));
         } else if trop_de_fichiers {
             trouve.push(format!(
@@ -491,6 +505,20 @@ impl Lecteur {
             couper(trouve.join("\n"))
         })
     }
+}
+
+/// Une ligne coupée à [`LIGNE_MAX`] octets, sur une frontière de caractère,
+/// avec un marqueur : une ligne minifiée ou un JSON d'une ligne ne remplit
+/// pas la mémoire ni le contexte (KOB-345).
+fn ligne_bornee(ligne: &str) -> std::borrow::Cow<'_, str> {
+    if ligne.len() <= LIGNE_MAX {
+        return ligne.into();
+    }
+    let mut fin = LIGNE_MAX;
+    while !ligne.is_char_boundary(fin) {
+        fin -= 1;
+    }
+    format!("{} … (ligne coupée)", &ligne[..fin]).into()
 }
 
 /// État d'un parcours borné (`Grep`, `Glob`).
