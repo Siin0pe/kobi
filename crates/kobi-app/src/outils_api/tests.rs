@@ -225,8 +225,15 @@ fn grep_coupe_les_lignes_trop_longues() {
     fs::write(dir.path().join("gros.txt"), lignes).unwrap();
     let sortie = lecteur(&dir).chercher(&json!({ "pattern": "x" })).unwrap();
     assert!(sortie.contains("résultat trop long"), "{}", sortie.len());
-    // Une ligne courte reste entière.
+    // Une ligne courte, ou d'exactement LIGNE_MAX octets, reste entière ;
+    // un caractère de 4 octets n'est jamais coupé.
     assert_eq!(ligne_bornee("court"), "court");
+    let pile = "x".repeat(LIGNE_MAX);
+    assert_eq!(ligne_bornee(&pile), pile.as_str());
+    let emojis = format!("x{}", "🦀".repeat(LIGNE_MAX));
+    let coupee = ligne_bornee(&emojis);
+    assert!(coupee.ends_with(" … (ligne coupée)"), "{coupee}");
+    assert!(coupee.len() <= LIGNE_MAX + " … (ligne coupée)".len());
 }
 
 #[test]
@@ -896,6 +903,10 @@ fn resultats_bornes() {
     }
     let r = l.chercher(&json!({ "pattern": "cible" })).unwrap();
     assert_eq!(r.lines().count(), RESULTATS_MAX + 1);
+    assert!(
+        r.ends_with(&format!("arrêté à {RESULTATS_MAX} lignes")),
+        "{r}"
+    );
     let r = l.lister(&json!({ "pattern": "f*.txt" })).unwrap();
     assert_eq!(r.lines().count(), RESULTATS_MAX + 1);
 }
