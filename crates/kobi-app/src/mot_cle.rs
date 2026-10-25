@@ -791,6 +791,14 @@ impl Ecouteur {
         }
     }
 
+    /// « Annuler » est fait ou clos (KOB-302) : la fenêtre se ferme, une
+    /// phrase sans le nom n'y compte plus.
+    pub fn fin_annulation(&mut self) {
+        if matches!(self.attente, Attente::Annulation { .. }) {
+            self.attente = Attente::Nom;
+        }
+    }
+
     /// Arrêt de la réunion annulable en cours ([`Ecouteur::annulable`]) ?
     pub fn en_annulation(&self) -> bool {
         matches!(self.attente, Attente::Annulation { .. })
@@ -1287,6 +1295,27 @@ mod tests {
             e.segment("reprends", true, 105.0),
             [Interpeller, Envoyer("reprends".into())]
         );
+    }
+
+    /// KOB-302 : « Annuler » fait (clic) ou clos ; une phrase sans le nom
+    /// avec « continue » ou « annule » ne part plus, le nom oui.
+    #[test]
+    fn fenetre_fermee_avec_l_annulation() {
+        let mut e = Ecouteur::new(false);
+        e.annulable(10.0, 10.0);
+        e.fin_annulation();
+        assert!(!e.en_annulation());
+        assert!(e.segment("bon, on continue", true, 13.0).is_empty());
+        assert!(e.segment("annule", true, 14.0).is_empty());
+        assert_eq!(
+            e.segment("Kobi, quelle heure est-il ?", true, 45.0),
+            [Interpeller, Envoyer("quelle heure est-il ?".into())]
+        );
+        // Hors annulation, rien ne change.
+        let mut e = Ecouteur::default();
+        e.suite(0.0);
+        e.fin_annulation();
+        assert!(e.attend_reponse());
     }
 
     #[test]
