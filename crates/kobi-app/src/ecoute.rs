@@ -49,10 +49,10 @@ const ATTENTE_OUVERTURE: Duration = Duration::from_secs(5);
 const ABANDON_OUVERTURE: Duration = Duration::from_secs(30);
 /// Attente de la fermeture du micro par son fil porteur.
 const ATTENTE_FERMETURE: Duration = Duration::from_secs(2);
-/// Réunion mise en pause sous charge : l'audio reçu mais pas encore
-/// transcrit l'est avant de fermer le micro, au plus pendant ce temps
-/// (KOB-261, comme la piste « eux » à sa fermeture).
-const VIDANGE_FILE: Duration = Duration::from_secs(45);
+/// Réunion mise en pause sous charge : l'audio dit avant la pause mais pas
+/// encore transcrit l'est avant de fermer le micro (KOB-261), tant que la
+/// réunion reste en pause ou se termine, au plus pendant ce temps (KOB-277).
+const VIDANGE_FILE: Duration = Duration::from_secs(600);
 /// Période du bilan de charge dans le journal.
 const BILAN: Duration = Duration::from_secs(300);
 /// Événement du retard de la transcription sur la parole (KOB-250) :
@@ -141,6 +141,9 @@ pub enum Commande {
     /// Met l'écoute en pause (`true`) ou la reprend (`false`), interface de
     /// contrôle (KOB-161).
     Pause(bool),
+    /// La réunion est mise en pause à cet instant : l'audio dit après ne
+    /// sera pas transcrit (KOB-277).
+    PauseReunion(Instant),
     /// Kobi vient de répondre : la conversation attend la suite.
     Suite,
     /// La dernière carte de validation s'est fermée : sa fenêtre aussi, la
@@ -496,6 +499,36 @@ fn recevoir(
     }
 }
 
+/// La vidange de la pause continue-t-elle ? Tant que la réunion reste en
+/// pause ou se termine (le compte rendu attend la fin de la transcription),
+/// ou que seule l'écoute de Kobi est coupée ; pas à la reprise, ni une fois
+/// la session revenue en veille (KOB-277).
+fn vidange_continue(session: &str, ecoute_en_pause: bool) -> bool {
+    match session {
+        "pause" | "fin" => true,
+        "reunion" => ecoute_en_pause,
+        _ => false,
+    }
+}
+
+/// Écarte de `file` les trames dites après `pause` (sur l'horloge du micro
+/// ouvert à `origine`, décalée de `decalage`) ; renvoie leur nombre.
+fn garder_avant(
+    file: &mut std::collections::VecDeque<AudioFrame>,
+    origine: Instant,
+    decalage: f64,
+    pause: Instant,
+) -> usize {
+    let avant = file.len();
+    file.retain(|f| origine + Duration::from_secs_f64(decalage) + f.t <= pause);
+    avant - file.len()
+}
+
+/// Durée (s) de l'audio en file, à 16 kHz.
+fn duree_audio(file: &std::collections::VecDeque<AudioFrame>) -> f64 {
+    file.iter().map(|f| f.samples.len()).sum::<usize>() as f64 / kobi_stt::SAMPLE_RATE as f64
+}
+
 /// Première erreur de périphérique parmi celles d'un flux ; un xrun (trames
 /// perdues) n'arrête pas le micro (KOB-236).
 fn panne_peripherique(erreurs: impl Iterator<Item = kobi_audio::StreamError>) -> Option<String> {
@@ -761,6 +794,9 @@ struct Fil<R: Runtime> {
     micro_perdu: bool,
     /// Ouverture du micro toujours en cours au tour précédent (KOB-285).
     ouverture: Option<Ouverture>,
+    /// Instant de la pause de la réunion, tant que le micro reste ouvert
+    /// (KOB-277).
+    pause_reunion: Option<Instant>,
     /// Décalage (s) des instants du micro ouvert sur l'horloge de l'audio :
     /// un micro rouvert après une panne repart de 0, la session non
     /// (KOB-278).
@@ -793,6 +829,7 @@ impl<R: Runtime> Fil<R> {
             partiel_publie: None,
             micro_perdu: false,
             ouverture: None,
+            pause_reunion: None,
             decalage: 0.0,
             derniere_trame: Instant::now(),
         }
@@ -886,6 +923,7 @@ impl<R: Runtime> Fil<R> {
                 self.origine = Instant::now();
                 self.decalage = 0.0;
                 self.derniere_trame = Instant::now();
+                self.pause_reunion = None;
                 self.entree = Some(entree);
                 tracing::info!(entree = %description, "écoute continue : micro ouvert");
                 if std::mem::take(&mut self.micro_perdu) {
@@ -933,6 +971,17 @@ impl<R: Runtime> Fil<R> {
             // (KOB-261) ; hors réunion, rien n'attend cet audio.
             if self.en_reunion {
                 self.file.extend(reste);
+                // Sous charge, le micro se ferme après la pause : ce qui a
+                // été dit depuis n'est pas transcrit (KOB-277).
+                if let Some(pause) = self.pause_reunion.take() {
+                    let apres = garder_avant(&mut self.file, self.origine, self.decalage, pause);
+                    if apres > 0 {
+                        tracing::info!(
+                            trames = apres,
+                            "écoute continue : audio dit après la pause écarté"
+                        );
+                    }
+                }
                 self.vider();
             }
         }
@@ -956,10 +1005,13 @@ impl<R: Runtime> Fil<R> {
         let transcrites = vidanger(
             &mut file,
             debut + VIDANGE_FILE,
-            |fil: &mut Self| !fil.en_pause && etat(&fil.app).etat == "reunion",
+            |fil: &mut Self| !vidange_continue(etat(&fil.app).etat, fil.en_pause),
             |fil: &mut Self, frame| fil.traiter(frame, false),
             self,
         );
+        // Reprise (ou session close) avant la fin : ce qui reste ne sera pas
+        // transcrit, et l'utilisateur le saura (KOB-277).
+        let perdues = duree_audio(&file);
         let mut conclue = false;
         if let Ok(stt) = self.stt.as_mut() {
             match stt.finish() {
@@ -998,8 +1050,10 @@ impl<R: Runtime> Fil<R> {
         if transcrites < a_vider {
             tracing::warn!(
                 trames = a_vider - transcrites,
+                secondes = perdues as u64,
                 "écoute continue : fin de l'audio non transcrite (délai dépassé ou reprise)"
             );
+            publier(&self.app, Message::TranscriptionIncomplete(perdues));
         }
     }
 
@@ -1070,6 +1124,7 @@ impl<R: Runtime> Fil<R> {
                 self.en_pause = pause;
                 tracing::info!(pause, "écoute continue (contrôle)");
             }
+            Commande::PauseReunion(quand) => self.pause_reunion = Some(quand),
             Commande::Raccourci => {
                 self.note("raccourci clavier");
                 if self.en_pause {
@@ -1137,6 +1192,12 @@ impl<R: Runtime> Fil<R> {
         for frame in arrivees {
             self.veiller(&frame);
             self.file.push_back(frame);
+        }
+        // Réunion mise en pause pendant ce tour : rien de plus en direct, la
+        // boucle ferme le micro et la vidange transcrit ce qui a été dit
+        // avant (KOB-277).
+        if self.en_reunion && etat(&self.app).etat == "pause" {
+            return;
         }
         let Some(frame) = self.file.pop_front() else {
             return;
@@ -1277,7 +1338,11 @@ impl<R: Runtime> Fil<R> {
             // Trop ancienne : la transcription ordinaire s'en chargera.
             v.faite = true;
         }
-        if !v.faite && (pret || (!ouverte && !v.extrait.is_empty())) {
+        // Réunion mise en pause : plus d'extrait anticipé, qui coûte cher
+        // sous charge et retarderait la fermeture du micro (KOB-277).
+        let en_cours = || etat(&self.app).etat == "reunion";
+        if !v.faite && (pret || (!ouverte && !v.extrait.is_empty())) && en_cours() {
+            let v = &mut self.veille;
             v.faite = true;
             let debut = v.debut.unwrap_or_default();
             let texte = self
@@ -2130,6 +2195,45 @@ mod tests {
             calcul.as_secs_f64(),
             calcul.as_secs_f64() / audio
         );
+    }
+
+    /// KOB-277 : la vidange continue tant que la réunion reste en pause ou se
+    /// termine (plus de borne de 45 s), ou que seule l'écoute est coupée ;
+    /// elle s'arrête à la reprise ou en veille.
+    #[test]
+    fn vidange_tant_que_la_pause_dure() {
+        assert!(vidange_continue("pause", false));
+        assert!(vidange_continue("fin", false));
+        assert!(
+            vidange_continue("reunion", true),
+            "écoute coupée, réunion en cours"
+        );
+        assert!(!vidange_continue("reunion", false), "reprise");
+        assert!(!vidange_continue("veille", false));
+        assert!(!vidange_continue("assistant", true));
+        assert!(VIDANGE_FILE >= Duration::from_secs(300));
+    }
+
+    /// KOB-277 : sous charge, le micro se ferme 24 s après la pause ; ce qui
+    /// a été dit depuis est écarté, le reste est gardé et chiffré.
+    #[test]
+    fn audio_dit_apres_la_pause_ecarte() {
+        let origine = Instant::now();
+        let mut file: std::collections::VecDeque<AudioFrame> = (0..400)
+            .map(|i| AudioFrame {
+                source: kobi_audio::Source::Moi,
+                samples: vec![0.0; 1_600],
+                t: Duration::from_millis(100 * i),
+            })
+            .collect();
+        // Pause à 16 s : le micro, rouvert après une panne, a son horloge
+        // décalée de 10 s (KOB-278) ; la pause tombe donc à 6 s de ses
+        // trames.
+        let pause = origine + Duration::from_secs(16);
+        assert_eq!(garder_avant(&mut file, origine, 10.0, pause), 339);
+        assert_eq!(file.len(), 61);
+        assert!(file.back().is_some_and(|f| f.t <= Duration::from_secs(6)));
+        assert!((duree_audio(&file) - 6.1).abs() < 1e-9);
     }
 
     /// KOB-261 : 30 s d'audio en file à la pause sont toutes transcrites,
