@@ -821,3 +821,55 @@ async fn lecture_sans_carte_et_cache_visible() {
     assert_eq!(usage.cache_read_input_tokens, 800);
     assert_eq!(usage.cache_creation_input_tokens, 800);
 }
+
+/// Relecture de KOB-320 : une écriture libre (« faire sans demander ») faite
+/// reste aussi dans la conversation après un échec.
+#[tokio::test]
+async fn ecriture_libre_gardee_apres_un_echec() {
+    let serveur = Serveur::lancer(vec![
+        appel("toolu_1", "publier", "{}"),
+        erreur(400, "invalid_request_error", "échec"),
+        texte("Déjà publié", "."),
+    ])
+    .await;
+    let outils = Arc::new(OutilsTest::default());
+    let mut brain = cerveau(&serveur, outils.clone());
+    let (e, cartes) = avec_cartes(brain.ask(question("publie")), Reponse::Oui).await;
+    assert_eq!(cartes, 0);
+    assert!(fin(&e).is_err());
+    let (e, _) = avec_cartes(brain.ask(question("alors ?")), Reponse::Oui).await;
+    assert!(fin(&e).is_ok());
+    assert_eq!(*outils.appels.lock().unwrap(), ["publier"]);
+    let m = serveur.recues()[2].corps["messages"].clone();
+    assert_eq!(m.as_array().unwrap().len(), 3, "{m}");
+    assert_eq!(m[2]["content"][0]["tool_use_id"], "toolu_1");
+}
+
+/// `texte_final` s'arrête à la question du tour, même fusionnée avec des
+/// résultats gardés : une réponse finale sans texte ne reprend pas celle
+/// d'un tour précédent.
+#[tokio::test]
+async fn texte_final_ne_remonte_pas_au_tour_precedent() {
+    let sans_texte = flux(&[
+        json!({"type":"message_start","message":{"id":"msg","usage":{"input_tokens":5}}}),
+        json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":0}}),
+        json!({"type":"message_stop"}),
+    ]);
+    let serveur = Serveur::lancer(vec![
+        texte("Ancienne", " réponse."),
+        appel("toolu_1", "publier", "{}"),
+        erreur(400, "invalid_request_error", "échec"),
+        sans_texte,
+    ])
+    .await;
+    let mut brain = cerveau(&serveur, Arc::new(OutilsTest::default()));
+    assert_eq!(
+        fin(&tous(brain.ask(question("un"))).await).unwrap().text,
+        "Ancienne réponse."
+    );
+    assert!(fin(&tous(brain.ask(question("deux"))).await).is_err());
+    assert_eq!(
+        fin(&tous(brain.ask(question("trois"))).await).unwrap().text,
+        ""
+    );
+}

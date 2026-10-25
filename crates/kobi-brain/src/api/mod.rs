@@ -332,14 +332,17 @@ async fn boucle(
             });
         }
         let mut resultats = Vec::new();
-        let mut ecriture = false;
+        let mut execute = false;
         for appel in &appels {
-            let (resultat, confirme) = executer(partage, appel, events).await;
-            ecriture |= confirme;
+            let (resultat, lance) = executer(partage, appel, events).await;
+            execute |= lance;
             resultats.push(resultat);
         }
         historique.push(json!({ "role": "user", "content": resultats }));
-        if ecriture {
+        // Un outil lancé (écriture confirmée ou « faire sans demander »,
+        // lecture) reste dans la conversation, même si le tour échoue
+        // ensuite.
+        if execute {
             *garde = Some(historique.len());
         }
     }
@@ -349,8 +352,8 @@ async fn boucle(
     )))
 }
 
-/// Exécute un appel d'outil et rend son bloc `tool_result`, et s'il
-/// s'agissait d'un appel confirmé par une carte puis lancé.
+/// Exécute un appel d'outil et rend son bloc `tool_result`, et si l'outil
+/// a vraiment été lancé.
 async fn executer(
     partage: &Partage,
     appel: &Value,
@@ -368,17 +371,17 @@ async fn executer(
             action: outils.action(&nom, &entree),
         })
         .await;
-    let mut confirme = false;
+    let mut lance = false;
     let resultat = if entree_illisible(appel) {
         Err(json!({ "INVALID_JSON": entree }).to_string())
+    } else if let Err(refus) = autoriser(partage, &id, &nom, &entree, events).await {
+        Err(refus)
+    } else if events.is_closed() {
+        // Tour lâché : plus rien ne s'exécute, même sans carte.
+        Err("Question abandonnée.".into())
     } else {
-        match autoriser(partage, &id, &nom, &entree, events).await {
-            Err(refus) => Err(refus),
-            Ok(carte) => {
-                confirme = carte;
-                outils.appeler(&nom, &entree).await
-            }
-        }
+        lance = true;
+        outils.appeler(&nom, &entree).await
     };
     let _ = events.send(BrainEvent::OutilRendu { id: id.clone() }).await;
     let (contenu, erreur) = match resultat {
@@ -389,22 +392,22 @@ async fn executer(
     if erreur {
         bloc["is_error"] = Value::Bool(true);
     }
-    (bloc, confirme)
+    (bloc, lance)
 }
 
 /// Carte de confirmation avant un outil qui écrit (mêmes règles et même
-/// carte que le backend Claude Code, KOB-320). `Ok(true)` : accepté sur
-/// carte ; `Ok(false)` : libre ; `Err` : le refus, rendu à Claude comme
-/// résultat de l'outil. Un tour lâché pendant la carte vaut refus.
+/// carte que le backend Claude Code, KOB-320). `Err` : le refus, rendu à
+/// Claude comme résultat de l'outil. Un tour lâché pendant la carte vaut
+/// refus.
 async fn autoriser(
     partage: &Partage,
     id: &str,
     nom: &str,
     entree: &Value,
     events: &mpsc::Sender<BrainEvent>,
-) -> Result<bool, String> {
+) -> Result<(), String> {
     match partage.config.outils.autorisation(nom) {
-        Autorisation::Libre => return Ok(false),
+        Autorisation::Libre => return Ok(()),
         Autorisation::Refus => return Err(format!("{nom} n'est pas permis dans cette session.")),
         Autorisation::Carte => {}
     }
@@ -419,7 +422,7 @@ async fn autoriser(
     let delai = partage.config.delai_carte;
     tokio::select! {
         decision = tokio::time::timeout(delai, reponse) => match decision {
-            Ok(Ok(Decision::Allow)) => Ok(true),
+            Ok(Ok(Decision::Allow)) => Ok(()),
             Ok(Ok(Decision::Deny(raison))) => Err(raison),
             Ok(Err(_)) => Err("Demande abandonnée par Kobi.".into()),
             Err(_) => Err(format!(
