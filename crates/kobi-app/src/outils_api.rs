@@ -355,8 +355,9 @@ impl Lecteur {
         // la vérification (KOB-335).
         let (fichier, taille) = self.ouvrir(&chemin)?;
         let mut lecteur = BufReader::new(fichier.take(LECTURE_MAX));
+        let pas_texte = || format!("{} n'est pas un fichier texte", chemin.display());
         if lecteur.fill_buf().map_err(erreur)?.contains(&0) {
-            return Err(format!("{} n'est pas un fichier texte", chemin.display()));
+            return Err(pas_texte());
         }
         let debut = entree["offset"].as_u64().unwrap_or(1).max(1);
         let nombre = entree["limit"].as_u64().unwrap_or(LIGNES_LUES as u64);
@@ -366,18 +367,30 @@ impl Lecteur {
         let mut coupe = false;
         while numero < (debut - 1).saturating_add(nombre) {
             ligne.clear();
-            if lire_ligne(&mut lecteur, &mut ligne).map_err(erreur)? == 0 {
+            let lue = lire_ligne(&mut lecteur, &mut ligne).map_err(erreur)?;
+            if lue.octets == 0 {
                 break;
+            }
+            // Un octet NUL plus loin que le premier tampon : binaire aussi
+            // (KOB-347).
+            if lue.nul {
+                return Err(pas_texte());
             }
             numero += 1;
             if numero < debut {
                 continue;
             }
-            let texte = String::from_utf8_lossy(&ligne);
-            sortie.push_str(&format!(
-                "{numero}\t{}\n",
-                texte.trim_end_matches(['\n', '\r'])
-            ));
+            let texte = if lue.coupee {
+                format!(
+                    "{} … (ligne coupée)",
+                    String::from_utf8_lossy(sans_caractere_entame(&ligne))
+                )
+            } else {
+                String::from_utf8_lossy(&ligne)
+                    .trim_end_matches(['\n', '\r'])
+                    .to_owned()
+            };
+            sortie.push_str(&format!("{numero}\t{texte}\n"));
             if sortie.len() > TAILLE_MAX {
                 coupe = true;
                 break;
@@ -561,26 +574,68 @@ impl Parcours {
 
 /// Lit une ligne dans `ligne`, en n'en gardant que [`LIGNE_MAX`] octets :
 /// une ligne géante (fichier minifié, sans retour à la ligne) ne passe pas
-/// en mémoire. Rend le nombre d'octets parcourus (0 à la fin).
-fn lire_ligne(lecteur: &mut impl std::io::BufRead, ligne: &mut Vec<u8>) -> std::io::Result<usize> {
-    let mut lus = 0;
+/// en mémoire.
+fn lire_ligne(lecteur: &mut impl std::io::BufRead, ligne: &mut Vec<u8>) -> std::io::Result<Lue> {
+    let mut lue = Lue {
+        octets: 0,
+        nul: false,
+        coupee: false,
+    };
     loop {
         let tampon = lecteur.fill_buf()?;
         if tampon.is_empty() {
-            return Ok(lus);
+            return Ok(lue);
         }
         let (fin, trouve) = match tampon.iter().position(|&b| b == b'\n') {
             Some(i) => (i + 1, true),
             None => (tampon.len(), false),
         };
         let place = LIGNE_MAX.saturating_sub(ligne.len());
-        ligne.extend_from_slice(&tampon[..fin.min(place)]);
+        // Toute la ligne, même la partie qui n'est pas gardée.
+        lue.nul |= tampon[..fin].contains(&0);
+        let garde = fin.min(place);
+        // Seul le retour à la ligne peut tomber sans que la ligne soit coupée.
+        lue.coupee |= tampon[garde..fin].iter().any(|b| !b"\r\n".contains(b));
+        ligne.extend_from_slice(&tampon[..garde]);
         lecteur.consume(fin);
-        lus += fin;
-        if trouve {
-            return Ok(lus);
+        lue.octets += fin;
+        // Binaire : inutile de parcourir la suite.
+        if trouve || lue.nul {
+            return Ok(lue);
         }
     }
+}
+
+/// Une ligne lue par [`lire_ligne`].
+struct Lue {
+    /// Octets parcourus (0 à la fin).
+    octets: usize,
+    /// Un octet NUL quelque part dans la ligne.
+    nul: bool,
+    /// Plus de [`LIGNE_MAX`] octets avant le retour à la ligne.
+    coupee: bool,
+}
+
+/// Sans le caractère UTF-8 qu'une coupe aurait laissé incomplet à la fin.
+fn sans_caractere_entame(octets: &[u8]) -> &[u8] {
+    let debut = octets.len().saturating_sub(3);
+    for i in (debut..octets.len()).rev() {
+        // Premier octet d'un caractère.
+        if octets[i] & 0xC0 != 0x80 {
+            let attendu = match octets[i] {
+                0xF0.. => 4,
+                0xE0.. => 3,
+                0xC0.. => 2,
+                _ => 1,
+            };
+            return if octets.len() - i < attendu {
+                &octets[..i]
+            } else {
+                octets
+            };
+        }
+    }
+    octets
 }
 
 fn texte<'a>(entree: &'a Value, cle: &str) -> Result<&'a str, String> {
