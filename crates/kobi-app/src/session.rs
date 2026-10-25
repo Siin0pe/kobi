@@ -252,6 +252,9 @@ pub fn installer<R: Runtime>(builder: Builder<R>) -> Builder<R> {
             crate::depots::lister_depots,
             // Serveurs MCP connectés (KOB-155), Réglages → MCP.
             crate::mcp::mcp_serveurs,
+            crate::cle_api::cle_api_etat,
+            crate::cle_api::cle_api_enregistrer,
+            crate::cle_api::cle_api_supprimer,
             crate::mcp::mcp_ajouter,
             crate::mcp::mcp_supprimer,
             crate::mcp::mcp_regler,
