@@ -50,7 +50,10 @@ fn fake_engine_report_is_written_and_readable() {
     let row = &report.rows[0];
     assert_eq!((row.engine.as_str(), row.meeting.as_str()), ("fake", "fr"));
     assert_eq!(row.threads, Some(kobi_bench::protocol::DEFAULT_THREADS));
-    assert!(!root.join(".bench.lock").exists(), "verrou libéré");
+    assert!(
+        kobi_bench::protocol::is_free(&root.join(".bench.lock")),
+        "verrou libéré"
+    );
     assert_eq!(row.metrics.wer, 0.0);
     assert!(row.metrics.delays.as_ref().unwrap().first_word.is_some());
 
@@ -90,7 +93,8 @@ fn interruption_libere_le_verrou() {
         .spawn()
         .unwrap();
     let start = Instant::now();
-    while !lock.join("owner").exists() {
+    let owner = kobi_bench::protocol::owner_path(&lock);
+    while !owner.exists() {
         assert!(
             start.elapsed() < Duration::from_secs(20),
             "verrou jamais pris"
@@ -106,6 +110,10 @@ fn interruption_libere_le_verrou() {
     assert!(kill.success());
     let status = child.wait().unwrap();
     assert_eq!(status.code(), Some(130), "{status:?}");
-    assert!(!lock.exists(), "verrou libéré après Ctrl-C");
+    assert!(
+        kobi_bench::protocol::is_free(&lock),
+        "verrou libéré après Ctrl-C"
+    );
+    assert!(!owner.exists(), "détenteur effacé après Ctrl-C");
     std::fs::remove_dir_all(&root).ok();
 }
