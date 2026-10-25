@@ -409,6 +409,10 @@ struct EnCours {
     /// Demandes sans titre exploitable (« — ») : Kobi réessaie avec plus de
     /// parole, au plus [`TITRE_ESSAIS`] fois.
     titre_essais: u8,
+    /// Mots de [`debut_parole`](Self::debut_parole) à la dernière demande :
+    /// la suivante attend [`TITRE_MOTS`] mots de plus, pas la même parole
+    /// (KOB-359).
+    titre_mots: usize,
     /// `notes.mode = end` (KOB-71) : ni bloc de notes ni titre pendant la
     /// réunion ; le titre est demandé avec le compte rendu.
     a_la_fin: bool,
@@ -1466,6 +1470,7 @@ impl<R: Runtime> Chef<R> {
             debut_parole: String::new(),
             titre_demande: false,
             titre_essais: 0,
+            titre_mots: 0,
             a_la_fin: mode == kobi_session::config::NotesMode::End,
             continu: mode == kobi_session::config::NotesMode::Continuous,
             bloc_en_echec: false,
@@ -1878,7 +1883,9 @@ impl<R: Runtime> Chef<R> {
             return;
         }
         r.a_noter.push_str(&ligne);
-        if !r.titre_demande && r.debut_parole.len() < TITRE_PAROLE_MAX {
+        // Gardée jusqu'au titre, même pendant une demande : un nouvel essai
+        // a ainsi la parole dite entre-temps (KOB-359).
+        if r.titre.is_none() && r.debut_parole.len() < TITRE_PAROLE_MAX {
             r.debut_parole.push_str(&ligne);
         }
         self.pour_conversation.push_str(&ligne);
@@ -2839,8 +2846,11 @@ impl<R: Runtime> Chef<R> {
             let pret = (depuis >= TITRE_APRES && mots >= seuil)
                 || mots >= 3 * seuil
                 || (depuis >= 2 * TITRE_APRES && mots >= TITRE_MOTS_MIN);
-            if pret && r.titre_essais < TITRE_ESSAIS && r.titre_auto {
+            // Après un refus, pas de nouvel essai sur la même parole (KOB-359).
+            let nouvelle_parole = r.titre_essais == 0 || mots >= r.titre_mots + TITRE_MOTS;
+            if pret && nouvelle_parole && r.titre_essais < TITRE_ESSAIS && r.titre_auto {
                 r.titre_demande = true;
+                r.titre_mots = mots;
                 tracing::info!(mots, s = depuis.as_secs(), "titre de la réunion demandé");
                 self.cerveau.demander(Demande::Titre {
                     transcript: r.debut_parole.clone(),
@@ -4011,6 +4021,46 @@ mod tests {
                 );
             });
         }
+    }
+
+    /// KOB-359 : après un titre inexploitable, pas de nouvelle demande sur la
+    /// même parole ; la suivante attend [`TITRE_MOTS`] mots de plus, comptés
+    /// avec ceux dits pendant la demande.
+    #[test]
+    fn titre_reessaye_avec_plus_de_parole() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            let r = c.reunion.as_mut().unwrap();
+            r.titre_auto = true;
+            // Comme au journal du ticket : 260 mots après 2 minutes.
+            r.debut = Instant::now() - TITRE_APRES;
+            r.debut_parole = "mot ".repeat(260);
+            c.tick();
+            assert!(c.reunion.as_ref().unwrap().titre_demande);
+            // Dit pendant la demande : gardé pour l'essai suivant.
+            c.recevoir(Message::Segment(dit("Ordre du jour."), Instant::now()));
+            c.titre_recu(Ok("—".into()));
+            for _ in 0..3 {
+                c.tick();
+            }
+            let r = c.reunion.as_mut().unwrap();
+            assert!(!r.titre_demande, "même parole : pas de nouvel essai");
+            assert_eq!(r.titre_essais, 1);
+            assert!(
+                r.debut_parole.contains("Ordre du jour."),
+                "{}",
+                r.debut_parole
+            );
+            r.debut_parole.push_str(&"mot ".repeat(TITRE_MOTS));
+            c.tick();
+            let r = c.reunion.as_ref().unwrap();
+            assert!(r.titre_demande, "assez de parole nouvelle : nouvel essai");
+            c.titre_recu(Ok("Budget du salon d'Annecy".into()));
+            let r = c.reunion.as_ref().unwrap();
+            assert_eq!(r.titre.as_deref(), Some("Budget du salon d'Annecy"));
+            assert!(r.debut_parole.is_empty());
+        });
     }
 
     /// KOB-268 : une question courte en anglais part avec un rappel en
