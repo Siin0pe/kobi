@@ -198,6 +198,37 @@ fn grep_cherche_sans_les_dossiers_ignores_ni_les_binaires() {
         .contains("expression invalide"));
 }
 
+/// KOB-345 : une ligne trouvée trop longue (fichier minifié, JSON d'une
+/// ligne) est coupée, sur une frontière de caractère, et la sortie reste
+/// bornée.
+#[test]
+fn grep_coupe_les_lignes_trop_longues() {
+    let dir = tempfile::tempdir().unwrap();
+    let longue = format!("début {} fin", "é".repeat(400_000));
+    for i in 0..5 {
+        fs::write(dir.path().join(format!("min{i}.js")), &longue).unwrap();
+    }
+    let l = lecteur(&dir);
+    let sortie = l.chercher(&json!({ "pattern": "début" })).unwrap();
+    assert!(sortie.len() <= TAILLE_MAX + 200, "{}", sortie.len());
+    assert_eq!(
+        sortie.matches("(ligne coupée)").count(),
+        5,
+        "{}",
+        &sortie[..300]
+    );
+    assert!(!sortie.contains("fin\n"));
+    assert!(!sortie.contains('\u{FFFD}'));
+    // 1500 lignes de 1000 octets : arrêt sur la taille, pas sur le nombre.
+    let dir = tempfile::tempdir().unwrap();
+    let lignes = format!("{}\n", "x".repeat(1000)).repeat(1500);
+    fs::write(dir.path().join("gros.txt"), lignes).unwrap();
+    let sortie = lecteur(&dir).chercher(&json!({ "pattern": "x" })).unwrap();
+    assert!(sortie.contains("résultat trop long"), "{}", sortie.len());
+    // Une ligne courte reste entière.
+    assert_eq!(ligne_bornee("court"), "court");
+}
+
 #[test]
 fn glob_liste_les_chemins() {
     let dir = codebase();
