@@ -1357,6 +1357,7 @@ mod tests {
             "Kobi.",
             // Ordre collé sous charge (KOB-289) : jugé tel qu'il partirait.
             "on en reparlera la semaine prochaine avec toute l'équipe Kobe reprends",
+            "Kobi, on arrête là pour aujourd'hui ?",
         ] {
             let mut e = Ecouteur::new(false);
             e.sous_charge = true;
