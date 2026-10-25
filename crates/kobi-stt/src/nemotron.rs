@@ -23,8 +23,10 @@ const TAIL_PADDING_SECS: f64 = 0.3;
 
 /// Écart entre deux trames à partir duquel l'audio entre elles est un
 /// silence non transmis (KOB-311) : au-dessous, c'est l'arrondi des
-/// positions de trames qui se suivent.
-const TROU_SECS: f64 = 0.2;
+/// positions de trames qui se suivent, ou un à-coup de la capture pendant
+/// la parole. Le micro passe par `nouvel_enonce` ; ce seuil sert surtout au
+/// son de l'ordinateur, dont la porte se ferme après plus de 1 s.
+const TROU_SECS: f64 = 1.0;
 
 /// Réglages du moteur.
 #[derive(Debug, Clone)]
@@ -117,6 +119,10 @@ struct Track {
     utterance_start: f64,
     /// Dernier texte émis pour l'énoncé en cours.
     last_text: String,
+    /// Énoncé neuf demandé par l'écoute (`nouvel_enonce`, `conclure`) : la
+    /// première trame reçue ensuite en donne le début (KOB-311), même datée
+    /// avant `pos` (la porte ajoute du silence après la parole).
+    debut_a_poser: bool,
 }
 
 /// Moteur Nemotron, voir le module.
@@ -201,6 +207,7 @@ impl NemotronEngine {
                 pos: 0.0,
                 utterance_start: 0.0,
                 last_text: String::new(),
+                debut_a_poser: false,
             }
         })
     }
@@ -281,12 +288,16 @@ impl SttEngine for NemotronEngine {
 
     fn push(&mut self, frame: &AudioFrame) -> Result<Vec<Segment>> {
         let track = self.track(frame.source);
-        track.utterance_start = debut_apres_un_trou(
-            track.utterance_start,
-            track.pos,
-            track.last_text.is_empty(),
-            frame.t,
-        );
+        track.utterance_start = if std::mem::take(&mut track.debut_a_poser) {
+            frame.t
+        } else {
+            debut_apres_un_trou(
+                track.utterance_start,
+                track.pos,
+                track.last_text.is_empty(),
+                frame.t,
+            )
+        };
         track
             .stream
             .accept_waveform(SAMPLE_RATE as i32, &frame.samples);
@@ -313,6 +324,7 @@ impl SttEngine for NemotronEngine {
             self.config.language.as_deref().unwrap_or("auto"),
         );
         track.utterance_start = track.pos;
+        track.debut_a_poser = true;
     }
 
     /// KOB-253 : l'écoute a pris le dernier partiel pour final ; le flux
@@ -328,6 +340,7 @@ impl SttEngine for NemotronEngine {
             self.config.language.as_deref().unwrap_or("auto"),
         );
         track.utterance_start = track.pos;
+        track.debut_a_poser = true;
         track.last_text.clear();
     }
 
@@ -511,7 +524,11 @@ mod tests {
         let dir = PathBuf::from(std::env::var("KOBI_NEMOTRON_DIR").expect("KOBI_NEMOTRON_DIR"));
         let parole = crate::wav::read_wav_16k_mono(dir.join("test_wavs/fr.wav")).unwrap();
         let duree = parole.len() as f64 / SAMPLE_RATE as f64;
-        for transmis in [true, false] {
+        // « transmis » : 8 s de silence transmis ; « trou » : non transmis ;
+        // « vidange » : la porte a ajouté 1 s de silence après la phrase et
+        // la parole reprend 0,3 s après sa fermeture, datée avant la fin de
+        // ce silence.
+        for cas in ["transmis", "trou", "vidange"] {
             let mut config = NemotronConfig::new(&dir);
             config.language = Some("fr".into());
             let mut engine = NemotronEngine::new(config).unwrap();
@@ -538,13 +555,23 @@ mod tests {
             pousser(&mut engine, &parole, 0.0);
             let fin_de_phrase = vec![0.0f32; 3 * SAMPLE_RATE as usize];
             pousser(&mut engine, &fin_de_phrase, duree);
-            let silence = vec![0.0f32; 8 * SAMPLE_RATE as usize];
-            if transmis {
-                pousser(&mut engine, &silence, duree + 3.0);
-            } else {
-                engine.nouvel_enonce(Source::Moi);
-            }
-            let reprise = duree + 11.0;
+            let reprise = match cas {
+                "transmis" => {
+                    let silence = vec![0.0f32; 8 * SAMPLE_RATE as usize];
+                    pousser(&mut engine, &silence, duree + 3.0);
+                    duree + 11.0
+                }
+                "trou" => {
+                    engine.nouvel_enonce(Source::Moi);
+                    duree + 11.0
+                }
+                _ => {
+                    let vidange = vec![0.0f32; SAMPLE_RATE as usize];
+                    pousser(&mut engine, &vidange, duree + 3.0);
+                    engine.nouvel_enonce(Source::Moi);
+                    duree + 3.3
+                }
+            };
             pousser(&mut engine, &parole, reprise);
             finals.extend(engine.finish().unwrap());
             // Segment ordinaire, sans silence avant, dès le début du flux :
@@ -560,10 +587,13 @@ mod tests {
                 .iter()
                 .find(|s| s.end > reprise)
                 .unwrap_or_else(|| panic!("pas de phrase après le silence : {finals:?}"));
-            println!("transmis={transmis} reprise={reprise:.2} {seconde:?}");
+            println!("{cas} reprise={reprise:.2} {seconde:?}");
+            // Jamais après la parole ; au plus la règle 1 (2,4 s) et un bloc
+            // avant, pour un silence transmis.
+            let avant = if cas == "transmis" { 3.0 } else { 0.0 };
             assert!(
-                seconde.start >= reprise - 3.0 && seconde.start <= reprise + 0.5,
-                "transmis={transmis} : début {} pour une parole à {reprise}",
+                seconde.start >= reprise - avant - 1e-6 && seconde.start <= reprise + 1e-6,
+                "{cas} : début {} pour une parole à {reprise}",
                 seconde.start
             );
         }
