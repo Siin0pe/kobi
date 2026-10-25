@@ -153,6 +153,10 @@ pub async fn ouvrir(
         cle,
         system_prompt,
         outils: Arc::new(outils),
+        // Compaction par l'API au-delà de 150k tokens (KOB-332) : à l'essai,
+        // activée seulement par `KOBI_COMPACTION=1`, en attendant la
+        // décision après un essai réel.
+        compaction: std::env::var("KOBI_COMPACTION").is_ok_and(|v| v == "1"),
         ..Default::default()
     })
 }

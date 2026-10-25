@@ -1315,9 +1315,13 @@ fn sans_cloture(texte: &str) -> &str {
 /// d'activité.
 fn avis(fin: &kobi_brain::TurnSummary, sortie: &Sortie) {
     if let Some(texte) = &fin.avis {
-        sortie(Retour::Avis {
-            texte: texte.clone(),
-        });
+        // Avis connus du backend clé API : traduits pour l'activité.
+        let texte = if texte == kobi_brain::api::AVIS_RESUME {
+            kobi_i18n::tr("coque.activite.resumeConversation", &[])
+        } else {
+            texte.clone()
+        };
+        sortie(Retour::Avis { texte });
     }
 }
 

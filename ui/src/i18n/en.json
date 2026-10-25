@@ -905,6 +905,7 @@
   },
   "coque.cleApi.invalide": "This doesn’t look like an Anthropic API key: it starts with “{prefixe}”, with no spaces.",
   "coque.activite.repriseConversation": "Conversation too long, started afresh (API key backend).",
+  "coque.activite.resumeConversation": "Conversation too long, summarized (API key backend).",
   "coque.chef.compteRenduSecours": "# Summary\n\nThe summary couldn't be written ({erreur}).\n\n## Notes\n\n{notes}",
   "coque.chef.compteRenduVide": "# Summary\n\nNo speech was transcribed during this meeting: there is nothing to summarize.",
   "coque.chef.compteRenduIncomplet": "> Transcript incomplete when this summary was written: the computer was busy and the end of the meeting wasn’t transcribed yet. The rest is added to the meeting’s transcript, in the Notebook.",

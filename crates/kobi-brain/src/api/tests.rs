@@ -1234,3 +1234,114 @@ async fn ni_cle_ni_conversation_dans_les_journaux() {
         );
     }
 }
+
+/// Réponse de compaction : le bloc arrive entier dans `content_block_start`.
+fn resume(texte: &str) -> Script {
+    flux(&[
+        json!({"type":"message_start","message":{"id":"msg","usage":{"input_tokens":0,"output_tokens":0}}}),
+        json!({"type":"content_block_start","index":0,"content_block":{"type":"compaction","content":texte,"signature":"sig-resume"}}),
+        json!({"type":"content_block_stop","index":0}),
+        json!({"type":"message_delta","delta":{"stop_reason":"compaction"},"usage":{"output_tokens":0}}),
+        json!({"type":"message_stop"}),
+    ])
+}
+
+fn cerveau_compact(serveur: &Serveur, compaction: bool) -> ApiBrain {
+    ApiBrain::new(ApiConfig {
+        cle: CLE.into(),
+        url: serveur.url.clone(),
+        // `texte` annonce 812 tokens d'entrée : le seuil est franchi.
+        contexte_max: 500,
+        compaction,
+        ..Default::default()
+    })
+    .unwrap()
+}
+
+/// KOB-332 : au-delà du seuil, la conversation est résumée par l'API ; le
+/// bloc rendu remplace l'historique tel quel, en tête, et chaque requête
+/// suivante porte l'en-tête bêta.
+#[tokio::test]
+async fn conversation_resumee_par_l_api() {
+    let serveur = Serveur::lancer(vec![
+        texte("A", "."),
+        resume("Résumé : décision de livrer vendredi."),
+        texte("B", "."),
+        texte("C", "."),
+    ])
+    .await;
+    let mut brain = cerveau_compact(&serveur, true);
+    assert!(fin(&tous(brain.ask(question("un"))).await)
+        .unwrap()
+        .avis
+        .is_none());
+    let deux = fin(&tous(brain.ask(question("deux"))).await).unwrap();
+    assert_eq!(deux.text, "B.");
+    assert_eq!(deux.avis.as_deref(), Some(AVIS_RESUME));
+    let r = serveur.recues();
+    // La demande de résumé : la conversation telle quelle, mêmes système et
+    // outils, avec ses consignes, sans repli côté serveur.
+    let demande = &r[1];
+    assert_eq!(demande.corps["compaction"]["type"], "summarize");
+    assert!(demande.corps["compaction"]["instructions"]
+        .as_str()
+        .unwrap()
+        .contains("N'appelle aucun outil"));
+    assert_eq!(
+        demande.corps["messages"],
+        json!([r[0].corps["messages"][0], {
+            "role": "assistant",
+            "content": [{"type":"thinking","thinking":"","signature":"sig-texte"},{"type":"text","text":"A."}],
+        }])
+    );
+    assert_eq!(demande.corps["system"], r[0].corps["system"]);
+    assert!(demande.corps.get("fallbacks").is_none());
+    assert_eq!(demande.entete("anthropic-beta"), Some("compact-2026-09-04"));
+    // La suite : le bloc en tête, exactement comme rendu, puis la question.
+    let m = r[2].corps["messages"].as_array().unwrap();
+    assert_eq!(m.len(), 2);
+    assert_eq!(
+        m[0],
+        json!({"role":"assistant","content":[{"type":"compaction","content":"Résumé : décision de livrer vendredi.","signature":"sig-resume"}]})
+    );
+    assert!(m[1]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("deux"));
+    assert_eq!(
+        r[2].entete("anthropic-beta"),
+        Some("server-side-fallback-2026-07-01,compact-2026-09-04")
+    );
+    assert_eq!(r[2].corps["fallbacks"], "default");
+}
+
+/// Sans résumé (raison d'arrêt autre que `compaction`), la conversation
+/// repart à neuf, comme sans compaction.
+#[tokio::test]
+async fn sans_resume_reprise_a_neuf() {
+    let serveur = Serveur::lancer(vec![texte("A", "."), arret("refusal"), texte("B", ".")]).await;
+    let mut brain = cerveau_compact(&serveur, true);
+    fin(&tous(brain.ask(question("un"))).await).unwrap();
+    let deux = fin(&tous(brain.ask(question("deux"))).await).unwrap();
+    assert_eq!(deux.avis.as_deref(), Some(AVIS_REPRISE));
+    let r = serveur.recues();
+    assert_eq!(r.len(), 3);
+    assert_eq!(r[2].corps["messages"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        r[2].entete("anthropic-beta"),
+        Some("server-side-fallback-2026-07-01")
+    );
+}
+
+/// Désactivée (par défaut) : aucune demande de résumé, reprise à neuf.
+#[tokio::test]
+async fn compaction_desactivee_par_defaut() {
+    assert!(!ApiConfig::default().compaction);
+    let serveur = Serveur::lancer(vec![texte("A", "."), texte("B", ".")]).await;
+    let mut brain = cerveau_compact(&serveur, false);
+    fin(&tous(brain.ask(question("un"))).await).unwrap();
+    fin(&tous(brain.ask(question("deux"))).await).unwrap();
+    let r = serveur.recues();
+    assert_eq!(r.len(), 2);
+    assert!(r.iter().all(|x| x.corps.get("compaction").is_none()));
+}
