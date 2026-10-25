@@ -236,7 +236,18 @@ fn parcours_refuse_les_noms_de_peripheriques() {
     fs::create_dir_all(racine.join("outils")).unwrap();
     std::os::unix::fs::symlink("COM1", racine.join("outils/port")).unwrap();
     std::os::unix::fs::symlink("../sous/AUX/x", racine.join("outils/relais")).unwrap();
-    for chemin in ["outils/port", "outils/relais", "NUL.txt", "code/nul/x.rs"] {
+    // KOB-367 : après un lien à cible absolue (une jonction sous Windows,
+    // rendue en `\\?\…`), la suite du chemin est encore jugée.
+    fs::create_dir_all(racine.join("vendor")).unwrap();
+    std::os::unix::fs::symlink(racine.join("vendor"), racine.join("lib")).unwrap();
+    for chemin in [
+        "outils/port",
+        "outils/relais",
+        "NUL.txt",
+        "code/nul/x.rs",
+        "lib/COM1",
+        "lib/CON.txt",
+    ] {
         let chemin = racine.join(chemin);
         assert!(lien_vers_le_reseau(&chemin, true), "{}", chemin.display());
         assert!(!lien_vers_le_reseau(&chemin, false), "{}", chemin.display());
