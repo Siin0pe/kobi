@@ -218,16 +218,16 @@ impl ReunionOuverte {
                 return Ok(None);
             }
         }
-        // Le titre ne change qu'une fois le dossier déplacé, et il est écrit
-        // avant la table des renommages : si elle échoue, `reunion.json` a
-        // quand même le nouveau titre (KOB-266).
-        let ancien = self.reunion.deplacer(titre)?;
+        // Le titre ne change qu'une fois le dossier déplacé. Le titre et la
+        // table des renommages s'écrivent chacun même si l'autre échoue : le
+        // dossier a bougé, l'ancien nom doit mener à lui (KOB-266, KOB-292).
+        let ancien = self.reunion.deplacer(titre, self.meta.titre.as_deref())?;
         if origine == Origine::Auto {
             self.meta.changements_auto += 1;
         }
         self.meta.titre = Some(titre.to_owned());
         self.meta.titre_auto = origine == Origine::Auto;
-        self.ecrire_meta()?;
+        let meta = self.ecrire_meta();
         if let Some(ancien) = &ancien {
             if let Some(reunions) = self.dossier().parent() {
                 if let Err(erreur) = noter_renommage(reunions, ancien, self.reunion.nom()) {
@@ -235,6 +235,7 @@ impl ReunionOuverte {
                 }
             }
         }
+        meta?;
         Ok(ancien)
     }
 
@@ -1308,6 +1309,48 @@ mod tests {
         // Même titre redonné : « budget » est toujours pris, rien ne bouge.
         assert_eq!(r2.nommer("Budget", Origine::Manuel).unwrap(), None);
         assert_eq!(r2.nom(), "2026-10-18-budget-2");
+    }
+
+    /// KOB-292 : « Budget 2027 » renommé « Budget » alors qu'une autre
+    /// réunion occupe « budget » : le dossier devient « budget-2 », il ne
+    /// garde pas « budget-2027 », qui venait de l'ancien titre.
+    #[test]
+    fn nombre_du_titre_n_est_pas_un_suffixe_meme_si_le_nom_est_pris() {
+        let (_d, st) = stockage();
+        let mut autre = st.nouvelle_reunion(T0, None).unwrap();
+        autre.nommer("Budget", Origine::Manuel).unwrap();
+        assert_eq!(autre.nom(), "2026-10-18-budget");
+        let mut r = st.nouvelle_reunion(T0 + 3_600_000, None).unwrap();
+        r.nommer("Budget 2027", Origine::Manuel).unwrap();
+        assert_eq!(r.nom(), "2026-10-18-budget-2027");
+        assert_eq!(
+            r.nommer("Budget", Origine::Manuel).unwrap().as_deref(),
+            Some("2026-10-18-budget-2027")
+        );
+        assert_eq!(r.nom(), "2026-10-18-budget-2");
+    }
+
+    /// KOB-292 : `reunion.json` illisible en écriture après le déplacement
+    /// du dossier : l'erreur remonte, mais l'ancien nom est quand même noté
+    /// et mène à la réunion.
+    #[test]
+    fn ancien_nom_note_meme_si_le_titre_n_est_pas_ecrit() {
+        let (_d, st) = stockage();
+        let mut r = st.nouvelle_reunion(T0, None).unwrap();
+        // Une fois le dossier déplacé, `reunion.json` est un dossier : son
+        // écriture atomique échoue.
+        let cible = st.dossier_reunions().join("2026-10-18-retro-du-sprint");
+        let ancien = r.dossier().to_path_buf();
+        fs::rename(&ancien, &cible).unwrap();
+        fs::remove_file(cible.join(META)).ok();
+        fs::create_dir_all(cible.join(META)).unwrap();
+        fs::rename(&cible, &ancien).unwrap();
+        assert!(r.nommer("Rétro du sprint", Origine::Manuel).is_err());
+        assert_eq!(r.nom(), "2026-10-18-retro-du-sprint", "le dossier a bougé");
+        assert_eq!(
+            nom_actuel(&st.dossier_reunions(), "2026-10-18-reunion").as_deref(),
+            Some("2026-10-18-retro-du-sprint")
+        );
     }
 
     /// KOB-266 : la table des renommages illisible en écriture n'empêche
