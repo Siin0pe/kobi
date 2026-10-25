@@ -35,6 +35,8 @@ struct Script {
     corps: String,
     /// Pause après le premier événement du flux (flux lent).
     pause: Option<Duration>,
+    /// Connexion fermée après ces octets du corps (flux coupé).
+    coupe: Option<usize>,
 }
 
 fn flux(evenements: &[Value]) -> Script {
@@ -51,6 +53,7 @@ fn flux(evenements: &[Value]) -> Script {
         entetes: vec![("content-type", "text/event-stream".into())],
         corps,
         pause: None,
+        coupe: None,
     }
 }
 
@@ -63,6 +66,7 @@ fn erreur(statut: u16, genre: &str, message: &str) -> Script {
         ],
         corps: json!({"type":"error","error":{"type":genre,"message":message}}).to_string(),
         pause: None,
+        coupe: None,
     }
 }
 
@@ -158,6 +162,11 @@ impl Serveur {
                 // pas la connexion suivante.
                 tokio::spawn(async move {
                     let _ = sock.write_all(tete.as_bytes()).await;
+                    if let Some(n) = s.coupe {
+                        let _ = sock.write_all(&s.corps.as_bytes()[..n]).await;
+                        let _ = sock.shutdown().await;
+                        return;
+                    }
                     let coupe = match s.pause {
                         Some(_) => s.corps.find("\n\n").map_or(0, |i| i + 2),
                         None => s.corps.len(),
@@ -1231,6 +1240,7 @@ async fn ni_cle_ni_conversation_dans_les_journaux() {
         entetes: vec![("content-type", "text/event-stream".into())],
         corps: "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5}}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"budget confidentiel de 4 millions\n\n".into(),
         pause: None,
+        coupe: None,
     };
     let serveur = Serveur::lancer(vec![texte("Le budget est ", "de 4 millions."), illisible]).await;
     let mut brain = cerveau(&serveur, Arc::new(OutilsTest::default()));
@@ -1250,6 +1260,66 @@ async fn ni_cle_ni_conversation_dans_les_journaux() {
             "{secret} dans l'erreur : {erreur}"
         );
     }
+}
+
+/// `script` coupé juste avant le premier événement qui contient `avant`
+/// (KOB-360).
+fn coupe_avant(mut script: Script, avant: &str) -> Script {
+    let i = script.corps.find(avant).unwrap();
+    script.coupe = Some(script.corps[..i].rfind("event:").unwrap());
+    script
+}
+
+/// KOB-360 : un flux coupé avant tout texte est réessayé dans la même
+/// conversation, sans erreur.
+#[tokio::test]
+async fn flux_coupe_avant_tout_texte_reessaye() {
+    let serveur = Serveur::lancer(vec![
+        texte("Un", "."),
+        coupe_avant(texte("A", "."), "text_delta"),
+        texte("B", "."),
+    ])
+    .await;
+    let mut brain = cerveau(&serveur, Arc::new(OutilsTest::default()));
+    fin(&tous(brain.ask(question("un"))).await).unwrap();
+    let deux = fin(&tous(brain.ask(question("deux"))).await).unwrap();
+    assert_eq!(deux.text, "B.");
+    let r = serveur.recues();
+    assert_eq!(r.len(), 3);
+    // Le nouvel essai porte la même conversation : rien n'est perdu.
+    assert_eq!(r[1].corps["messages"], r[2].corps["messages"]);
+    assert_eq!(r[2].corps["messages"].as_array().unwrap().len(), 3);
+}
+
+/// KOB-360 : coupé après un texte montré, le flux n'est pas rejoué (texte
+/// en double) : erreur d'API, pas un plantage ; la conversation reste
+/// entière pour la question suivante.
+#[tokio::test]
+async fn flux_coupe_apres_un_texte_erreur_sans_perte() {
+    let mut coupe = texte("Le début", " et la fin.");
+    let fin_du_debut = coupe.corps.find("Le début").unwrap();
+    coupe.coupe = Some(coupe.corps[fin_du_debut..].find("\n\n").unwrap() + fin_du_debut + 2);
+    let serveur = Serveur::lancer(vec![texte("Un", "."), coupe, texte("C", ".")]).await;
+    let mut brain = cerveau(&serveur, Arc::new(OutilsTest::default()));
+    fin(&tous(brain.ask(question("un"))).await).unwrap();
+    match fin(&tous(brain.ask(question("deux"))).await) {
+        Err(BrainError::Api(m)) => assert!(m.contains("flux interrompu"), "{m}"),
+        autre => panic!("{autre:?}"),
+    }
+    assert_eq!(
+        serveur.recues().len(),
+        2,
+        "pas de nouvel essai après un texte"
+    );
+    let trois = fin(&tous(brain.ask(question("trois"))).await).unwrap();
+    assert_eq!(trois.text, "C.");
+    // Le premier échange est toujours là ; le tour coupé est retiré.
+    let m = serveur.recues()[2].corps["messages"].clone();
+    assert_eq!(m.as_array().unwrap().len(), 3, "{m}");
+    assert!(m[2]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("trois"));
 }
 
 /// Réponse de compaction : le bloc arrive entier dans `content_block_start`.

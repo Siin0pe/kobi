@@ -887,8 +887,14 @@ async fn requete_corps(
 /// Erreurs du flux réessayées si elles arrivent avant tout contenu.
 const ERREURS_FLUX_REESSAYEES: &[&str] = &["overloaded_error", "api_error"];
 
-/// Lit le flux d'une réponse en relayant le texte. `Ok(None)` : surcharge
-/// annoncée dans le flux avant tout bloc, à réessayer (si `reessai`).
+/// Lit le flux d'une réponse en relayant le texte. `Ok(None)` : à réessayer
+/// (si `reessai`) : surcharge annoncée dans le flux avant tout bloc, ou flux
+/// coupé avant tout texte montré (KOB-360).
+///
+/// Un flux coupé est une erreur de réseau, pas un plantage : la
+/// conversation est intacte (le tour la remet en état), la session reste
+/// ouverte. Après un texte montré, il n'est pas rejoué (il le serait en
+/// double) : erreur d'API.
 async fn lire(
     mut reponse: reqwest::Response,
     events: &mpsc::Sender<BrainEvent>,
@@ -896,6 +902,15 @@ async fn lire(
 ) -> Result<Option<Reponse>, BrainError> {
     let mut decoupeur = Decoupeur::default();
     let mut message = Reponse::default();
+    let mut montre = false;
+    let coupure = |raison: String, montre: bool| {
+        if reessai && !montre {
+            tracing::warn!(%raison, "API Anthropic : flux coupé avant tout texte");
+            Ok(None)
+        } else {
+            Err(BrainError::Api(raison))
+        }
+    };
     while !message.fini {
         // Tour lâché pendant le flux (délai, Stop) : la lecture s'arrête et
         // la connexion se ferme (KOB-314).
@@ -908,7 +923,7 @@ async fn lire(
         let morceau = match morceau {
             Ok(Some(m)) => m,
             Ok(None) => break,
-            Err(e) => return Err(BrainError::Crashed(format!("flux interrompu : {e}"))),
+            Err(e) => return coupure(format!("flux interrompu : {e}"), montre),
         };
         for donnee in decoupeur.pousser(&morceau) {
             let apport = match message.appliquer(&donnee) {
@@ -924,7 +939,10 @@ async fn lire(
                 Err(e) => return Err(BrainError::Api(format!("{} : {}", e.genre, e.message))),
             };
             let event = match apport {
-                Apport::Texte(t) if !t.is_empty() => BrainEvent::Text(t),
+                Apport::Texte(t) if !t.is_empty() => {
+                    montre = true;
+                    BrainEvent::Text(t)
+                }
                 Apport::Vie => BrainEvent::Vie,
                 _ => continue,
             };
@@ -932,9 +950,7 @@ async fn lire(
         }
     }
     if !message.fini {
-        return Err(BrainError::Crashed(
-            "flux terminé sans fin de message".into(),
-        ));
+        return coupure("flux terminé sans fin de message".into(), montre);
     }
     Ok(Some(message))
 }
