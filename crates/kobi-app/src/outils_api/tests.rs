@@ -824,16 +824,57 @@ fn course_dossier_remplace_par_un_lien() {
     assert!(e.contains("hors des dossiers permis"), "{e}");
 }
 
-/// Le fichier lui-même remplacé par un lien : refusé (`O_NOFOLLOW`).
+/// Le fichier lui-même remplacé par un lien, même vers un fichier des
+/// dossiers permis : refusé (le lien n'est pas suivi, `O_NOFOLLOW`).
 #[cfg(unix)]
 #[test]
 fn course_fichier_remplace_par_un_lien() {
-    let (dedans, _dehors, secret) = deux_dossiers();
+    let dedans = codebase();
     let l = lecteur(&dedans);
     let verifie = l.permis("README.md").unwrap();
     fs::remove_file(&verifie).unwrap();
-    std::os::unix::fs::symlink(&secret, &verifie).unwrap();
-    assert!(l.ouvrir(&verifie).is_err());
+    std::os::unix::fs::symlink(dedans.path().join("src/main.rs"), &verifie).unwrap();
+    let e = l.ouvrir(&verifie).unwrap_err();
+    // Sous Linux, le lien est désigné sans être suivi (`O_PATH`) et refusé
+    // pour son type ; ailleurs, `O_NOFOLLOW` fait échouer l'ouverture.
+    assert!(
+        e.contains("pas un fichier ordinaire") || e.contains("symbolic links"),
+        "{e}"
+    );
+}
+
+/// Grep borné même quand le filtre écarte tout, et le parcours compte les
+/// dossiers (relecture de KOB-335).
+#[test]
+fn bornes_avant_le_filtre_et_sur_les_dossiers() {
+    let dedans = codebase();
+    for i in 0..30 {
+        fs::create_dir_all(dedans.path().join(format!("vide{i:02}/a/b"))).unwrap();
+    }
+    let mut l = lecteur(&dedans);
+    l.bornes.entrees = 20;
+    let r = l
+        .chercher(&json!({ "pattern": "x", "glob": "*.zzz" }))
+        .unwrap();
+    assert!(r.contains("parcours arrêté après 20 entrées"), "{r}");
+    let r = l.lister(&json!({ "pattern": "*.zzz" })).unwrap();
+    assert!(r.contains("parcours arrêté après 20 entrées"), "{r}");
+    // Durée : une borne nulle arrête tout de suite.
+    let mut l = lecteur(&dedans);
+    l.bornes.duree = std::time::Duration::ZERO;
+    let r = l.lister(&json!({ "pattern": "*" })).unwrap();
+    assert!(r.contains("parcours arrêté"), "{r}");
+}
+
+/// Dossiers permis imbriqués (mémoire sous une codebase) : rien n'est
+/// compté ni montré deux fois.
+#[test]
+fn dossiers_imbriques_comptes_une_fois() {
+    let dedans = codebase();
+    let l = Lecteur::new(&[dedans.path().to_path_buf(), dedans.path().join("src")]);
+    assert_eq!(l.dossiers.len(), 1);
+    let r = l.lister(&json!({ "pattern": "**/*.rs" })).unwrap();
+    assert_eq!(r.lines().count(), 1, "{r}");
 }
 
 /// Le fichier remplacé par un tube nommé : refusé tout de suite, sans
@@ -871,15 +912,15 @@ fn parcours_bornes() {
     }
     let mut l = lecteur(&dedans);
     l.bornes.fichiers = 5;
-    l.bornes.entrees = 10;
     let r = l.chercher(&json!({ "pattern": "cible" })).unwrap();
     assert!(r.contains("recherche arrêtée après 5 fichiers"), "{r}");
     assert!(
         r.lines().filter(|x| x.contains(":1:cible")).count() <= 5,
         "{r}"
     );
+    l.bornes.entrees = 10;
     let r = l.lister(&json!({ "pattern": "*.txt" })).unwrap();
-    assert!(r.contains("parcours arrêté après 10 fichiers"), "{r}");
+    assert!(r.contains("parcours arrêté après 10 entrées"), "{r}");
     // Sans borne atteinte : les RESULTATS_MAX premiers chemins triés.
     for i in 40..400 {
         fs::write(dedans.path().join(format!("f{i:03}.txt")), "x").unwrap();
