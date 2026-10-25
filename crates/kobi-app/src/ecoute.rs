@@ -40,6 +40,15 @@ const REESSAI_MICRO: Duration = Duration::from_secs(5);
 const MICRO_MUET: Duration = Duration::from_secs(3);
 /// Attente d'une trame quand la file est vide.
 const ATTENTE_TRAME: Duration = Duration::from_millis(200);
+/// Attente de l'ouverture du micro, faite dans un fil à part : au-delà,
+/// l'écoute ne reste pas bloquée (serveur audio mort ou figé, KOB-285) et
+/// la reprend au tour suivant.
+const ATTENTE_OUVERTURE: Duration = Duration::from_secs(5);
+/// Ouverture du micro toujours en cours après ce temps : abandonnée, une
+/// nouvelle est lancée (le serveur audio a pu revenir entre-temps).
+const ABANDON_OUVERTURE: Duration = Duration::from_secs(30);
+/// Attente de la fermeture du micro par son fil porteur.
+const ATTENTE_FERMETURE: Duration = Duration::from_secs(2);
 /// Réunion mise en pause sous charge : l'audio reçu mais pas encore
 /// transcrit l'est avant de fermer le micro, au plus pendant ce temps
 /// (KOB-261, comme la piste « eux » à sa fermeture).
@@ -191,7 +200,7 @@ fn raccourci_enregistrement() -> String {
 
 /// D'où vient l'audio.
 enum Entree {
-    Micro(Capture),
+    Micro(Porteur),
     /// Fichier injecté (`KOBI_ECOUTE_WAV`), joué par un fil à part.
     Fichier(Receiver<AudioFrame>),
 }
@@ -199,7 +208,7 @@ enum Entree {
 impl Entree {
     fn frames(&self) -> &Receiver<AudioFrame> {
         match self {
-            Entree::Micro(capture) => capture.frames(),
+            Entree::Micro(porteur) => &porteur.trames,
             Entree::Fichier(rx) => rx,
         }
     }
@@ -207,7 +216,7 @@ impl Entree {
     /// Ferme l'entrée ; renvoie l'audio reçu mais pas encore lu.
     fn fermer(self) -> Vec<AudioFrame> {
         match self {
-            Entree::Micro(capture) => capture.stop().0,
+            Entree::Micro(porteur) => porteur.fermer(),
             Entree::Fichier(rx) => rx.try_iter().collect(),
         }
     }
@@ -216,14 +225,15 @@ impl Entree {
     /// mis à part : le canal des trames, lui, ne se ferme pas (KOB-236).
     fn panne(&self) -> Option<String> {
         match self {
-            Entree::Micro(capture) => panne_peripherique(capture.errors().try_iter()),
+            Entree::Micro(porteur) => panne_peripherique(porteur.erreurs.try_iter()),
             Entree::Fichier(_) => None,
         }
     }
 
     /// Ouvre le fichier injecté, ou le micro choisi ; s'il a disparu, celui
     /// par défaut (KOB-236). Renvoie aussi sa description pour le journal.
-    fn ouvrir() -> Result<(Entree, String), String> {
+    /// Appelé dans le fil qui gardera la capture ([`Ouverture::lancer`]).
+    fn ouvrir_ici() -> Result<(Ouvert, String), String> {
         if let Some(wav) = std::env::var_os("KOBI_ECOUTE_WAV") {
             let wav = PathBuf::from(wav);
             let samples = kobi_stt::wav::read_wav_16k_mono(&wav)
@@ -233,7 +243,7 @@ impl Entree {
                 wav.display(),
                 samples.len() as f64 / kobi_stt::SAMPLE_RATE as f64
             );
-            return Ok((Entree::Fichier(jouer(samples)), description));
+            return Ok((Ouvert::Fichier(jouer(samples)), description));
         }
         let demarrer = |mic: Option<String>| {
             Capture::start(&CaptureOptions {
@@ -262,7 +272,167 @@ impl Entree {
             })
             .collect::<Vec<_>>()
             .join(", ");
-        Ok((Entree::Micro(capture), description))
+        Ok((Ouvert::Micro(capture), description))
+    }
+}
+
+/// Ce que [`Entree::ouvrir_ici`] a ouvert.
+enum Ouvert {
+    Micro(Capture),
+    Fichier(Receiver<AudioFrame>),
+}
+
+/// Micro tenu par un fil porteur (KOB-285) : la capture ne quitte jamais
+/// le fil qui l'a ouverte (un flux cpal n'est pas `Send` partout), et
+/// l'écoute ne reste jamais bloquée sur son ouverture ni sa fermeture. Les
+/// trames et les erreurs du flux sont relayées.
+struct Porteur {
+    trames: Receiver<AudioFrame>,
+    erreurs: Receiver<kobi_audio::StreamError>,
+    /// Demande de fermeture ; la réponse rend l'audio reçu mais pas encore
+    /// relayé.
+    fermer: Sender<Sender<Vec<AudioFrame>>>,
+}
+
+impl Porteur {
+    /// Ferme la capture ; renvoie l'audio reçu mais pas encore lu, dans
+    /// l'ordre. Le porteur bloqué (serveur audio mort) n'est pas attendu
+    /// au-delà de [`ATTENTE_FERMETURE`].
+    fn fermer(self) -> Vec<AudioFrame> {
+        let mut reste: Vec<AudioFrame> = self.trames.try_iter().collect();
+        let (tx, rx) = mpsc::channel();
+        if self.fermer.send(tx).is_ok() {
+            if let Ok(fin) = rx.recv_timeout(ATTENTE_FERMETURE) {
+                reste.extend(fin);
+            }
+        }
+        reste.extend(self.trames.try_iter());
+        reste
+    }
+}
+
+/// Flux d'un micro ouvert, vu par son porteur.
+trait Flux {
+    fn trames(&self) -> &Receiver<AudioFrame>;
+    fn erreurs(&self) -> &Receiver<kobi_audio::StreamError>;
+    /// Arrête le flux ; renvoie l'audio reçu mais pas encore lu.
+    fn arreter(self) -> Vec<AudioFrame>;
+}
+
+impl Flux for Capture {
+    fn trames(&self) -> &Receiver<AudioFrame> {
+        self.frames()
+    }
+    fn erreurs(&self) -> &Receiver<kobi_audio::StreamError> {
+        self.errors()
+    }
+    fn arreter(self) -> Vec<AudioFrame> {
+        self.stop().0
+    }
+}
+
+/// Fil porteur : relaie les trames et les erreurs de `capture` jusqu'à la
+/// demande de fermeture, ou jusqu'à ce que l'écoute lâche le micro.
+fn porter(
+    capture: impl Flux,
+    trames: Sender<AudioFrame>,
+    erreurs: Sender<kobi_audio::StreamError>,
+    fermer: Receiver<Sender<Vec<AudioFrame>>>,
+) {
+    loop {
+        match capture.trames().recv_timeout(Duration::from_millis(50)) {
+            Ok(trame) => {
+                if trames.send(trame).is_err() {
+                    return;
+                }
+                for trame in capture.trames().try_iter() {
+                    if trames.send(trame).is_err() {
+                        return;
+                    }
+                }
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            // Flux fini : l'écoute le voit au canal relayé, fermé à son tour.
+            Err(RecvTimeoutError::Disconnected) => return,
+        }
+        for erreur in capture.erreurs().try_iter() {
+            let _ = erreurs.send(erreur);
+        }
+        match fermer.try_recv() {
+            Ok(reponse) => {
+                let _ = reponse.send(capture.arreter());
+                return;
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::TryRecvError::Disconnected) => return,
+        }
+    }
+}
+
+/// Ouverture du micro en cours dans un fil à part (KOB-285).
+struct Ouverture {
+    resultat: Receiver<Result<(Entree, String), String>>,
+    depuis: Instant,
+}
+
+impl Ouverture {
+    /// Ouvre l'entrée dans un fil qui, pour un micro, reste ensuite son
+    /// porteur.
+    fn lancer() -> Self {
+        Self::lancer_avec(Entree::ouvrir_ici)
+    }
+
+    fn lancer_avec(
+        ouvrir: impl FnOnce() -> Result<(Ouvert, String), String> + Send + 'static,
+    ) -> Self {
+        let (tx, resultat) = mpsc::channel();
+        let lance = std::thread::Builder::new()
+            .name("ouverture-micro".into())
+            .spawn(move || match ouvrir() {
+                Err(e) => {
+                    let _ = tx.send(Err(e));
+                }
+                Ok((Ouvert::Fichier(rx), description)) => {
+                    let _ = tx.send(Ok((Entree::Fichier(rx), description)));
+                }
+                Ok((Ouvert::Micro(capture), description)) => {
+                    let (trames_tx, trames) = mpsc::channel();
+                    let (erreurs_tx, erreurs) = mpsc::channel();
+                    let (fermer, fermer_rx) = mpsc::channel();
+                    let porteur = Porteur {
+                        trames,
+                        erreurs,
+                        fermer,
+                    };
+                    // L'écoute a renoncé entre-temps : la capture se ferme.
+                    if tx.send(Ok((Entree::Micro(porteur), description))).is_ok() {
+                        porter(capture, trames_tx, erreurs_tx, fermer_rx);
+                    }
+                }
+            });
+        if let Err(e) = lance {
+            let (tx, rx) = mpsc::channel();
+            let _ = tx.send(Err(e.to_string()));
+            return Ouverture {
+                resultat: rx,
+                depuis: Instant::now(),
+            };
+        }
+        Ouverture {
+            resultat,
+            depuis: Instant::now(),
+        }
+    }
+
+    /// Le résultat, s'il arrive avant `delai` ; `None` : toujours en cours.
+    fn attendre(&self, delai: Duration) -> Option<Result<(Entree, String), String>> {
+        match self.resultat.recv_timeout(delai) {
+            Ok(r) => Some(r),
+            Err(RecvTimeoutError::Timeout) => None,
+            Err(RecvTimeoutError::Disconnected) => {
+                Some(Err("ouverture du micro interrompue".into()))
+            }
+        }
     }
 }
 
@@ -589,6 +759,8 @@ struct Fil<R: Runtime> {
     partiel_publie: Option<String>,
     /// Le micro a été perdu et n'est pas encore rouvert (KOB-236).
     micro_perdu: bool,
+    /// Ouverture du micro toujours en cours au tour précédent (KOB-285).
+    ouverture: Option<Ouverture>,
     /// Décalage (s) des instants du micro ouvert sur l'horloge de l'audio :
     /// un micro rouvert après une panne repart de 0, la session non
     /// (KOB-278).
@@ -620,6 +792,7 @@ impl<R: Runtime> Fil<R> {
             niveau: (0.0, 0),
             partiel_publie: None,
             micro_perdu: false,
+            ouverture: None,
             decalage: 0.0,
             derniere_trame: Instant::now(),
         }
@@ -681,7 +854,28 @@ impl<R: Runtime> Fil<R> {
     }
 
     fn ouvrir_micro(&mut self) -> bool {
-        match Entree::ouvrir() {
+        // Hors du fil d'écoute et avec une limite de temps : une ouverture
+        // bloquée (serveur audio mort ou figé) ne fige plus l'écoute ; elle
+        // est reprise au tour suivant, puis relancée (KOB-285).
+        let ouverture = match self.ouverture.take() {
+            Some(o) if o.depuis.elapsed() < ABANDON_OUVERTURE => o,
+            Some(_) => {
+                tracing::warn!("écoute continue : ouverture du micro bloquée, relancée");
+                self.note("ouverture du micro bloquée : relancée");
+                Ouverture::lancer()
+            }
+            None => Ouverture::lancer(),
+        };
+        let Some(resultat) = ouverture.attendre(ATTENTE_OUVERTURE) else {
+            tracing::warn!(
+                attente_s = ouverture.depuis.elapsed().as_secs(),
+                "écoute continue : ouverture du micro en attente"
+            );
+            self.note("ouverture du micro en attente");
+            self.ouverture = Some(ouverture);
+            return false;
+        };
+        match resultat {
             Ok((entree, description)) => {
                 if let Ok(stt) = self.stt.as_mut() {
                     stt.reset();
@@ -829,19 +1023,18 @@ impl<R: Runtime> Fil<R> {
         if self.micro_perdu {
             return;
         }
-        let rouvert = self.rouvrir_apres_panne();
-        let message = if rouvert {
-            kobi_i18n::tr("coque.ecoute.microPerduRouvert", &[])
-        } else {
-            self.micro_perdu = true;
-            let _ = self.app.emit(EVENEMENT_MICRO, true);
-            kobi_i18n::tr("coque.ecoute.microPerduAucun", &[])
-        };
+        // Dit tout de suite, avant de chercher un autre micro : la
+        // réouverture peut attendre le serveur audio (KOB-285). Le micro
+        // retrouvé est noté à son ouverture.
+        self.micro_perdu = true;
+        let _ = self.app.emit(EVENEMENT_MICRO, true);
         let titre = kobi_i18n::tr("coque.ecoute.microPerdu", &[]);
+        let message = kobi_i18n::tr("coque.ecoute.microPerduRecherche", &[]);
         // L'erreur affichée entre seule dans l'activité ; la noter en plus
         // la doublait.
         let app = self.app.clone();
         std::thread::spawn(move || erreur(&app, &titre, &message));
+        self.rouvrir_apres_panne();
     }
 
     fn commande(&mut self, commande: Commande) {
@@ -1983,6 +2176,127 @@ mod tests {
             vidanger(&mut file, Instant::now(), |_| false, traiter, &mut vues),
             0
         );
+    }
+
+    /// Doublure de micro pour le porteur.
+    struct FauxFlux {
+        trames: Receiver<AudioFrame>,
+        erreurs: Receiver<kobi_audio::StreamError>,
+    }
+
+    impl Flux for FauxFlux {
+        fn trames(&self) -> &Receiver<AudioFrame> {
+            &self.trames
+        }
+        fn erreurs(&self) -> &Receiver<kobi_audio::StreamError> {
+            &self.erreurs
+        }
+        fn arreter(self) -> Vec<AudioFrame> {
+            self.trames.try_iter().collect()
+        }
+    }
+
+    fn trame_a(ms: u64) -> AudioFrame {
+        AudioFrame {
+            source: kobi_audio::Source::Moi,
+            samples: vec![0.0; 1_600],
+            t: Duration::from_millis(ms),
+        }
+    }
+
+    /// KOB-285 : une ouverture bloquée (serveur audio mort) ne bloque pas
+    /// l'écoute : `attendre` rend la main au délai ; l'ouverture reprise
+    /// plus tard rend son résultat ; une erreur remonte telle quelle.
+    #[test]
+    fn ouverture_bloquee_ne_bloque_pas_l_ecoute() {
+        let (debloquer, bloque) = mpsc::channel::<()>();
+        let ouverture = Ouverture::lancer_avec(move || {
+            let _ = bloque.recv();
+            let (_tx, rx) = mpsc::channel();
+            Ok((Ouvert::Fichier(rx), "fichier de test".into()))
+        });
+        let debut = Instant::now();
+        assert!(ouverture.attendre(Duration::from_millis(200)).is_none());
+        assert!(debut.elapsed() < Duration::from_secs(2));
+        debloquer.send(()).unwrap();
+        let Some(Ok((Entree::Fichier(_), description))) =
+            ouverture.attendre(Duration::from_secs(5))
+        else {
+            panic!("l'ouverture reprise doit aboutir");
+        };
+        assert_eq!(description, "fichier de test");
+        let echec = Ouverture::lancer_avec(|| Err("aucun micro".into()));
+        assert!(matches!(
+            echec.attendre(Duration::from_secs(5)),
+            Some(Err(e)) if e == "aucun micro"
+        ));
+    }
+
+    /// KOB-285 : le porteur relaie les trames et les erreurs du flux, rend à
+    /// la fermeture l'audio pas encore lu, dans l'ordre, et s'arrête quand
+    /// l'écoute lâche le micro.
+    #[test]
+    fn porteur_relaie_et_ferme() {
+        let (flux_trames, trames_flux) = mpsc::channel();
+        let (flux_erreurs, erreurs_flux) = mpsc::channel();
+        let flux = FauxFlux {
+            trames: trames_flux,
+            erreurs: erreurs_flux,
+        };
+        let (trames_tx, trames) = mpsc::channel();
+        let (erreurs_tx, erreurs) = mpsc::channel();
+        let (fermer, fermer_rx) = mpsc::channel();
+        let fil = std::thread::spawn(move || porter(flux, trames_tx, erreurs_tx, fermer_rx));
+        let porteur = Porteur {
+            trames,
+            erreurs,
+            fermer,
+        };
+        flux_trames.send(trame_a(0)).unwrap();
+        flux_erreurs
+            .send(kobi_audio::StreamError {
+                source: kobi_audio::Source::Moi,
+                xrun: false,
+                message: "débranché".into(),
+            })
+            .unwrap();
+        let premiere = porteur.trames.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(premiere.t, Duration::ZERO);
+        let erreur = porteur
+            .erreurs
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(erreur.message, "débranché");
+        // Deux trames relayées mais pas lues, une restée dans le flux.
+        flux_trames.send(trame_a(100)).unwrap();
+        flux_trames.send(trame_a(200)).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        flux_trames.send(trame_a(300)).unwrap();
+        let reste: Vec<_> = porteur.fermer().into_iter().map(|f| f.t).collect();
+        assert_eq!(
+            reste,
+            [100, 200, 300].map(Duration::from_millis),
+            "rien de perdu, dans l'ordre"
+        );
+        fil.join().unwrap();
+
+        // L'écoute lâche le micro (micro coupé) : le porteur s'arrête seul.
+        let (_flux_trames, trames_flux) = mpsc::channel();
+        let (_flux_erreurs, erreurs_flux) = mpsc::channel();
+        let flux = FauxFlux {
+            trames: trames_flux,
+            erreurs: erreurs_flux,
+        };
+        let (trames_tx, trames) = mpsc::channel();
+        let (erreurs_tx, erreurs) = mpsc::channel();
+        let (fermer, fermer_rx) = mpsc::channel();
+        let fil = std::thread::spawn(move || porter(flux, trames_tx, erreurs_tx, fermer_rx));
+        drop(Porteur {
+            trames,
+            erreurs,
+            fermer,
+        });
+        fil.join().unwrap();
     }
 
     /// KOB-280 : une doublure d'entrée qui cesse d'envoyer des trames, sans
