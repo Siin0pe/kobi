@@ -108,6 +108,23 @@ test('retard signalé juste avant le début de la réunion : REC l’affiche dè
   await expectNoErrors(errors);
 });
 
+test('réunion terminée : ni « micro perdu », ni retard, ni son de l’ordi sur l’étiquette pendant « Annuler » (KOB-291)', async ({ page }) => {
+  await mockTauri(page);
+  const errors = await openUi(page, '');
+  await emit(page, 'state', { etat: 'reunion', activite: 'calme', mascotte: 'idle', transcrit: true });
+  await emit(page, 'enregistrement', { actif: true, pause: false, debut_ms: Date.now() - 5 * 60_000, notes: 1, titre: null });
+  await emit(page, 'micro', true);
+  await emit(page, 'transcription_retard', { secondes: 120, raccourci: 'Ctrl+Shift+R' });
+  await emit(page, 'son_ordi', true);
+  const rec = page.locator('.rec');
+  for (const indicateur of ['.rec-micro', '.rec-retard', '.rec-eux']) await expect(rec.locator(indicateur)).toBeVisible();
+  await emit(page, 'enregistrement', { actif: false, pause: false, annulable: true, debut_ms: Date.now() - 5 * 60_000, notes: 1, titre: null });
+  await expect(rec).toHaveClass(/is-ended/);
+  await expect(rec.locator('.rec-label')).toHaveText('réunion terminée');
+  for (const indicateur of ['.rec-micro', '.rec-retard', '.rec-eux']) await expect(rec.locator(indicateur)).toBeHidden();
+  await expectNoErrors(errors);
+});
+
 test('micro perdu sans autre micro : REC le montre jusqu’à son retour, caché en pause (KOB-236)', async ({ page }) => {
   await mockTauri(page);
   const errors = await openUi(page, '');
