@@ -335,6 +335,15 @@ pub fn compte_rendu_ui(reunion: &str, markdown: &str) -> CompteRenduUi {
     }
 }
 
+/// Où va un échange avec Kobi, décidé à sa question (KOB-325, KOB-340).
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Rangement {
+    /// Les notes de la réunion commencée à cet instant.
+    Notes(Instant),
+    /// Le journal, dans la conversation de ce numéro.
+    Journal(u64),
+}
+
 /// Carte de confirmation, au format `ActionCard` de l'interface.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CarteUi {
@@ -464,8 +473,11 @@ pub struct Chef<R: Runtime> {
     /// commencée à cet instant, ou le journal des conversations (`None`).
     /// La réponse suit sa question, même si elle arrive après « Annuler »,
     /// la reprise, la fin ou dans une autre réunion (KOB-325, KOB-327,
-    /// KOB-330).
-    rangement: HashMap<u64, Option<Instant>>,
+    /// KOB-330), ou de la même conversation (KOB-340).
+    rangement: HashMap<u64, Rangement>,
+    /// Numéro de la conversation du quotidien en cours, augmenté à chaque
+    /// fermeture (KOB-340).
+    conversation_n: u64,
     /// Cartes proposées par la prise de notes (tour 0, KOB-72), et si Kobi
     /// était au calme à leur ouverture : il y revient une fois décidées.
     cartes_des_notes: HashMap<u64, bool>,
@@ -804,6 +816,7 @@ impl<R: Runtime> Chef<R> {
             annoncees: Default::default(),
             interrompus: HashSet::new(),
             rangement: HashMap::new(),
+            conversation_n: 0,
             cartes_des_notes: HashMap::new(),
             cartes_ouvertes: HashMap::new(),
             validations: Default::default(),
@@ -1194,18 +1207,28 @@ impl<R: Runtime> Chef<R> {
     /// posées pendant la fin ou la pause, elles vont au journal des
     /// conversations, comme hors réunion (KOB-325).
     fn ranger(&mut self, tour: u64, qui: Qui, texte: &str, voix: bool) {
-        // Aux notes de la réunion en cours, sauf pendant sa fin ou sa pause.
-        let notes_de = match qui {
+        // Aux notes de la réunion en cours, sauf pendant sa fin ou sa pause ;
+        // sinon à la conversation en cours.
+        let rangement = match qui {
             Qui::Moi => {
-                let notes_de = self
+                let rangement = self
                     .reunion
                     .as_ref()
                     .filter(|r| !r.fin_demandee && !r.pause)
-                    .map(|r| r.debut);
-                self.rangement.insert(tour, notes_de);
-                notes_de
+                    .map_or(Rangement::Journal(self.conversation_n), |r| {
+                        Rangement::Notes(r.debut)
+                    });
+                self.rangement.insert(tour, rangement);
+                rangement
             }
-            Qui::Kobi => self.rangement.remove(&tour).flatten(),
+            Qui::Kobi => self
+                .rangement
+                .remove(&tour)
+                .unwrap_or(Rangement::Journal(self.conversation_n)),
+        };
+        let notes_de = match rangement {
+            Rangement::Notes(debut) => Some(debut),
+            Rangement::Journal(_) => None,
         };
         if let Some(r) = self.reunion.as_mut().filter(|r| Some(r.debut) == notes_de) {
             let t = r.debut.elapsed().as_secs();
@@ -1233,6 +1256,16 @@ impl<R: Runtime> Chef<R> {
             tracing::info!(
                 tour,
                 "réponse arrivée après sa réunion : montrée, pas rangée"
+            );
+            return;
+        }
+        // Réponse d'une conversation déjà fermée (une réunion a démarré
+        // depuis) : elle n'en ouvre pas une autre où elle serait seule
+        // (KOB-340) ; la bulle la montre.
+        if rangement != Rangement::Journal(self.conversation_n) {
+            tracing::info!(
+                tour,
+                "réponse arrivée après sa conversation : montrée, pas rangée"
             );
             return;
         }
@@ -2587,6 +2620,7 @@ impl<R: Runtime> Chef<R> {
 
     fn fermer_conversation(&mut self) {
         if self.conversation.take().is_some() {
+            self.conversation_n += 1;
             self.ecrivain.fermer_conversation();
             let _ = self.app.emit(EVENEMENT_FIN_CONVERSATION, ());
         }
@@ -4752,6 +4786,36 @@ mod tests {
             let r = c.reunion.as_ref().unwrap();
             assert!(!r.a_noter.contains("Entre nous."), "{}", r.a_noter);
             assert!(r.apres_l_arret.is_empty());
+        });
+    }
+
+    /// KOB-340 : une tâche lancée hors réunion dont le résultat arrive
+    /// pendant une réunion n'ouvre pas de conversation où elle serait seule ;
+    /// dans la même conversation, la réponse va au journal.
+    #[test]
+    fn reponse_hors_reunion_arrivee_pendant_une_reunion() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.question("cherche les tickets".into(), true);
+            let tache = c.tour;
+            assert!(c.conversation.is_some());
+            c.commande(Intention::DemarrerReunion);
+            assert!(c.conversation.is_none());
+            c.recevoir(Message::Cerveau(Retour::Resultat {
+                tour: tache,
+                texte: "Trois tickets.".into(),
+            }));
+            assert!(
+                c.conversation.is_none(),
+                "conversation rouverte pendant la réunion"
+            );
+            assert!(!c
+                .reunion
+                .as_ref()
+                .unwrap()
+                .a_noter
+                .contains("Trois tickets."));
+            assert!(c.rangement.is_empty());
         });
     }
 
