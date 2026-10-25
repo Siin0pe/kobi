@@ -2611,8 +2611,9 @@ impl<R: Runtime> Chef<R> {
                         let _ = self
                             .app
                             .emit(EVENEMENT_COMPTE_RENDU, compte_rendu_ui(&reunion, &texte));
-                        // Annoncé une fois à voix haute, si la voix est active (KOB-204).
-                        crate::voix::dire(
+                        // Annoncé une fois à voix haute, si la voix est active (KOB-204),
+                        // sans couper la réponse en cours (KOB-365).
+                        crate::voix::annoncer(
                             &self.app,
                             &kobi_i18n::tr("coque.chef.compteRenduPret", &[]),
                         );
