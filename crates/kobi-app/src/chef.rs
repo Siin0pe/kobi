@@ -344,6 +344,10 @@ struct EnCours {
     /// Début de la pause : ce qui a été dit avant est gardé, même transcrit
     /// après (KOB-261).
     pause_a: Option<Instant>,
+    /// Plages de fins annulées, de l'arrêt à l'annulation : ce qui y a été
+    /// dit (« reprends », au revoir) n'entre pas dans les notes de la
+    /// réunion reprise, même transcrit après (KOB-309).
+    fins_annulees: Vec<(Instant, Instant)>,
     notes: String,
     derniere_note: Option<String>,
     /// Transcription pas encore passée aux notes.
@@ -1235,6 +1239,7 @@ impl<R: Runtime> Chef<R> {
             incomplet: false,
             compte_rendu_demande: false,
             pause_a: None,
+            fins_annulees: Vec::new(),
             titre: None,
             titre_manuel: false,
             debut_parole: String::new(),
@@ -1363,6 +1368,9 @@ impl<R: Runtime> Chef<R> {
         // La réunion reprend sans pause : l'écoute oublie toute pause notée
         // (KOB-297, KOB-305).
         let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::RepriseReunion);
+        if let Some(arret) = r.arret {
+            r.fins_annulees.push((arret, Instant::now()));
+        }
         r.fin_demandee = false;
         r.annulable_jusqu = None;
         r.pause = false;
@@ -1486,6 +1494,14 @@ impl<R: Runtime> Chef<R> {
         // gardé jusqu'au compte rendu. Ce qui est dit après (le « annule »
         // d'« Annuler »…) ne l'est pas (KOB-198).
         if r.fin_demandee && r.arret.is_none_or(|arret| dit_a > arret) {
+            return;
+        }
+        // Dit pendant une fin ensuite annulée, transcrit après l'annulation :
+        // pas plus dans les notes que si la fin avait tenu (KOB-309).
+        if r.fins_annulees
+            .iter()
+            .any(|&(arret, annule)| commence_a > arret && commence_a <= annule)
+        {
             return;
         }
         horodater(&mut s, r.debut, dit_a);
@@ -3317,6 +3333,41 @@ mod tests {
             let r = c.reunion.as_ref().unwrap();
             assert!(!r.fin_demandee && !r.pause && r.pause_a.is_none());
             assert!(c.enregistrement().actif && !c.enregistrement().pause);
+        });
+    }
+
+    /// KOB-309 : fin, puis « Annuler » ; ce qui a été dit pendant la fin et
+    /// arrive après l'annulation (« reprends » transcrit en retard) n'entre
+    /// pas dans les notes. Ce qui a été dit avant l'arrêt, ou après
+    /// l'annulation, si.
+    #[test]
+    fn parole_pendant_une_fin_annulee_hors_des_notes() {
+        let (app, _dir) = chef_en_essai();
+        // Segments brefs : leur début est l'instant donné.
+        let dit = |texte: &str| {
+            let mut s = dit(texte);
+            s.start = s.end;
+            s
+        };
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            let avant = Instant::now() - Duration::from_millis(50);
+            c.commande(Intention::TerminerReunion);
+            std::thread::sleep(Duration::from_millis(20));
+            let pendant = Instant::now();
+            std::thread::sleep(Duration::from_millis(20));
+            c.commande(Intention::Reprendre);
+            assert!(!c.fin_annulable());
+            c.recevoir(Message::Segment(dit("Pendant la fin."), pendant));
+            c.recevoir(Message::Segment(dit("Avant l'arrêt."), avant));
+            c.recevoir(Message::Segment(
+                dit("Après la reprise."),
+                Instant::now() + Duration::from_secs(2),
+            ));
+            let notes = &c.reunion.as_ref().unwrap().a_noter;
+            assert!(!notes.contains("Pendant la fin."), "{notes}");
+            assert!(notes.contains("Avant l'arrêt."), "{notes}");
+            assert!(notes.contains("Après la reprise."), "{notes}");
         });
     }
 
