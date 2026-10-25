@@ -237,6 +237,10 @@ impl Lecteur {
 
     /// Chemin résolu, s'il est dans un dossier permis.
     fn permis(&self, chemin: &str) -> Result<PathBuf, String> {
+        // Sous une base verbatim (`\\?\C:\…`), seul `\` sépare : `a/../x`
+        // y serait un seul nom (KOB-352).
+        #[cfg(windows)]
+        let chemin = &chemin.replace('/', "\\");
         let brut = Path::new(chemin);
         let brut = match (brut.is_absolute(), self.base.as_ref()) {
             (false, Some(base)) => base.join(brut),
@@ -256,12 +260,13 @@ impl Lecteur {
         if chemin_reseau(chemin) || chemin_reseau(&brut.to_string_lossy()) {
             return Err(refus());
         }
-        // Sous Windows, `canonicalize` réduit `..` sur le texte
-        // (`GetFullPathNameW`) avant de suivre le moindre lien : le contrôle
-        // part du même chemin réduit (KOB-352). `absolute` ne touche pas au
-        // disque. Ailleurs, `..` est physique des deux côtés.
+        // Sous Windows, un `..` du chemin demandé se réduit sur le texte avant
+        // tout lien suivi : le contrôle et `canonicalize` partent du même
+        // chemin réduit, verbatim compris (`absolute` laisse `\\?\` intact),
+        // sans toucher au disque (KOB-352). Ailleurs, `..` est physique des
+        // deux côtés.
         #[cfg(windows)]
-        let brut = std::path::absolute(&brut).map_err(|e| format!("{chemin} : {e}"))?;
+        let brut = reduire_sur_le_texte(&brut);
         if !prefixe_local(&brut) || lien_vers_le_reseau(&brut) {
             return Err(refus());
         }
@@ -928,6 +933,26 @@ fn lien_vers_le_reseau(chemin: &Path) -> bool {
         }
     }
     false
+}
+
+/// `.` et `..` retirés sur le texte, sans remonter au-dessus de la racine ni
+/// du préfixe, sans rien lire sur le disque (KOB-352, Windows).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn reduire_sur_le_texte(chemin: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut reduit = PathBuf::new();
+    for composant in chemin.components() {
+        match composant {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if matches!(reduit.components().next_back(), Some(Component::Normal(_))) {
+                    reduit.pop();
+                }
+            }
+            autre => reduit.push(autre.as_os_str()),
+        }
+    }
+    reduit
 }
 
 /// Liens lus au plus pour un chemin, comme Linux (KOB-352).

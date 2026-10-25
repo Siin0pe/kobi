@@ -183,26 +183,53 @@ fn lien_vers_un_chemin_reseau_refuse_sans_le_suivre() {
         .contains("Kobi"));
 }
 
-/// KOB-352, sous Windows : `a\..\evil` se réduit sur le texte en `evil`
+/// KOB-352 : `.` et `..` se retirent sur le texte, sans remonter au-dessus
+/// de la racine, verbatim compris (utilisé sous Windows).
+#[test]
+fn reduction_sur_le_texte() {
+    assert_eq!(
+        reduire_sur_le_texte(Path::new("/base/a/../evil")),
+        Path::new("/base/evil")
+    );
+    assert_eq!(
+        reduire_sur_le_texte(Path::new("/base/./a/./b")),
+        Path::new("/base/a/b")
+    );
+    assert_eq!(reduire_sur_le_texte(Path::new("/../../x")), Path::new("/x"));
+}
+
+/// KOB-352, sous Windows : `a\..\evil` (ou `a/../evil`) se réduit sur le
+/// texte en `evil`, base verbatim comprise
 /// (comme le fait `canonicalize`), dont le lien vise le réseau : refusé ;
 /// `a\x`, dont le `..` de la cible est physique, aussi. La CI windows-latest
 /// peut créer des liens.
 #[cfg(windows)]
 #[test]
 fn lien_vers_un_chemin_reseau_refuse_sous_windows() {
+    // La base est verbatim : la réduction ne doit pas s'y arrêter.
+    assert_eq!(
+        reduire_sur_le_texte(Path::new(r"\\?\C:\base\a\..\.\evil")),
+        Path::new(r"\\?\C:\base\evil")
+    );
+    assert_eq!(
+        reduire_sur_le_texte(Path::new(r"\\?\C:\..\x")),
+        Path::new(r"\\?\C:\x")
+    );
     use std::os::windows::fs::{symlink_dir, symlink_file};
     let dir = codebase();
     let racine = dir.path();
     fs::create_dir_all(racine.join(r"sub\deep")).unwrap();
     if symlink_dir(r"sub\deep", racine.join("a")).is_err() {
-        // Pas le droit de créer des liens sur ce poste : rien à vérifier.
+        // Pas le droit de créer des liens sur ce poste : rien à vérifier,
+        // sauf en CI, qui doit pouvoir le faire.
+        assert!(std::env::var_os("CI").is_none(), "liens impossibles en CI");
         return;
     }
     symlink_file(r"\\attaquant\p", racine.join("evil")).unwrap();
     symlink_file(r"..\evil2", racine.join(r"sub\deep\x")).unwrap();
     symlink_file(r"\\attaquant\q", racine.join(r"sub\evil2")).unwrap();
     let l = lecteur(&dir);
-    for chemin in [r"a\..\evil", r"a\x", "evil"] {
+    for chemin in [r"a\..\evil", "a/../evil", r"a\x", "evil"] {
         let e = l.lire(&json!({ "file_path": chemin })).unwrap_err();
         assert!(e.contains("chemin réseau"), "{chemin} : {e}");
     }
