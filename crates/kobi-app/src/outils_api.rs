@@ -296,9 +296,13 @@ impl Lecteur {
         let entrees = walkdir::WalkDir::new(depart)
             .follow_links(false)
             .into_iter()
+            // Le départ lui-même est toujours parcouru : demandé (« cherche
+            // dans node_modules ») ou déclaré (une codebase nommée `target`),
+            // il ne s'ignore pas (KOB-346).
             .filter_entry(|e| {
-                !(e.file_type().is_dir()
-                    && DOSSIERS_IGNORES.contains(&e.file_name().to_string_lossy().as_ref()))
+                e.depth() == 0
+                    || !(e.file_type().is_dir()
+                        && DOSSIERS_IGNORES.contains(&e.file_name().to_string_lossy().as_ref()))
             });
         for entree in entrees {
             parcours.vues += 1;
