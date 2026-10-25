@@ -1037,6 +1037,7 @@ impl<R: Runtime> Chef<R> {
             if let Some(accepte) = crate::intentions::reponse_validation(&texte) {
                 tracing::info!(%id, accepte, "réponse à la carte, à la voix ou au clavier");
                 crate::validation::decider(&self.app, &id, accepte);
+                self.reponse_a_la_carte(texte, voix, accepte);
                 return;
             }
         }
@@ -1053,9 +1054,12 @@ impl<R: Runtime> Chef<R> {
                 );
                 crate::validation::retirer(&self.app, &carte.to_string(), accepte);
                 self.recevoir(Message::Decision { carte, accepte });
-                // « Kobi, oui » : l'écoute ouverte par le nom se referme. Une
-                // autre carte qui attend se remontre, Kobi y repropose.
-                if self.activite() == Some("ecoute") {
+                // « Kobi, oui » sur une carte des notes : l'écoute ouverte par
+                // le nom se referme (aucune réponse ne suit). Une autre carte
+                // qui attend se remontre, Kobi y repropose. Celle de la
+                // conversation, elle, fait repartir le tour (l'état passe de
+                // l'écoute à la réflexion, KOB-336).
+                if self.activite() == Some("ecoute") && self.cartes_des_notes.contains_key(&carte) {
                     self.transition(&[Evenement::PasDeQuestion]);
                     if let Some(ui) = self
                         .carte_affichee_sauf(Some(carte))
@@ -1071,6 +1075,7 @@ impl<R: Runtime> Chef<R> {
                         let _ = self.app.emit(EVENEMENT_CARTE, &ui);
                     }
                 }
+                self.reponse_a_la_carte(texte, voix, accepte);
                 return;
             }
         }
@@ -2137,6 +2142,28 @@ impl<R: Runtime> Chef<R> {
                 crate::ecoute::Commande::ReponseAttendue(crate::validation::ECHEANCE),
             );
         }
+    }
+
+    /// « Oui » ou « non » dit à une carte : un échange fini dans la
+    /// conversation, pas une question qui attendrait sa réponse (KOB-336).
+    fn reponse_a_la_carte(&mut self, question: String, voix: bool, accepte: bool) {
+        let reponse = kobi_i18n::tr(
+            if accepte {
+                "coque.chef.carteOui"
+            } else {
+                "coque.chef.carteNon"
+            },
+            &[],
+        );
+        self.tour += 1;
+        self.ajouter(Bulle {
+            tour: self.tour,
+            question,
+            reponse,
+            statut: "fini",
+            clavier: !voix,
+            etapes: Vec::new(),
+        });
     }
 
     /// Plus aucune carte, ni de Kobi ni MCP, n'attend : la fenêtre de la
@@ -4050,6 +4077,34 @@ mod tests {
         });
     }
 
+    /// KOB-336 : « Kobi, oui » sur une carte de Kobi (rappel) : Kobi ne reste
+    /// pas figé en écoute, il repart sur le tour ; le « oui » est un échange
+    /// fini dans la conversation.
+    #[test]
+    fn kobi_oui_sur_une_carte_de_kobi_ne_fige_pas() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.recevoir(Message::Interpelle);
+            c.transition(&[Evenement::QuestionEnvoyee]);
+            c.validation_ouverte("v1".into(), "Ajoute un rappel");
+            assert_eq!(c.activite(), Some("propose"));
+            c.recevoir(Message::Interpelle);
+            assert_eq!(c.activite(), Some("ecoute"));
+            c.recevoir(Message::Question {
+                texte: "oui".into(),
+                voix: true,
+                dit_a: None,
+            });
+            c.recevoir(Message::ValidationFermee {
+                id: "v1".into(),
+                reponse: crate::validation::Reponse::Accepte,
+            });
+            assert_eq!(c.activite(), Some("reflechit"));
+            let dernier = c.historique.last().unwrap();
+            assert_eq!((dernier.question.as_str(), dernier.statut), ("oui", "fini"));
+        });
+    }
+
     /// KOB-336 : une carte des notes le dit en tête ; « Kobi, oui » lui
     /// répond comme un clic (la plus récente d'abord), Kobi revient au calme ;
     /// une phrase ordinaire ne touche pas à la carte.
@@ -4087,7 +4142,6 @@ mod tests {
             c.recevoir(Message::Interpelle);
             c.recevoir(dite("quelle heure est-il ?"));
             assert_eq!(c.tour, tour + 1);
-            c.recevoir(dite("ok"));
             c.recevoir(dite("stop"));
             assert_eq!(c.cartes.len(), 2);
             assert!(c.notes_acceptees.is_empty());
@@ -4097,7 +4151,10 @@ mod tests {
             assert_eq!(c.activite(), Some("ecoute"));
             c.recevoir(dite("oui"));
             assert!(c.notes_acceptees.contains(&4));
-            assert_eq!(c.tour, tour, "pas de question envoyée");
+            assert_eq!(c.tour, tour + 1, "un échange fini, pas une question");
+            let dernier = c.historique.last().unwrap();
+            assert_eq!((dernier.question.as_str(), dernier.statut), ("oui", "fini"));
+            assert_eq!(dernier.reponse, "C'est parti.");
             assert_eq!(c.activite(), Some("propose"), "la carte 3 attend encore");
             c.recevoir(Message::Cerveau(Retour::CarteFermee {
                 carte: 4,

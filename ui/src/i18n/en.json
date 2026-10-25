@@ -900,6 +900,8 @@
   "coque.chef.aiAnnule": "I canceled “{question}”.",
   "coque.chef.delaiCarte": "No answer: I didn't do anything.",
   "coque.chef.depuisLesNotes": "From the notes",
+  "coque.chef.carteOui": "On it.",
+  "coque.chef.carteNon": "OK, I'll leave it.",
   "coque.chef.jeLeFais": "Shall I do it?",
   "coque.chef.resumeJeLeFais": "{resume}. Shall I do it?",
   "coque.chef.enAttenteReseau": {

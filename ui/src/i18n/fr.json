@@ -900,6 +900,8 @@
   "coque.chef.aiAnnule": "J'ai annulé « {question} ».",
   "coque.chef.delaiCarte": "Pas de réponse : je n'ai rien fait.",
   "coque.chef.depuisLesNotes": "Depuis les notes",
+  "coque.chef.carteOui": "C'est parti.",
+  "coque.chef.carteNon": "D'accord, je laisse tomber.",
   "coque.chef.jeLeFais": "Je le fais ?",
   "coque.chef.resumeJeLeFais": "{resume}. Je le fais ?",
   "coque.chef.enAttenteReseau": {
