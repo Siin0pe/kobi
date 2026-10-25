@@ -395,6 +395,7 @@ async fn conversation_seulement_allongee() {
     let notes = NotesUpdate {
         transcript: "[00:10 moi] bonjour".into(),
         notes: "- rien".into(),
+        ..Default::default()
     };
     assert_eq!(
         fin(&tous(brain.update_notes(notes)).await).unwrap().text,

@@ -11,7 +11,7 @@
 //! « Kobi, assiste-nous pour la réunion » est reconnu sur place
 //! ([`crate::intentions`]) : la réunion démarre avant tout appel à Claude.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
@@ -56,15 +56,20 @@ const TITRE_PAROLE_MAX: usize = 8_000;
 /// Demandes de titre au plus, quand Claude ne trouve pas.
 const TITRE_ESSAIS: u8 = 3;
 
-/// Notes en mode fin de réunion (`notes.mode = end`, KOB-71) : rien n'est
-/// demandé à Claude pendant la réunion, tout passe par le compte rendu. Lu
-/// au début de chaque réunion.
-fn notes_a_la_fin() -> bool {
-    kobi_session::config::default_path().is_some_and(|p| {
-        kobi_session::config::load_or_create(&p).config.notes.mode
-            == kobi_session::config::NotesMode::End
-    })
+/// Mode de prise de notes (`notes.mode`), lu au début de chaque réunion. En
+/// fin de réunion (`end`, KOB-71), rien n'est demandé à Claude pendant la
+/// réunion, tout passe par le compte rendu. En continu (`continuous`,
+/// KOB-72, expérimental), un bloc part toutes les [`PHRASES_CONTINU`]
+/// phrases et Claude peut proposer une action, sur carte.
+fn mode_de_notes() -> kobi_session::config::NotesMode {
+    kobi_session::config::default_path()
+        .map(|p| kobi_session::config::load_or_create(&p).config.notes.mode)
+        .unwrap_or_default()
 }
+
+/// Phrases par bloc en notes continues (KOB-72) : assez peu pour réagir
+/// vite, assez pour ne pas appeler Claude à chaque phrase.
+const PHRASES_CONTINU: usize = 3;
 
 /// Titre automatique réglé (`meetings.titre_auto`). Lu au début de chaque
 /// réunion, pas à chaque tick sous le verrou du chef (KOB-265).
@@ -391,6 +396,11 @@ struct EnCours {
     /// `notes.mode = end` (KOB-71) : ni bloc de notes ni titre pendant la
     /// réunion ; le titre est demandé avec le compte rendu.
     a_la_fin: bool,
+    /// `notes.mode = continuous` (KOB-72) : blocs de [`PHRASES_CONTINU`]
+    /// phrases, et propositions d'action sur carte.
+    continu: bool,
+    /// Le dernier bloc a échoué : il est repris à l'heure, même en continu.
+    bloc_en_echec: bool,
     /// `meetings.titre_auto`, lu au début de la réunion (KOB-265).
     titre_auto: bool,
     /// Latence de chaque interpellation, résumée à la fin du compte rendu
@@ -447,6 +457,13 @@ pub struct Chef<R: Runtime> {
     /// ni la réponse n'entrent dans les notes, même si la réponse arrive
     /// après « Annuler » ou la reprise (KOB-325).
     hors_notes: HashSet<u64>,
+    /// Cartes proposées par la prise de notes (tour 0, KOB-72), et si Kobi
+    /// était au calme à leur ouverture : il y revient une fois décidées.
+    cartes_des_notes: HashMap<u64, bool>,
+    /// Ouverture de chaque carte MCP : sans clic, kobi-perms la refuse seul
+    /// à l'échéance sans que rien ne revienne ; le chef la ferme alors, pour
+    /// ne pas rester en proposition (KOB-72).
+    cartes_ouvertes: HashMap<u64, Instant>,
     /// Cartes de validation ouvertes (KOB-156), dans l'ordre de l'écran :
     /// « oui » ou « non » répond à celle affichée (KOB-218).
     validations: crate::validation::FileValidations,
@@ -740,6 +757,8 @@ impl<R: Runtime> Chef<R> {
             annoncees: Default::default(),
             interrompus: HashSet::new(),
             hors_notes: HashSet::new(),
+            cartes_des_notes: HashMap::new(),
+            cartes_ouvertes: HashMap::new(),
             validations: Default::default(),
             peut_etre: false,
             differee: false,
@@ -1282,6 +1301,7 @@ impl<R: Runtime> Chef<R> {
         // La conversation du quotidien s'arrête là ; la réunion prend le relais.
         self.fermer_conversation();
         tracing::info!(ms = debut.elapsed().as_millis() as u64, "réunion démarrée");
+        let mode = mode_de_notes();
         self.reunion = Some(EnCours {
             dossier: None,
             debut,
@@ -1307,7 +1327,9 @@ impl<R: Runtime> Chef<R> {
             debut_parole: String::new(),
             titre_demande: false,
             titre_essais: 0,
-            a_la_fin: notes_a_la_fin(),
+            a_la_fin: mode == kobi_session::config::NotesMode::End,
+            continu: mode == kobi_session::config::NotesMode::Continuous,
+            bloc_en_echec: false,
             titre_auto: titre_auto_actif(),
             latences: Default::default(),
         });
@@ -2006,7 +2028,17 @@ impl<R: Runtime> Chef<R> {
                 tracing::info!(tour, carte, %outil, "carte de confirmation");
                 let ui = carte_ui(carte, &outil, &entree);
                 self.cartes.insert(carte, ui.clone());
+                self.cartes_ouvertes.insert(carte, Instant::now());
                 self.calme_a = None;
+                // Proposée par les notes en continu (KOB-72) : Kobi passe
+                // des notes à la proposition, même depuis le calme.
+                if tour == 0 {
+                    let calme = self.activite() == Some("calme");
+                    self.cartes_des_notes.insert(carte, calme);
+                    if calme {
+                        self.transition(&[Evenement::NotesCommencent]);
+                    }
+                }
                 self.transition(&[Evenement::PermissionDemandee]);
                 let _ = self.app.emit(EVENEMENT_CARTE, &ui);
             }
@@ -2020,11 +2052,21 @@ impl<R: Runtime> Chef<R> {
                     };
                     let _ = self.app.emit(EVENEMENT_CARTE, &ui);
                 }
-                self.transition(&[if accepte == Some(true) {
-                    Evenement::PermissionAccordee
-                } else {
-                    Evenement::PermissionRefusee
-                }]);
+                self.cartes_ouvertes.remove(&carte);
+                let depuis_calme = self.cartes_des_notes.remove(&carte).unwrap_or(false);
+                // Une autre carte attend encore : Kobi reste en proposition.
+                if self.cartes.is_empty() {
+                    self.transition(&[if accepte == Some(true) {
+                        Evenement::PermissionAccordee
+                    } else {
+                        Evenement::PermissionRefusee
+                    }]);
+                    // Aucune réponse ne suit une carte des notes : retour au
+                    // calme d'où elle venait.
+                    if depuis_calme && accepte == Some(true) {
+                        self.transition(&[Evenement::ReponseTerminee]);
+                    }
+                }
             }
             Retour::Activite { demande, at_ms } => self.activite_outil(&demande, at_ms),
             Retour::Notes(resultat) => self.notes(resultat),
@@ -2068,21 +2110,44 @@ impl<R: Runtime> Chef<R> {
         }
     }
 
+    /// Cartes MCP restées sans clic au-delà de l'échéance de kobi-perms (qui
+    /// les a refusées) : fermées comme un refus (KOB-72).
+    fn cartes_expirees(&mut self) {
+        let echeance = kobi_perms::DEFAULT_TIMEOUT + Duration::from_secs(5);
+        let expirees: Vec<u64> = self
+            .cartes_ouvertes
+            .iter()
+            .filter(|(_, ouverte)| ouverte.elapsed() > echeance)
+            .map(|(carte, _)| *carte)
+            .collect();
+        for carte in expirees {
+            tracing::info!(carte, "carte sans réponse : refusée à l'échéance");
+            self.retour(Retour::CarteFermee {
+                carte,
+                accepte: None,
+            });
+        }
+    }
+
     fn notes(&mut self, resultat: Result<String, String>) {
         let Some(r) = &mut self.reunion else { return };
         let envoye = r.envoye.take().unwrap_or_default();
         match resultat {
             Ok(notes) if !notes.trim().is_empty() => {
+                r.bloc_en_echec = false;
                 r.derniere_note = derniere_note(&r.notes, &notes).or(r.derniere_note.take());
                 r.notes = notes;
                 self.ecrivain.notes(r.notes.clone());
                 tracing::info!(lignes = compter_notes(&r.notes), "notes mises à jour");
                 self.emettre_enregistrement();
             }
-            Ok(_) => {}
+            Ok(_) => r.bloc_en_echec = false,
             Err(e) => {
                 tracing::warn!(erreur = %e, "notes : bloc en échec, repris au prochain");
                 r.a_noter.insert_str(0, &envoye);
+                // Repris à l'heure, pas au tick suivant : en continu, le bloc
+                // remis a déjà ses phrases (KOB-72).
+                r.bloc_en_echec = true;
             }
         }
     }
@@ -2393,6 +2458,7 @@ impl<R: Runtime> Chef<R> {
 
     /// Délais : retour au calme, blocs de notes.
     pub fn tick(&mut self) {
+        self.cartes_expirees();
         self.poser_questions_differees();
         let parle = crate::voix::parle(&self.app);
         if let Some((quand, evenement)) = self.calme_a {
@@ -2460,12 +2526,11 @@ impl<R: Runtime> Chef<R> {
                 });
             }
         }
-        if r.pause
-            || r.fin_demandee
-            || r.a_la_fin
-            || r.envoye.is_some()
-            || Instant::now() < r.prochain_bloc
-        {
+        // En continu, le bloc part dès qu'il a ses phrases ; le reste part
+        // à l'heure, comme en mode blocs.
+        let du = Instant::now() >= r.prochain_bloc
+            || (r.continu && !r.bloc_en_echec && r.a_noter.lines().count() >= PHRASES_CONTINU);
+        if r.pause || r.fin_demandee || r.a_la_fin || r.envoye.is_some() || !du {
             return;
         }
         r.prochain_bloc = Instant::now() + self.intervalle;
@@ -2474,10 +2539,15 @@ impl<R: Runtime> Chef<R> {
         }
         let bloc = std::mem::take(&mut r.a_noter);
         r.envoye = Some(bloc.clone());
-        tracing::info!(octets = bloc.len(), "bloc de notes envoyé");
+        tracing::info!(
+            octets = bloc.len(),
+            continu = r.continu,
+            "bloc de notes envoyé"
+        );
         self.cerveau.demander(Demande::Notes {
             transcript: bloc,
             notes: r.notes.clone(),
+            propositions: r.continu,
         });
     }
 }
@@ -3171,6 +3241,103 @@ mod tests {
                 "{}",
                 r.pour_compte_rendu
             );
+        });
+    }
+
+    /// KOB-72 : en continu, le bloc part dès sa troisième phrase, avant
+    /// l'heure, et demande des propositions ; en mode blocs, il attend
+    /// l'heure.
+    #[test]
+    fn notes_en_continu_par_trois_phrases() {
+        for continu in [true, false] {
+            let (app, _dir) = chef_en_essai();
+            avec_chef(&app, |c| {
+                c.commande(Intention::DemarrerReunion);
+                c.reunion.as_mut().unwrap().continu = continu;
+                for texte in ["Budget validé.", "Lieu : Annecy."] {
+                    c.recevoir(Message::Segment(dit(texte), Instant::now()));
+                }
+                c.tick();
+                assert!(c.reunion.as_ref().unwrap().envoye.is_none());
+                c.recevoir(Message::Segment(
+                    dit("Il faut envoyer le devis."),
+                    Instant::now(),
+                ));
+                c.tick();
+                let r = c.reunion.as_ref().unwrap();
+                assert_eq!(r.envoye.is_some(), continu, "continu : {continu}");
+                if continu {
+                    assert!(r.envoye.as_ref().unwrap().contains("devis"));
+                    assert!(r.a_noter.is_empty());
+                }
+            });
+        }
+    }
+
+    /// KOB-72 : une carte proposée par les notes (tour 0) met Kobi en
+    /// proposition depuis le calme et l'y ramène une fois décidée ; tant
+    /// qu'une autre carte attend, il reste en proposition.
+    #[test]
+    fn carte_des_notes_en_proposition_puis_au_calme() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            assert_eq!(c.activite(), Some("calme"));
+            let carte = |carte| {
+                Message::Cerveau(Retour::Carte {
+                    tour: 0,
+                    carte,
+                    outil: "mcp__linear__save_issue".into(),
+                    entree: serde_json::json!({"title": "Envoyer le devis"}),
+                })
+            };
+            let fermee = |carte, accepte| Message::Cerveau(Retour::CarteFermee { carte, accepte });
+            c.recevoir(carte(7));
+            assert_eq!(c.activite(), Some("propose"));
+            c.recevoir(fermee(7, Some(true)));
+            assert_eq!(c.activite(), Some("calme"));
+            // Deux cartes : la première décidée, Kobi attend la seconde.
+            c.recevoir(carte(8));
+            c.recevoir(carte(9));
+            c.recevoir(fermee(8, Some(false)));
+            assert_eq!(c.activite(), Some("propose"));
+            c.recevoir(fermee(9, Some(false)));
+            assert_eq!(c.activite(), Some("calme"));
+            assert!(c.cartes_des_notes.is_empty());
+            // Jamais décidée : à l'échéance de kobi-perms, refusée et fermée.
+            c.recevoir(carte(10));
+            assert_eq!(c.activite(), Some("propose"));
+            c.tick();
+            assert_eq!(c.activite(), Some("propose"));
+            *c.cartes_ouvertes.get_mut(&10).unwrap() =
+                Instant::now() - kobi_perms::DEFAULT_TIMEOUT - Duration::from_secs(6);
+            c.tick();
+            assert_eq!(c.activite(), Some("calme"));
+            assert!(c.cartes.is_empty() && c.cartes_ouvertes.is_empty());
+        });
+    }
+
+    /// KOB-72 : en continu, un bloc en échec n'est pas renvoyé au tick
+    /// suivant (il a déjà ses phrases) mais à l'heure.
+    #[test]
+    fn notes_en_continu_bloc_en_echec_repris_a_l_heure() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            c.reunion.as_mut().unwrap().continu = true;
+            for texte in ["Un.", "Deux.", "Trois."] {
+                c.recevoir(Message::Segment(dit(texte), Instant::now()));
+            }
+            c.tick();
+            assert!(c.reunion.as_ref().unwrap().envoye.is_some());
+            c.recevoir(Message::Cerveau(Retour::Notes(Err("réseau".into()))));
+            c.tick();
+            let r = c.reunion.as_mut().unwrap();
+            assert!(r.envoye.is_none(), "renvoyé au tick suivant");
+            assert!(r.a_noter.contains("Trois."));
+            r.prochain_bloc = Instant::now();
+            c.tick();
+            assert!(c.reunion.as_ref().unwrap().envoye.is_some());
         });
     }
 

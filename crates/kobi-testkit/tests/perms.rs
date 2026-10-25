@@ -4,7 +4,9 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use kobi_brain::{Ask, Brain, BrainEvent, ClaudeCodeBrain, Decision, MeetingConfig, Turn};
+use kobi_brain::{
+    Ask, Brain, BrainEvent, ClaudeCodeBrain, Decision, MeetingConfig, NotesUpdate, Turn,
+};
 use kobi_perms::Cards;
 use serde_json::{json, Map};
 
@@ -16,12 +18,18 @@ fn work_dir(test: &str) -> kobi_testkit::DossierTemp {
 }
 
 async fn start(dir: &Path, timeout: Duration) -> ClaudeCodeBrain {
+    start_avec(dir, timeout, "permission.json").await
+}
+
+async fn start_avec(dir: &Path, timeout: Duration, scenario: &str) -> ClaudeCodeBrain {
     let mut servers = Map::new();
     servers.insert(
         "notes".into(),
         json!({ "command": FAKE_MCP, "args": ["--journal", dir.join("journal.txt")] }),
     );
-    let scenario = Path::new(env!("CARGO_MANIFEST_DIR")).join("scenarios/permission.json");
+    let scenario = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("scenarios")
+        .join(scenario);
     ClaudeCodeBrain::start(MeetingConfig {
         program: PathBuf::from(FAKE_CLAUDE),
         mcp_servers: servers,
@@ -77,6 +85,31 @@ async fn une_ecriture_attend_la_reponse() {
     assert!(cards.answer(id, Decision::Allow));
     let summary = turn.wait().await.unwrap();
     assert!(summary.text.contains("C'est noté"));
+    assert_eq!(
+        journal(&dir).as_deref(),
+        Some("- Il faut envoyer le devis au client.\n")
+    );
+    brain.close(Duration::from_secs(5)).await;
+}
+
+/// KOB-72 : en notes continues, le message de notes demande les
+/// propositions (le faux `claude` attend la consigne) ; l'action proposée
+/// ouvre une carte, et rien n'est écrit avant le oui.
+#[tokio::test]
+async fn notes_en_continu_une_proposition_ouvre_une_carte() {
+    let dir = work_dir("notes-continu");
+    let cards = Cards::new(Duration::from_secs(60));
+    let mut brain = start_avec(&dir, Duration::from_secs(60), "notes-continu.json").await;
+    let mut turn = brain.update_notes(NotesUpdate {
+        transcript: "[00:10 moi] Il faut envoyer le devis au client.".into(),
+        notes: String::new(),
+        propositions: true,
+    });
+    let id = until_card(&mut turn, &cards).await;
+    assert_eq!(cards.pending()[0].tool, "write_note");
+    assert_eq!(journal(&dir), None);
+    assert!(cards.answer(id, Decision::Allow));
+    turn.wait().await.unwrap();
     assert_eq!(
         journal(&dir).as_deref(),
         Some("- Il faut envoyer le devis au client.\n")

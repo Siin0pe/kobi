@@ -31,6 +31,9 @@ pub struct NotesUpdate {
     /// Transcription depuis le bloc précédent.
     pub transcript: String,
     pub notes: String,
+    /// Notes en continu (KOB-72, expérimental) : Claude peut proposer une
+    /// action en appelant l'outil qui écrit ; Kobi montre la carte.
+    pub propositions: bool,
 }
 
 /// Fin de réunion : demande du compte rendu.

@@ -93,6 +93,7 @@ impl Outbox {
         let update = NotesUpdate {
             transcript,
             notes: notes.to_owned(),
+            ..Default::default()
         };
         (update, mark)
     }

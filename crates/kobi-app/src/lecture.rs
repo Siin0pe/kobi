@@ -216,14 +216,23 @@ fn assembler(
                     .filter(|o| !lecture.contains(o)),
             );
             autorises.extend(lecture);
-        } else {
+        } else if pilote {
             autorises.extend(mcp.outils_autorises.iter().cloned());
-            let reunion = kobi_ctl::mcp::outils_de_reunion(serveur);
-            if pilote {
-                autorises.extend(reunion);
-            } else {
-                refuses.extend(reunion);
-            }
+            autorises.extend(kobi_ctl::mcp::outils_de_reunion(serveur));
+        } else {
+            // Notes (KOB-72) : rien de Kobi qui écrive ou affiche, pas même
+            // un réglage « sans demander » ; la transcription est une donnée.
+            // Une action proposée vise un outil de l'utilisateur, sur carte.
+            let lecture = kobi_ctl::mcp::outils_de_lecture(serveur);
+            let ecrit = |o: &String| !lecture.contains(o);
+            let kobi: Vec<String> = kobi_ctl::mcp::outils_de_l_agent(serveur);
+            autorises.extend(
+                mcp.outils_autorises
+                    .iter()
+                    .filter(|o| !kobi.contains(o) || !ecrit(o))
+                    .cloned(),
+            );
+            refuses.extend(kobi.iter().filter(|o| ecrit(o)).cloned());
         }
     }
     let mut args: Vec<String> = [
@@ -541,7 +550,12 @@ mod tests {
     fn session_avec_le_mcp_de_kobi() {
         let mcp = McpSession {
             fichier: PathBuf::from("C:/Users/moi/Kobi/mcp/session-conversation.json"),
-            outils_autorises: vec!["mcp__kobi__notes_last".into(), "mcp__kobi__status".into()],
+            outils_autorises: vec![
+                "mcp__kobi__notes_last".into(),
+                "mcp__kobi__status".into(),
+                "mcp__kobi__config_set".into(),
+                "mcp__linear__save_issue".into(),
+            ],
             permission_prompt_tool: None,
             prompt: None,
         };
@@ -553,13 +567,31 @@ mod tests {
         assert!(args.contains(&"--strict-mcp-config".to_string()));
         assert_eq!(
             valeur(&args, "--allowedTools"),
-            ["Read,Grep,Glob,mcp__kobi__notes_last,mcp__kobi__status"]
+            ["Read,Grep,Glob,mcp__kobi__notes_last,mcp__kobi__status,mcp__linear__save_issue"]
         );
         assert_eq!(valeur(&args, "--tools"), ["Read,Grep,Glob"]);
         let prompt = valeur(&args, "--append-system-prompt")[0];
         assert!(prompt.contains("mcp__kobi__"), "{prompt}");
-        // Session des notes : le pilotage de la réunion lui est refusé.
-        assert!(valeur(&args, "--disallowedTools")[0].contains("mcp__kobi__meeting_stop"));
+        // Session des notes : le pilotage de la réunion lui est refusé, et
+        // tout ce qui écrit ou affiche chez Kobi (KOB-72) : la transcription
+        // ne doit pas pouvoir changer un réglage « sans demander ».
+        let refuses: Vec<&str> = valeur(&args, "--disallowedTools")[0].split(',').collect();
+        for outil in [
+            "meeting_stop",
+            "config_set",
+            "config_undo",
+            "reminders_add",
+            "voice_say",
+            "listen_pause",
+            "app_open",
+            "app_quit",
+        ] {
+            assert!(
+                refuses.contains(&format!("mcp__kobi__{outil}").as_str()),
+                "{outil}"
+            );
+        }
+        assert!(!refuses.contains(&"mcp__kobi__notes_last"));
         assert!(!prompt.contains("## Piloter la réunion"));
         assert!(!prompt.contains("## Au quotidien comme en réunion"));
     }
