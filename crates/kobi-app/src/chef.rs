@@ -1218,6 +1218,17 @@ impl<R: Runtime> Chef<R> {
             }
             return;
         }
+        // Réponse à une question d'une réunion close : sa question est dans
+        // les notes de celle-ci, pas dans une conversation. Seule au
+        // journal, elle n'y aurait pas de sens, et rouvrirait une
+        // conversation (KOB-334) : la bulle la montre, rien de plus.
+        if notes_de.is_some() {
+            tracing::info!(
+                tour,
+                "réponse arrivée après sa réunion : montrée, pas rangée"
+            );
+            return;
+        }
         let Some(stockage) = crate::stockage::actuel(&self.app) else {
             return;
         };
@@ -4377,6 +4388,56 @@ mod tests {
             c.commande(Intention::Reprendre);
             let &(arret, annule, voix) = c.reunion.as_ref().unwrap().fins_annulees.last().unwrap();
             assert!(annule > arret && !voix, "clic : l'heure du traitement");
+        });
+    }
+
+    /// KOB-334 : la réponse à une question d'une réunion close ne s'écrit
+    /// pas seule dans le journal, et ne rouvre pas de conversation ; une
+    /// réponse hors réunion, si.
+    #[test]
+    fn reponse_apres_sa_reunion_pas_au_journal() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            c.question("et le budget ?".into(), true);
+            let tour = c.tour;
+            c.reunion = None;
+            c.conversation = None;
+            c.recevoir(Message::Cerveau(Retour::Fin {
+                tour,
+                texte: "Budget de la réunion close.".into(),
+            }));
+            assert!(c.conversation.is_none(), "conversation rouverte");
+            assert!(c.rangement.is_empty());
+            // Réponse de A arrivée pendant une réunion B : ni ses notes, ni le
+            // journal.
+            c.commande(Intention::DemarrerReunion);
+            c.question("et la salle ?".into(), true);
+            let tour_a = c.tour;
+            c.reunion = None;
+            std::thread::sleep(Duration::from_millis(5));
+            c.commande(Intention::DemarrerReunion);
+            c.conversation = None;
+            c.recevoir(Message::Cerveau(Retour::Fin {
+                tour: tour_a,
+                texte: "Salle Annecy.".into(),
+            }));
+            assert!(c.conversation.is_none(), "conversation rouverte pendant B");
+            assert!(!c
+                .reunion
+                .as_ref()
+                .unwrap()
+                .a_noter
+                .contains("Salle Annecy."));
+            c.reunion = None;
+            // Hors réunion : au journal, la conversation continue.
+            c.question("quelle heure est-il ?".into(), true);
+            let tour = c.tour;
+            c.recevoir(Message::Cerveau(Retour::Fin {
+                tour,
+                texte: "Midi.".into(),
+            }));
+            assert!(c.conversation.is_some());
         });
     }
 
