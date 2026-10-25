@@ -1530,6 +1530,60 @@ async fn resume_en_erreur_4xx_reprise_a_neuf() {
     );
 }
 
+/// KOB-356 : un résumé lent qui finit en 400 après une reprise à neuf (limite
+/// dure) ne vaut pas pour la nouvelle conversation : le tour suivant au-
+/// dessus du seuil la garde entière, et un résumé est lancé après lui.
+#[tokio::test]
+async fn resume_impossible_apres_une_reprise_ecarte() {
+    // 1212 tokens > 2 × 500 : le tour suivant repart à neuf.
+    let mut gros = texte("A", ".");
+    gros.corps = gros.corps.replace(
+        "\"cache_creation_input_tokens\":800",
+        "\"cache_creation_input_tokens\":1200",
+    );
+    let mut lent = erreur(400, "invalid_request_error", "prompt is too long");
+    lent.pause = Some(Duration::from_secs(2));
+    let serveur = Serveur::lancer(vec![
+        gros,
+        lent,
+        texte("B", "."),
+        texte("C", "."),
+        resume("Résumé."),
+    ])
+    .await;
+    let mut brain = cerveau_compact(&serveur, true);
+    fin(&tous(brain.ask(question("un"))).await).unwrap();
+    while serveur.recues().len() < 2 {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    // Pendant le résumé : limite dure, reprise à neuf.
+    let deux = fin(&tous(brain.ask(question("deux"))).await).unwrap();
+    assert_eq!(deux.avis.as_deref(), Some(AVIS_REPRISE));
+    assert_eq!(
+        serveur.recues()[2].corps["messages"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    // Le 400 de l'ancienne conversation arrive.
+    attendre_requetes(&serveur, &brain, 3).await;
+    assert!(!brain.partage.reprise_demandee.load(Ordering::SeqCst));
+    // 812 tokens > 500 : au-dessus du seuil, mais rien d'effacé.
+    let trois = fin(&tous(brain.ask(question("trois"))).await).unwrap();
+    assert!(trois.avis.is_none());
+    assert_eq!(
+        serveur.recues()[3].corps["messages"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+    // Et la nouvelle conversation est résumée.
+    attendre_requetes(&serveur, &brain, 5).await;
+    assert_eq!(serveur.recues()[4].corps["compaction"]["type"], "summarize");
+}
+
 /// Pas de résumé après le compte rendu final : la conversation s'arrête là.
 #[tokio::test]
 async fn pas_de_resume_apres_le_compte_rendu() {

@@ -331,6 +331,9 @@ async fn tour(partage: &Partage, texte: String, events: &mpsc::Sender<BrainEvent
         historique.clear();
         partage.compacte.store(false, Ordering::SeqCst);
         partage.contexte.store(0, Ordering::SeqCst);
+        // Une demande de l'ancienne conversation ne vaut pas pour la
+        // nouvelle (KOB-356).
+        partage.reprise_demandee.store(false, Ordering::SeqCst);
         *partage.avis.lock().unwrap_or_else(|e| e.into_inner()) = Some(AVIS_REPRISE.to_owned());
     }
     let debut = historique.len();
@@ -703,11 +706,18 @@ async fn resumer_si_besoin(partage: &Partage) {
     } else {
         compacter(partage, &copie).await
     };
+    if matches!(issue, Resume::Passager) {
+        tracing::info!("résumé reporté après le tour suivant");
+        return;
+    }
+    let mut historique = partage.historique.lock().await;
+    // La conversation commence toujours par la copie résumée : rien n'a été
+    // retiré ni repris à neuf pendant le résumé.
+    let n = copie.len();
+    let inchangee = historique.len() >= n && historique[..n] == copie[..];
     match issue {
         Resume::Bloc(bloc) => {
-            let mut historique = partage.historique.lock().await;
-            let n = copie.len();
-            if historique.len() >= n && historique[..n] == copie[..] {
+            if inchangee {
                 tracing::info!(
                     messages = n,
                     suite = historique.len() - n,
@@ -723,8 +733,15 @@ async fn resumer_si_besoin(partage: &Partage) {
                 tracing::info!("conversation changée pendant le résumé : résumé écarté");
             }
         }
-        Resume::Passager => tracing::info!("résumé reporté après le tour suivant"),
-        Resume::Impossible => partage.reprise_demandee.store(true, Ordering::SeqCst),
+        Resume::Passager => {}
+        // Sur une conversation déjà reprise à neuf, l'échec ne dit rien de
+        // la nouvelle : elle sera résumée à son tour (KOB-356).
+        Resume::Impossible if inchangee => {
+            partage.reprise_demandee.store(true, Ordering::SeqCst);
+        }
+        Resume::Impossible => {
+            tracing::info!("conversation changée pendant le résumé : échec écarté");
+        }
     }
 }
 
