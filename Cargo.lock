@@ -3105,6 +3105,7 @@ dependencies = [
  "kobi-session",
  "kobi-stt",
  "kobi-tts",
+ "libc",
  "regex",
  "reqwest",
  "rmcp",

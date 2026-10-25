@@ -802,3 +802,104 @@ fn resultats_bornes() {
     let r = l.lister(&json!({ "pattern": "f*.txt" })).unwrap();
     assert_eq!(r.lines().count(), RESULTATS_MAX + 1);
 }
+
+// ----- Course entre vérification et ouverture, bornes (KOB-335) -----
+
+/// Un dossier intermédiaire remplacé par un lien vers l'extérieur entre la
+/// vérification du chemin et son ouverture : refusé (vrai chemin du
+/// descripteur, `/proc/self/fd`).
+#[cfg(target_os = "linux")]
+#[test]
+fn course_dossier_remplace_par_un_lien() {
+    let (dedans, dehors, _) = deux_dossiers();
+    fs::create_dir(dedans.path().join("sous")).unwrap();
+    fs::write(dedans.path().join("sous/note.txt"), "dedans").unwrap();
+    fs::write(dehors.path().join("note.txt"), "secret").unwrap();
+    let l = lecteur(&dedans);
+    let verifie = l.permis("sous/note.txt").unwrap();
+    // L'attaquant échange le dossier contre un lien.
+    fs::rename(dedans.path().join("sous"), dedans.path().join("ancien")).unwrap();
+    std::os::unix::fs::symlink(dehors.path(), dedans.path().join("sous")).unwrap();
+    let e = l.ouvrir(&verifie).unwrap_err();
+    assert!(e.contains("hors des dossiers permis"), "{e}");
+}
+
+/// Le fichier lui-même remplacé par un lien : refusé (`O_NOFOLLOW`).
+#[cfg(unix)]
+#[test]
+fn course_fichier_remplace_par_un_lien() {
+    let (dedans, _dehors, secret) = deux_dossiers();
+    let l = lecteur(&dedans);
+    let verifie = l.permis("README.md").unwrap();
+    fs::remove_file(&verifie).unwrap();
+    std::os::unix::fs::symlink(&secret, &verifie).unwrap();
+    assert!(l.ouvrir(&verifie).is_err());
+}
+
+/// Le fichier remplacé par un tube nommé : refusé tout de suite, sans
+/// bloquer (`O_NONBLOCK`, type vérifié sur le descripteur).
+#[cfg(unix)]
+#[test]
+fn course_fichier_remplace_par_un_tube() {
+    let dedans = codebase();
+    let l = lecteur(&dedans);
+    let verifie = l.permis("README.md").unwrap();
+    fs::remove_file(&verifie).unwrap();
+    assert!(std::process::Command::new("mkfifo")
+        .arg(&verifie)
+        .status()
+        .unwrap()
+        .success());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(l.ouvrir(&verifie).map(|_| ()));
+    });
+    let r = rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("l'ouverture d'un tube a bloqué");
+    let e = r.unwrap_err();
+    assert!(e.contains("pas un fichier ordinaire"), "{e}");
+}
+
+/// Grep et Glob bornés en fichiers lus et en entrées parcourues ; Glob ne
+/// garde que les premiers chemins, dans l'ordre.
+#[test]
+fn parcours_bornes() {
+    let dedans = codebase();
+    for i in 0..40 {
+        fs::write(dedans.path().join(format!("f{i:02}.txt")), "cible\n").unwrap();
+    }
+    let mut l = lecteur(&dedans);
+    l.bornes.fichiers = 5;
+    l.bornes.entrees = 10;
+    let r = l.chercher(&json!({ "pattern": "cible" })).unwrap();
+    assert!(r.contains("recherche arrêtée après 5 fichiers"), "{r}");
+    assert!(
+        r.lines().filter(|x| x.contains(":1:cible")).count() <= 5,
+        "{r}"
+    );
+    let r = l.lister(&json!({ "pattern": "*.txt" })).unwrap();
+    assert!(r.contains("parcours arrêté après 10 fichiers"), "{r}");
+    // Sans borne atteinte : les RESULTATS_MAX premiers chemins triés.
+    for i in 40..400 {
+        fs::write(dedans.path().join(format!("f{i:03}.txt")), "x").unwrap();
+    }
+    let l = lecteur(&dedans);
+    let r = l.lister(&json!({ "pattern": "f*.txt" })).unwrap();
+    let lignes: Vec<&str> = r.lines().collect();
+    assert_eq!(lignes.len(), RESULTATS_MAX + 1);
+    let mut tous: Vec<String> = fs::read_dir(dedans.path().canonicalize().unwrap())
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.file_name().unwrap().to_string_lossy().starts_with('f'))
+        .map(|p| p.display().to_string())
+        .collect();
+    tous.sort();
+    assert_eq!(&lignes[..RESULTATS_MAX], &tous[..RESULTATS_MAX]);
+    assert!(
+        lignes[RESULTATS_MAX].contains("400 fichiers"),
+        "{}",
+        lignes[RESULTATS_MAX]
+    );
+}

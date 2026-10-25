@@ -43,6 +43,10 @@ regex = "1"
 walkdir = "2"
 rmcp = { version = "3.5", features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "reqwest", "auth"] }
 
+# Ouverture sans lien ni blocage des outils de lecture (KOB-335).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56"
 

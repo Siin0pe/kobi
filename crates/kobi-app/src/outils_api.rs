@@ -40,11 +40,34 @@ const RESULTATS_MAX: usize = 300;
 /// Dossiers jamais parcourus.
 const DOSSIERS_IGNORES: &[&str] = &[".git", "node_modules", "target", ".venv", "__pycache__"];
 
+/// Bornes d'un parcours (`Grep`, `Glob`), KOB-335 : un arbre immense ne
+/// retient ni la mémoire ni le tour.
+#[derive(Debug, Clone, Copy)]
+struct Bornes {
+    /// Fichiers lus au plus par `Grep`.
+    fichiers: usize,
+    /// Entrées parcourues au plus par `Glob`.
+    entrees: usize,
+    /// Durée maximale d'un parcours.
+    duree: std::time::Duration,
+}
+
+impl Default for Bornes {
+    fn default() -> Self {
+        Self {
+            fichiers: 20_000,
+            entrees: 200_000,
+            duree: std::time::Duration::from_secs(10),
+        }
+    }
+}
+
 /// Lecture seule dans des dossiers permis.
 #[derive(Debug, Clone)]
 pub struct Lecteur {
     /// Dossiers permis, résolus.
     dossiers: Vec<PathBuf>,
+    bornes: Bornes,
 }
 
 impl Lecteur {
@@ -56,7 +79,57 @@ impl Lecteur {
                 .filter_map(|d| d.canonicalize().ok())
                 .filter(|d| d.is_dir())
                 .collect(),
+            bornes: Bornes::default(),
         }
+    }
+
+    fn dans_les_dossiers(&self, chemin: &Path) -> bool {
+        self.dossiers.iter().any(|d| chemin.starts_with(d))
+    }
+
+    /// Ouvre un fichier déjà validé par [`Lecteur::permis`], sans laisser de
+    /// fenêtre entre la vérification et l'ouverture (KOB-335) :
+    /// * le dernier élément n'est pas suivi s'il est devenu un lien
+    ///   (`O_NOFOLLOW`), et l'ouverture ne bloque pas sur un tube nommé
+    ///   (`O_NONBLOCK`) ;
+    /// * le type est vérifié sur le descripteur ouvert : un fichier ordinaire
+    ///   seulement ;
+    /// * sous Linux, le vrai chemin du descripteur (`/proc/self/fd`) doit
+    ///   être dans les dossiers permis : un dossier remplacé par un lien
+    ///   après la vérification est refusé. Ailleurs, le chemin est résolu une
+    ///   seconde fois, après l'ouverture (à essayer sous Windows et macOS).
+    fn ouvrir(&self, chemin: &Path) -> Result<(std::fs::File, u64), String> {
+        let erreur = |e: std::io::Error| format!("{} : {e}", chemin.display());
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        }
+        let fichier = options.open(chemin).map_err(erreur)?;
+        let meta = fichier.metadata().map_err(erreur)?;
+        if !meta.is_file() {
+            return Err(format!(
+                "{} n'est pas un fichier ordinaire",
+                chemin.display()
+            ));
+        }
+        #[cfg(target_os = "linux")]
+        let reel = {
+            use std::os::fd::AsRawFd;
+            std::fs::read_link(format!("/proc/self/fd/{}", fichier.as_raw_fd())).map_err(erreur)?
+        };
+        #[cfg(not(target_os = "linux"))]
+        let reel = chemin.canonicalize().map_err(erreur)?;
+        if !self.dans_les_dossiers(&reel) {
+            return Err(format!(
+                "{} est hors des dossiers permis ({})",
+                chemin.display(),
+                self.liste()
+            ));
+        }
+        Ok((fichier, meta.len()))
     }
 
     pub fn definitions() -> Vec<Value> {
@@ -111,7 +184,7 @@ impl Lecteur {
             _ => brut.to_path_buf(),
         };
         let resolu = brut.canonicalize().map_err(|e| format!("{chemin} : {e}"))?;
-        if self.dossiers.iter().any(|d| resolu.starts_with(d)) {
+        if self.dans_les_dossiers(&resolu) {
             Ok(resolu)
         } else {
             Err(format!(
@@ -161,21 +234,10 @@ impl Lecteur {
         use std::io::{BufRead, BufReader, Read};
         let chemin = self.permis(texte(entree, "file_path")?)?;
         let erreur = |e: std::io::Error| format!("{} : {e}", chemin.display());
-        // Ni dossier, ni tube nommé (l'ouvrir attendrait sans fin), ni
-        // périphérique : un fichier ordinaire seulement.
-        let taille = std::fs::metadata(&chemin).map_err(erreur)?;
-        if !taille.is_file() {
-            return Err(format!(
-                "{} n'est pas un fichier ordinaire",
-                chemin.display()
-            ));
-        }
-        let taille = taille.len();
-        let mut lecteur = BufReader::new(
-            std::fs::File::open(&chemin)
-                .map_err(erreur)?
-                .take(LECTURE_MAX),
-        );
+        // Ni dossier, ni tube nommé, ni périphérique, ni chemin changé depuis
+        // la vérification (KOB-335).
+        let (fichier, taille) = self.ouvrir(&chemin)?;
+        let mut lecteur = BufReader::new(fichier.take(LECTURE_MAX));
         if lecteur.fill_buf().map_err(erreur)?.contains(&0) {
             return Err(format!("{} n'est pas un fichier texte", chemin.display()));
         }
@@ -220,19 +282,37 @@ impl Lecteur {
             .case_insensitive(entree["-i"].as_bool().unwrap_or(false))
             .build()
             .map_err(|e| format!("expression invalide : {e}"))?;
+        use std::io::Read;
         let filtre = filtre(entree["glob"].as_str())?;
         let mut trouve = Vec::new();
+        let debut = std::time::Instant::now();
+        let mut lus = 0;
         'tout: for depart in self.departs(entree)? {
             for fichier in self.fichiers(&depart) {
                 let nom = fichier.file_name().unwrap_or_default().to_string_lossy();
-                if filtre.as_ref().is_some_and(|f| !f.matches(&nom))
-                    || fichier.metadata().map_or(true, |m| m.len() > FICHIER_MAX)
-                {
+                if filtre.as_ref().is_some_and(|f| !f.matches(&nom)) {
                     continue;
                 }
-                let Ok(octets) = std::fs::read(&fichier) else {
+                // Parcours borné (KOB-335).
+                if lus >= self.bornes.fichiers || debut.elapsed() >= self.bornes.duree {
+                    trouve.push(format!(
+                        "… recherche arrêtée après {lus} fichiers lus ({} s au plus) : précise le dossier ou le filtre",
+                        self.bornes.duree.as_secs()
+                    ));
+                    break 'tout;
+                }
+                // Même ouverture que Read : rien hors des dossiers, aucun tube.
+                let Ok((ouvert, taille)) = self.ouvrir(&fichier) else {
                     continue;
                 };
+                if taille > FICHIER_MAX {
+                    continue;
+                }
+                lus += 1;
+                let mut octets = Vec::new();
+                if ouvert.take(FICHIER_MAX).read_to_end(&mut octets).is_err() {
+                    continue;
+                }
                 if octets.contains(&0) {
                     continue;
                 }
@@ -261,20 +341,40 @@ impl Lecteur {
             require_literal_separator: true,
             ..Default::default()
         };
-        let mut trouve = Vec::new();
-        for depart in self.departs(entree)? {
+        // Seuls les RESULTATS_MAX premiers chemins (dans l'ordre) restent en
+        // mémoire, et le parcours est borné (KOB-335).
+        let mut gardes = std::collections::BTreeSet::new();
+        let mut total = 0usize;
+        let mut vus = 0usize;
+        let mut arrete = false;
+        let debut = std::time::Instant::now();
+        'tout: for depart in self.departs(entree)? {
             for fichier in self.fichiers(&depart) {
+                vus += 1;
+                if vus > self.bornes.entrees || debut.elapsed() >= self.bornes.duree {
+                    arrete = true;
+                    break 'tout;
+                }
                 let relatif = fichier.strip_prefix(&depart).unwrap_or(&fichier);
                 if motif.matches_path_with(relatif, options) {
-                    trouve.push(fichier.display().to_string());
+                    total += 1;
+                    gardes.insert(fichier.display().to_string());
+                    if gardes.len() > RESULTATS_MAX {
+                        gardes.pop_last();
+                    }
                 }
             }
         }
-        trouve.sort();
-        let total = trouve.len();
-        trouve.truncate(RESULTATS_MAX);
+        let mut trouve: Vec<String> = gardes.into_iter().collect();
         if total > RESULTATS_MAX {
             trouve.push(format!("… {total} fichiers, {RESULTATS_MAX} montrés"));
+        }
+        if arrete {
+            trouve.push(format!(
+                "… parcours arrêté après {} fichiers ({} s au plus) : précise le dossier ou le motif",
+                vus - 1,
+                self.bornes.duree.as_secs()
+            ));
         }
         Ok(if trouve.is_empty() {
             "Aucun fichier.".into()
