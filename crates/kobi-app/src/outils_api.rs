@@ -959,7 +959,9 @@ fn chemin_reseau(chemin: &str) -> bool {
 /// Avec `peripheriques` (Windows), un composant qui est un nom de
 /// périphérique DOS sous un chemin non verbatim est refusé avant d'être
 /// ouvert : Win32 changerait `C:\…\COM1` en `\\.\COM1` (KOB-353). Même au
-/// milieu du chemin, puisque chaque préfixe est ouvert ici.
+/// milieu du chemin, puisque chaque préfixe est ouvert ici. « Verbatim » se
+/// juge sur le chemin donné, celui que Win32 traduit : la cible absolue d'un
+/// lien, rendue en `\\?\…`, ne le rend pas verbatim (KOB-367).
 fn lien_vers_le_reseau(chemin: &Path, peripheriques: bool) -> bool {
     use std::collections::VecDeque;
     use std::path::Component;
@@ -969,6 +971,7 @@ fn lien_vers_le_reseau(chemin: &Path, peripheriques: bool) -> bool {
         .collect();
     let mut resolu = PathBuf::new();
     let mut liens = 0;
+    let verbatim = chemin_verbatim(&chemin.to_string_lossy());
     while let Some(morceau) = a_lire.pop_front() {
         match morceau.components().next() {
             Some(Component::CurDir) | None => continue,
@@ -982,10 +985,7 @@ fn lien_vers_le_reseau(chemin: &Path, peripheriques: bool) -> bool {
             }
             Some(Component::Normal(_)) => {}
         }
-        if peripheriques
-            && !chemin_verbatim(&resolu.to_string_lossy())
-            && nom_de_peripherique(morceau.as_os_str())
-        {
+        if peripheriques && !verbatim && nom_de_peripherique(morceau.as_os_str()) {
             return true;
         }
         let candidat = resolu.join(&morceau);
