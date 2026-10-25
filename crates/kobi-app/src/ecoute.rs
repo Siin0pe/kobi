@@ -150,8 +150,9 @@ pub enum Commande {
     PauseReunion(Instant),
     /// La réunion reprend : la pause d'avant ne compte plus (KOB-297).
     RepriseReunion,
-    /// « Annuler » est fait ou clos : la fenêtre ne se rouvre plus à la
-    /// prochaine ouverture du micro (KOB-299).
+    /// « Annuler » est fait (la réunion reprend) : la fenêtre ne se rouvre
+    /// plus à la prochaine ouverture du micro (KOB-299). Clos sans
+    /// annulation : [`Commande::FinConfirmee`].
     FinAnnulation,
     /// « Annuler » est clos sans annulation : la fin est définitive. Ce qui
     /// a été dit avant l'arrêt, même transcrit bien après, ne parle plus à
