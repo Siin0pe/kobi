@@ -243,18 +243,21 @@ fn depart_nomme_comme_un_dossier_ignore_parcouru() {
     let dir = codebase();
     let l = lecteur(&dir);
     let target = dir.path().join("target");
+    // Sous le départ, un dossier ignoré reste ignoré.
+    fs::create_dir_all(target.join("node_modules")).unwrap();
+    fs::write(target.join("node_modules/cache.rs"), "// TODO\n").unwrap();
     let r = l
         .chercher(&json!({ "pattern": "TODO", "path": target }))
         .unwrap();
-    assert!(r.contains("genere.rs"), "{r}");
+    assert!(r.contains("genere.rs") && !r.contains("cache.rs"), "{r}");
     let r = l
         .lister(&json!({ "pattern": "**/*.rs", "path": target }))
         .unwrap();
-    assert!(r.contains("genere.rs"), "{r}");
+    assert!(r.contains("genere.rs") && !r.contains("cache.rs"), "{r}");
     // Une codebase déclarée nommée `target`.
     let declaree = Lecteur::new(std::slice::from_ref(&target));
     let r = declaree.chercher(&json!({ "pattern": "TODO" })).unwrap();
-    assert!(r.contains("genere.rs"), "{r}");
+    assert!(r.contains("genere.rs") && !r.contains("cache.rs"), "{r}");
     // Depuis la racine, `target` reste ignoré.
     let r = l.chercher(&json!({ "pattern": "TODO" })).unwrap();
     assert!(!r.contains("genere.rs"), "{r}");
