@@ -147,7 +147,11 @@ impl Reunion {
     /// `-3`… si le nom est pris), sans perdre l'écriture en cours : la
     /// transcription est refermée, le dossier déplacé, puis la transcription
     /// rouverte en ajout. Renvoie l'ancien nom s'il a changé.
-    pub fn deplacer(&mut self, titre: &str) -> io::Result<Option<String>> {
+    pub fn deplacer(
+        &mut self,
+        titre: &str,
+        ancien_titre: Option<&str>,
+    ) -> io::Result<Option<String>> {
         let ancien = self.nom().to_owned();
         let Some(date) = ancien
             .get(..10)
@@ -163,13 +167,17 @@ impl Reunion {
             .ok_or_else(|| io::Error::other("dossier de réunion sans parent"))?;
         // Déjà nommé ainsi, ou avec le suffixe d'un vrai conflit (`base` pris
         // par une autre réunion). « Budget 2027 » renommé « Budget » n'en est
-        // pas un : `-2027` fait partie de l'ancien titre (KOB-266).
+        // pas un, même si « budget » est pris : `-2027` vient de l'ancien
+        // titre, qui donne exactement l'ancien nom (KOB-266, KOB-292).
+        let nom_de_l_ancien_titre =
+            ancien_titre.is_some_and(|t| ancien == format!("{date}-{}", nettoyer_titre(t)));
         let suffixe_de_l_ancien = ancien == base
-            || ancien
-                .strip_prefix(&base)
-                .and_then(|reste| reste.strip_prefix('-'))
-                .and_then(|n| n.parse::<u32>().ok())
-                .is_some_and(|n| n >= 2 && parent.join(&base).exists());
+            || (!nom_de_l_ancien_titre
+                && ancien
+                    .strip_prefix(&base)
+                    .and_then(|reste| reste.strip_prefix('-'))
+                    .and_then(|n| n.parse::<u32>().ok())
+                    .is_some_and(|n| n >= 2 && parent.join(&base).exists()));
         if suffixe_de_l_ancien {
             return Ok(None);
         }
@@ -194,9 +202,19 @@ impl Reunion {
             Ok(cible) => {
                 // Le dossier a bougé : même si la réouverture échoue (fichier
                 // verrouillé sous Windows), les segments suivants y vont, pas
-                // dans un dossier fantôme à l'ancien nom (KOB-266).
+                // dans un dossier fantôme à l'ancien nom (KOB-266). La
+                // transcription se rouvre alors au prochain segment, et le
+                // renommage reste un succès : l'appelant écrit le titre et
+                // note l'ancien nom (KOB-292).
                 self.dossier = cible;
-                *self = Self::ouvrir(self.dossier.clone())?;
+                match Self::ouvrir(self.dossier.clone()) {
+                    Ok(rouverte) => *self = rouverte,
+                    Err(erreur) => tracing::warn!(
+                        %erreur,
+                        dossier = %self.dossier.display(),
+                        "transcription non rouverte après le renommage : rouverte au prochain segment"
+                    ),
+                }
                 Ok(Some(ancien))
             }
             Err(e) => {
