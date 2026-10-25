@@ -2468,6 +2468,55 @@ mod tests {
         );
     }
 
+    /// KOB-307 : une question différée qui plante, puis perd le réseau,
+    /// est relancée puis reposée sur une session `Differee`, jamais sur
+    /// celle de la conversation.
+    #[tokio::test(start_paused = true)]
+    async fn question_differee_relancee_puis_reposee_sur_sa_session() {
+        let (s, recus) = sortie();
+        let roles = Arc::new(Mutex::new(Vec::new()));
+        let r = roles.clone();
+        let differees = Arc::new(Mutex::new(std::collections::VecDeque::from([
+            Step::Fail(BrainError::Crashed("exit status 3".into())),
+            Step::Fail(BrainError::Api("API Error: Connection error.".into())),
+            Step::Text("Differee".into()),
+        ])));
+        let fabrique: Fabrique = Arc::new(move |role| {
+            r.lock().unwrap().push(role);
+            let pas = match role {
+                Role::Differee => differees.lock().unwrap().pop_front().unwrap(),
+                _ => Step::Text(format!("{role:?}")),
+            };
+            Box::pin(async move { Ok(Box::new(FakeBrain::new().then(vec![pas])) as Session) })
+        });
+        let c = Cerveau::lancer(fabrique, s);
+        c.demander(Demande::Question {
+            tour: 1,
+            question: "et le budget ?".into(),
+            transcript: String::new(),
+            notes: String::new(),
+            differee: true,
+        });
+        attendre(&recus, |r| matches!(r, Retour::Relance { tour: 1 })).await;
+        attendre(&recus, |r| matches!(r, Retour::EnAttente { tour: 1, .. })).await;
+        attendre(&recus, |r| matches!(r, Retour::Resultat { tour: 1, .. })).await;
+        assert!(recu(&recus, |r| *r
+            == Retour::Resultat {
+                tour: 1,
+                texte: "Differee".into()
+            }));
+        assert!(!recu(&recus, |r| matches!(r, Retour::Fin { tour: 1, .. })));
+        assert_eq!(
+            roles
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|r| **r == Role::Differee)
+                .count(),
+            3
+        );
+    }
+
     #[tokio::test]
     async fn notes_en_parallele_des_questions() {
         let (s, recus) = sortie();

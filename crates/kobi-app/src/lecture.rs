@@ -165,14 +165,22 @@ pub fn arguments_lecture_seule(
     assembler(modele, systeme, codebases, memoire, mcp, Acces::Lecture)
 }
 
-/// Ajouté au prompt d'une session en liste blanche : Claude ne promet pas
-/// ce que ses outils ne permettent pas.
+/// Prompt de lecture d'une session en liste blanche (KOB-307), à la place
+/// de [`PROMPT_LECTURE`] et du prompt du MCP de Kobi : Claude ne tente pas
+/// ce que ses outils ne permettent pas, et ne le promet pas.
 pub const PROMPT_LECTURE_SEULE: &str = "\
-## Lecture seule
+## Tu ne fais que lire
 
-Dans cette conversation, seuls tes outils marqués [lecture] sont permis : tu ne peux ni \
-démarrer, mettre en pause ou arrêter la réunion, ni changer un réglage, ni ajouter un rappel. \
-Si on te le demande, dis en une phrase que tu ne peux pas le faire d'ici, sans prétendre l'avoir fait.";
+Tu lis et tu cherches dans les dossiers de code de l'utilisateur (Read, Grep, Glob) et dans \
+ses réunions, notes, conversations et rappels, avec tes outils `mcp__kobi__*` de lecture. \
+Tu n'as aucun autre outil : tu ne peux ni démarrer, mettre en pause ou arrêter la réunion, ni \
+changer un réglage, ni ajouter un rappel, ni agir sur un outil externe (tickets, messages, \
+agenda…).
+
+- Pour une question sur le code, cherche avec Grep et Glob, lis avec Read, et cite le \
+fichier et la ligne (`chemin/fichier.rs:42`).
+- Pour toute action, dis en une phrase que tu ne peux pas la faire d'ici, sans prétendre \
+l'avoir faite, et donne le texte prêt à copier si c'est utile.";
 
 /// Ce que la session peut faire avec le MCP de Kobi.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -201,10 +209,7 @@ fn assembler(
         if acces == Acces::Lecture {
             // Aucun outil `meeting_*`, même en lecture (`meeting_status` :
             // `status` dit déjà l'état de la réunion).
-            let lecture: Vec<String> = kobi_ctl::mcp::outils_de_lecture(serveur)
-                .into_iter()
-                .filter(|o| !o.contains("__meeting_"))
-                .collect();
+            let lecture = kobi_ctl::mcp::outils_en_lecture_seule(serveur);
             refuses.extend(
                 kobi_ctl::mcp::outils_de_l_agent(serveur)
                     .into_iter()
@@ -261,7 +266,14 @@ fn assembler(
         args.push("--add-dir".into());
         args.push(dossier.display().to_string());
     }
-    let mut prompt = format!("{systeme}\n\n{PROMPT_LECTURE}");
+    // En liste blanche, un prompt à part : celui de la lecture parle de Bash
+    // et des cartes, celui du MCP de Kobi du pilotage de la réunion.
+    let lecture = if acces == Acces::Lecture {
+        PROMPT_LECTURE_SEULE
+    } else {
+        PROMPT_LECTURE
+    };
+    let mut prompt = format!("{systeme}\n\n{lecture}");
     // Une question de la conversation, même en liste blanche.
     if acces != Acces::Notes {
         prompt.push_str("\n\n");
@@ -274,15 +286,13 @@ fn assembler(
     if let Some(mcp) = mcp {
         args.push("--mcp-config".into());
         args.push(mcp.fichier.display().to_string());
-        prompt.push_str("\n\n");
-        prompt.push_str(crate::mcp_config::PROMPT_MCP_KOBI);
+        if acces != Acces::Lecture {
+            prompt.push_str("\n\n");
+            prompt.push_str(crate::mcp_config::PROMPT_MCP_KOBI);
+        }
         if pilote {
             prompt.push_str("\n\n");
             prompt.push_str(crate::mcp_config::PROMPT_PILOTAGE_REUNION);
-        }
-        if acces == Acces::Lecture {
-            prompt.push_str("\n\n");
-            prompt.push_str(PROMPT_LECTURE_SEULE);
         }
         if let Some(utilisateur) = mcp.prompt.as_ref().filter(|_| acces != Acces::Lecture) {
             prompt.push_str("\n\n");
@@ -620,6 +630,9 @@ mod tests {
         assert!(!prompt.contains("## Serveurs de l'utilisateur"));
         assert!(prompt.contains("## Au quotidien comme en réunion"));
         assert!(prompt.contains(PROMPT_LECTURE_SEULE));
+        assert!(!prompt.contains(PROMPT_LECTURE));
+        assert!(!prompt.contains(crate::mcp_config::PROMPT_MCP_KOBI));
+        assert!(!prompt.contains("Bash"), "{prompt}");
     }
 
     /// Conversation (KOB-165) : Claude pilote la réunion sans carte.

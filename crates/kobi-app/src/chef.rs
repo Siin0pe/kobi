@@ -1047,7 +1047,13 @@ impl<R: Runtime> Chef<R> {
         self.cerveau.demander(Demande::Question {
             tour: self.tour,
             question: self.avec_contexte(consigne.unwrap_or_else(|| texte.clone())),
-            transcript: std::mem::take(&mut self.pour_conversation),
+            // Une session différée est jetable : la conversation garde ce
+            // qu'elle n'a pas vu (KOB-307).
+            transcript: if self.differee {
+                self.pour_conversation.clone()
+            } else {
+                std::mem::take(&mut self.pour_conversation)
+            },
             notes,
             differee: self.differee,
         });
@@ -3536,6 +3542,7 @@ mod tests {
         let (app, _dir) = chef_en_essai_avec(fabrique);
         avec_chef(&app, |c| {
             c.commande(Intention::DemarrerReunion);
+            c.recevoir(Message::Segment(dit("Budget validé."), Instant::now()));
             c.commande(Intention::TerminerReunion);
             c.recevoir(Message::QuestionDifferee("note l'action budget".into()));
             c.recevoir(Message::QuestionDifferee("et le planning ?".into()));
@@ -3547,6 +3554,12 @@ mod tests {
             c.tick();
             assert_eq!(c.questions_differees, ["et le planning ?"]);
             assert!(!c.differee);
+            // La conversation garde ce qu'elle n'a pas vu.
+            assert!(
+                c.pour_conversation.contains("Budget validé."),
+                "{}",
+                c.pour_conversation
+            );
         });
         assert!(
             session_differee_demandee(&roles),

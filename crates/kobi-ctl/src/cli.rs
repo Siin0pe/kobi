@@ -87,6 +87,7 @@ pub fn analyser(args: &[String]) -> Result<Demande, Erreur> {
             return match reste {
                 [] => Ok(Demande::Mcp(Mode::Externe)),
                 ["--agent"] => Ok(Demande::Mcp(Mode::Agent)),
+                ["--lecture"] => Ok(Demande::Mcp(Mode::Lecture)),
                 _ => Err(usage(tr("ctl.cli.usageMcp", &[]))),
             }
         }
@@ -723,6 +724,7 @@ mod tests {
         );
         assert_eq!(lire("mcp").unwrap(), Demande::Mcp(Mode::Externe));
         assert_eq!(lire("mcp --agent").unwrap(), Demande::Mcp(Mode::Agent));
+        assert_eq!(lire("mcp --lecture").unwrap(), Demande::Mcp(Mode::Lecture));
         let generale = aide(None);
         for c in COMMANDES {
             assert!(generale.contains(&c.mots()), "{}", c.nom);

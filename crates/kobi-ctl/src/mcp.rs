@@ -30,6 +30,9 @@ pub enum Mode {
     Externe,
     /// L'agent de Kobi : ce qui écrit est validé par l'utilisateur (KOB-156).
     Agent,
+    /// Une session de Kobi en lecture seule (KOB-307) : seules les lectures,
+    /// et rien de la réunion (`meeting_*`).
+    Lecture,
 }
 
 impl Mode {
@@ -37,14 +40,26 @@ impl Mode {
         match self {
             Mode::Externe => Origine::Mcp,
             Mode::Agent => Origine::Agent,
+            Mode::Lecture => Origine::Lecture,
         }
     }
 
     /// Commandes exposées : toutes sauf les internes ; pour l'agent, l'app
-    /// valide celles qui écrivent.
+    /// valide celles qui écrivent. En lecture seule, les lectures hors
+    /// réunion.
     pub fn commandes(self) -> impl Iterator<Item = &'static Commande> {
-        COMMANDES.iter().filter(|c| !c.interne)
+        COMMANDES
+            .iter()
+            .filter(move |c| !c.interne && (self != Mode::Lecture || c.lecture_seule()))
     }
+}
+
+/// Outils de [`Mode::Lecture`], tels que Claude Code les voit.
+pub fn outils_en_lecture_seule(serveur: &str) -> Vec<String> {
+    Mode::Lecture
+        .commandes()
+        .map(|c| format!("mcp__{serveur}__{}", c.outil()))
+        .collect()
 }
 
 /// Noms complets des outils de lecture, tels que Claude Code les voit
@@ -284,6 +299,16 @@ mod tests {
             .unwrap()
             .starts_with("[lecture]"));
 
+        // Lecture seule (KOB-307) : les lectures, rien de la réunion.
+        let lecture = liste(Mode::Lecture);
+        assert!(!lecture.is_empty());
+        for t in &lecture {
+            assert_eq!(t["annotations"]["readOnlyHint"], true, "{t}");
+            assert!(!t["name"].as_str().unwrap().starts_with("meeting_"), "{t}");
+        }
+        assert!(lecture.iter().any(|t| t["name"] == "notes_last"));
+        assert_eq!(outils_en_lecture_seule("kobi").len(), lecture.len());
+
         // L'agent voit tout ; l'app valide ce qui écrit (KOB-156).
         let agent = liste(Mode::Agent);
         assert_eq!(agent.len(), tous.len());
@@ -348,5 +373,17 @@ mod tests {
         assert!(r.get("error").is_none(), "{r}");
         let r = traiter(&appel("rm_rf", json!({})), Mode::Externe, &faux).unwrap();
         assert_eq!(r["error"]["code"], -32602);
+
+        // Lecture seule (KOB-307) : ni la réunion ni l'écriture ne sont
+        // servies, l'appel n'atteint pas l'app.
+        for outil in ["meeting_stop", "meeting_status", "config_set", "app_quit"] {
+            let r = traiter(&appel(outil, json!({})), Mode::Lecture, &faux).unwrap();
+            assert_eq!(r["error"]["code"], -32602, "{outil} : {r}");
+        }
+        let r = traiter(&appel("status", json!({})), Mode::Lecture, &faux).unwrap();
+        assert!(r["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("\"origine\": \"lecture\""));
     }
 }
