@@ -117,6 +117,18 @@ fn autoriser<R: Runtime>(
             ),
         ));
     }
+    // Session en lecture seule (KOB-307) : rien d'autre qu'une lecture hors
+    // réunion, même si le harness laissait passer l'appel.
+    if origine == Origine::Lecture {
+        return if commande.lecture_seule() {
+            Ok(())
+        } else {
+            Err(erreur(
+                Code::Unauthorized,
+                kobi_i18n::tr("coque.controle.lectureSeule", &[("commande", commande.nom)]),
+            ))
+        };
+    }
     match (origine, commande.effet) {
         (Origine::Cli | Origine::Mcp, _) | (Origine::Agent, Effet::Lecture | Effet::Affichage) => {
             return Ok(())
@@ -1352,6 +1364,45 @@ mod tests {
             Code::Conflict,
             "plus de réunion à arrêter"
         );
+    }
+
+    /// KOB-307 : une session en lecture seule ne pilote pas la réunion et
+    /// n'écrit rien, même si l'appel arrive jusqu'à l'app ; elle lit.
+    #[test]
+    fn lecture_seule_refusee_hors_lecture() {
+        let e = essai();
+        let lecture = |nom, p| lancer(&e, nom, p, Origine::Lecture);
+        for nom in [
+            "meeting.start",
+            "meeting.stop",
+            "meeting.status",
+            "listen.pause",
+            "mascot.hide",
+            "app.quit",
+        ] {
+            assert_eq!(
+                lecture(nom, json!({})).unwrap_err().code,
+                Code::Unauthorized,
+                "{nom}"
+            );
+        }
+        assert_eq!(
+            lecture(
+                "config.set",
+                json!({"key": "voice.assistant", "value": false})
+            )
+            .unwrap_err()
+            .code,
+            Code::Unauthorized
+        );
+        assert_eq!(
+            lecture("reminders.add", json!({"text": "appeler Paul"}))
+                .unwrap_err()
+                .code,
+            Code::Unauthorized
+        );
+        assert_eq!(cli(&e, "status", json!({})).unwrap()["etat"], "veille");
+        assert!(lecture("status", json!({})).is_ok());
     }
 
     #[test]

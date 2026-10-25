@@ -301,9 +301,8 @@ pub fn session_claude(
         .into_iter()
         .filter(|(n, _)| nom_valide(n).is_ok())
         .collect();
-    // La conversation pilote la réunion (KOB-165), pas les notes.
-    let pilote = role == crate::cerveau::Role::Conversation;
-    let role = format!("{role:?}").to_lowercase();
+    let lecture_seule = role == crate::cerveau::Role::Differee;
+    let nom_role = format!("{role:?}").to_lowercase();
     let args = kobi_brain::ArgsWithPerms(Arc::new(move |perms: &Value| {
         let dossier = config::kobi_dir()
             .ok_or_else(|| kobi_i18n::tr("coque.commun.dossierPersoIntrouvable", &[]))?
@@ -314,42 +313,104 @@ pub fn session_claude(
             .and_then(|u| u.rsplit(':').next())
             .and_then(|p| p.split('/').next())
             .unwrap_or("0");
-        let fichier = dossier.join(format!("session-{role}-{port}.json"));
-        let mut utilisateur: Vec<crate::mcp_config::ServeurMcp> = serveurs
-            .iter()
-            .map(|(nom, config)| crate::mcp_config::ServeurMcp {
-                nom: nom.clone(),
-                config: config.clone(),
-                outils_autorises: Vec::new(),
-            })
-            .collect();
-        utilisateur.push(crate::mcp_config::ServeurMcp {
-            nom: kobi_perms::SERVER_NAME.into(),
-            config: perms.clone(),
-            outils_autorises: Vec::new(),
-        });
-        let mut mcp = crate::mcp_config::assembler(&fichier, utilisateur)
+        let fichier = dossier.join(format!("session-{nom_role}-{port}.json"));
+        let exe = std::env::current_exe()
             .map_err(|e| kobi_i18n::tr("coque.mcp.configSession", &[("erreur", &e.to_string())]))?;
-        mcp.permission_prompt_tool = Some(kobi_perms::PERMISSION_PROMPT_TOOL.into());
-        mcp.prompt = prompt.clone();
-        // Commandes validées par le hook de Kobi (KOB-154).
-        Ok(crate::commandes::brancher(
-            crate::lecture::arguments(
+        arguments_de_session(
+            role,
+            Session {
                 modele,
-                kobi_brain::SYSTEM_PROMPT,
-                &codebases,
-                memoire.as_ref(),
-                Some(&mcp),
-                pilote,
-            ),
-            reglages.as_deref(),
-        ))
+                codebases: &codebases,
+                memoire: memoire.as_ref(),
+                reglages: reglages.as_deref(),
+            },
+            &fichier,
+            &exe,
+            &serveurs,
+            prompt.as_deref(),
+            perms,
+        )
     }));
+    // Une question différée (KOB-307) n'a ni les serveurs de l'utilisateur,
+    // ni leurs secrets, ni leurs règles.
+    if lecture_seule {
+        return SessionClaude {
+            args,
+            regles: kobi_perms::Rules::default(),
+            env: Vec::new(),
+        };
+    }
     SessionClaude {
         args,
         regles,
         env: session.env,
     }
+}
+
+/// Ce qui ne change pas d'une session à l'autre.
+struct Session<'a> {
+    modele: &'a str,
+    codebases: &'a [PathBuf],
+    memoire: Option<&'a crate::lecture::Memoire>,
+    reglages: Option<&'a Path>,
+}
+
+/// Écrit la config MCP de la session dans `fichier` et rend les arguments
+/// de `claude`. La conversation pilote la réunion (KOB-165), pas les notes.
+/// Une question différée (KOB-307) n'a que le MCP de Kobi en lecture seule
+/// (`kobi mcp --lecture`) : ni les serveurs de l'utilisateur, ni le serveur
+/// de permission, ni le hook des commandes.
+fn arguments_de_session(
+    role: crate::cerveau::Role,
+    s: Session<'_>,
+    fichier: &Path,
+    exe: &Path,
+    serveurs: &[(String, Value)],
+    prompt: Option<&str>,
+    perms: &Value,
+) -> Result<Vec<String>, String> {
+    let erreur =
+        |e: std::io::Error| kobi_i18n::tr("coque.mcp.configSession", &[("erreur", &e.to_string())]);
+    if role == crate::cerveau::Role::Differee {
+        let kobi = crate::mcp_config::serveur_kobi_lecture(exe);
+        let mcp = crate::mcp_config::assembler_avec(fichier, kobi, Vec::new()).map_err(erreur)?;
+        return Ok(crate::lecture::arguments_lecture_seule(
+            s.modele,
+            kobi_brain::SYSTEM_PROMPT,
+            s.codebases,
+            s.memoire,
+            Some(&mcp),
+        ));
+    }
+    let mut utilisateur: Vec<crate::mcp_config::ServeurMcp> = serveurs
+        .iter()
+        .map(|(nom, config)| crate::mcp_config::ServeurMcp {
+            nom: nom.clone(),
+            config: config.clone(),
+            outils_autorises: Vec::new(),
+        })
+        .collect();
+    utilisateur.push(crate::mcp_config::ServeurMcp {
+        nom: kobi_perms::SERVER_NAME.into(),
+        config: perms.clone(),
+        outils_autorises: Vec::new(),
+    });
+    let kobi = crate::mcp_config::serveur_kobi(exe);
+    let mut mcp = crate::mcp_config::assembler_avec(fichier, kobi, utilisateur).map_err(erreur)?;
+    mcp.permission_prompt_tool = Some(kobi_perms::PERMISSION_PROMPT_TOOL.into());
+    mcp.prompt = prompt.map(str::to_owned);
+    // Commandes validées par le hook de Kobi (KOB-154).
+    Ok(crate::commandes::brancher(
+        crate::lecture::arguments(
+            s.modele,
+            kobi_brain::SYSTEM_PROMPT,
+            s.codebases,
+            s.memoire,
+            Some(&mcp),
+            role == crate::cerveau::Role::Conversation,
+        ),
+        s.reglages,
+    ))
 }
 
 // ----- Import depuis Claude Code -----
@@ -1284,6 +1345,91 @@ mod tests {
             assert!(!page_web(refusee), "{refusee}");
             assert!(ouvrir_navigateur(refusee).is_err(), "{refusee}");
         }
+    }
+
+    /// KOB-307 : la session d'une question différée, telle qu'elle est
+    /// écrite et lancée : le seul MCP de Kobi, servi en lecture seule ; ni
+    /// les serveurs de l'utilisateur, ni le serveur de permission, ni le hook
+    /// des commandes, et aucun outil `meeting_*` dans la requête.
+    #[test]
+    fn session_differee_en_lecture_seule() {
+        use crate::cerveau::Role;
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("kobi");
+        let reglages = dir.path().join("reglages.json");
+        let serveurs = vec![(
+            "linear".to_owned(),
+            json!({"type": "http", "url": "https://mcp.linear.app/mcp"}),
+        )];
+        let perms = json!({"type": "http", "url": "http://127.0.0.1:4242/mcp"});
+        let lancer = |role, fichier: &Path| {
+            arguments_de_session(
+                role,
+                Session {
+                    modele: "haiku",
+                    codebases: &[],
+                    memoire: None,
+                    reglages: Some(&reglages),
+                },
+                fichier,
+                &exe,
+                &serveurs,
+                Some("## Serveurs de l'utilisateur"),
+                &perms,
+            )
+            .unwrap()
+        };
+        let valeur = |args: &[String], option: &str| {
+            args.windows(2)
+                .find(|w| w[0] == option)
+                .map(|w| w[1].clone())
+                .unwrap_or_default()
+        };
+        let lu = |fichier: &Path| -> Value {
+            serde_json::from_str(&std::fs::read_to_string(fichier).unwrap()).unwrap()
+        };
+
+        let fichier = dir.path().join("differee.json");
+        let args = lancer(Role::Differee, &fichier);
+        let config = lu(&fichier);
+        let noms: Vec<&String> = config["mcpServers"].as_object().unwrap().keys().collect();
+        assert_eq!(noms, ["kobi"]);
+        assert_eq!(
+            config["mcpServers"]["kobi"]["args"],
+            json!(["mcp", "--lecture"])
+        );
+        assert_eq!(valeur(&args, "--mcp-config"), fichier.display().to_string());
+        assert_eq!(valeur(&args, "--tools"), "Read,Grep,Glob");
+        assert_eq!(valeur(&args, "--permission-mode"), "dontAsk");
+        assert!(!args.iter().any(|a| a == "--permission-prompt-tool"));
+        assert!(
+            !args.iter().any(|a| a == "--settings"),
+            "pas de hook : {args:?}"
+        );
+        let autorises = valeur(&args, "--allowedTools");
+        assert!(!autorises.contains("meeting_"), "{autorises}");
+        assert!(!autorises.contains("linear"), "{autorises}");
+        assert!(autorises.contains("mcp__kobi__notes_last"), "{autorises}");
+        for outil in kobi_ctl::mcp::outils_de_reunion(crate::mcp_config::SERVEUR_KOBI) {
+            assert!(
+                valeur(&args, "--disallowedTools").contains(&outil),
+                "{outil}"
+            );
+        }
+        assert!(!valeur(&args, "--append-system-prompt").contains("## Serveurs de l'utilisateur"));
+
+        // Témoin : la conversation a bien tout cela.
+        let fichier = dir.path().join("conversation.json");
+        let args = lancer(Role::Conversation, &fichier);
+        let config = lu(&fichier);
+        assert_eq!(
+            config["mcpServers"]["kobi"]["args"],
+            json!(["mcp", "--agent"])
+        );
+        assert!(config["mcpServers"]["linear"].is_object());
+        assert!(config["mcpServers"][kobi_perms::SERVER_NAME].is_object());
+        assert!(valeur(&args, "--allowedTools").contains("mcp__kobi__meeting_stop"));
+        assert!(args.iter().any(|a| a == "--permission-prompt-tool"));
     }
 
     #[derive(Default)]

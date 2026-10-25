@@ -20,6 +20,9 @@ pub enum Origine {
     Mcp,
     /// L'agent de Kobi lui-même (`kobi mcp --agent`).
     Agent,
+    /// Une session de Kobi en lecture seule (`kobi mcp --lecture`, KOB-307) :
+    /// l'app refuse tout ce qui n'est pas une lecture.
+    Lecture,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

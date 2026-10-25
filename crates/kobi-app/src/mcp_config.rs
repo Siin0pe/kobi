@@ -95,14 +95,24 @@ pub fn serveur_kobi(exe: &Path) -> ServeurMcp {
     }
 }
 
-/// Assemble `{"mcpServers": {…}}` : le MCP de Kobi (toujours présent, servi
-/// par l'exécutable en cours) puis `utilisateur` (KOB-155), et l'écrit dans
-/// `fichier`. Un serveur de l'utilisateur nommé « kobi » est ignoré.
-pub fn assembler(fichier: &Path, utilisateur: Vec<ServeurMcp>) -> io::Result<McpSession> {
-    let exe = std::env::current_exe()?;
-    assembler_avec(fichier, serveur_kobi(&exe), utilisateur)
+/// Le MCP de Kobi en lecture seule (KOB-307) : le serveur ne sert que les
+/// lectures hors réunion, et l'app refuse le reste.
+pub fn serveur_kobi_lecture(exe: &Path) -> ServeurMcp {
+    ServeurMcp {
+        nom: SERVEUR_KOBI.into(),
+        config: json!({
+            "type": "stdio",
+            "command": exe.display().to_string(),
+            "args": ["mcp", "--lecture"],
+        }),
+        outils_autorises: kobi_ctl::mcp::outils_en_lecture_seule(SERVEUR_KOBI),
+    }
 }
 
+/// Assemble `{"mcpServers": {…}}` : le MCP de Kobi `kobi` (toujours
+/// présent, servi par l'exécutable en cours, [`serveur_kobi`] ou
+/// [`serveur_kobi_lecture`]) puis `utilisateur` (KOB-155), et l'écrit dans
+/// `fichier`. Un serveur de l'utilisateur nommé « kobi » est ignoré.
 pub(crate) fn assembler_avec(
     fichier: &Path,
     kobi: ServeurMcp,

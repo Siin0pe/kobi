@@ -396,6 +396,12 @@ impl Commande {
         PILOTAGE_REUNION.contains(&self.nom)
     }
 
+    /// Permise à une session en lecture seule (KOB-307) : une lecture, hors
+    /// réunion (`meeting.*`).
+    pub fn lecture_seule(&self) -> bool {
+        self.effet == Effet::Lecture && !self.nom.starts_with("meeting.")
+    }
+
     /// Clé de traduction de la description (`ctl.commandes.meetingStart`).
     fn cle(&self) -> String {
         let mut cle = String::from("ctl.commandes.");

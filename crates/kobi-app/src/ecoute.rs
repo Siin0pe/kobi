@@ -1604,6 +1604,13 @@ impl<R: Runtime> Fil<R> {
                     tracing::info!("interpellation sans question");
                     Message::SansQuestion
                 }
+                Action::Differer(q) => {
+                    tracing::info!(
+                        longueur = q.len(),
+                        "question dite avant l'arrêt, gardée jusqu'à la fin de « Annuler »"
+                    );
+                    Message::QuestionDifferee(q)
+                }
             };
             publier(&self.app, message);
         }
