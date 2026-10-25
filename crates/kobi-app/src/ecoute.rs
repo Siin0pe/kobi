@@ -503,6 +503,17 @@ fn recevoir(
     }
 }
 
+/// L'écoute de Kobi sera-t-elle coupée une fois `commandes` appliquées ?
+/// Le raccourci la rouvre, comme la fin de la coupure (KOB-295).
+fn ecoute_en_pause_apres(en_pause: bool, commandes: &[Commande]) -> bool {
+    commandes.iter().fold(en_pause, |pause, c| match c {
+        Commande::Pause(p) => *p,
+        Commande::BasculerPause => !pause,
+        Commande::Raccourci => false,
+        _ => pause,
+    })
+}
+
 /// La vidange de la pause continue-t-elle ? Tant que la réunion reste en
 /// pause ou se termine (le compte rendu attend la fin de la transcription),
 /// ou que seule l'écoute de Kobi est coupée ; pas à la reprise, ni une fois
@@ -796,6 +807,8 @@ struct Fil<R: Runtime> {
     partiel_publie: Option<String>,
     /// Le micro a été perdu et n'est pas encore rouvert (KOB-236).
     micro_perdu: bool,
+    /// Commandes reçues pendant une vidange, à appliquer ensuite (KOB-295).
+    differees: Vec<Commande>,
     /// Instant réel de la dernière fin de réunion annulable (KOB-287).
     arret_annulable: Option<Instant>,
     /// Ouverture du micro toujours en cours au tour précédent (KOB-285).
@@ -834,6 +847,7 @@ impl<R: Runtime> Fil<R> {
             niveau: (0.0, 0),
             partiel_publie: None,
             micro_perdu: false,
+            differees: Vec::new(),
             arret_annulable: None,
             ouverture: None,
             pause_reunion: None,
@@ -855,6 +869,10 @@ impl<R: Runtime> Fil<R> {
             self.note(&format!("Nemotron absent : {e}"));
         }
         loop {
+            // Reçues pendant une vidange : appliquées dans l'ordre (KOB-295).
+            for commande in std::mem::take(&mut self.differees) {
+                self.commande(commande);
+            }
             while let Ok(commande) = rx.try_recv() {
                 self.commande(commande);
             }
@@ -869,7 +887,7 @@ impl<R: Runtime> Fil<R> {
             }
             // En pause (Kobi ou la réunion), ni micro ni transcription.
             if self.en_pause || session == "pause" || self.stt.is_err() {
-                self.fermer_micro();
+                self.fermer_micro(&rx);
                 match rx.recv_timeout(Duration::from_millis(500)) {
                     Ok(commande) => self.commande(commande),
                     Err(RecvTimeoutError::Timeout) => {}
@@ -989,7 +1007,7 @@ impl<R: Runtime> Fil<R> {
         rouvert
     }
 
-    fn fermer_micro(&mut self) {
+    fn fermer_micro(&mut self, commandes: &Receiver<Commande>) {
         // Une ouverture encore en attente est lâchée : aboutie pendant la
         // pause, sa capture se ferme d'elle-même au lieu d'enregistrer
         // (KOB-293).
@@ -1015,7 +1033,7 @@ impl<R: Runtime> Fil<R> {
                         );
                     }
                 }
-                self.vider();
+                self.vider(commandes);
             }
         }
         crate::chef::avancer(&self.app, kobi_stt::Source::Moi, None);
@@ -1028,17 +1046,24 @@ impl<R: Runtime> Fil<R> {
     /// pendant [`VIDANGE_FILE`], puis Nemotron conclut la dernière phrase.
     /// Sans effet sur l'écoute : un ordre dit avant la pause n'est plus
     /// exécuté. S'arrête si la réunion reprend entre-temps (KOB-261).
-    fn vider(&mut self) {
+    fn vider(&mut self, commandes: &Receiver<Commande>) {
         if self.stt.is_err() {
             return;
         }
         let debut = Instant::now();
         let a_vider = self.file.len();
         let mut file = std::mem::take(&mut self.file);
+        // Les commandes arrivées entre deux trames sont lues tout de suite :
+        // l'écoute rouverte (fin de la coupure, raccourci) arrête la vidange,
+        // pour rouvrir le micro ; toutes sont appliquées après (KOB-295).
         let transcrites = vidanger(
             &mut file,
             debut + VIDANGE_FILE,
-            |fil: &mut Self| !vidange_continue(etat(&fil.app).etat, fil.en_pause),
+            |fil: &mut Self| {
+                fil.differees.extend(commandes.try_iter());
+                let en_pause = ecoute_en_pause_apres(fil.en_pause, &fil.differees);
+                !vidange_continue(etat(&fil.app).etat, en_pause)
+            },
             |fil: &mut Self, frame| fil.traiter(frame, false),
             self,
         );
@@ -2279,6 +2304,31 @@ mod tests {
             calcul.as_secs_f64(),
             calcul.as_secs_f64() / audio
         );
+    }
+
+    /// KOB-295 : écoute coupée pendant une réunion en cours, puis rouverte
+    /// (fin de la coupure, bascule, raccourci) pendant la vidange : elle
+    /// s'arrête pour rouvrir le micro ; les autres commandes n'y changent rien.
+    #[test]
+    fn ecoute_rouverte_arrete_la_vidange() {
+        use Commande::*;
+        assert!(ecoute_en_pause_apres(true, &[]));
+        assert!(ecoute_en_pause_apres(
+            true,
+            &[Suite, ReponseAttendue(Duration::from_secs(60))]
+        ));
+        for rouvre in [vec![Pause(false)], vec![BasculerPause], vec![Raccourci]] {
+            let pause = ecoute_en_pause_apres(true, &rouvre);
+            assert!(!pause, "{rouvre:?}");
+            assert!(!vidange_continue("reunion", pause), "{rouvre:?}");
+        }
+        // Coupée, rouverte, recoupée : la vidange continue.
+        assert!(ecoute_en_pause_apres(true, &[Pause(false), BasculerPause]));
+        // La réunion en pause, elle, continue de se vider.
+        assert!(vidange_continue(
+            "pause",
+            ecoute_en_pause_apres(true, &[Raccourci])
+        ));
     }
 
     /// KOB-277 : la vidange continue tant que la réunion reste en pause ou se
