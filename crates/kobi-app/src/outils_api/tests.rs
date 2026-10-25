@@ -154,10 +154,33 @@ fn lien_vers_un_chemin_reseau_refuse_sans_le_suivre() {
         .lire(&json!({ "file_path": "lisez-moi" }))
         .unwrap()
         .contains("Kobi"));
-    // Une boucle de liens : refusée, sans tourner sans fin.
+    // `..` dans une cible s'applique au chemin résolu, pas au nom du lien :
+    // `a/x` mène à `sub/evil`, qui vise le réseau.
+    fs::create_dir_all(racine.join("sub/deep")).unwrap();
+    symlink("sub/deep", racine.join("a")).unwrap();
+    symlink("../evil", racine.join("sub/deep/x")).unwrap();
+    symlink("//attaquant/p", racine.join("sub/evil")).unwrap();
+    let e = l.lire(&json!({ "file_path": "a/x" })).unwrap_err();
+    assert!(e.contains("chemin réseau"), "{e}");
+    // Un lien absolu local, dans la codebase : se lit.
+    symlink(racine.join("README.md"), racine.join("absolu")).unwrap();
+    assert!(l
+        .lire(&json!({ "file_path": "absolu" }))
+        .unwrap()
+        .contains("Kobi"));
+    // Une boucle de liens : refusée par le compte des liens, sans tourner
+    // sans fin.
     symlink("boucle-b", racine.join("boucle-a")).unwrap();
     symlink("boucle-a", racine.join("boucle-b")).unwrap();
-    assert!(l.lire(&json!({ "file_path": "boucle-a" })).is_err());
+    let e = l.lire(&json!({ "file_path": "boucle-a" })).unwrap_err();
+    assert!(e.contains("chemin réseau"), "{e}");
+    // `a -> .` répété : un seul passage, borné par le compte des liens.
+    symlink(".", racine.join("ici")).unwrap();
+    let long = vec!["ici"; 30].join("/") + "/README.md";
+    assert!(l
+        .lire(&json!({ "file_path": long }))
+        .unwrap()
+        .contains("Kobi"));
 }
 
 /// Rien ne se lit hors des dossiers permis : chemin absolu, `..`, lien

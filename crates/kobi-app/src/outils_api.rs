@@ -861,48 +861,81 @@ fn chemin_reseau(chemin: &str) -> bool {
     !disque_local
 }
 
-/// Un composant du chemin est-il un lien symbolique qui vise, directement ou
-/// par d'autres liens, un chemin réseau ou de périphérique (KOB-352) ? Sous
-/// Windows, `canonicalize` le suivrait et ouvrirait la connexion SMB. Rien
-/// n'est résolu ici : chaque lien est lu (`read_link`), jamais suivi ; les
-/// liens en chaîne sont lus jusqu'à [`LIENS_MAX`], au-delà le chemin est
-/// refusé.
+/// Un lien du chemin vise-t-il, directement ou par d'autres liens, un chemin
+/// réseau ou de périphérique (KOB-352) ? Sous Windows, `canonicalize` le
+/// suivrait et ouvrirait la connexion SMB. Le chemin est résolu comme le
+/// ferait le système, sans rien suivre : chaque lien est lu (`read_link`) et
+/// **remplacé** par sa cible, et `..` s'applique au chemin déjà résolu
+/// (physique), pas au nom du lien. Plus de [`LIENS_MAX`] liens en tout
+/// (boucle, chaîne sans fin) : refusé.
 fn lien_vers_le_reseau(chemin: &Path) -> bool {
-    fn lire(chemin: &Path, profondeur: usize) -> bool {
-        if profondeur > LIENS_MAX {
+    use std::collections::VecDeque;
+    use std::path::Component;
+    let mut a_lire: VecDeque<PathBuf> = chemin
+        .components()
+        .map(|c| PathBuf::from(c.as_os_str()))
+        .collect();
+    let mut resolu = PathBuf::new();
+    let mut liens = 0;
+    while let Some(morceau) = a_lire.pop_front() {
+        match morceau.components().next() {
+            Some(Component::CurDir) | None => continue,
+            Some(Component::ParentDir) => {
+                resolu.pop();
+                continue;
+            }
+            Some(Component::Prefix(_) | Component::RootDir) => {
+                resolu.push(&morceau);
+                continue;
+            }
+            Some(Component::Normal(_)) => {}
+        }
+        let candidat = resolu.join(&morceau);
+        let est_un_lien =
+            std::fs::symlink_metadata(&candidat).is_ok_and(|m| m.file_type().is_symlink());
+        if !est_un_lien {
+            resolu = candidat;
+            continue;
+        }
+        liens += 1;
+        if liens > LIENS_MAX {
             return true;
         }
-        let mut courant = PathBuf::new();
-        for composant in chemin.components() {
-            courant.push(composant);
-            let Ok(meta) = std::fs::symlink_metadata(&courant) else {
-                continue;
-            };
-            if !meta.file_type().is_symlink() {
-                continue;
-            }
-            let Ok(cible) = std::fs::read_link(&courant) else {
-                return true;
-            };
-            let cible_texte = cible.to_string_lossy();
-            if chemin_reseau(&cible_texte) || !prefixe_local(&cible) {
-                return true;
-            }
-            let cible = match courant.parent() {
-                Some(parent) if cible.is_relative() => parent.join(&cible),
-                _ => cible,
-            };
-            if lire(&cible, profondeur + 1) {
-                return true;
-            }
+        let Ok(cible) = std::fs::read_link(&candidat) else {
+            return true;
+        };
+        if chemin_reseau(&cible.to_string_lossy())
+            || !prefixe_local(&cible)
+            || racine_sans_disque(&cible)
+        {
+            return true;
         }
-        false
+        // La cible prend la place du lien : absolue, elle repart de sa
+        // racine ; relative, du dossier où est le lien.
+        if cible.is_absolute() {
+            resolu = PathBuf::new();
+        }
+        for composant in cible.components().rev() {
+            a_lire.push_front(PathBuf::from(composant.as_os_str()));
+        }
     }
-    lire(chemin, 0)
+    false
 }
 
-/// Liens lus en chaîne au plus (KOB-352).
-const LIENS_MAX: usize = 16;
+/// Liens lus au plus pour un chemin, comme Linux (KOB-352).
+const LIENS_MAX: usize = 40;
+
+/// Sous Windows, une cible de lien qui a une racine sans disque
+/// (`\Device\Mup\…`, `\??\…` déjà vu) : NT la suit telle quelle, vers le
+/// réseau ou un périphérique (KOB-352). Ailleurs, une racine est locale.
+fn racine_sans_disque(cible: &Path) -> bool {
+    cfg!(windows)
+        && cible.has_root()
+        && !matches!(
+            cible.components().next(),
+            Some(std::path::Component::Prefix(_))
+        )
+}
 
 /// Sous Windows, liste blanche : un chemin absolu n'a pour préfixe qu'un
 /// disque local (`C:`, `\\?\C:`) ; tout autre préfixe (UNC, périphérique,
