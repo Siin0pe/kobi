@@ -212,6 +212,41 @@ pub fn installer_sans_parleur<R: Runtime>(app: &AppHandle<R>, reglage: &VoiceCon
     });
 }
 
+/// Voix d'essai : un vrai parleur sur une synthèse et une sortie factices
+/// (chaque son dure 50 ms), voix active partout.
+#[cfg(test)]
+pub fn installer_factice<R: Runtime>(app: &AppHandle<R>) {
+    struct Muette;
+    impl Synthese for Muette {
+        fn frequence(&self) -> u32 {
+            16_000
+        }
+        fn synthetiser(&mut self, _phrase: &str) -> kobi_tts::Resultat<Vec<f32>> {
+            Ok(vec![0.0; 800])
+        }
+    }
+    struct Silence;
+    impl Sortie for Silence {
+        fn jouer(&mut self, _: &[f32], _: u32, _: &kobi_tts::Arret) -> kobi_tts::Resultat<()> {
+            std::thread::sleep(Duration::from_millis(50));
+            Ok(())
+        }
+    }
+    let parleur = Parleur::new(
+        Box::new(|| Ok(Box::new(Muette) as Box<dyn Synthese>)),
+        Box::new(|| Ok(Box::new(Silence) as Box<dyn Sortie>)),
+        |_| {},
+    );
+    app.manage(Voix {
+        reglage: Mutex::new((true, true)),
+        verbosite: Mutex::default(),
+        parleur: Some(parleur),
+        config: None,
+        recent: Mutex::default(),
+        interruptions: Default::default(),
+    });
+}
+
 /// Combien Kobi parle en ce moment (normal sans la voix installée).
 pub fn verbosite<R: Runtime>(app: &AppHandle<R>) -> Verbosite {
     app.try_state::<Voix>()
@@ -499,6 +534,16 @@ impl Reponse {
                 tracing::info!("voix : réponse longue, résumé seulement");
             }
             self.dire(app, &phrases);
+            avec_parleur(app, |p| p.finir(e));
+        }
+    }
+
+    /// Réponse lâchée sans autre phrase (tâche détachée, erreur) : l'énoncé
+    /// se clôt, sinon la voix resterait « occupée » et les annonces de
+    /// service attendraient pour rien (KOB-366). Ce qui est déjà confié se
+    /// dit encore.
+    pub fn lacher<R: Runtime>(self, app: &AppHandle<R>) {
+        if let Some(e) = self.enonce {
             avec_parleur(app, |p| p.finir(e));
         }
     }
