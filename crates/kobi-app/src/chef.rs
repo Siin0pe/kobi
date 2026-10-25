@@ -1148,6 +1148,12 @@ impl<R: Runtime> Chef<R> {
                 Some(r) if r.pause => {
                     r.pause = false;
                     r.pause_a = None;
+                    // La pause d'avant ne doit plus écarter de parole à une
+                    // prochaine fermeture du micro (KOB-297).
+                    let _ = crate::ecoute::commander(
+                        &self.app,
+                        crate::ecoute::Commande::RepriseReunion,
+                    );
                     self.transition(&[Evenement::Reprendre]);
                     kobi_i18n::tr("coque.chef.enregistreDeNouveau", &[])
                 }
