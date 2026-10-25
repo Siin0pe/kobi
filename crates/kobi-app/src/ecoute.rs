@@ -546,7 +546,9 @@ fn raccourci_sans_micro(session: &str) -> bool {
 }
 
 /// L'écoute de Kobi sera-t-elle coupée une fois `commandes` appliquées ?
-/// Le raccourci la rouvre, comme la fin de la coupure (KOB-295).
+/// Le raccourci la rouvre, comme la fin de la coupure (KOB-295), sauf
+/// pendant la pause de la réunion (KOB-304), où la vidange continue de
+/// toute façon.
 fn ecoute_en_pause_apres(en_pause: bool, commandes: &[Commande]) -> bool {
     commandes.iter().fold(en_pause, |pause, c| match c {
         Commande::Pause(p) => *p,
