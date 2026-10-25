@@ -336,38 +336,18 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
     Ok(jetons)
 }
 
-/// Ce qui suit un `{` hors guillemets : bash le développe-t-il (`{a,b}`,
-/// `{1..3}`) ? Les guillemets à l'intérieur ne l'empêchent pas
-/// (`{"-delete",}` donne `-delete`) : ils sont sautés, et une virgule ou `..`
-/// n'importe où entre les accolades suffit (prudent, KOB-258). Un caractère
-/// échappé par `\`, hors guillemets ou entre guillemets doubles, n'ouvre ni
-/// ne ferme rien : `{"\"",-delete}` et `{\",-delete}` se développent
-/// (KOB-272).
+/// Ce qui suit un `{` hors guillemets : bash peut-il le développer
+/// (`{a,b}`, `{1..3}`) ? Règle prudente, sans chercher à refaire l'analyse de
+/// bash : une virgule ou `..` n'importe où après l'accolade, suivie plus loin
+/// d'un `}`, suffit pour refuser. Guillemets, échappements (KOB-258, KOB-272)
+/// et accolades imbriquées (`{{},-delete}` donne `{} -delete`, KOB-286) n'y
+/// changent rien ; `{}` seul (`find -exec cat {} +`) reste tel quel.
 fn accolades_developpees(suite: &[char]) -> bool {
-    let mut guillemet: Option<char> = None;
-    let mut dedans = String::new();
-    let mut i = 0;
-    while let Some(&x) = suite.get(i) {
-        i += 1;
-        if x == '\\' && guillemet != Some('\'') {
-            if let Some(&y) = suite.get(i) {
-                dedans.push(y);
-                i += 1;
-            }
-            continue;
-        }
-        match guillemet {
-            Some(q) if x == q => guillemet = None,
-            Some(_) => dedans.push(x),
-            None => match x {
-                '\'' | '"' => guillemet = Some(x),
-                '}' => return dedans.contains(',') || dedans.contains(".."),
-                x if x.is_whitespace() || matches!(x, ';' | '|' | '&') => return false,
-                x => dedans.push(x),
-            },
-        }
-    }
-    false
+    suite
+        .iter()
+        .enumerate()
+        .find(|&(i, &x)| x == ',' || (x == '.' && suite.get(i + 1) == Some(&'.')))
+        .is_some_and(|(i, _)| suite[i..].contains(&'}'))
 }
 
 /// Redirection : seules celles qui n'écrivent dans aucun fichier passent.
@@ -1641,6 +1621,16 @@ mod tests {
             "sort --comp=./outil f",
             "sort -T /tmp f",
             "sort --temporary-directory=/tmp f",
+            // KOB-286 : accolades imbriquées, que bash apparie par niveau.
+            "find . {{},-delete}",
+            "find . {a{b},-delete}",
+            "find . {{a,b},-delete}",
+            "sed -n 1p {{},-i,Cargo.toml}",
+            "fd {{},-x,rm} motif",
+            "rg {{},--pre=sh} . crates",
+            "git log {{},--output=x.txt}",
+            "find . {{\"\\\"\"},-delete}",
+            "cat {{a..c},../../.ssh/id_rsa}",
         ] {
             pas_lecture(bash(ligne), ligne);
         }
