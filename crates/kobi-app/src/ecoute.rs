@@ -148,6 +148,8 @@ pub enum Commande {
     /// La réunion est mise en pause à cet instant : l'audio dit après ne
     /// sera pas transcrit (KOB-277).
     PauseReunion(Instant),
+    /// La réunion reprend : la pause d'avant ne compte plus (KOB-297).
+    RepriseReunion,
     /// Kobi vient de répondre : la conversation attend la suite.
     Suite,
     /// La dernière carte de validation s'est fermée : sa fenêtre aussi, la
@@ -306,14 +308,18 @@ impl Porteur {
     /// l'ordre. Le porteur bloqué (serveur audio mort) n'est pas attendu
     /// au-delà de [`ATTENTE_FERMETURE`].
     fn fermer(self) -> Vec<AudioFrame> {
-        let mut reste: Vec<AudioFrame> = self.trames.try_iter().collect();
         let (tx, rx) = mpsc::channel();
-        if self.fermer.send(tx).is_ok() {
-            if let Ok(fin) = rx.recv_timeout(ATTENTE_FERMETURE) {
-                reste.extend(fin);
-            }
-        }
-        reste.extend(self.trames.try_iter());
+        let fin = if self.fermer.send(tx).is_ok() {
+            rx.recv_timeout(ATTENTE_FERMETURE).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        // La réponse reçue, le porteur ne relaie plus rien : tout ce qu'il a
+        // relayé est déjà là, et passe avant le reste de la capture. Relevé
+        // avant la réponse, une trame relayée entre-temps passait après
+        // (KOB-297).
+        let mut reste: Vec<AudioFrame> = self.trames.try_iter().collect();
+        reste.extend(fin);
         reste
     }
 }
@@ -1196,6 +1202,7 @@ impl<R: Runtime> Fil<R> {
                 tracing::info!(pause, "écoute continue (contrôle)");
             }
             Commande::PauseReunion(quand) => self.pause_reunion = Some(quand),
+            Commande::RepriseReunion => self.pause_reunion = None,
             Commande::Raccourci => {
                 self.note("raccourci clavier");
                 if self.en_pause {
@@ -2500,6 +2507,33 @@ mod tests {
             "pris à l'ouverture"
         );
         assert!(releve.duration_since(demarre) >= Duration::from_millis(250));
+    }
+
+    /// KOB-297 : le porteur relaie encore une trame (B) entre la demande de
+    /// fermeture et sa réponse (C, le reste de la capture) : l'audio est
+    /// rendu dans l'ordre A, B, C.
+    #[test]
+    fn porteur_rend_l_audio_dans_l_ordre() {
+        let (trames_tx, trames) = mpsc::channel();
+        let (_erreurs_tx, erreurs) = mpsc::channel();
+        let (fermer, fermer_rx) = mpsc::channel::<Sender<Vec<AudioFrame>>>();
+        trames_tx.send(trame_a(0)).unwrap();
+        let faux_porteur = std::thread::spawn(move || {
+            let reponse = fermer_rx.recv().unwrap();
+            trames_tx.send(trame_a(100)).unwrap();
+            reponse.send(vec![trame_a(200)]).unwrap();
+        });
+        let reste: Vec<_> = Porteur {
+            trames,
+            erreurs,
+            fermer,
+        }
+        .fermer()
+        .into_iter()
+        .map(|f| f.t)
+        .collect();
+        faux_porteur.join().unwrap();
+        assert_eq!(reste, [0, 100, 200].map(Duration::from_millis));
     }
 
     /// KOB-293 : une ouverture lente, lâchée (pause) avant d'aboutir, ferme
