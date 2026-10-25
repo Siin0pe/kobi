@@ -320,9 +320,6 @@ fn lecture(sortie: Fabrique<Box<dyn Sortie>>, rx: Receiver<VersLecture>, p: Arc<
                 }
             }
             VersLecture::Erreur { enonce, message } => {
-                let _ =
-                    p.a_dire
-                        .compare_exchange(enonce + 1, 0, Ordering::SeqCst, Ordering::SeqCst);
                 if p.courant(enonce) {
                     (p.rappel)(Evenement::Erreur(message));
                 }
@@ -502,11 +499,16 @@ mod tests {
         );
         let e = p.nouvel_enonce();
         p.dire(e, "bonjour à tous");
+        p.finir(e);
         let Evenement::Erreur(m) = rx.recv_timeout(Duration::from_secs(2)).unwrap() else {
             panic!()
         };
         assert!(m.contains("pas de paquet"), "{m}");
-        // L'énoncé abandonné n'occupe plus la voix.
-        assert!(!p.occupe());
+        // Sa fin, après l'échec, libère la voix.
+        let libre = (0..100).any(|_| {
+            std::thread::sleep(Duration::from_millis(10));
+            !p.occupe()
+        });
+        assert!(libre);
     }
 }
