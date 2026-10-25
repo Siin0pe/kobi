@@ -907,6 +907,8 @@
   "coque.rappels.tacheImpossible": "Je n'arrive pas à ranger cette tâche : {erreur}",
   "coque.ecoute.erreurMicro": "Micro ou transcription",
   "coque.ecoute.microIndisponible": "micro indisponible",
+  "coque.ecoute.pauseReunion": "Réunion en pause",
+  "coque.ecoute.pauseReunionAide": "Le micro est coupé pendant la pause. Reprenez la réunion pour me parler.",
   "coque.ecoute.microPerdu": "Micro perdu",
   "coque.ecoute.microPerduRecherche": "Le micro s’est arrêté (débranché ?). Kobi passe à un autre micro s’il y en a un, sinon il réessaie toutes les 5 secondes.",
   "coque.ecoute.microRetrouve": "Micro retrouvé : {micro}",

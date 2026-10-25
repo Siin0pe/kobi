@@ -907,6 +907,8 @@
   "coque.rappels.tacheImpossible": "I can't save this task: {erreur}",
   "coque.ecoute.erreurMicro": "Microphone or transcription",
   "coque.ecoute.microIndisponible": "microphone unavailable",
+  "coque.ecoute.pauseReunion": "Meeting paused",
+  "coque.ecoute.pauseReunionAide": "The microphone is off during the pause. Resume the meeting to talk to me.",
   "coque.ecoute.microPerdu": "Microphone lost",
   "coque.ecoute.microPerduRecherche": "The microphone stopped (unplugged?). Kobi switches to another microphone if there is one, otherwise it retries every 5 seconds.",
   "coque.ecoute.microRetrouve": "Microphone back: {micro}",

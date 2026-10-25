@@ -1251,24 +1251,36 @@ impl<R: Runtime> Fil<R> {
                     tracing::info!(pause = false, "écoute continue : reprise par le raccourci");
                     crate::menu::ecoute_reprise(&self.app);
                 }
-                // Réunion en pause : le micro y est fermé exprès, rien n'est
-                // en panne. Pas d'erreur « micro indisponible » (KOB-304).
-                if raccourci_sans_micro(etat(&self.app).etat) {
-                    tracing::info!("raccourci pendant la pause de la réunion : micro fermé");
-                    self.note("raccourci pendant la pause de la réunion : micro fermé");
-                    return;
-                }
                 if self.stt.is_err() {
                     self.stt = charger_stt();
                 }
-                let probleme = match &self.stt {
-                    Err(e) => Some(e.clone()),
-                    Ok(_) => None,
+                if let Err(e) = &self.stt {
+                    let (app, message) = (self.app.clone(), e.clone());
+                    let titre = kobi_i18n::tr("coque.ecoute.erreurMicro", &[]);
+                    std::thread::spawn(move || erreur(&app, &titre, &message));
+                    return;
                 }
-                .or_else(|| {
-                    (self.entree.is_none() && !self.ouvrir_micro())
-                        .then(|| kobi_i18n::tr("coque.ecoute.microIndisponible", &[]))
-                });
+                // Réunion en pause : le micro y est fermé exprès, rien n'est
+                // en panne. Pas d'erreur « micro indisponible », mais le dire
+                // (KOB-304).
+                if raccourci_sans_micro(etat(&self.app).etat) {
+                    tracing::info!("raccourci pendant la pause de la réunion : micro fermé");
+                    self.note("raccourci pendant la pause de la réunion : micro fermé");
+                    let app = self.app.clone();
+                    let titre = kobi_i18n::tr("coque.ecoute.pauseReunion", &[]);
+                    let message = kobi_i18n::tr("coque.ecoute.pauseReunionAide", &[]);
+                    std::thread::spawn(move || erreur(&app, &titre, &message));
+                    return;
+                }
+                // Micro perdu : même réouverture que la boucle, qui garde la
+                // session (KOB-278).
+                let probleme = (self.entree.is_none()
+                    && !(if self.micro_perdu {
+                        self.rouvrir_apres_panne()
+                    } else {
+                        self.ouvrir_micro()
+                    }))
+                .then(|| kobi_i18n::tr("coque.ecoute.microIndisponible", &[]));
                 if let Some(message) = probleme {
                     let app = self.app.clone();
                     let titre = kobi_i18n::tr("coque.ecoute.erreurMicro", &[]);
