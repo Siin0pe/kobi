@@ -157,8 +157,39 @@ pub async fn ouvrir(
         // activée seulement par `KOBI_COMPACTION=1`, en attendant la
         // décision après un essai réel.
         compaction: std::env::var("KOBI_COMPACTION").is_ok_and(|v| v == "1"),
+        url: adresse_api(std::env::var("KOBI_API_URL").ok().as_deref()),
         ..Default::default()
     })
+}
+
+/// Adresse de l'API : `KOBI_API_URL` pour un essai contre un serveur
+/// factice (KOB-358), seulement s'il est local ; sinon l'adresse réelle.
+/// Une variable d'environnement ne doit jamais pouvoir envoyer la clé
+/// ailleurs.
+fn adresse_api(essai: Option<&str>) -> String {
+    let Some(valeur) = essai else {
+        return kobi_brain::api::URL_API.to_owned();
+    };
+    let locale = valeur.strip_prefix("http://").and_then(|reste| {
+        let hote = reste.split('/').next().unwrap_or_default();
+        let (nom, port) = match hote.rsplit_once(':') {
+            Some((nom, port)) if !nom.is_empty() && !nom.ends_with(':') => (nom, Some(port)),
+            _ => (hote, None),
+        };
+        let port_valide =
+            port.is_none_or(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+        (["127.0.0.1", "localhost", "[::1]"].contains(&nom) && port_valide).then_some(valeur)
+    });
+    match locale {
+        Some(url) => {
+            tracing::info!(url, "API Messages : serveur d'essai local (KOBI_API_URL)");
+            url.trim_end_matches('/').to_owned()
+        }
+        None => {
+            tracing::warn!("KOBI_API_URL ignorée : seule une adresse http locale est acceptée");
+            kobi_brain::api::URL_API.to_owned()
+        }
+    }
 }
 
 /// Outils du MCP de Kobi proposés selon le rôle (noms côté serveur), et
@@ -224,6 +255,36 @@ fn catalogue_kobi(permis: &[String], lecture_seule: bool) -> kobi_perms::mcp::Se
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// KOB-358 : seule une adresse http locale remplace l'API réelle.
+    #[test]
+    fn adresse_d_essai_locale_seulement() {
+        let reelle = kobi_brain::api::URL_API;
+        assert_eq!(adresse_api(None), reelle);
+        for (valeur, attendu) in [
+            ("http://127.0.0.1:8765", "http://127.0.0.1:8765"),
+            ("http://127.0.0.1:8765/", "http://127.0.0.1:8765"),
+            ("http://localhost:9000", "http://localhost:9000"),
+            ("http://[::1]:9000", "http://[::1]:9000"),
+            ("http://localhost", "http://localhost"),
+        ] {
+            assert_eq!(adresse_api(Some(valeur)), attendu, "{valeur}");
+        }
+        for valeur in [
+            "https://exemple.com",
+            "http://exemple.com:8765",
+            "http://127.0.0.1@exemple.com",
+            "http://127.0.0.1:80@exemple.com",
+            "http://127.0.0.1.exemple.com",
+            "http://localhost:abc",
+            "http://localhost:",
+            "https://127.0.0.1:8765",
+            "",
+            "127.0.0.1:8765",
+        ] {
+            assert_eq!(adresse_api(Some(valeur)), reelle, "{valeur}");
+        }
+    }
 
     /// `auto` : Claude Code s'il est prêt, sinon la clé ; `api` : la clé
     /// seulement.
