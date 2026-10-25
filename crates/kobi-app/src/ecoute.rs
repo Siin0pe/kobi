@@ -1633,7 +1633,9 @@ impl<R: Runtime> Fil<R> {
                         longueur = q.len(),
                         "question dite avant l'arrêt, gardée jusqu'à la fin de « Annuler »"
                     );
-                    Message::QuestionDifferee(q)
+                    // `dit_a` vient de l'horloge de l'audio, comme `arret_clos` :
+                    // le chef le compare à l'arrêt (KOB-326, KOB-337).
+                    Message::QuestionDifferee(q, dit_a)
                 }
             };
             publier(&self.app, message);

@@ -154,8 +154,9 @@ pub enum Message {
     /// L'interpellation n'a pas été suivie d'une question.
     SansQuestion,
     /// Question dite avant l'arrêt, transcrite pendant « Annuler » : gardée
-    /// jusqu'à la fin de la fenêtre (KOB-307).
-    QuestionDifferee(String),
+    /// jusqu'à la fin de la fenêtre (KOB-307). Avec l'instant où elle a été
+    /// dite (KOB-337).
+    QuestionDifferee(String, Instant),
     /// Ces secondes de parole dites avant la pause n'ont pas pu être
     /// transcrites (reprise pendant la vidange sous charge, KOB-277).
     TranscriptionIncomplete(f64),
@@ -883,9 +884,11 @@ impl<R: Runtime> Chef<R> {
                 let _ = self.app.emit(EVENEMENT_QUESTION, &q);
             }
             Message::TranscriptionIncomplete(secondes) => self.transcription_incomplete(secondes),
-            Message::QuestionDifferee(q) => {
-                // Rien d'une réunion passée ne part dans la nouvelle (KOB-326).
-                if self.reunion_apres_l_arret() {
+            Message::QuestionDifferee(q, dit_a) => {
+                // Rien d'une réunion passée ne part dans la nouvelle (KOB-326) ;
+                // une question de la réunion en cours, si (KOB-337).
+                let passee = self.arret_definitif.is_some_and(|arret| dit_a <= arret);
+                if passee && self.reunion_apres_l_arret() {
                     tracing::info!(
                         "question d'avant l'arrêt arrivée dans la réunion suivante : écartée"
                     );
@@ -4019,7 +4022,10 @@ mod tests {
             c.recevoir(Message::Segment(dit("Premier point."), Instant::now()));
             c.commande(Intention::TerminerReunion);
             assert!(c.fin_annulable());
-            c.recevoir(Message::QuestionDifferee("note l'action budget".into()));
+            c.recevoir(Message::QuestionDifferee(
+                "note l'action budget".into(),
+                Instant::now(),
+            ));
             c.tick();
             assert_eq!(c.questions_differees, ["note l'action budget"]);
             // « Annuler » se ferme : le compte rendu s'écrit, elle attend.
@@ -4053,8 +4059,14 @@ mod tests {
             c.commande(Intention::DemarrerReunion);
             c.recevoir(Message::Segment(dit("Budget validé."), Instant::now()));
             c.commande(Intention::TerminerReunion);
-            c.recevoir(Message::QuestionDifferee("note l'action budget".into()));
-            c.recevoir(Message::QuestionDifferee("et le planning ?".into()));
+            c.recevoir(Message::QuestionDifferee(
+                "note l'action budget".into(),
+                Instant::now(),
+            ));
+            c.recevoir(Message::QuestionDifferee(
+                "et le planning ?".into(),
+                Instant::now(),
+            ));
             c.commande(Intention::Reprendre);
             c.tick();
             assert_eq!(c.questions_differees, ["et le planning ?"]);
@@ -4211,7 +4223,7 @@ mod tests {
             c.commande(Intention::DemarrerReunion);
             let tour = c.tour;
             c.recevoir(dite("quel est le budget ?", avant));
-            c.recevoir(Message::QuestionDifferee("et le planning ?".into()));
+            c.recevoir(Message::QuestionDifferee("et le planning ?".into(), avant));
             assert!(
                 c.questions_differees.is_empty(),
                 "{:?}",
@@ -4233,6 +4245,7 @@ mod tests {
             c.commande(Intention::TerminerReunion);
             c.recevoir(Message::QuestionDifferee(
                 "appelle cette réunion Budget 2027".into(),
+                Instant::now(),
             ));
             c.commande(Intention::Reprendre);
             let tour = c.tour;
@@ -4438,6 +4451,52 @@ mod tests {
                 texte: "Midi.".into(),
             }));
             assert!(c.conversation.is_some());
+        });
+    }
+
+    /// KOB-337 : après une première réunion terminée pour de bon, la
+    /// question différée de la réunion suivante est encore posée après sa
+    /// fenêtre « Annuler » ; une question tardive de la première, non.
+    #[test]
+    fn question_differee_de_la_deuxieme_reunion_posee() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            // Réunion A, terminée pour de bon.
+            c.commande(Intention::DemarrerReunion);
+            let dans_a = Instant::now();
+            c.commande(Intention::TerminerReunion);
+            c.reunion.as_mut().unwrap().annulable_jusqu = Some(Instant::now() - VIDANGE);
+            c.tick();
+            assert!(c.arret_definitif.is_some());
+            c.reunion = None;
+            std::thread::sleep(Duration::from_millis(5));
+            // Réunion B : une question dite avant son arrêt, transcrite
+            // pendant sa fenêtre « Annuler ».
+            c.commande(Intention::DemarrerReunion);
+            let dans_b = Instant::now();
+            c.commande(Intention::TerminerReunion);
+            c.recevoir(Message::QuestionDifferee(
+                "note l'action budget".into(),
+                dans_b,
+            ));
+            // Une question tardive de A : écartée.
+            c.recevoir(Message::QuestionDifferee("et le planning ?".into(), dans_a));
+            assert_eq!(c.questions_differees, ["note l'action budget"]);
+            // « Annuler » : la question de B est posée.
+            c.commande(Intention::Reprendre);
+            let tour = c.tour;
+            c.tick();
+            assert!(c.questions_differees.is_empty());
+            assert_eq!(c.tour, tour + 1);
+            // B terminée pour de bon, compte rendu en cours : une question
+            // de B transcrite après sa fenêtre est encore gardée.
+            let encore_b = Instant::now();
+            c.commande(Intention::TerminerReunion);
+            c.reunion.as_mut().unwrap().annulable_jusqu = Some(Instant::now() - VIDANGE);
+            c.tick();
+            assert!(c.reunion.is_some());
+            c.recevoir(Message::QuestionDifferee("et le devis ?".into(), encore_b));
+            assert_eq!(c.questions_differees, ["et le devis ?"]);
         });
     }
 
