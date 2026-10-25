@@ -183,6 +183,31 @@ fn lien_vers_un_chemin_reseau_refuse_sans_le_suivre() {
         .contains("Kobi"));
 }
 
+/// KOB-352, sous Windows : `a\..\evil` se réduit sur le texte en `evil`
+/// (comme le fait `canonicalize`), dont le lien vise le réseau : refusé ;
+/// `a\x`, dont le `..` de la cible est physique, aussi. La CI windows-latest
+/// peut créer des liens.
+#[cfg(windows)]
+#[test]
+fn lien_vers_un_chemin_reseau_refuse_sous_windows() {
+    use std::os::windows::fs::{symlink_dir, symlink_file};
+    let dir = codebase();
+    let racine = dir.path();
+    fs::create_dir_all(racine.join(r"sub\deep")).unwrap();
+    if symlink_dir(r"sub\deep", racine.join("a")).is_err() {
+        // Pas le droit de créer des liens sur ce poste : rien à vérifier.
+        return;
+    }
+    symlink_file(r"\\attaquant\p", racine.join("evil")).unwrap();
+    symlink_file(r"..\evil2", racine.join(r"sub\deep\x")).unwrap();
+    symlink_file(r"\\attaquant\q", racine.join(r"sub\evil2")).unwrap();
+    let l = lecteur(&dir);
+    for chemin in [r"a\..\evil", r"a\x", "evil"] {
+        let e = l.lire(&json!({ "file_path": chemin })).unwrap_err();
+        assert!(e.contains("chemin réseau"), "{chemin} : {e}");
+    }
+}
+
 /// Rien ne se lit hors des dossiers permis : chemin absolu, `..`, lien
 /// symbolique qui sort.
 #[test]

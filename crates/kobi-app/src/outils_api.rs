@@ -247,15 +247,23 @@ impl Lecteur {
         if self.dossiers.is_empty() {
             return Err(format!("{chemin} : aucun dossier permis"));
         }
-        if chemin_reseau(chemin)
-            || chemin_reseau(&brut.to_string_lossy())
-            || !prefixe_local(&brut)
-            || lien_vers_le_reseau(&brut)
-        {
-            return Err(format!(
+        let refus = || {
+            format!(
                 "{chemin} : chemin réseau ou de périphérique refusé (seuls les dossiers permis se lisent : {})",
                 self.liste()
-            ));
+            )
+        };
+        if chemin_reseau(chemin) || chemin_reseau(&brut.to_string_lossy()) {
+            return Err(refus());
+        }
+        // Sous Windows, `canonicalize` réduit `..` sur le texte
+        // (`GetFullPathNameW`) avant de suivre le moindre lien : le contrôle
+        // part du même chemin réduit (KOB-352). `absolute` ne touche pas au
+        // disque. Ailleurs, `..` est physique des deux côtés.
+        #[cfg(windows)]
+        let brut = std::path::absolute(&brut).map_err(|e| format!("{chemin} : {e}"))?;
+        if !prefixe_local(&brut) || lien_vers_le_reseau(&brut) {
+            return Err(refus());
         }
         let resolu = brut.canonicalize().map_err(|e| format!("{chemin} : {e}"))?;
         if self.dans_les_dossiers(&resolu) {
