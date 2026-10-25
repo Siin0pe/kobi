@@ -192,6 +192,51 @@ mod tests {
         }
     }
 
+    /// Journaux capturés pendant un test.
+    #[derive(Clone, Default)]
+    struct Capture(std::sync::Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Capture {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Capture {
+        type Writer = Capture;
+        fn make_writer(&'a self) -> Capture {
+            self.clone()
+        }
+    }
+
+    /// KOB-322 : la clé n'entre jamais dans les journaux (saisie, état,
+    /// remplacement, refus d'une clé mal formée, suppression).
+    #[test]
+    fn cle_jamais_dans_les_journaux() {
+        let capture = Capture::default();
+        let abonne = tracing_subscriber::fmt()
+            .with_writer(capture.clone())
+            .with_max_level(tracing::Level::TRACE)
+            .finish();
+        let mauvaise = "sk-ant-api03-avec espace-ZZZZZZZZ";
+        tracing::subscriber::with_default(abonne, || {
+            let coffre = CoffreMemoire::default();
+            enregistrer(&coffre, CLE).unwrap();
+            etat(&coffre).unwrap();
+            assert!(enregistrer(&coffre, mauvaise).is_err());
+            supprimer(&coffre).unwrap();
+        });
+        let journaux = String::from_utf8_lossy(&capture.0.lock().unwrap()).into_owned();
+        assert!(journaux.contains("clé API enregistrée"), "{journaux}");
+        for secret in [CLE, "ABCDEFGHIJ", mauvaise, "ZZZZZZZZ"] {
+            assert!(!journaux.contains(secret), "{secret} :\n{journaux}");
+        }
+    }
+
     fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
         let mut fichiers = Vec::new();
         for e in std::fs::read_dir(dir).unwrap().flatten() {
