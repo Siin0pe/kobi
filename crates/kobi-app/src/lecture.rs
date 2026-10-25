@@ -292,12 +292,14 @@ fn assembler(
 }
 
 /// Prompt système d'une session du backend clé API (KOB-103) : le même
-/// que celui d'une session Claude Code du même rôle, MCP de Kobi compris.
+/// que celui d'une session Claude Code du même rôle. `mcp_kobi` : le MCP de
+/// Kobi est connecté (sinon le prompt ne parle pas de ses outils).
 pub fn prompt_de_session(
     systeme: &str,
     codebases: &[PathBuf],
     memoire: Option<&Memoire>,
     role: crate::cerveau::Role,
+    mcp_kobi: bool,
     prompt_utilisateur: Option<&str>,
 ) -> String {
     let acces = match role {
@@ -305,7 +307,14 @@ pub fn prompt_de_session(
         crate::cerveau::Role::Notes => Acces::Notes,
         crate::cerveau::Role::Differee => Acces::Lecture,
     };
-    prompt(systeme, codebases, memoire, true, prompt_utilisateur, acces)
+    prompt(
+        systeme,
+        codebases,
+        memoire,
+        mcp_kobi,
+        prompt_utilisateur,
+        acces,
+    )
 }
 
 /// Prompt ajouté au prompt système : règles de lecture, conversation,
@@ -345,10 +354,12 @@ fn prompt(
             prompt.push_str("\n\n");
             prompt.push_str(crate::mcp_config::PROMPT_PILOTAGE_REUNION);
         }
-        if let Some(utilisateur) = prompt_utilisateur.filter(|_| acces != Acces::Lecture) {
-            prompt.push_str("\n\n");
-            prompt.push_str(utilisateur);
-        }
+    }
+    // Serveurs de l'utilisateur, même si le MCP de Kobi manque (backend clé
+    // API) ; côté Claude Code, ils n'existent qu'avec lui.
+    if let Some(utilisateur) = prompt_utilisateur.filter(|_| acces != Acces::Lecture) {
+        prompt.push_str("\n\n");
+        prompt.push_str(utilisateur);
     }
     // Carte des dépôts (KOB-153) : bloc à part, en fin de prompt.
     prompt.push_str("\n\n");

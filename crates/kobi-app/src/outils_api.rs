@@ -185,7 +185,7 @@ impl Lecteur {
         let mut ligne = Vec::new();
         let mut numero = 0u64;
         let mut coupe = false;
-        while numero < debut - 1 + nombre {
+        while numero < (debut - 1).saturating_add(nombre) {
             ligne.clear();
             if lire_ligne(&mut lecteur, &mut ligne).map_err(erreur)? == 0 {
                 break;

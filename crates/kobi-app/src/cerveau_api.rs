@@ -55,6 +55,17 @@ pub fn choisir(reglage: Brain, claude_code_pret: bool, cle: bool) -> Choix {
     }
 }
 
+/// Clé API, lue seulement si le choix du backend peut la retenir : jamais
+/// avec `claude-code`, ni en `auto` quand Claude Code est prêt (pas
+/// d'accès au trousseau pour rien).
+pub fn cle_utile(reglage: Brain, claude_code_pret: bool) -> Option<String> {
+    match reglage {
+        Brain::Api => cle(),
+        Brain::Auto if !claude_code_pret => cle(),
+        _ => None,
+    }
+}
+
 /// Clé API enregistrée (KOB-104), s'il y en a une.
 pub fn cle() -> Option<String> {
     crate::cle_api::lire(&CoffreSysteme)
@@ -102,6 +113,7 @@ pub async fn ouvrir(
         ],
         ..Default::default()
     };
+    let mut mcp_kobi = false;
     match crate::mcp::connecter_un(SERVEUR_KOBI, &kobi, coffre).await {
         Some((nom, client, outils)) => {
             let (permis, retires) = outils_kobi(role);
@@ -114,6 +126,7 @@ pub async fn ouvrir(
                 .serveurs
                 .insert(SERVEUR_KOBI.to_owned(), catalogue_kobi(&permis, differee));
             serveurs.push((nom, client, outils));
+            mcp_kobi = true;
         }
         None => tracing::warn!("MCP de Kobi injoignable : session clé API sans ses outils"),
     }
@@ -133,6 +146,7 @@ pub async fn ouvrir(
         &codebases,
         memoire.as_ref(),
         role,
+        mcp_kobi,
         prompt_utilisateur.as_deref(),
     );
     ApiBrain::new(ApiConfig {
@@ -144,8 +158,9 @@ pub async fn ouvrir(
 }
 
 /// Outils du MCP de Kobi proposés selon le rôle (noms côté serveur), et
-/// ceux retirés : une question différée n'a que la lecture ; les notes ne
-/// pilotent pas la réunion. Mêmes listes que les sessions Claude Code.
+/// ceux retirés : la conversation a tout ; les notes n'ont que les
+/// lectures ; une question différée n'a que `outils_en_lecture_seule`.
+/// Mêmes listes que les sessions Claude Code (`lecture::assembler`).
 fn outils_kobi(role: Role) -> (Vec<String>, Vec<String>) {
     let court = |noms: Vec<String>| -> Vec<String> {
         let prefixe = format!("mcp__{SERVEUR_KOBI}__");
@@ -158,10 +173,21 @@ fn outils_kobi(role: Role) -> (Vec<String>, Vec<String>) {
             court(kobi_ctl::mcp::outils_en_lecture_seule(SERVEUR_KOBI)),
             Vec::new(),
         ),
-        Role::Notes => (
-            court(kobi_ctl::mcp::outils_de_l_agent(SERVEUR_KOBI)),
-            court(kobi_ctl::mcp::outils_de_reunion(SERVEUR_KOBI)),
-        ),
+        // Notes (KOB-72) : rien de Kobi qui écrive, affiche ou pilote, pas
+        // même un réglage « sans demander » : la transcription est une
+        // donnée. Seulement ses lectures, comme pour Claude Code.
+        Role::Notes => {
+            let lecture = kobi_ctl::mcp::outils_de_lecture(SERVEUR_KOBI);
+            (
+                court(
+                    kobi_ctl::mcp::outils_de_l_agent(SERVEUR_KOBI)
+                        .into_iter()
+                        .filter(|o| lecture.contains(o))
+                        .collect(),
+                ),
+                Vec::new(),
+            )
+        }
         Role::Conversation => (
             court(kobi_ctl::mcp::outils_de_l_agent(SERVEUR_KOBI)),
             Vec::new(),
@@ -233,8 +259,17 @@ mod tests {
         let reunion = courts(kobi_ctl::mcp::outils_de_reunion(SERVEUR_KOBI));
         assert!(!reunion.is_empty());
         assert!(reunion.iter().all(|o| conv.contains(o)));
-        let (_, retires) = outils_kobi(Role::Notes);
-        assert_eq!(retires, reunion);
+        // Notes : les lectures seulement, rien qui écrive, affiche ou
+        // pilote (KOB-72).
+        let (notes, retires) = outils_kobi(Role::Notes);
+        assert!(retires.is_empty());
+        let lectures = courts(kobi_ctl::mcp::outils_de_lecture(SERVEUR_KOBI));
+        assert!(!notes.is_empty());
+        assert!(notes.iter().all(|o| lectures.contains(o)), "{notes:?}");
+        assert!(notes.iter().all(|o| !reunion.contains(o)));
+        for interdit in ["config_set", "config_undo"] {
+            assert!(!notes.iter().any(|o| o == interdit), "{interdit}");
+        }
         let (lecture, _) = outils_kobi(Role::Differee);
         assert_eq!(
             lecture,

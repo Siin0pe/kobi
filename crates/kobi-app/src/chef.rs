@@ -2713,7 +2713,8 @@ pub fn fabrique_claude(
                     .await
                     .clone(),
             };
-            let cle = crate::cerveau_api::cle();
+            // La clé n'est lue dans le trousseau que si elle peut servir.
+            let cle = crate::cerveau_api::cle_utile(reglage, programme.is_ok());
             match crate::cerveau_api::choisir(reglage, programme.is_ok(), cle.is_some()) {
                 crate::cerveau_api::Choix::Api => {
                     let cle = cle.unwrap_or_default();
