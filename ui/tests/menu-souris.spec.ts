@@ -150,7 +150,7 @@ test('fenêtre du menu refusée par la coque : le menu se referme et la mascotte
       pointeur: { x: 100, y: 100 },
       zone: { x: 0, y: 0, largeur: 1920, hauteur: 1032 },
       echelle: 1,
-      contexte: { recording: false, paused: false, compact: false, voice: false },
+      contexte: { recording: false, paused: false, compact: false, voice: false, ending: false },
     }),
   );
   await expect(page.locator('.kmenu')).toBeHidden();
@@ -208,7 +208,7 @@ test('mascotte : le clic droit demande la fenêtre du menu, puis exécute l’en
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2, { button: 'right' });
   await expect.poll(async () => (await appels(page)).filter((a) => a.cmd === 'ouvrir_menu').length).toBe(1);
   const ouverture = (await appels(page)).find((a) => a.cmd === 'ouvrir_menu')!;
-  expect(ouverture.args).toEqual({ contexte: { recording: false, paused: false, compact: false, voice: false }, clavier: false });
+  expect(ouverture.args).toEqual({ contexte: { recording: false, paused: false, compact: false, voice: false, ending: false }, clavier: false });
   // Le menu n'est pas dessiné dans la fenêtre de Kobi : la mascotte ne bouge pas.
   await expect(page.locator('.stage > .kmenu')).toBeHidden();
   await expect(page.locator('.stage')).toHaveClass(/menu-open/);

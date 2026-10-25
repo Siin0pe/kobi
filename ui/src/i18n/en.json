@@ -808,6 +808,8 @@
   "kobi.meeting.ariaTermineeAnnuler": "Meeting over. Undo to resume the same meeting",
   "kobi.meeting.retard": "{duree} behind",
   "kobi.meeting.retardAide": "The transcription is {duree} behind. To stop right now: {arret}.",
+  "kobi.meeting.pauseMicroCoupe": "PAUSED · mic off",
+  "kobi.meeting.pauseMicroCoupeAria": "Meeting paused: the mic is off. Resume the meeting to talk to me.",
   "kobi.meeting.microPerdu": "mic lost",
   "kobi.meeting.microPerduAide": "The microphone stopped: your voice is no longer transcribed. Kobi reopens one as soon as a microphone is available.",
   "kobi.meeting.consentKicker": "Meeting · local transcription",
@@ -897,6 +899,7 @@
   "coque.chef.tacheAnnulee": "Task canceled.",
   "coque.chef.aiAnnule": "I canceled “{question}”.",
   "coque.chef.delaiCarte": "No answer: I didn't do anything.",
+  "coque.chef.depuisLesNotes": "From the notes",
   "coque.chef.jeLeFais": "Shall I do it?",
   "coque.chef.resumeJeLeFais": "{resume}. Shall I do it?",
   "coque.chef.enAttenteReseau": {

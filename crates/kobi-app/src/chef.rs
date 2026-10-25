@@ -1040,6 +1040,40 @@ impl<R: Runtime> Chef<R> {
                 return;
             }
         }
+        // Une carte MCP attend : « oui » ou « non » répondent à celle qui est
+        // affichée, comme un clic (KOB-336). Seul le micro pose des
+        // questions : la voix des autres (son de l'ordinateur) ne valide
+        // rien ; en réunion, il faut le nom (« Kobi, oui »).
+        if let Some(carte) = self.carte_affichee() {
+            if let Some(accepte) = crate::intentions::reponse_carte_mcp(&texte) {
+                tracing::info!(
+                    carte,
+                    accepte,
+                    "réponse à la carte MCP, à la voix ou au clavier"
+                );
+                crate::validation::retirer(&self.app, &carte.to_string(), accepte);
+                self.recevoir(Message::Decision { carte, accepte });
+                // « Kobi, oui » : l'écoute ouverte par le nom se referme. Une
+                // autre carte qui attend se remontre, Kobi y repropose.
+                if self.activite() == Some("ecoute") {
+                    self.transition(&[Evenement::PasDeQuestion]);
+                    if let Some(ui) = self
+                        .carte_affichee_sauf(Some(carte))
+                        .and_then(|k| self.cartes.get(&k))
+                    {
+                        let ui = ui.clone();
+                        if self.activite() == Some("calme") {
+                            self.transition(&[
+                                Evenement::NotesCommencent,
+                                Evenement::PermissionDemandee,
+                            ]);
+                        }
+                        let _ = self.app.emit(EVENEMENT_CARTE, &ui);
+                    }
+                }
+                return;
+            }
+        }
         // « Kobi, parle », « en silence », « stop » (KOB-142).
         match crate::voix::commande_vocale(&texte) {
             Some(crate::voix::CommandeVoix::Stop) => {
@@ -2083,9 +2117,7 @@ impl<R: Runtime> Chef<R> {
         }
         // Plus de carte : la fenêtre de suite reprend sa durée habituelle
         // (KOB-197), et celle de la carte se ferme (KOB-273).
-        if self.validations.est_vide() {
-            let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::CartesFermees);
-        }
+        self.si_plus_aucune_carte();
         // La carte montre déjà « Pas de réponse : refusé. » ; la voix ne le
         // redit que si elle est le seul canal (KOB-215), et pas si la carte
         // suivante est annoncée aussitôt : dit plus tard, il semblerait
@@ -2105,6 +2137,33 @@ impl<R: Runtime> Chef<R> {
                 crate::ecoute::Commande::ReponseAttendue(crate::validation::ECHEANCE),
             );
         }
+    }
+
+    /// Plus aucune carte, ni de Kobi ni MCP, n'attend : la fenêtre de la
+    /// réponse se ferme (KOB-273, KOB-336).
+    fn si_plus_aucune_carte(&self) {
+        if self.validations.est_vide() && self.cartes.is_empty() {
+            let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::CartesFermees);
+        }
+    }
+
+    /// Carte MCP affichée, à qui « oui » / « non » répondent : la plus
+    /// récente, comme à l'écran (KOB-343).
+    fn carte_affichee(&self) -> Option<u64> {
+        self.carte_affichee_sauf(None)
+    }
+
+    fn carte_affichee_sauf(&self, sauf: Option<u64>) -> Option<u64> {
+        self.cartes_ouvertes
+            .iter()
+            // Échue chez kobi-perms (refusée), elle n'attend plus de réponse.
+            .filter(|(carte, ouverte)| {
+                self.cartes.contains_key(carte)
+                    && Some(**carte) != sauf
+                    && ouverte.elapsed() < kobi_perms::DEFAULT_TIMEOUT
+            })
+            .max_by_key(|(carte, ouverte)| (**ouverte, **carte))
+            .map(|(carte, _)| *carte)
     }
 
     /// La carte se lit à l'écran : la voix demande seulement « Je le fais ? ».
@@ -2340,7 +2399,16 @@ impl<R: Runtime> Chef<R> {
                     });
                     return;
                 }
-                let ui = carte_ui(carte, &outil, &entree);
+                let mut ui = carte_ui(carte, &outil, &entree);
+                // Proposée par les notes, pas par la question en cours : elle
+                // le dit en tête (KOB-336).
+                if tour == 0 {
+                    ui.kicker = format!(
+                        "{} · {}",
+                        kobi_i18n::tr("coque.chef.depuisLesNotes", &[]),
+                        ui.kicker
+                    );
+                }
                 self.cartes.insert(carte, ui.clone());
                 self.cartes_ouvertes.insert(carte, Instant::now());
                 if tour == 0 {
@@ -2370,6 +2438,12 @@ impl<R: Runtime> Chef<R> {
                     self.transition(&[Evenement::PermissionDemandee]);
                 }
                 let _ = self.app.emit(EVENEMENT_CARTE, &ui);
+                // « Oui » ou « non » sans le nom hors réunion, tant que la
+                // carte attend (KOB-197, KOB-336).
+                let _ = crate::ecoute::commander(
+                    &self.app,
+                    crate::ecoute::Commande::ReponseAttendue(kobi_perms::DEFAULT_TIMEOUT),
+                );
             }
             Retour::CarteFermee { carte, accepte } => {
                 tracing::info!(carte, ?accepte, "carte fermée");
@@ -2390,6 +2464,7 @@ impl<R: Runtime> Chef<R> {
                 };
                 let _ = self.app.emit(EVENEMENT_CARTE, &ui);
                 self.cartes_ouvertes.remove(&carte);
+                self.si_plus_aucune_carte();
                 let des_notes = self.cartes_des_notes.remove(&carte);
                 self.notes_acceptees.remove(&carte);
                 // Une action des notes acceptée laisse sa trace dans les notes
@@ -3972,6 +4047,76 @@ mod tests {
             c.tick();
             assert_eq!(c.activite(), Some("calme"));
             assert!(c.cartes.is_empty() && c.cartes_ouvertes.is_empty());
+        });
+    }
+
+    /// KOB-336 : une carte des notes le dit en tête ; « Kobi, oui » lui
+    /// répond comme un clic (la plus récente d'abord), Kobi revient au calme ;
+    /// une phrase ordinaire ne touche pas à la carte.
+    #[test]
+    fn carte_mcp_tranchee_a_la_voix() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            let carte = |tour, carte| {
+                Message::Cerveau(Retour::Carte {
+                    tour,
+                    carte,
+                    outil: "mcp__linear__save_issue".into(),
+                    entree: serde_json::json!({"title": "Corriger la connexion"}),
+                })
+            };
+            let dite = |texte: &str| Message::Question {
+                texte: texte.into(),
+                voix: true,
+                dit_a: None,
+            };
+            c.recevoir(carte(0, 3));
+            let kicker = &c.cartes[&3].kicker;
+            assert!(kicker.starts_with("Depuis les notes · Linear"), "{kicker}");
+            std::thread::sleep(Duration::from_millis(2));
+            c.recevoir(carte(0, 4));
+            assert_eq!(
+                c.carte_affichee(),
+                Some(4),
+                "la plus récente, comme à l'écran"
+            );
+            // Une phrase qui n'est pas une réponse ne décide rien, ni « ok »
+            // dit à autre chose, ni « stop » qui fait taire Kobi.
+            let tour = c.tour;
+            c.recevoir(Message::Interpelle);
+            c.recevoir(dite("quelle heure est-il ?"));
+            assert_eq!(c.tour, tour + 1);
+            c.recevoir(dite("ok"));
+            c.recevoir(dite("stop"));
+            assert_eq!(c.cartes.len(), 2);
+            assert!(c.notes_acceptees.is_empty());
+            // « Kobi, oui » : la carte affichée est acceptée, comme au clic.
+            let tour = c.tour;
+            c.recevoir(Message::Interpelle);
+            assert_eq!(c.activite(), Some("ecoute"));
+            c.recevoir(dite("oui"));
+            assert!(c.notes_acceptees.contains(&4));
+            assert_eq!(c.tour, tour, "pas de question envoyée");
+            assert_eq!(c.activite(), Some("propose"), "la carte 3 attend encore");
+            c.recevoir(Message::Cerveau(Retour::CarteFermee {
+                carte: 4,
+                accepte: Some(true),
+            }));
+            // « Non » : la suivante est refusée, et Kobi revient au calme.
+            assert_eq!(c.carte_affichee(), Some(3));
+            c.recevoir(dite("non"));
+            assert!(!c.notes_acceptees.contains(&3));
+            c.recevoir(Message::Cerveau(Retour::CarteFermee {
+                carte: 3,
+                accepte: Some(false),
+            }));
+            assert!(c.cartes.is_empty());
+            assert_eq!(c.carte_affichee(), None);
+            assert_eq!(c.activite(), Some("calme"));
+            // Carte de la conversation : pas de mention des notes.
+            c.recevoir(carte(5, 6));
+            assert!(c.cartes[&6].kicker.starts_with("Linear"));
         });
     }
 

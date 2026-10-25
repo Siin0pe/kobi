@@ -340,3 +340,27 @@ test('fenêtre de la mascotte transparente, menu ouvert ou non ; une seule chose
   expect(await fonds()).toEqual(transparent);
   await expectNoErrors(errors);
 });
+
+test('fin de réunion : « Pause » grisée, sans effet au clic ni place au clavier (KOB-310)', async ({ page }) => {
+  await fakeShell(page);
+  const errors = await openUi(page, '');
+  const emitShell = (e: string, p: unknown): Promise<void> => page.evaluate(([e, p]) => (window as unknown as { __emit(e: string, p: unknown): void }).__emit(e as string, p), [e, p] as const);
+  await emitShell('state', { etat: 'fin', activite: null, mascotte: 'compose', transcrit: false });
+  await rightClickKobi(page);
+  const pause = menu(page).getByRole('menuitem', { name: 'Pause de l’écoute' });
+  await expect(pause).toBeDisabled();
+  await pause.click({ force: true });
+  await expect(menu(page)).toBeVisible();
+  const calls = await page.evaluate(() => (window as unknown as { __calls: Array<{ cmd: string; args?: { entree?: string } }> }).__calls);
+  expect(calls.filter((c) => c.cmd === 'menu_kobi')).toEqual([]);
+  // Au clavier, la flèche passe de « Enregistrer » à « Ouvrir Kobi ».
+  await menu(page).getByRole('menuitem', { name: 'Enregistrer la réunion' }).focus();
+  await page.keyboard.press('ArrowDown');
+  await expect(menu(page).getByRole('menuitem', { name: 'Ouvrir Kobi' })).toBeFocused();
+  await page.keyboard.press('Escape');
+  // La fin passée, l'entrée revient.
+  await emitShell('state', { etat: 'veille', activite: null, mascotte: 'idle', transcrit: false });
+  await rightClickKobi(page);
+  await expect(menu(page).getByRole('menuitem', { name: 'Pause de l’écoute' })).toBeEnabled();
+  await expectNoErrors(errors);
+});

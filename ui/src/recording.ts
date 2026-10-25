@@ -116,6 +116,8 @@ export function followRecording(stage: Stage): void {
     microPerdu = e.payload;
     stage.updateMeeting({ micLost: microPerdu });
   });
+  // Raccourci pendant la pause (KOB-310) : il ne fait rien, REC le dit.
+  void api.event.listen<null>('pause_rappel', () => stage.rappelPause());
   void api.event.listen<RecordingState>('enregistrement', (e) => {
     explicit = true;
     applyRecording(stage, e.payload);

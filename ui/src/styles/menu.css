@@ -177,6 +177,11 @@
 .kmenu-item:focus {
   background-size: 100% 100%;
 }
+/* Sans effet dans l'état courant (KOB-310). */
+.kmenu-item:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
 .kmenu-item:focus-visible {
   box-shadow: inset 0 0 0 2px var(--ink);
 }
