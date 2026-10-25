@@ -86,16 +86,20 @@ const LIMITE: &[&str] = &[
 /// elle passe d'elle-même, ce n'est pas la limite d'usage d'un abonnement
 /// (KOB-369). Ses messages viennent de `kobi-brain` (« HTTP 429 : … »,
 /// « rate_limit_error : … »), jamais de Claude Code.
+/// Où qu'il soit : le message affiché porte un préfixe (« erreur d'API :
+/// rate_limit_error : … », KOB-373).
 fn limite_par_minute(m: &str) -> bool {
-    m.contains("http 429") || m.starts_with("rate_limit_error")
+    m.contains("http 429") || m.contains("rate_limit_error :")
 }
 
-/// « 429 » seul (un code), pas au milieu d'un nombre (« 204291 tokens »).
+/// « 429 » comme code : après une espace ou au début, avant une espace, un
+/// `{` ou la fin. Pas dans un nombre (« 204291 », « 0.429 »), un identifiant
+/// (« u429a ») ni une position (« cli.js:1234:429 ») (KOB-369, KOB-373).
 fn code_429(m: &str) -> bool {
     m.match_indices("429").any(|(i, _)| {
         let avant = m[..i].chars().next_back();
         let apres = m[i + 3..].chars().next();
-        !avant.is_some_and(|c| c.is_ascii_digit()) && !apres.is_some_and(|c| c.is_ascii_digit())
+        avant.is_none_or(|c| c == ' ') && apres.is_none_or(|c| c == ' ' || c == '{')
     })
 }
 
@@ -534,6 +538,47 @@ mod tests {
         assert!(code_429("error 429"));
         assert!(!code_429("204291 tokens"));
         assert!(!code_429("14290"));
+    }
+
+    /// KOB-373 : par le chemin réel (message affiché, préfixé) : la limite
+    /// par minute annoncée dans le flux est passagère ; « 429 » collé à une
+    /// lettre, à « : » ou à « . » n'est pas un code.
+    #[test]
+    fn limite_par_minute_dans_le_flux_et_faux_429() {
+        let vu = |e: BrainError| pour_l_utilisateur(&e.to_string()).0;
+        assert_eq!(
+            vu(BrainError::Api(
+                "rate_limit_error : This request would exceed the rate limit".into()
+            )),
+            "Claude est surchargé"
+        );
+        assert_eq!(
+            classer_message(&BrainError::Api("rate_limit_error : over limit".into()).to_string()),
+            Panne::Surcharge
+        );
+        // Claude Code : sa limite d'usage reste reconnue.
+        assert_eq!(
+            vu(BrainError::Api(
+                r#"API Error: 429 {"type":"error","error":{"type":"rate_limit_error"}}"#.into()
+            )),
+            "Limite d'usage atteinte"
+        );
+        assert_eq!(
+            classer(&BrainError::Crashed("at cli.js:1234:429".into())),
+            Panne::Plantage
+        );
+        assert_eq!(
+            classer(&BrainError::Api(
+                r#"API Error: 529 {"request_id":"req_U429a","type":"overloaded_error"}"#.into()
+            )),
+            Panne::Surcharge
+        );
+        for faux in ["0.429", "u429a", "cli.js:1234:429", "a 429b"] {
+            assert!(!code_429(faux), "{faux}");
+        }
+        for code in ["429", "error: 429 {", "status 429"] {
+            assert!(code_429(code), "{code}");
+        }
     }
 
     /// KOB-370 : un flux coupé après un texte montré est une coupure de la
