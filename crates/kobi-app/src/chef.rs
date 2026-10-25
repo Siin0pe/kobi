@@ -2293,14 +2293,20 @@ impl<R: Runtime> Chef<R> {
             }
             Retour::CarteFermee { carte, accepte } => {
                 tracing::info!(carte, ?accepte, "carte fermée");
-                if let Some(mut ui) = self.cartes.remove(&carte) {
-                    ui.status = if accepte == Some(true) {
-                        "confirmed"
-                    } else {
-                        "dismissed"
-                    };
-                    let _ = self.app.emit(EVENEMENT_CARTE, &ui);
-                }
+                // Déjà fermée (écho du cerveau après un refus de Kobi lui-même,
+                // KOB-331), ou jamais montrée (carte des notes après la fin) :
+                // rien ne change une seconde fois (KOB-341).
+                let Some(mut ui) = self.cartes.remove(&carte) else {
+                    self.cartes_ouvertes.remove(&carte);
+                    self.cartes_des_notes.remove(&carte);
+                    return;
+                };
+                ui.status = if accepte == Some(true) {
+                    "confirmed"
+                } else {
+                    "dismissed"
+                };
+                let _ = self.app.emit(EVENEMENT_CARTE, &ui);
                 self.cartes_ouvertes.remove(&carte);
                 let des_notes = self.cartes_des_notes.remove(&carte);
                 match des_notes {
@@ -4867,6 +4873,42 @@ mod tests {
             ] {
                 assert!(tout.contains(texte), "{texte} : {tout}");
             }
+        });
+    }
+
+    /// KOB-341 : la fermeture d'une carte déjà fermée (écho du cerveau) ne
+    /// change rien : une validation qui attend garde Kobi en proposition.
+    #[test]
+    fn carte_fermee_deux_fois_sans_effet() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            c.recevoir(Message::Interpelle);
+            c.question("change le réglage".into(), true);
+            c.validation_ouverte("v1".into(), "Changer le réglage");
+            assert_eq!(c.activite(), Some("propose"));
+            c.recevoir(Message::Cerveau(Retour::CarteFermee {
+                carte: 99,
+                accepte: Some(false),
+            }));
+            assert_eq!(c.activite(), Some("propose"), "quittée sur un écho");
+            // Une carte des notes refusée à la fin : une seule fermeture compte.
+            c.recevoir(Message::Cerveau(Retour::Carte {
+                tour: 0,
+                carte: 51,
+                outil: "mcp__linear__save_issue".into(),
+                entree: serde_json::json!({"title": "Devis"}),
+            }));
+            c.recevoir(Message::Cerveau(Retour::CarteFermee {
+                carte: 51,
+                accepte: Some(false),
+            }));
+            c.recevoir(Message::Cerveau(Retour::CarteFermee {
+                carte: 51,
+                accepte: None,
+            }));
+            assert_eq!(c.activite(), Some("propose"));
+            assert!(c.cartes.is_empty() && c.cartes_des_notes.is_empty());
         });
     }
 
