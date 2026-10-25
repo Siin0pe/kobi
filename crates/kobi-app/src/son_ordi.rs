@@ -623,8 +623,9 @@ mod tests {
     fn nouvel_enonce_a_chaque_reprise_du_son_de_l_ordinateur() {
         #[derive(Default)]
         struct Faux {
+            /// Pour chaque énoncé neuf : sa source, et la première trame
+            /// envoyée ensuite.
             enonces: Vec<(kobi_stt::Source, Option<f64>)>,
-            premiere_trame: Option<f64>,
         }
         impl kobi_stt::SttEngine for Faux {
             fn name(&self) -> &str {
@@ -634,14 +635,16 @@ mod tests {
                 &mut self,
                 frame: &kobi_stt::AudioFrame,
             ) -> kobi_stt::Result<Vec<kobi_stt::Segment>> {
-                self.premiere_trame.get_or_insert(frame.t);
+                if let Some((_, premiere @ None)) = self.enonces.last_mut() {
+                    *premiere = Some(frame.t);
+                }
                 Ok(Vec::new())
             }
             fn finish(&mut self) -> kobi_stt::Result<Vec<kobi_stt::Segment>> {
                 Ok(Vec::new())
             }
             fn nouvel_enonce(&mut self, source: kobi_stt::Source) {
-                self.enonces.push((source, self.premiere_trame.take()));
+                self.enonces.push((source, None));
             }
         }
         let mut stt = Faux::default();
@@ -668,11 +671,18 @@ mod tests {
                 t += 0.1;
             }
         }
-        // Deux reprises de parole, deux énoncés neufs pour « eux », chacun
-        // demandé avant d'envoyer l'audio de sa reprise.
+        // Deux reprises de parole (à 1,0 s et 5,6 s), deux énoncés neufs
+        // pour « eux », chacun demandé avant d'envoyer l'audio de sa reprise :
+        // sa première trame est le début du pré-roulage (0,5 s avant).
         assert_eq!(stt.enonces.len(), 2, "{:?}", stt.enonces);
-        assert!(stt.enonces.iter().all(|(s, _)| *s == kobi_stt::Source::Eux));
-        assert_eq!(stt.enonces[0].1, None, "rien n'est parti avant la 1re");
+        for ((source, premiere), reprise) in stt.enonces.iter().zip([1.0, 5.6]) {
+            assert_eq!(*source, kobi_stt::Source::Eux);
+            let premiere = premiere.expect("audio envoyé après l'énoncé neuf");
+            assert!(
+                (premiere - (reprise - 0.5)).abs() < 0.15,
+                "première trame {premiere} pour une reprise à {reprise}"
+            );
+        }
     }
 
     #[test]
