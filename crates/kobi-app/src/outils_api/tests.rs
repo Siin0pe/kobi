@@ -598,3 +598,207 @@ async fn outil_au_nom_hors_format() {
     assert_eq!(*lus.lock().unwrap(), ["files.read", "long"]);
     o.fermer().await;
 }
+
+// ----- Confinement (KOB-321, demandé pour la relecture de KOB-103) -----
+
+/// Dossier déclaré, et à côté un dossier « dehors » avec un secret.
+fn deux_dossiers() -> (tempfile::TempDir, tempfile::TempDir, PathBuf) {
+    let dedans = codebase();
+    let dehors = tempfile::tempdir().unwrap();
+    let secret = dehors.path().join("secret.txt");
+    fs::write(&secret, "mot de passe\n").unwrap();
+    (dedans, dehors, secret)
+}
+
+fn hors(r: Result<String, String>) {
+    let e = r.expect_err("devait être refusé");
+    assert!(e.contains("hors des dossiers permis"), "{e}");
+}
+
+/// `..` sous toutes ses formes : relatif, absolu qui repasse par le
+/// dossier, et `path` de Grep et de Glob.
+#[test]
+fn confinement_points_points() {
+    let (dedans, dehors, _) = deux_dossiers();
+    let l = lecteur(&dedans);
+    let voisin = dehors
+        .path()
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    for chemin in [
+        format!("../{voisin}/secret.txt"),
+        format!("src/../../{voisin}/secret.txt"),
+        format!("{}/src/../../{voisin}/secret.txt", dedans.path().display()),
+    ] {
+        hors(l.lire(&json!({ "file_path": chemin })));
+    }
+    hors(l.chercher(&json!({ "pattern": "passe", "path": format!("../{voisin}") })));
+    hors(l.lister(&json!({ "pattern": "*", "path": format!("../{voisin}") })));
+    // Un motif de Glob ne remonte pas : il ne porte que sur les chemins
+    // trouvés sous le dossier.
+    assert_eq!(
+        l.lister(&json!({ "pattern": format!("../{voisin}/*") }))
+            .unwrap(),
+        "Aucun fichier."
+    );
+}
+
+/// Chemins absolus hors des dossiers, fichiers système compris.
+#[test]
+fn confinement_chemins_absolus() {
+    let (dedans, _dehors, secret) = deux_dossiers();
+    let l = lecteur(&dedans);
+    hors(l.lire(&json!({ "file_path": secret })));
+    #[cfg(unix)]
+    for systeme in ["/etc/passwd", "/etc/hostname", "/"] {
+        if Path::new(systeme).exists() {
+            hors(l.lire(&json!({ "file_path": systeme })));
+            hors(l.chercher(&json!({ "pattern": "root", "path": systeme })));
+        }
+    }
+    // Un préfixe de nom n'est pas un dossier parent : `/x/code-bis` n'est
+    // pas dans `/x/code`.
+    let parent = tempfile::tempdir().unwrap();
+    let (code, bis) = (parent.path().join("code"), parent.path().join("code-bis"));
+    fs::create_dir_all(&code).unwrap();
+    fs::create_dir_all(&bis).unwrap();
+    fs::write(bis.join("a.txt"), "x").unwrap();
+    hors(Lecteur::new(&[code]).lire(&json!({ "file_path": bis.join("a.txt") })));
+}
+
+/// Liens symboliques qui sortent : vers un fichier, vers un dossier (ni
+/// lus, ni parcourus), et dossier déclaré qui est lui-même un lien.
+#[cfg(unix)]
+#[test]
+fn confinement_liens_symboliques() {
+    use std::os::unix::fs::symlink;
+    let (dedans, dehors, secret) = deux_dossiers();
+    symlink(&secret, dedans.path().join("lien.txt")).unwrap();
+    symlink(dehors.path(), dedans.path().join("lien-dossier")).unwrap();
+    let l = lecteur(&dedans);
+    hors(l.lire(&json!({ "file_path": dedans.path().join("lien.txt") })));
+    hors(l.lire(&json!({ "file_path": "lien-dossier/secret.txt" })));
+    hors(l.chercher(&json!({ "pattern": "passe", "path": "lien-dossier" })));
+    hors(l.lister(&json!({ "pattern": "*", "path": "lien-dossier" })));
+    assert_eq!(
+        l.chercher(&json!({ "pattern": "passe" })).unwrap(),
+        "Aucun résultat."
+    );
+    let tout = l.lister(&json!({ "pattern": "**/*" })).unwrap();
+    assert!(!tout.contains("secret") && !tout.contains("lien"), "{tout}");
+    // Le dossier déclaré par un lien : c'est sa cible qui est permise, et
+    // seulement elle.
+    let parent = tempfile::tempdir().unwrap();
+    symlink(dedans.path(), parent.path().join("code")).unwrap();
+    let l = Lecteur::new(&[parent.path().join("code")]);
+    assert!(l
+        .lire(&json!({ "file_path": parent.path().join("code/README.md") }))
+        .is_ok());
+    hors(l.lire(&json!({ "file_path": secret })));
+}
+
+/// Fichiers spéciaux : un tube nommé ne bloque pas (ni Read, ni Grep, ni
+/// Glob), un dossier ou un périphérique n'est pas lu.
+#[cfg(unix)]
+#[test]
+fn confinement_fichiers_speciaux() {
+    let dedans = codebase();
+    let tube = dedans.path().join("tube");
+    assert!(std::process::Command::new("mkfifo")
+        .arg(&tube)
+        .status()
+        .unwrap()
+        .success());
+    let l = lecteur(&dedans);
+    let e = l.lire(&json!({ "file_path": tube })).unwrap_err();
+    assert!(e.contains("pas un fichier ordinaire"), "{e}");
+    let e = l.lire(&json!({ "file_path": "src" })).unwrap_err();
+    assert!(e.contains("pas un fichier ordinaire"), "{e}");
+    assert!(!l
+        .chercher(&json!({ "pattern": "x" }))
+        .unwrap()
+        .contains("tube"));
+    assert!(!l
+        .chercher(&json!({ "pattern": "x", "path": "tube" }))
+        .unwrap()
+        .contains("tube"));
+    assert!(!l
+        .lister(&json!({ "pattern": "*" }))
+        .unwrap()
+        .contains("tube"));
+    // Un lien vers un périphérique sort des dossiers.
+    std::os::unix::fs::symlink("/dev/zero", dedans.path().join("zero")).unwrap();
+    hors(l.lire(&json!({ "file_path": "zero" })));
+}
+
+/// KOB-321 : un très gros fichier n'est jamais chargé en entier. Read lit
+/// ligne à ligne et le dit ; une ligne géante est coupée ; les résultats
+/// restent bornés ; Grep ignore le fichier.
+#[test]
+fn gros_fichier_lu_par_morceaux() {
+    use std::io::Write;
+    let dedans = codebase();
+    let gros = dedans.path().join("gros.log");
+    // Fichier creux de 60 Mo : 10 000 lignes de texte (100 ko), puis une
+    // « ligne » de zéros sans fin de ligne.
+    let mut f = fs::File::create(&gros).unwrap();
+    f.write_all(b"premiere TODO\nseconde\n").unwrap();
+    for i in 3..=10_000 {
+        writeln!(f, "ligne {i:05}").unwrap();
+    }
+    f.set_len(60_000_000).unwrap();
+    drop(f);
+    let l = lecteur(&dedans);
+    assert_eq!(
+        l.lire(&json!({ "file_path": gros, "limit": 2 })).unwrap(),
+        "1\tpremiere TODO\n2\tseconde\n(fichier de 60000000 octets : seuls les 50000000 premiers sont lus)\n"
+    );
+    assert!(l
+        .lire(&json!({ "file_path": gros, "offset": 9_999, "limit": 2 }))
+        .unwrap()
+        .starts_with("9999\tligne 09999\n10000\tligne 10000\n"));
+    // La ligne 10 001 fait près de 60 Mo : coupée à LIGNE_MAX.
+    let r = l
+        .lire(&json!({ "file_path": gros, "offset": 10_001, "limit": 1 }))
+        .unwrap();
+    assert!(r.starts_with("10001\t"), "{}", &r[..10]);
+    assert!(r.len() < LIGNE_MAX * 4 + 200, "{}", r.len());
+    // Au-delà de ce qui est parcouru : rien, mais pas d'erreur.
+    let r = l
+        .lire(&json!({ "file_path": gros, "offset": 20_000 }))
+        .unwrap();
+    assert!(
+        r.starts_with("(fichier vide ou fin de fichier dépassée)"),
+        "{r}"
+    );
+    assert_eq!(
+        l.chercher(&json!({ "pattern": "premiere" })).unwrap(),
+        "Aucun résultat."
+    );
+}
+
+/// Beaucoup de lignes ou de correspondances : résultats bornés.
+#[test]
+fn resultats_bornes() {
+    let dedans = codebase();
+    let long = "x".repeat(1000) + "\n";
+    fs::write(dedans.path().join("long.txt"), long.repeat(500)).unwrap();
+    let l = lecteur(&dedans);
+    let r = l
+        .lire(&json!({ "file_path": dedans.path().join("long.txt") }))
+        .unwrap();
+    assert!(
+        r.len() <= TAILLE_MAX + 20 && r.ends_with("… (coupé)"),
+        "{}",
+        r.len()
+    );
+    for i in 0..400 {
+        fs::write(dedans.path().join(format!("f{i}.txt")), "cible\n").unwrap();
+    }
+    let r = l.chercher(&json!({ "pattern": "cible" })).unwrap();
+    assert_eq!(r.lines().count(), RESULTATS_MAX + 1);
+    let r = l.lister(&json!({ "pattern": "f*.txt" })).unwrap();
+    assert_eq!(r.lines().count(), RESULTATS_MAX + 1);
+}

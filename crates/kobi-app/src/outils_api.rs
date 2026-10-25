@@ -29,6 +29,10 @@ use serde_json::{json, Value};
 const LIGNES_LUES: usize = 2000;
 /// Taille maximale d'un résultat rendu à Claude.
 const TAILLE_MAX: usize = 100_000;
+/// Octets parcourus au plus dans un fichier (`Read`).
+const LECTURE_MAX: u64 = 50_000_000;
+/// Caractères gardés au plus d'une ligne (`Read`).
+const LIGNE_MAX: usize = 2000;
 /// Fichiers plus gros : ignorés par `Grep`.
 const FICHIER_MAX: u64 = 2_000_000;
 /// Lignes trouvées au plus (`Grep`) et chemins au plus (`Glob`).
@@ -149,21 +153,64 @@ impl Lecteur {
             .map(|e| e.into_path())
     }
 
+    /// Lit `limit` lignes à partir de `offset`, sans jamais charger le
+    /// fichier entier (KOB-321) : lecture ligne à ligne, chaque ligne
+    /// coupée à [`LIGNE_MAX`], le tout borné à [`TAILLE_MAX`] et à
+    /// [`LECTURE_MAX`] octets parcourus.
     pub fn lire(&self, entree: &Value) -> Result<String, String> {
+        use std::io::{BufRead, BufReader, Read};
         let chemin = self.permis(texte(entree, "file_path")?)?;
-        let octets = std::fs::read(&chemin).map_err(|e| format!("{} : {e}", chemin.display()))?;
-        if octets.contains(&0) {
+        let erreur = |e: std::io::Error| format!("{} : {e}", chemin.display());
+        // Ni dossier, ni tube nommé (l'ouvrir attendrait sans fin), ni
+        // périphérique : un fichier ordinaire seulement.
+        let taille = std::fs::metadata(&chemin).map_err(erreur)?;
+        if !taille.is_file() {
+            return Err(format!(
+                "{} n'est pas un fichier ordinaire",
+                chemin.display()
+            ));
+        }
+        let taille = taille.len();
+        let mut lecteur = BufReader::new(
+            std::fs::File::open(&chemin)
+                .map_err(erreur)?
+                .take(LECTURE_MAX),
+        );
+        if lecteur.fill_buf().map_err(erreur)?.contains(&0) {
             return Err(format!("{} n'est pas un fichier texte", chemin.display()));
         }
-        let contenu = String::from_utf8_lossy(&octets);
-        let debut = entree["offset"].as_u64().unwrap_or(1).max(1) as usize;
-        let nombre = entree["limit"].as_u64().map_or(LIGNES_LUES, |n| n as usize);
+        let debut = entree["offset"].as_u64().unwrap_or(1).max(1);
+        let nombre = entree["limit"].as_u64().unwrap_or(LIGNES_LUES as u64);
         let mut sortie = String::new();
-        for (i, ligne) in contenu.lines().enumerate().skip(debut - 1).take(nombre) {
-            sortie.push_str(&format!("{}\t{ligne}\n", i + 1));
+        let mut ligne = Vec::new();
+        let mut numero = 0u64;
+        let mut coupe = false;
+        while numero < debut - 1 + nombre {
+            ligne.clear();
+            if lire_ligne(&mut lecteur, &mut ligne).map_err(erreur)? == 0 {
+                break;
+            }
+            numero += 1;
+            if numero < debut {
+                continue;
+            }
+            let texte = String::from_utf8_lossy(&ligne);
+            sortie.push_str(&format!(
+                "{numero}\t{}\n",
+                texte.trim_end_matches(['\n', '\r'])
+            ));
+            if sortie.len() > TAILLE_MAX {
+                coupe = true;
+                break;
+            }
         }
         if sortie.is_empty() {
             sortie = "(fichier vide ou fin de fichier dépassée)".into();
+        }
+        if taille > LECTURE_MAX && !coupe {
+            sortie.push_str(&format!(
+                "(fichier de {taille} octets : seuls les {LECTURE_MAX} premiers sont lus)\n"
+            ));
         }
         Ok(couper(sortie))
     }
@@ -234,6 +281,30 @@ impl Lecteur {
         } else {
             couper(trouve.join("\n"))
         })
+    }
+}
+
+/// Lit une ligne dans `ligne`, en n'en gardant que [`LIGNE_MAX`] octets :
+/// une ligne géante (fichier minifié, sans retour à la ligne) ne passe pas
+/// en mémoire. Rend le nombre d'octets parcourus (0 à la fin).
+fn lire_ligne(lecteur: &mut impl std::io::BufRead, ligne: &mut Vec<u8>) -> std::io::Result<usize> {
+    let mut lus = 0;
+    loop {
+        let tampon = lecteur.fill_buf()?;
+        if tampon.is_empty() {
+            return Ok(lus);
+        }
+        let (fin, trouve) = match tampon.iter().position(|&b| b == b'\n') {
+            Some(i) => (i + 1, true),
+            None => (tampon.len(), false),
+        };
+        let place = LIGNE_MAX.saturating_sub(ligne.len());
+        ligne.extend_from_slice(&tampon[..fin.min(place)]);
+        lecteur.consume(fin);
+        lus += fin;
+        if trouve {
+            return Ok(lus);
+        }
     }
 }
 
