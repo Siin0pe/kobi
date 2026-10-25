@@ -123,6 +123,9 @@ struct Track {
     /// première trame reçue ensuite en donne le début (KOB-311), même datée
     /// avant `pos` (la porte ajoute du silence après la parole).
     debut_a_poser: bool,
+    /// Dernières secondes d'audio reçu ([`QUEUE_SANS_TEXTE`]), rejouées dans le flux après
+    /// une fin d'énoncé (KOB-342).
+    queue: std::collections::VecDeque<f32>,
 }
 
 /// Moteur Nemotron, voir le module.
@@ -158,7 +161,7 @@ impl NemotronEngine {
         // énoncé non vide ; règle 3 : énoncé trop long.
         rc.rule1_min_trailing_silence = 2.4;
         rc.rule2_min_trailing_silence = config.endpoint_silence;
-        rc.rule3_min_utterance_length = 30.0;
+        rc.rule3_min_utterance_length = LONGUEUR_MAX_ENONCE as f32;
 
         let recognizer = OnlineRecognizer::create(&rc).ok_or_else(|| {
             SttError::Engine(format!(
@@ -208,6 +211,7 @@ impl NemotronEngine {
                 utterance_start: 0.0,
                 last_text: String::new(),
                 debut_a_poser: false,
+                queue: std::collections::VecDeque::new(),
             }
         })
     }
@@ -238,6 +242,27 @@ impl NemotronEngine {
                 out.push(segment(&text, true));
             }
             recognizer.reset(&track.stream);
+            // Le bloc décodé qui a révélé la fin d'énoncé peut contenir le
+            // début de la phrase suivante, pas encore rendu en texte (le
+            // modèle a ~0,56 s de retard) : `reset` l'effaçait, et « Point
+            // numéro deux » devenait « numéro deux » (KOB-342). La queue de
+            // l'audio, du silence pour l'essentiel (règle 2 : au moins
+            // `endpoint_silence` sans parole), repart dans le flux neuf.
+            // Pas après une fin d'énoncé par longueur (règle 3, parole
+            // continue) : elle redonnerait des mots déjà rendus.
+            if track.pos - track.utterance_start < LONGUEUR_MAX_ENONCE - 0.5 {
+                let garde = if text.is_empty() {
+                    QUEUE_SANS_TEXTE
+                } else {
+                    QUEUE_APRES_TEXTE
+                };
+                let saut = track.queue.len().saturating_sub(garde);
+                let queue: Vec<f32> = track.queue.iter().skip(saut).copied().collect();
+                track.stream.accept_waveform(SAMPLE_RATE as i32, &queue);
+                while recognizer.is_ready(&track.stream) {
+                    recognizer.decode(&track.stream);
+                }
+            }
             track.utterance_start = track.pos;
             track.last_text.clear();
         } else if text != track.last_text {
@@ -249,6 +274,22 @@ impl NemotronEngine {
         out
     }
 }
+
+/// Audio rejoué après une fin d'énoncé qui a rendu du texte (KOB-342).
+/// Mesuré au vrai modèle (deux phrases séparées par 0,4 à 1,5 s de
+/// silence) : 0,6 s perd encore le début d'une phrase qui suit un énoncé
+/// collé ; 1 s n'en perd aucun, et ne redonne aucun mot (règle 2 : au moins
+/// `endpoint_silence` de silence avant la fin d'énoncé).
+const QUEUE_APRES_TEXTE: usize = SAMPLE_RATE as usize;
+/// Audio rejoué après une fin d'énoncé sans texte (règle 1 : silence long).
+/// Le modèle la détecte en retard, parfois quand la phrase suivante a déjà
+/// commencé depuis près d'une seconde (« Point numéro cinq » perdu après une
+/// question) ; rien n'a été rendu depuis le dernier `reset`, donc rejouer
+/// plus large ne peut redonner aucun mot.
+const QUEUE_SANS_TEXTE: usize = 5 * SAMPLE_RATE as usize / 2;
+
+/// Règle 3 de fin d'énoncé : longueur maximale, en secondes.
+const LONGUEUR_MAX_ENONCE: f64 = 30.0;
 
 /// Début de l'énoncé quand arrive une trame qui commence à `t` (KOB-311) :
 /// après `nouvel_enonce` ou `conclure` (`a_poser`, consommé), la trame le
@@ -310,6 +351,11 @@ impl SttEngine for NemotronEngine {
         track
             .stream
             .accept_waveform(SAMPLE_RATE as i32, &frame.samples);
+        track.queue.extend(frame.samples.iter().copied());
+        if track.queue.len() > QUEUE_SANS_TEXTE {
+            let trop = track.queue.len() - QUEUE_SANS_TEXTE;
+            track.queue.drain(..trop);
+        }
         track.pos = track.pos.max(frame.end());
         Ok(self.drain(frame.source))
     }
@@ -328,6 +374,8 @@ impl SttEngine for NemotronEngine {
             return;
         }
         track.stream = self.recognizer.create_stream();
+        // L'audio d'avant ne doit pas revenir dans le flux neuf (KOB-342).
+        track.queue.clear();
         track.stream.set_option(
             "language",
             self.config.language.as_deref().unwrap_or("auto"),
@@ -344,6 +392,8 @@ impl SttEngine for NemotronEngine {
             return;
         };
         track.stream = self.recognizer.create_stream();
+        // L'audio d'avant ne doit pas revenir dans le flux neuf (KOB-342).
+        track.queue.clear();
         track.stream.set_option(
             "language",
             self.config.language.as_deref().unwrap_or("auto"),
@@ -545,6 +595,79 @@ mod tests {
     /// fin (d'où l'app tire `dit_a`). Ignoré sans modèle :
     /// `KOBI_NEMOTRON_DIR=<dossier du paquet> cargo test -p kobi-stt
     /// --features nemotron -- --ignored`.
+    /// Mots d'un texte, en minuscules et sans ponctuation.
+    fn mots(texte: &str) -> Vec<String> {
+        texte
+            .split(|c: char| !c.is_alphanumeric() && c != '\'')
+            .filter(|m| !m.is_empty())
+            .map(str::to_lowercase)
+            .collect()
+    }
+
+    /// KOB-342 : la même phrase dite deux fois, séparée par un silence assez
+    /// long pour une fin d'énoncé. Le second énoncé garde son premier mot
+    /// (avant le correctif : « Point numéro deux » devenait « numéro deux »,
+    /// ou perdait ses trois premiers mots), et rien de la première phrase ne
+    /// revient dans le second. Lancement :
+    /// `KOBI_NEMOTRON_DIR=… cargo test -p kobi-stt --features nemotron --
+    /// --ignored premier_mot`.
+    #[test]
+    #[ignore = "demande KOBI_NEMOTRON_DIR"]
+    fn premier_mot_apres_une_fin_d_enonce_avec_le_modele() {
+        let dir = PathBuf::from(std::env::var("KOBI_NEMOTRON_DIR").expect("KOBI_NEMOTRON_DIR"));
+        let parole = crate::wav::read_wav_16k_mono(dir.join("test_wavs/fr.wav")).unwrap();
+        let finals = |avec_silence: Option<f64>| -> Vec<Vec<String>> {
+            let mut config = NemotronConfig::new(&dir);
+            config.language = Some("fr".into());
+            let mut engine = NemotronEngine::new(config).unwrap();
+            let mut audio = parole.clone();
+            if let Some(silence) = avec_silence {
+                audio.extend(vec![0.0f32; (silence * SAMPLE_RATE as f64) as usize]);
+                audio.extend(&parole);
+            }
+            audio.extend(vec![0.0f32; 3 * SAMPLE_RATE as usize]);
+            let mut finals = Vec::new();
+            for (i, bloc) in audio.chunks(1600).enumerate() {
+                let frame = AudioFrame {
+                    source: Source::Moi,
+                    samples: bloc.to_vec(),
+                    t: i as f64 * 0.1,
+                };
+                finals.extend(
+                    engine
+                        .push(&frame)
+                        .unwrap()
+                        .into_iter()
+                        .filter(|s| s.is_final),
+                );
+            }
+            finals.iter().map(|s| mots(&s.text)).collect()
+        };
+        // La phrase seule : la référence.
+        let reference = finals(None).concat();
+        assert!(reference.len() >= 3, "{reference:?}");
+        for silence in [0.4, 0.8, 1.0, 1.5] {
+            let textes = finals(Some(silence));
+            let tout = textes.concat();
+            // La phrase entière revient deux fois, ni plus ni moins de mots
+            // (à un mot près : le modèle peut hésiter sur une liaison).
+            let attendu = 2 * reference.len();
+            assert!(
+                tout.len().abs_diff(attendu) <= 1,
+                "silence {silence} s : {} mots pour {attendu} attendus : {textes:?}",
+                tout.len()
+            );
+            // Après une fin d'énoncé, le second commence par le premier mot.
+            if textes.len() >= 2 {
+                assert_eq!(
+                    &textes[textes.len() - 1][..2],
+                    &reference[..2],
+                    "silence {silence} s : {textes:?}"
+                );
+            }
+        }
+    }
+
     #[test]
     #[ignore = "demande KOBI_NEMOTRON_DIR"]
     fn debut_d_enonce_apres_le_silence_avec_le_modele() {
