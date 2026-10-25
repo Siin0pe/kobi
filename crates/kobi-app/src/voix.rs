@@ -93,32 +93,63 @@ struct Recent {
     debut: Option<Instant>,
     /// Fin de la voix, si elle est finie.
     fin: Option<Instant>,
+    /// Texte des énoncés d'avant dont l'écho peut encore arriver, et jusqu'à
+    /// quand (KOB-374) : un nouvel énoncé (annonce, confirmation, réponse)
+    /// ne doit pas faire oublier la voix qui vient de jouer.
+    avant: Option<(String, Instant)>,
 }
 
 impl Recent {
-    /// Texte dont l'écho peut encore arriver quand un nouvel énoncé
-    /// commence (la voix d'avant joue encore, ou vient de finir) : gardé,
-    /// sinon cet écho, transcrit après coup, passerait pour l'utilisateur et
-    /// couperait l'énoncé suivant (KOB-374). Ses [`ECHO_GARDE`] derniers
-    /// caractères au plus.
-    fn encore_en_echo(&self, parle: bool) -> String {
-        if !self.actif(parle) {
-            return String::new();
-        }
-        let debut = self
-            .texte
-            .char_indices()
-            .rev()
-            .nth(ECHO_GARDE - 1)
-            .map_or(0, |(i, _)| i);
-        self.texte[debut..].to_owned()
-    }
-
     /// L'écho de ce texte peut-il arriver maintenant ?
     fn actif(&self, parle: bool) -> bool {
         parle
             || self.fin.is_some_and(|f| f.elapsed() < ECHO_APRES)
             || (self.fin.is_none() && self.debut.is_some_and(|d| d.elapsed() < ECHO_EN_FILE))
+    }
+
+    /// Recent d'un nouvel énoncé : il garde le texte dont l'écho peut encore
+    /// arriver, avec sa propre échéance, comptée depuis la fin de cette voix
+    /// (maintenant si elle jouait encore), pas depuis l'énoncé suivant. Ses
+    /// [`ECHO_GARDE`] derniers caractères au plus.
+    fn suivant(&self, parle: bool) -> Self {
+        let maintenant = Instant::now();
+        let echeance = if parle {
+            Some(maintenant + ECHO_APRES)
+        } else if let Some(fin) = self.fin {
+            Some(fin + ECHO_APRES)
+        } else if self.debut.is_some_and(|d| d.elapsed() < ECHO_EN_FILE) {
+            Some(maintenant + ECHO_APRES)
+        } else {
+            None
+        }
+        .filter(|e| *e > maintenant && !self.texte.trim().is_empty());
+        let avant = self.avant_actif().map(|(t, e)| (t.to_owned(), e));
+        let avant = match (avant, echeance) {
+            (Some((a, ea)), Some(e)) => Some((format!("{a} {}", self.texte), ea.max(e))),
+            (Some(a), None) => Some(a),
+            (None, Some(e)) => Some((self.texte.clone(), e)),
+            (None, None) => None,
+        }
+        .map(|(texte, e)| {
+            let debut = texte
+                .char_indices()
+                .rev()
+                .nth(ECHO_GARDE - 1)
+                .map_or(0, |(i, _)| i);
+            (texte[debut..].to_owned(), e)
+        });
+        Self {
+            avant,
+            ..Self::default()
+        }
+    }
+
+    /// Texte d'avant encore possible en écho.
+    fn avant_actif(&self) -> Option<(&str, Instant)> {
+        self.avant
+            .as_ref()
+            .filter(|(_, e)| Instant::now() < *e)
+            .map(|(t, e)| (t.as_str(), *e))
     }
 }
 
@@ -423,6 +454,32 @@ fn texte_dit<R: Runtime>(app: &AppHandle<R>) -> Option<(String, bool, bool)> {
     Some((format!("{} {en_cours}", r.texte), parle, r.actif(parle)))
 }
 
+/// Texte des énoncés d'avant encore possible en écho (KOB-374).
+fn dit_avant<R: Runtime>(app: &AppHandle<R>) -> Option<String> {
+    let v = app.try_state::<Voix>()?;
+    let r = v.recent.lock().unwrap_or_else(|e| e.into_inner());
+    r.avant_actif().map(|(t, _)| t.to_owned())
+}
+
+/// Mots en dessous desquels un segment n'est comparé qu'à l'énoncé en
+/// cours : « oui », « non » ou « stop » se retrouvent vite dans un texte
+/// plus long, et la réponse de l'utilisateur serait perdue (KOB-374).
+const ECHO_MOTS_AVANT: usize = 3;
+
+/// `texte` est-il l'écho de l'énoncé en cours (`dit`, si `actif`), ou, s'il
+/// a assez de mots, de la voix d'avant ?
+fn echo_reconnu<R: Runtime>(app: &AppHandle<R>, texte: &str, dit: &str, actif: bool) -> bool {
+    if actif && est_echo(texte, dit) {
+        return true;
+    }
+    let mots = normaliser(texte)
+        .split(' ')
+        .filter(|m| !m.is_empty())
+        .count();
+    mots >= ECHO_MOTS_AVANT
+        && dit_avant(app).is_some_and(|avant| est_echo(texte, &format!("{avant} {dit}")))
+}
+
 /// Ce segment transcrit est-il la voix de Kobi (son écho dans le micro),
 /// pendant qu'il parle ou juste après ? L'écoute l'ignore alors : Kobi ne
 /// se prend ni pour une question ni pour un participant.
@@ -433,16 +490,17 @@ pub fn est_ma_voix<R: Runtime>(app: &AppHandle<R>, texte: &str) -> bool {
     let Some((dit, _, actif)) = texte_dit(app) else {
         return false;
     };
-    actif && est_echo(texte, &dit)
+    echo_reconnu(app, texte, &dit, actif)
 }
 
 /// Segment transcrit pendant que Kobi parle : s'il n'est pas l'écho de sa
-/// propre voix, l'utilisateur parle et la voix se tait.
+/// propre voix (ou de celle d'avant, KOB-374), l'utilisateur parle et la
+/// voix se tait.
 pub fn entendu<R: Runtime>(app: &AppHandle<R>, texte: &str) {
     let Some((dit, parle, _)) = texte_dit(app) else {
         return;
     };
-    if parle && !est_echo(texte, &dit) {
+    if parle && !echo_reconnu(app, texte, &dit, true) {
         taire(app, "l'utilisateur parle");
     }
 }
@@ -528,10 +586,7 @@ impl Reponse {
         if enonce.is_some() {
             if let Some(v) = app.try_state::<Voix>() {
                 let mut r = v.recent.lock().unwrap_or_else(|e| e.into_inner());
-                *r = Recent {
-                    texte: r.encore_en_echo(etat.parle),
-                    ..Recent::default()
-                };
+                *r = r.suivant(etat.parle);
             }
         }
         Self {
@@ -828,9 +883,10 @@ mod tests {
     use tauri::test::{mock_builder, mock_context, noop_assets, MockRuntime};
     use tauri::App;
 
-    /// KOB-374 : un nouvel énoncé (annonce, confirmation) qui suit une
-    /// réponse garde le texte de celle-ci tant que son écho peut arriver ;
-    /// passé [`ECHO_APRES`], il l'oublie.
+    /// KOB-374 : un nouvel énoncé (annonce, confirmation, réponse qui
+    /// réfléchit encore) ne fait pas oublier la voix d'avant tant que son
+    /// écho peut arriver (fin + [`ECHO_APRES`]) ; un mot seul (« non ») ne
+    /// lui est pas comparé ; passé l'échéance, elle est oubliée.
     #[test]
     fn echo_de_la_reponse_reconnu_apres_une_annonce() {
         let app = session::installer(mock_builder())
@@ -845,22 +901,35 @@ mod tests {
                 std::thread::sleep(Duration::from_millis(20));
             }
         };
+        let finie_il_y_a = |secondes: u64| {
+            let v = h.state::<Voix>();
+            let mut recent = v.recent.lock().unwrap();
+            recent.fin = Some(Instant::now() - Duration::from_secs(secondes));
+        };
         let mut r = Reponse::new(h);
-        r.fin(h, "Dans la réunion, validation du budget pour Annecy.");
+        r.fin(h, "Non, la réunion valide le budget pour Annecy.");
         attendre_silence();
+        finie_il_y_a(1);
         // L'annonce part juste après, l'écho de la réponse arrive ensuite.
         dire(h, "Le compte rendu est prêt.");
-        assert!(est_ma_voix(h, "Dans la réunion validation"), "écho oublié");
+        assert!(est_ma_voix(h, "la réunion valide le budget"), "écho oublié");
         assert!(est_ma_voix(h, "le compte rendu est prêt"));
         attendre_silence();
-        // Bien après la fin : l'ancien texte n'est plus gardé.
+        // Une nouvelle réponse qui n'a encore rien dit : l'écho d'avant
+        // reste reconnu, mais pas un « non » de l'utilisateur.
+        finie_il_y_a(1);
+        let _reflechit = Reponse::new(h);
+        assert!(est_ma_voix(h, "la réunion valide le budget"));
+        assert!(!est_ma_voix(h, "non"), "réponse de l'utilisateur perdue");
+        // Passé l'échéance de l'écho d'avant : oubliée.
         {
             let v = h.state::<Voix>();
             let mut recent = v.recent.lock().unwrap();
-            recent.fin = Some(Instant::now() - ECHO_APRES - Duration::from_secs(1));
+            if let Some((_, e)) = recent.avant.as_mut() {
+                *e = Instant::now() - Duration::from_millis(1);
+            }
         }
-        dire(h, "Rappel : appeler Paul.");
-        assert!(!est_ma_voix(h, "Dans la réunion validation du budget"));
+        assert!(!est_ma_voix(h, "la réunion valide le budget pour Annecy"));
     }
 
     fn app(reglage: VoiceConfig) -> App<MockRuntime> {
