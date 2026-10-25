@@ -66,9 +66,12 @@ pub(crate) fn attendre_lecture(
 const ERREURS_PANNE: u32 = 20;
 #[cfg(any(feature = "lecture", test))]
 const DUREE_PANNE: Duration = Duration::from_millis(250);
-/// Sans erreur depuis ce temps, la rafale suivante repart de zéro.
+/// Sans erreur depuis ce temps, la rafale suivante repart de zéro. Court :
+/// une rafale ne dure que si ses erreurs sont serrées (un flux mort en rend
+/// une toutes les 0,1 ms). Une rafale d'ouverture suivie d'une erreur isolée,
+/// ou des erreurs isolées espacées, ne s'additionnent pas (KOB-296).
 #[cfg(any(feature = "lecture", test))]
-const FIN_RAFALE: Duration = Duration::from_secs(1);
+const FIN_RAFALE: Duration = Duration::from_millis(100);
 /// Une erreur isolée se journalise au plus une fois par minute.
 #[cfg(any(feature = "lecture", test))]
 const JOURNAL_ERREURS: Duration = Duration::from_secs(60);
@@ -499,6 +502,14 @@ mod tests {
             .map(|i| s.noter(t1 + Duration::from_micros(20 * i), false, false))
             .collect();
         assert!(!rafale.contains(&Verdict::Panne), "{rafale:?}");
+        // KOB-296 : puis une erreur isolée 300 ms après, et des erreurs
+        // isolées toutes les 0,9 s pendant 30 s : toujours pas de panne.
+        let apres = s.noter(t1 + Duration::from_millis(300), false, false);
+        assert_ne!(apres, Verdict::Panne);
+        let isolees: Vec<_> = (1..=33)
+            .map(|i| s.noter(t1 + Duration::from_millis(300 + 900 * i), false, false))
+            .collect();
+        assert!(!isolees.contains(&Verdict::Panne), "{isolees:?}");
         // Flux mort : 10 000 erreurs par seconde, sans fin ; panne passé
         // 250 ms, une seule ligne avant.
         let t2 = t1 + Duration::from_secs(10);
