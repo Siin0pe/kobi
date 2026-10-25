@@ -242,6 +242,18 @@ impl Lecteur {
             (false, Some(base)) => base.join(brut),
             _ => brut.to_path_buf(),
         };
+        // Avant toute résolution : résoudre un chemin réseau ouvrirait déjà
+        // la connexion (KOB-344). Sans dossier permis, rien ne se résout.
+        if self.dossiers.is_empty() {
+            return Err(format!("{chemin} : aucun dossier permis"));
+        }
+        if chemin_reseau(chemin) || chemin_reseau(&brut.to_string_lossy()) || !prefixe_local(&brut)
+        {
+            return Err(format!(
+                "{chemin} : chemin réseau ou de périphérique refusé (seuls les dossiers permis se lisent : {})",
+                self.liste()
+            ));
+        }
         let resolu = brut.canonicalize().map_err(|e| format!("{chemin} : {e}"))?;
         if self.dans_les_dossiers(&resolu) {
             Ok(resolu)
@@ -792,6 +804,42 @@ impl kobi_brain::Outillage for OutillageKobi {
             .await
             .unwrap_or_else(|e| Err(e.to_string()))
         })
+    }
+}
+
+/// Chemin réseau ou de périphérique Windows : `\\serveur\partage`,
+/// `\\?\UNC\…`, `\\.\pipe\…`, `\\?\GLOBALROOT\…`, et leurs formes en `/`.
+/// Le résoudre (`canonicalize`) ouvre déjà un handle : Windows se connecte au
+/// serveur en SMB et lui envoie le hash NTLM de l'utilisateur, ou se branche
+/// sur un tube (KOB-344). Seul le préfixe verbatim d'un disque local
+/// (`\\?\C:\`, que rend `canonicalize` sous Windows) passe. Jugé sur le texte,
+/// le même sous tous les systèmes.
+fn chemin_reseau(chemin: &str) -> bool {
+    let c = chemin.replace('/', "\\");
+    // `\??\UNC\…`, `\??\pipe\…` : passés tels quels à NT.
+    if c.starts_with("\\??\\") {
+        return true;
+    }
+    if !c.starts_with("\\\\") {
+        return false;
+    }
+    let disque_local = c.strip_prefix("\\\\?\\").is_some_and(|reste| {
+        let b = reste.as_bytes();
+        b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && b[2] == b'\\'
+    });
+    !disque_local
+}
+
+/// Sous Windows, liste blanche : un chemin absolu n'a pour préfixe qu'un
+/// disque local (`C:`, `\\?\C:`) ; tout autre préfixe (UNC, périphérique,
+/// verbatim) est refusé avant résolution (KOB-344). Ailleurs, rien à juger.
+fn prefixe_local(chemin: &Path) -> bool {
+    use std::path::{Component, Prefix};
+    match chemin.components().next() {
+        Some(Component::Prefix(p)) => {
+            matches!(p.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_))
+        }
+        _ => true,
     }
 }
 
