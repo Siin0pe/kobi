@@ -352,16 +352,37 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
 
 /// Ce qui suit un `{` hors guillemets : bash peut-il le développer
 /// (`{a,b}`, `{1..3}`) ? Règle prudente, sans chercher à refaire l'analyse de
-/// bash : une virgule ou `..` n'importe où après l'accolade, suivie plus loin
-/// d'un `}`, suffit pour refuser. Guillemets, échappements (KOB-258, KOB-272)
+/// bash : une virgule ou `..` après l'accolade, suivie plus loin d'un `}`,
+/// suffit pour refuser. Guillemets doubles, échappements (KOB-258, KOB-272)
 /// et accolades imbriquées (`{{},-delete}` donne `{} -delete`, KOB-286) n'y
 /// changent rien ; `{}` seul (`find -exec cat {} +`) reste tel quel.
+///
+/// Seule exception, sûre : entre guillemets simples, bash ne développe rien
+/// et n'échappe rien. Le texte y est sauté jusqu'au `'` suivant
+/// (`… | jq '{name, id}'` reste une lecture, KOB-300). Un `'` échappé (`\'`)
+/// ou entre guillemets doubles (`"it's"`) est un caractère ordinaire.
 fn accolades_developpees(suite: &[char]) -> bool {
-    suite
-        .iter()
-        .enumerate()
-        .find(|&(i, &x)| x == ',' || (x == '.' && suite.get(i + 1) == Some(&'.')))
-        .is_some_and(|(i, _)| suite[i..].contains(&'}'))
+    let mut doubles = false;
+    let mut i = 0;
+    while let Some(&x) = suite.get(i) {
+        match x {
+            '\\' => i += 1,
+            '"' => doubles = !doubles,
+            '\'' if !doubles => {
+                // Guillemet simple sans fermant : refusé ailleurs, et ici
+                // tout le reste est sauté.
+                match suite[i + 1..].iter().position(|&y| y == '\'') {
+                    Some(n) => i += n + 1,
+                    None => return false,
+                }
+            }
+            ',' => return suite[i..].contains(&'}'),
+            '.' if suite.get(i + 1) == Some(&'.') => return suite[i..].contains(&'}'),
+            _ => {}
+        }
+        i += 1;
+    }
+    false
 }
 
 /// Redirection : seules celles qui n'écrivent dans aucun fichier passent.
@@ -1594,6 +1615,11 @@ mod tests {
             "grep -n '# titre' Cargo.toml",
             "grep -n \"#\" Cargo.toml",
             "grep -n '#\nx' Cargo.toml",
+            // KOB-300 : virgule ou `..` et `}` entre guillemets simples,
+            // après un `{}` hors guillemets.
+            "ls {} | grep -n '{x,y}'",
+            "ls {}; grep -n 'a,b}' Cargo.toml",
+            "ls {} | grep -n 'a..}' Cargo.toml",
         ] {
             lecture(bash(ligne), ligne);
         }
@@ -1674,6 +1700,19 @@ mod tests {
             "Get-ChildItem\rRemove-Item crates",
         ] {
             pas_lecture(ps(ligne), ligne);
+        }
+        // KOB-300 : l'exception des guillemets simples ne s'étend pas aux
+        // guillemets doubles ni aux échappements.
+        for ligne in [
+            "find . {\"it's\",-delete}",
+            "find . {\"a'b\",-delete}",
+            "find . {'a',-delete}",
+            "find . {'x'..'y'}",
+            "find . {\\'x,-delete}",
+            "find . {\"'\",-delete} '",
+            "git log HEAD@{1}..HEAD@{0}",
+        ] {
+            pas_lecture(bash(ligne), ligne);
         }
     }
 
