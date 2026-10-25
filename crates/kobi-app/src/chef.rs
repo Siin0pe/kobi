@@ -359,6 +359,10 @@ struct EnCours {
     /// dit (« reprends », au revoir) n'entre pas dans les notes de la
     /// réunion reprise, même transcrit après (KOB-309).
     fins_annulees: FinsAnnulees,
+    /// Segments dits après l'arrêt, arrivés pendant « Annuler » : rangés si
+    /// la fin est annulée, jetés si elle tient. Une piste en avance sur
+    /// l'autre (« eux » avant le « reprends » du micro) ne perd rien (KOB-339).
+    apres_l_arret: Vec<(Segment, Instant)>,
     notes: String,
     derniere_note: Option<String>,
     /// Transcription pas encore passée aux notes.
@@ -1412,6 +1416,7 @@ impl<R: Runtime> Chef<R> {
             compte_rendu_demande: false,
             pause_a: None,
             fins_annulees: Vec::new(),
+            apres_l_arret: Vec::new(),
             titre: None,
             titre_manuel: false,
             debut_parole: String::new(),
@@ -1542,6 +1547,8 @@ impl<R: Runtime> Chef<R> {
         if r.annulable_jusqu.take().is_none() {
             return;
         }
+        // La fin tient : rien de ce qui a été dit après l'arrêt n'entre.
+        r.apres_l_arret.clear();
         let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::FinConfirmee);
         tracing::info!("fin de la réunion confirmée");
         if r.arret.is_some() {
@@ -1660,9 +1667,15 @@ impl<R: Runtime> Chef<R> {
         if std::mem::take(&mut r.compte_rendu_demande) && r.compte_rendu_garde.take().is_none() {
             self.comptes_rendus_abandonnes += 1;
         }
+        let apres = std::mem::take(&mut r.apres_l_arret);
         self.transition(&[Evenement::Reprendre]);
         self.emettre_enregistrement();
-        tracing::info!("fin de la réunion annulée");
+        tracing::info!(segments = apres.len(), "fin de la réunion annulée");
+        // Arrivé avant l'annulation, dit après l'arrêt : rangé maintenant,
+        // selon la règle des fins annulées (KOB-339).
+        for (s, dit_a) in apres {
+            self.segment(s, dit_a);
+        }
         kobi_i18n::tr("coque.chef.reunionContinue", &[])
     }
 
@@ -1776,6 +1789,9 @@ impl<R: Runtime> Chef<R> {
         // gardé jusqu'au compte rendu. Ce qui est dit après (le « annule »
         // d'« Annuler »…) ne l'est pas (KOB-198).
         if r.fin_demandee && r.arret.is_none_or(|arret| dit_a > arret) {
+            if r.annulable_jusqu.is_some() {
+                r.apres_l_arret.push((s, dit_a));
+            }
             return;
         }
         // Dit pendant une fin ensuite annulée, transcrit après l'annulation :
@@ -4667,6 +4683,54 @@ mod tests {
             c.recevoir(Message::QuestionDifferee("et le devis ?".into(), encore_b));
             assert_eq!(c.questions_differees, ["et le devis ?"]);
         });
+    }
+
+    /// KOB-339 : sous charge, une phrase de « eux » dite juste après
+    /// « reprends », arrivée avant lui, est gardée quand la fin est annulée ;
+    /// ce qui a été dit pendant la fin reste dehors, et rien de ce qui suit
+    /// l'arrêt n'entre si la fin tient.
+    #[test]
+    fn eux_dit_apres_reprends_arrive_avant_lui() {
+        let bref = |texte: &str| {
+            let mut s = dit(texte);
+            s.start = s.end;
+            s
+        };
+        for annulee in [true, false] {
+            let (app, _dir) = chef_en_essai();
+            avec_chef(&app, |c| {
+                c.commande(Intention::DemarrerReunion);
+                c.recevoir(Message::Segment(dit("Premier point."), Instant::now()));
+                c.commande(Intention::TerminerReunion);
+                std::thread::sleep(Duration::from_millis(20));
+                let pendant = Instant::now();
+                std::thread::sleep(Duration::from_millis(20));
+                let reprends = Instant::now();
+                std::thread::sleep(Duration::from_millis(20));
+                let apres = Instant::now();
+                // La piste « eux » est en avance : ses phrases arrivent avant
+                // « reprends », que le micro transcrit en retard.
+                c.recevoir(Message::Segment(bref("Pendant la fin."), pendant));
+                c.recevoir(Message::Segment(bref("Donc on valide le budget."), apres));
+                if annulee {
+                    c.recevoir(Message::Question {
+                        texte: "reprends".into(),
+                        voix: true,
+                        dit_a: Some(reprends),
+                    });
+                    let notes = &c.reunion.as_ref().unwrap().a_noter;
+                    assert!(notes.contains("Donc on valide le budget."), "{notes}");
+                    assert!(!notes.contains("Pendant la fin."), "{notes}");
+                } else {
+                    c.reunion.as_mut().unwrap().annulable_jusqu = Some(Instant::now() - VIDANGE);
+                    c.tick();
+                    let r = c.reunion.as_ref().unwrap();
+                    assert!(r.apres_l_arret.is_empty());
+                    assert!(!r.a_noter.contains("Donc on valide"), "{}", r.a_noter);
+                    assert!(!r.pour_compte_rendu.contains("Donc on valide"));
+                }
+            });
+        }
     }
 
     /// KOB-228 : un compte rendu demandé pendant qu'un bloc est à la prise
