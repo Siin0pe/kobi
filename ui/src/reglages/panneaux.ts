@@ -8,6 +8,7 @@
 
 import { AFFICHAGE } from './affichage';
 import { ANIMATIONS } from './animations';
+import { CLE_API } from './cle-api';
 import { DEMARRAGE } from './demarrage';
 import { LANGUE } from './langue';
 import { CLAUDE, DOSSIERS, ESSAI, MICRO, MODELE, PARCOURS, RACCOURCIS } from './etapes';
@@ -17,7 +18,7 @@ import { PERMISSIONS } from './permissions';
 import { SON_ORDI } from './son-ordi';
 import { STOCKAGE } from './stockage';
 
-const liste: Panneau[] = [STOCKAGE, DOSSIERS, MCP, PERMISSIONS, MICRO, SON_ORDI, MODELE, CLAUDE, DEMARRAGE, LANGUE, ANIMATIONS, AFFICHAGE, RACCOURCIS, PARCOURS];
+const liste: Panneau[] = [STOCKAGE, DOSSIERS, MCP, PERMISSIONS, MICRO, SON_ORDI, MODELE, CLAUDE, CLE_API, DEMARRAGE, LANGUE, ANIMATIONS, AFFICHAGE, RACCOURCIS, PARCOURS];
 
 /** Panneaux de la section Réglages, dans l'ordre du menu. */
 export const PANNEAUX: readonly Panneau[] = liste;
