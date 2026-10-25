@@ -792,6 +792,8 @@ struct Fil<R: Runtime> {
     partiel_publie: Option<String>,
     /// Le micro a été perdu et n'est pas encore rouvert (KOB-236).
     micro_perdu: bool,
+    /// Instant réel de la dernière fin de réunion annulable (KOB-287).
+    arret_annulable: Option<Instant>,
     /// Ouverture du micro toujours en cours au tour précédent (KOB-285).
     ouverture: Option<Ouverture>,
     /// Instant de la pause de la réunion, tant que le micro reste ouvert
@@ -828,6 +830,7 @@ impl<R: Runtime> Fil<R> {
             niveau: (0.0, 0),
             partiel_publie: None,
             micro_perdu: false,
+            arret_annulable: None,
             ouverture: None,
             pause_reunion: None,
             decalage: 0.0,
@@ -921,6 +924,14 @@ impl<R: Runtime> Fil<R> {
                 self.porte = Porte::new(kobi_stt::SAMPLE_RATE);
                 self.t = 0.0;
                 self.origine = Instant::now();
+                // Réunion terminée micro fermé (pendant la pause) : la
+                // fenêtre « Annuler » vaut encore pour le micro rouvert
+                // (KOB-287).
+                if let Some((depuis, duree)) = self.arret_annulable.and_then(|arret| {
+                    fenetre_annulation(arret, self.origine, crate::chef::ANNULATION)
+                }) {
+                    self.ecouteur.annulable(depuis, duree);
+                }
                 self.decalage = 0.0;
                 self.derniere_trame = Instant::now();
                 self.pause_reunion = None;
@@ -1112,10 +1123,13 @@ impl<R: Runtime> Fil<R> {
             Commande::ReponseAttendue(duree) => {
                 self.ecouteur.reponse_attendue(self.t, duree.as_secs_f64())
             }
-            Commande::Annulable(arret) => self.ecouteur.annulable(
-                instant_audio(self.origine, arret),
-                crate::chef::ANNULATION.as_secs_f64(),
-            ),
+            Commande::Annulable(arret) => {
+                self.arret_annulable = Some(arret);
+                self.ecouteur.annulable(
+                    instant_audio(self.origine, arret),
+                    crate::chef::ANNULATION.as_secs_f64(),
+                );
+            }
             Commande::BasculerPause => {
                 self.en_pause = !self.en_pause;
                 tracing::info!(pause = self.en_pause, "écoute continue");
@@ -1478,6 +1492,19 @@ fn reprise_de_l_horloge(origine: Instant, maintenant: Instant) -> f64 {
     maintenant.saturating_duration_since(origine).as_secs_f64()
 }
 
+/// Fenêtre « Annuler » d'une fin à l'instant `arret`, sur l'horloge d'un
+/// micro ouvert à `origine` (KOB-287) : `(depuis, duree)` en secondes
+/// d'audio, ou `None` si elle est déjà close à l'ouverture.
+fn fenetre_annulation(
+    arret: Instant,
+    origine: Instant,
+    annulation: Duration,
+) -> Option<(f64, f64)> {
+    let fin = arret + annulation;
+    let reste = fin.saturating_duration_since(arret.max(origine));
+    (!reste.is_zero()).then(|| (instant_audio(origine, arret), reste.as_secs_f64()))
+}
+
 /// Instant `quand` dans le temps de l'audio du micro ouvert à `origine`.
 fn instant_audio(origine: Instant, quand: Instant) -> f64 {
     quand.saturating_duration_since(origine).as_secs_f64()
@@ -1605,6 +1632,37 @@ mod tests {
         assert!(!neuf
             .segment("Oui", true, 0.8)
             .contains(&Action::Envoyer("Oui".into())));
+    }
+
+    /// KOB-287 : réunion terminée pendant la pause, micro fermé ; à sa
+    /// réouverture, la fenêtre « Annuler » court encore jusqu'à la même
+    /// échéance ; ouverte après l'échéance, plus rien.
+    #[test]
+    fn fenetre_annuler_au_micro_rouvert() {
+        let arret = Instant::now();
+        let annulation = Duration::from_secs(10);
+        // Micro rouvert 4 s après l'arrêt : 6 s restent, depuis le début.
+        let (depuis, duree) =
+            fenetre_annulation(arret, arret + Duration::from_secs(4), annulation).unwrap();
+        assert_eq!(depuis, 0.0);
+        assert!((duree - 6.0).abs() < 1e-9);
+        // Micro ouvert avant l'arrêt (cas ordinaire) : 10 s, depuis l'arrêt.
+        let (depuis, duree) =
+            fenetre_annulation(arret, arret - Duration::from_secs(30), annulation).unwrap();
+        assert!((depuis - 30.0).abs() < 1e-9 && (duree - 10.0).abs() < 1e-9);
+        assert_eq!(
+            fenetre_annulation(arret, arret + Duration::from_secs(12), annulation),
+            None
+        );
+        // « reprends » sans le nom, dit 2 s après la réouverture, part.
+        let mut e = Ecouteur::new(false);
+        let (depuis, duree) =
+            fenetre_annulation(arret, arret + Duration::from_secs(4), annulation).unwrap();
+        e.annulable(depuis, duree);
+        assert_eq!(
+            e.segment("reprends", true, 2.0),
+            [Action::Interpeller, Action::Envoyer("reprends".into())]
+        );
     }
 
     #[test]
