@@ -20,11 +20,29 @@ export interface CarteUi {
   status: ActionCard['status'];
 }
 
-/** Affiche une carte publiée par la coque. */
+/** Cartes encore en attente de chaque scène, dans l'ordre d'arrivée. */
+const enAttente = new WeakMap<Stage, Map<string, ActionCard>>();
+
+/**
+ * Affiche une carte publiée par la coque. Plusieurs cartes peuvent attendre
+ * ensemble (une de la conversation, une des notes en continu) : la plus
+ * récente est montrée, et quand elle se ferme, la suivante encore en attente
+ * reprend sa place, au lieu de disparaître alors qu'elle attend (KOB-343).
+ */
 export function applyCarte(stage: Stage, c: CarteUi): void {
   if (isValidation(c)) return showValidation(stage, c);
   const action: ActionCard = { id: c.id, kicker: c.kicker, title: c.title, meta: c.meta ?? undefined, status: c.status };
-  if (c.status === 'pending') stage.setState('suggest', { action });
+  let file = enAttente.get(stage);
+  if (!file) enAttente.set(stage, (file = new Map()));
+  if (c.status === 'pending') {
+    file.delete(c.id);
+    file.set(c.id, action);
+    stage.setState('suggest', { action });
+    return;
+  }
+  file.delete(c.id);
+  const suivante = [...file.values()].pop();
+  if (suivante) stage.setState('suggest', { action: suivante });
   else if (c.status === 'confirmed') stage.setState('done', { action });
   else stage.setState('idle');
 }

@@ -144,6 +144,25 @@ test('carte de la coque : Kobi propose, le clic renvoie decider_carte, puis Fait
   await expectNoErrors(errors);
 });
 
+test('deux cartes en attente : fermer l’une montre l’autre, qui attend encore (KOB-343)', async ({ page }) => {
+  await mockTauri(page);
+  const errors = await openUi(page, '');
+  const card = page.locator('[data-card=action]');
+  await emit(page, 'carte', { id: '21', kicker: 'Je crée le ticket ?', title: 'Ticket de la conversation', meta: null, status: 'pending' });
+  await emit(page, 'carte', { id: '22', kicker: 'Je le fais ?', title: 'Proposition des notes', meta: null, status: 'pending' });
+  await expect(card).toContainText('Proposition des notes');
+  // La plus récente est décidée : l’autre revient, toujours en attente.
+  await emit(page, 'carte', { id: '22', kicker: 'Je le fais ?', title: 'Proposition des notes', meta: null, status: 'confirmed' });
+  await expect(page.locator('.stage')).toHaveAttribute('data-state', 'suggest');
+  await expect(card).toContainText('Ticket de la conversation');
+  await card.getByRole('button').first().click();
+  expect(await calls(page)).toContainEqual(['decider_carte', { id: '21', accepte: true }]);
+  // La dernière se ferme : Fait, comme une carte seule.
+  await emit(page, 'carte', { id: '21', kicker: 'Je crée le ticket ?', title: 'Ticket de la conversation', meta: null, status: 'confirmed' });
+  await expect(page.locator('.stage')).toHaveAttribute('data-state', 'done');
+  await expectNoErrors(errors);
+});
+
 test('Échap interrompt la réponse : la frappe s’arrête net et la suite du flux est ignorée (interrompre)', async ({ page }) => {
   await mockTauri(page);
   const errors = await openUi(page, '');
