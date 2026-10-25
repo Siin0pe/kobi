@@ -859,6 +859,7 @@
   "barre.quitter-confirme": "Stop the meeting and quit",
   "coque.chef.sansReponse": "I haven't answered anything yet.",
   "coque.chef.reunionEnPause": "Meeting paused: I'm not recording anymore.",
+  "coque.chef.transcriptionIncomplete": "Incomplete transcript: {secondes} s of speech said before the pause could not be transcribed (machine too busy).",
   "coque.chef.dejaEnPause": "The meeting is already paused.",
   "coque.chef.aucuneReunion": "No meeting in progress.",
   "coque.chef.enregistreDeNouveau": "Recording again.",

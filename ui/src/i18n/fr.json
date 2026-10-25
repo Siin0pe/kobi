@@ -859,6 +859,7 @@
   "barre.quitter-confirme": "Arrêter la réunion et quitter",
   "coque.chef.sansReponse": "Je n'ai encore rien répondu.",
   "coque.chef.reunionEnPause": "Réunion en pause : je n'enregistre plus.",
+  "coque.chef.transcriptionIncomplete": "Transcription incomplète : {secondes} s de parole dites avant la pause n'ont pas pu être transcrites (machine trop chargée).",
   "coque.chef.dejaEnPause": "La réunion est déjà en pause.",
   "coque.chef.aucuneReunion": "Aucune réunion en cours.",
   "coque.chef.enregistreDeNouveau": "J'enregistre de nouveau.",

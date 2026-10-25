@@ -146,6 +146,9 @@ pub enum Message {
     QuestionPeutEtre(String),
     /// L'interpellation n'a pas été suivie d'une question.
     SansQuestion,
+    /// Ces secondes de parole dites avant la pause n'ont pas pu être
+    /// transcrites (reprise pendant la vidange sous charge, KOB-277).
+    TranscriptionIncomplete(f64),
     /// L'écoute est mise en pause hors réunion : la conversation se termine
     /// et Kobi revient en veille (KOB-238).
     EcouteCoupee,
@@ -784,6 +787,7 @@ impl<R: Runtime> Chef<R> {
             Message::QuestionPartielle(q) => {
                 let _ = self.app.emit(EVENEMENT_QUESTION, &q);
             }
+            Message::TranscriptionIncomplete(secondes) => self.transcription_incomplete(secondes),
             Message::SansQuestion => {
                 self.transition(&[Evenement::PasDeQuestion]);
             }
@@ -1124,8 +1128,15 @@ impl<R: Runtime> Chef<R> {
             Intention::DemarrerReunion => self.demarrer(),
             Intention::Pause => match &mut self.reunion {
                 Some(r) if !r.pause => {
+                    let maintenant = Instant::now();
                     r.pause = true;
-                    r.pause_a = Some(Instant::now());
+                    r.pause_a = Some(maintenant);
+                    // L'écoute ne transcrit pas ce qui est dit après, même si
+                    // elle ne voit la pause qu'en retard (KOB-277).
+                    let _ = crate::ecoute::commander(
+                        &self.app,
+                        crate::ecoute::Commande::PauseReunion(maintenant),
+                    );
                     self.transition(&[Evenement::Pause]);
                     kobi_i18n::tr("coque.chef.reunionEnPause", &[])
                 }
@@ -1443,8 +1454,13 @@ impl<R: Runtime> Chef<R> {
             return;
         };
         // En pause, seul ce qui a été dit avant la pause est gardé : sous
-        // charge, il arrive après (KOB-261).
-        if r.pause && r.pause_a.is_none_or(|pause| dit_a > pause) {
+        // charge, il arrive après (KOB-261). Jugé sur le début du segment :
+        // la dernière phrase, conclue à la fermeture du micro, finit après
+        // la pause (marge de fin du moteur) et serait perdue (KOB-277).
+        let commence_a = dit_a
+            .checked_sub(Duration::from_secs_f64((s.end - s.start).max(0.0)))
+            .unwrap_or(dit_a);
+        if r.pause && r.pause_a.is_none_or(|pause| commence_a > pause) {
             return;
         }
         // Dit avant la fin mais transcrit après (charge, file d'attente) :
@@ -1481,6 +1497,22 @@ impl<R: Runtime> Chef<R> {
             r.debut_parole.push_str(&ligne);
         }
         self.pour_conversation.push_str(&ligne);
+    }
+
+    /// De la parole dite avant la pause n'a pas pu être transcrite (KOB-277) :
+    /// le compte rendu le sait (mention dans la transcription qui lui
+    /// parvient), et l'utilisateur aussi (activité).
+    fn transcription_incomplete(&mut self, secondes: f64) {
+        let secondes = (secondes.round() as u64).max(1).to_string();
+        let texte = kobi_i18n::tr(
+            "coque.chef.transcriptionIncomplete",
+            &[("secondes", &secondes)],
+        );
+        tracing::warn!(%secondes, "transcription incomplète signalée");
+        if let Some(r) = self.reunion.as_mut().filter(|r| !r.compte_rendu_demande) {
+            r.a_noter.push_str(&format!("[{texte}]\n"));
+        }
+        crate::activite::noter(&self.app, crate::activite::Genre::Erreur, &texte, None);
     }
 
     /// Réponse que Kobi donne sans Claude (« répète », « où en est… ? »,
@@ -3195,6 +3227,53 @@ mod tests {
             assert_eq!(
                 r.compte_rendu_garde,
                 Some(Ok(kobi_i18n::tr("coque.chef.compteRenduVide", &[])))
+            );
+        });
+    }
+
+    /// KOB-277 : la dernière phrase, conclue à la fermeture du micro, commence
+    /// avant la pause mais finit après (marge de fin du moteur) : elle est
+    /// gardée ; une phrase commencée après la pause ne l'est pas.
+    #[test]
+    fn derniere_phrase_avant_la_pause_gardee() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            c.commande(Intention::Pause);
+            let pause = c.reunion.as_ref().unwrap().pause_a.unwrap();
+            let mut chevauche = dit("Point huit, le budget est validé.");
+            chevauche.start = 0.0;
+            chevauche.end = 6.0;
+            c.recevoir(Message::Segment(chevauche, pause + Duration::from_secs(2)));
+            let mut apres = dit("Pendant la pause.");
+            apres.start = 0.0;
+            apres.end = 1.0;
+            c.recevoir(Message::Segment(apres, pause + Duration::from_secs(3)));
+            let r = c.reunion.as_ref().unwrap();
+            assert!(r.a_noter.contains("Point huit"), "{}", r.a_noter);
+            assert!(!r.a_noter.contains("Pendant la pause"), "{}", r.a_noter);
+        });
+    }
+
+    /// KOB-277 : de la parole dite avant la pause, perdue sous charge, est
+    /// mentionnée dans la transcription qui part au compte rendu.
+    #[test]
+    fn transcription_incomplete_dite_au_compte_rendu() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            c.recevoir(Message::Segment(dit("Point un."), Instant::now()));
+            c.commande(Intention::Pause);
+            c.recevoir(Message::TranscriptionIncomplete(21.6));
+            c.commande(Intention::Reprendre);
+            c.commande(Intention::TerminerReunion);
+            let r = c.reunion.as_ref().unwrap();
+            assert!(
+                r.pour_compte_rendu.contains("Point un.")
+                    && r.pour_compte_rendu
+                        .contains("Transcription incomplète : 22 s"),
+                "{}",
+                r.pour_compte_rendu
             );
         });
     }
