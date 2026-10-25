@@ -117,6 +117,15 @@ fn chemins_reseau_refuses_avant_toute_resolution() {
     // Liste blanche des préfixes (seuls les chemins Windows en ont).
     assert!(prefixe_local(Path::new("/code/kobi")));
     assert!(prefixe_local(Path::new("src/main.rs")));
+    #[cfg(windows)]
+    {
+        for reseau in [r"\\srv\p\x", r"\\?\UNC\srv\p", r"\\.\pipe\x"] {
+            assert!(!prefixe_local(Path::new(reseau)), "{reseau}");
+        }
+        for local in [r"C:\code\kobi", r"\\?\C:\code\kobi"] {
+            assert!(prefixe_local(Path::new(local)), "{local}");
+        }
+    }
 }
 
 /// Rien ne se lit hors des dossiers permis : chemin absolu, `..`, lien
