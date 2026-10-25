@@ -489,7 +489,8 @@ fn echo_reconnu<R: Runtime>(
     let connu = format!("{avant} {dit}");
     if mots.len() >= ECHO_MOTS_AVANT {
         est_echo(texte, &connu)
-    } else if pour_couper {
+    } else if pour_couper && commande_vocale(texte) != Some(CommandeVoix::Stop) {
+        // « Stop » coupe toujours tout de suite (KOB-248).
         let connu = normaliser(&connu);
         let connus: std::collections::HashSet<&str> = connu.split(' ').collect();
         mots.iter().all(|m| connus.contains(m))
@@ -936,6 +937,15 @@ mod tests {
         // de quoi la couper. Un « non » n'est pas ignoré pour autant.
         assert!(echo_reconnu(h, "la réunion", "", false, true));
         assert!(!echo_reconnu(h, "la réunion", "", false, false));
+        // « Stop » coupe toujours, même si la voix d'avant le disait.
+        {
+            let v = h.state::<Voix>();
+            let mut recent = v.recent.lock().unwrap();
+            if let Some((t, _)) = recent.avant.as_mut() {
+                t.push_str(" Dis stop pour m'arrêter.");
+            }
+        }
+        assert!(!echo_reconnu(h, "stop", "", false, true));
         attendre_silence();
         // Une nouvelle réponse qui n'a encore rien dit : l'écho d'avant
         // reste reconnu, mais pas un « non » de l'utilisateur.
