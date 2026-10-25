@@ -1668,13 +1668,13 @@ fn fenetre_annulation(
     (!reste.is_zero()).then(|| (instant_audio(origine, arret), reste.as_secs_f64()))
 }
 
-/// Instant `quand` dans le temps de l'audio du micro ouvert à `origine`.
 /// L'audio qui finit à `t` a-t-il été dit avant l'arrêt clos `arret`
 /// (KOB-326, KOB-333) ?
 fn dit_avant_un_arret_clos(t: f64, arret: Option<f64>) -> bool {
     arret.is_some_and(|arret| t < arret)
 }
 
+/// Instant `quand` dans le temps de l'audio du micro ouvert à `origine`.
 fn instant_audio(origine: Instant, quand: Instant) -> f64 {
     quand.saturating_duration_since(origine).as_secs_f64()
 }
