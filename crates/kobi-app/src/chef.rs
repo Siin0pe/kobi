@@ -1491,6 +1491,7 @@ impl<R: Runtime> Chef<R> {
         r.annulable_jusqu = Some(arret + ANNULATION);
         self.transition(&[Evenement::TerminerReunion]);
         self.emettre_enregistrement();
+        self.refuser_cartes_des_notes();
         self.vider_puis_compte_rendu();
         // « Reprends » s'entend sans redire « Kobi » pendant « Annuler ».
         // L'instant réel de l'arrêt : sous retard, seul ce qui est dit après
@@ -1498,6 +1499,25 @@ impl<R: Runtime> Chef<R> {
         let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::Annulable(arret));
         tracing::info!("réunion terminée, annulable");
         kobi_i18n::tr("coque.chef.reunionTerminee", &[])
+    }
+
+    /// Une action proposée par les notes en continu (KOB-72) ne vaut que
+    /// pendant la réunion : à sa fin, sa carte est refusée (KOB-331). Un oui
+    /// tardif n'agit plus après la fin, et le tour de notes qui l'attendait
+    /// finit sans retenir le compte rendu.
+    fn refuser_cartes_des_notes(&mut self) {
+        let cartes: Vec<u64> = self.cartes_des_notes.keys().copied().collect();
+        for carte in cartes {
+            tracing::info!(carte, "fin de la réunion : carte des notes refusée");
+            self.cerveau.demander(Demande::Decision {
+                carte,
+                accepte: false,
+            });
+            self.retour(Retour::CarteFermee {
+                carte,
+                accepte: Some(false),
+            });
+        }
     }
 
     /// Fin de « Annuler » (délai écoulé, fin redemandée, quitter) : la fin est
@@ -3474,6 +3494,36 @@ mod tests {
             c.tick();
             assert_eq!(c.activite(), Some("calme"));
             assert!(c.cartes.is_empty() && c.cartes_ouvertes.is_empty());
+        });
+    }
+
+    /// KOB-331 : à la fin de la réunion, une carte proposée par les notes et
+    /// encore ouverte est refusée ; une carte de la conversation, non.
+    #[test]
+    fn fin_de_reunion_refuse_la_carte_des_notes() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            let carte = |tour, carte| {
+                Message::Cerveau(Retour::Carte {
+                    tour,
+                    carte,
+                    outil: "mcp__linear__save_issue".into(),
+                    entree: serde_json::json!({"title": "Envoyer le devis"}),
+                })
+            };
+            c.recevoir(carte(0, 21));
+            c.recevoir(carte(5, 22));
+            c.commande(Intention::TerminerReunion);
+            assert!(c.cartes_des_notes.is_empty());
+            assert!(
+                !c.cartes.contains_key(&21),
+                "carte des notes encore ouverte"
+            );
+            assert!(
+                c.cartes.contains_key(&22),
+                "carte de la conversation fermée"
+            );
         });
     }
 
