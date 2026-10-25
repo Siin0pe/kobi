@@ -77,17 +77,22 @@ impl Ecrivain {
 
     /// Crée les fichiers de la réunion.
     pub fn ouvrir_reunion(&self, stockage: Stockage, debut_ms: u64) {
-        self.envoyer(move |d| match stockage.nouvelle_reunion(debut_ms, None) {
-            Ok(r) => {
-                let dossier = r.dossier().to_path_buf();
-                d.terminee = None;
-                d.reunion = Some(r);
-                d.compter(Nouvelle::ReunionOuverte(dossier));
+        self.envoyer(move |d| {
+            // La réunion terminée ne reçoit plus rien, même si la nouvelle ne
+            // s'ouvre pas : sa transcription irait sinon dans l'ancienne
+            // (KOB-288).
+            d.terminee = None;
+            match stockage.nouvelle_reunion(debut_ms, None) {
+                Ok(r) => {
+                    let dossier = r.dossier().to_path_buf();
+                    d.reunion = Some(r);
+                    d.compter(Nouvelle::ReunionOuverte(dossier));
+                }
+                Err(e) => d.compter(Nouvelle::Erreur(kobi_i18n::tr(
+                    "coque.ecrivain.dossierImpossible",
+                    &[("erreur", &e.to_string())],
+                ))),
             }
-            Err(e) => d.compter(Nouvelle::Erreur(kobi_i18n::tr(
-                "coque.ecrivain.dossierImpossible",
-                &[("erreur", &e.to_string())],
-            ))),
         });
     }
 
@@ -253,6 +258,38 @@ mod tests {
             .unwrap();
         assert_eq!(lue.resume.fin_ms, Some(2_000));
         assert_eq!(lue.notes.trim(), "- budget");
+    }
+
+    /// KOB-288 : la réunion suivante ne s'ouvre pas (dossier de stockage
+    /// inaccessible) ; ses segments ne vont pas dans la transcription de la
+    /// précédente.
+    #[test]
+    fn reunion_suivante_impossible_rien_dans_la_precedente() {
+        let dir = tempfile::tempdir().unwrap();
+        let stockage = Stockage::new(dir.path());
+        let comptes = Arc::new(Mutex::new(Vec::new()));
+        let c = comptes.clone();
+        let e = Ecrivain::lancer(move |compte| c.lock().unwrap().push(compte));
+        e.ouvrir_reunion(stockage.clone(), 1_000);
+        e.segment(segment(0.0, "réunion A"));
+        e.terminer_reunion("## Résumé".into(), String::new(), 2_000);
+        // Un fichier à la place du dossier de stockage : rien ne s'y crée.
+        let fichier = dir.path().join("pas-un-dossier");
+        std::fs::write(&fichier, b"").unwrap();
+        e.ouvrir_reunion(Stockage::new(&fichier), 3_000);
+        e.segment(segment(1.0, "réunion B"));
+        e.attendre();
+        let comptes = comptes.lock().unwrap();
+        let Nouvelle::ReunionOuverte(dossier) = &comptes[0] else {
+            panic!("{comptes:?}");
+        };
+        assert!(
+            matches!(comptes.last(), Some(Nouvelle::Erreur(_))),
+            "{comptes:?}"
+        );
+        let transcript = std::fs::read_to_string(dossier.join("transcript.jsonl")).unwrap();
+        assert!(transcript.contains("réunion A"), "{transcript}");
+        assert!(!transcript.contains("réunion B"), "{transcript}");
     }
 
     #[test]
