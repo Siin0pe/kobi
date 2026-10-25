@@ -539,6 +539,12 @@ fn prochaines_commandes(
     Some(commandes)
 }
 
+/// Le raccourci tombe-t-il pendant la pause de la réunion, où le micro est
+/// fermé exprès (KOB-293) ? Alors pas d'erreur de micro (KOB-304).
+fn raccourci_sans_micro(session: &str) -> bool {
+    session == "pause"
+}
+
 /// L'écoute de Kobi sera-t-elle coupée une fois `commandes` appliquées ?
 /// Le raccourci la rouvre, comme la fin de la coupure (KOB-295).
 fn ecoute_en_pause_apres(en_pause: bool, commandes: &[Commande]) -> bool {
@@ -1244,6 +1250,13 @@ impl<R: Runtime> Fil<R> {
                     self.en_pause = false;
                     tracing::info!(pause = false, "écoute continue : reprise par le raccourci");
                     crate::menu::ecoute_reprise(&self.app);
+                }
+                // Réunion en pause : le micro y est fermé exprès, rien n'est
+                // en panne. Pas d'erreur « micro indisponible » (KOB-304).
+                if raccourci_sans_micro(etat(&self.app).etat) {
+                    tracing::info!("raccourci pendant la pause de la réunion : micro fermé");
+                    self.note("raccourci pendant la pause de la réunion : micro fermé");
+                    return;
                 }
                 if self.stt.is_err() {
                     self.stt = charger_stt();
@@ -2384,6 +2397,17 @@ mod tests {
         );
         envoi.join().unwrap();
         assert!(prochaines_commandes(&mut differees, &rx, Duration::from_millis(50)).is_none());
+    }
+
+    /// KOB-304 : seul l'état « pause » de la réunion évite l'erreur de micro
+    /// au raccourci ; partout ailleurs, un micro qui ne s'ouvre pas reste
+    /// signalé.
+    #[test]
+    fn raccourci_pendant_la_pause_sans_erreur_de_micro() {
+        assert!(raccourci_sans_micro("pause"));
+        for session in ["veille", "assistant", "reunion", "fin"] {
+            assert!(!raccourci_sans_micro(session), "{session}");
+        }
     }
 
     /// KOB-295 : écoute coupée pendant une réunion en cours, puis rouverte
