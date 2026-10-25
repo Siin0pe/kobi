@@ -84,9 +84,12 @@ impl Lecteur {
             .collect();
         let mut garde: Vec<PathBuf> = Vec::new();
         for d in &resolus {
+            // Écarté seulement si le parcours d'un autre dossier déclaré y
+            // passe : `/proj/target`, déclaré avec `/proj`, reste un départ
+            // à part, puisque le parcours de `/proj` saute `target` (KOB-357).
             let dedans = resolus
                 .iter()
-                .any(|autre| autre != d && d.starts_with(autre));
+                .any(|autre| autre != d && atteint_par_le_parcours(autre, d));
             if !dedans && !garde.contains(d) {
                 garde.push(d.clone());
             }
@@ -554,6 +557,16 @@ fn ligne_bornee(ligne: &str) -> std::borrow::Cow<'_, str> {
         fin -= 1;
     }
     format!("{} … (ligne coupée)", &ligne[..fin]).into()
+}
+
+/// `dossier` est sous `depart` et le parcours de `depart` y arrive : aucun
+/// dossier entre les deux (ni `dossier` lui-même) n'est ignoré.
+fn atteint_par_le_parcours(depart: &Path, dossier: &Path) -> bool {
+    dossier.strip_prefix(depart).is_ok_and(|reste| {
+        !reste
+            .components()
+            .any(|c| DOSSIERS_IGNORES.contains(&c.as_os_str().to_string_lossy().as_ref()))
+    })
 }
 
 /// État d'un parcours borné (`Grep`, `Glob`).

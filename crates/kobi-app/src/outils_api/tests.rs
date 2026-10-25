@@ -431,6 +431,50 @@ fn depart_nomme_comme_un_dossier_ignore_parcouru() {
     assert!(!r.contains("genere.rs"), "{r}");
 }
 
+/// KOB-357 : `/proj` et `/proj/target` déclarés tous les deux : sans
+/// `path`, Grep et Glob parcourent aussi `target`, une seule fois. Un
+/// dossier déclaré sous un dossier non ignoré reste absorbé.
+#[test]
+fn dossier_declare_sous_un_nom_ignore_parcouru() {
+    let dir = codebase();
+    let racine = dir.path().to_path_buf();
+    let target = racine.join("target");
+    let l = Lecteur::new(&[racine.clone(), target.clone(), racine.join("src")]);
+    assert_eq!(
+        l.dossiers,
+        vec![
+            racine.canonicalize().unwrap(),
+            target.canonicalize().unwrap()
+        ]
+    );
+    let r = l.chercher(&json!({ "pattern": "TODO" })).unwrap();
+    assert_eq!(r.matches("genere.rs").count(), 1, "{r}");
+    assert!(r.contains("README.md"), "{r}");
+    let r = l.lister(&json!({ "pattern": "**/*.rs" })).unwrap();
+    assert_eq!(r.matches("genere.rs").count(), 1, "{r}");
+    assert_eq!(r.matches("main.rs").count(), 1, "{r}");
+    // Sous `target` déclaré, un dossier non ignoré est absorbé, un
+    // `node_modules` déclaré reste à part.
+    let debug = target.join("debug");
+    let modules = target.join("node_modules");
+    fs::create_dir_all(&modules).unwrap();
+    let l = Lecteur::new(&[target.clone(), debug.clone(), modules.clone()]);
+    assert_eq!(
+        l.dossiers,
+        vec![
+            target.canonicalize().unwrap(),
+            modules.canonicalize().unwrap()
+        ]
+    );
+    // Chaque composant compte, pas seulement le nom final ni le premier :
+    // `target/debug` et `src/node_modules` ne sont pas atteints depuis la
+    // racine.
+    let profond = racine.join("src/node_modules");
+    fs::create_dir_all(&profond).unwrap();
+    let l = Lecteur::new(&[racine.clone(), debug.clone(), profond.clone()]);
+    assert_eq!(l.dossiers.len(), 3, "{:?}", l.dossiers);
+}
+
 #[test]
 fn glob_liste_les_chemins() {
     let dir = codebase();
