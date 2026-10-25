@@ -72,7 +72,7 @@ pub const CLES: &[(&str, Application, &str)] = &[
     (
         "stt.engine",
         AuRedemarrage,
-        "Moteur de transcription (auto : le gagnant du benchmark).",
+        "Moteur de transcription : auto (le gagnant du benchmark) ou nemotron.",
     ),
     (
         "notes.mode",
@@ -330,6 +330,7 @@ pub fn modifier(config: &Config, cle: &str, valeur: Value) -> Result<Modificatio
                 )));
             }
         }
+        "stt.engine" => nouvelle.stt.verifier().map_err(refus)?,
         "stockage.dossier" => {
             if let Some(d) = nouvelle
                 .stockage
@@ -410,6 +411,18 @@ mod tests {
         assert_eq!(m.application, AChaud);
         assert!(modifier(&c, "voice.verbosite", json!("bavarde")).is_err());
 
+        // KOB-45 : moteur de transcription connu, ou refusé.
+        let m = modifier(&c, "stt.engine", json!("nemotron")).unwrap();
+        assert_eq!(m.config.stt.engine, "nemotron");
+        match modifier(&c, "stt.engine", json!("whisper")) {
+            Err(ErreurCle::Refusee { raison, .. }) => {
+                assert!(
+                    raison.contains("whisper") && raison.contains("auto, nemotron"),
+                    "{raison}"
+                )
+            }
+            autre => panic!("{autre:?}"),
+        }
         let m = modifier(&c, "notes.mode", json!("end")).unwrap();
         assert_eq!(m.config.notes.mode, NotesMode::End);
         let m = modifier(&c, "meetings.retention_days", json!(90)).unwrap();
