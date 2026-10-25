@@ -454,3 +454,147 @@ async fn lecture_seule_sans_carte() {
     assert!(ecrites_u.lock().unwrap().is_empty() && ecrites_k.lock().unwrap().is_empty());
     o.fermer().await;
 }
+
+// ----- Noms d'outils hors du format de l'API (KOB-317) -----
+
+fn conforme(nom: &str) -> bool {
+    !nom.is_empty()
+        && nom.len() <= NOM_MAX
+        && nom
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+#[test]
+fn noms_normalises_pour_l_api() {
+    let mut pris = BTreeMap::new();
+    let mut ajouter = |serveur: &str, outil: &str| {
+        let nom = nom_pour_l_api(serveur, outil, &pris);
+        assert!(conforme(&nom), "{nom}");
+        pris.insert(nom.clone(), (serveur.to_owned(), outil.to_owned()));
+        nom
+    };
+    // Déjà conforme : inchangé, comme chez Claude Code.
+    assert_eq!(ajouter("linear", "list_issues"), "mcp__linear__list_issues");
+    assert_eq!(ajouter("fs", "files.read"), "mcp__fs__files_read");
+    // Doublon après normalisation : numéroté.
+    assert_eq!(ajouter("fs", "files_read"), "mcp__fs__files_read_2");
+    assert_eq!(ajouter("fs", "files read"), "mcp__fs__files_read_3");
+    // Trop long : coupé, avec une empreinte stable du vrai nom.
+    let long = "un_outil_au_nom_vraiment_beaucoup_trop_long_pour_l_api_messages_d_anthropic";
+    let a = ajouter("serveur", long);
+    assert_eq!(a.len(), NOM_MAX);
+    assert_eq!(a, nom_pour_l_api("serveur", long, &BTreeMap::new()));
+    let b = ajouter("serveur", &format!("{long}_bis"));
+    assert_ne!(a, b);
+    // Caractères non ASCII.
+    assert_eq!(ajouter("fs", "lire/fichier.é"), "mcp__fs__lire_fichier__");
+}
+
+#[derive(Clone)]
+struct Pointe {
+    lus: Arc<Mutex<Vec<String>>>,
+    #[allow(dead_code, reason = "lu par la macro tool_handler")]
+    tool_router: ToolRouter<Self>,
+}
+
+#[tool_router]
+impl Pointe {
+    #[tool(
+        name = "files.read",
+        description = "Lit un fichier.",
+        annotations(read_only_hint = true)
+    )]
+    fn files_read(&self) -> String {
+        self.lus.lock().unwrap().push("files.read".into());
+        "contenu".into()
+    }
+
+    #[tool(
+        name = "un_outil_au_nom_vraiment_beaucoup_trop_long_pour_l_api_messages_d_anthropic",
+        description = "Outil au nom trop long.",
+        annotations(read_only_hint = true)
+    )]
+    fn long(&self) -> String {
+        self.lus.lock().unwrap().push("long".into());
+        "long".into()
+    }
+}
+
+#[tool_handler]
+impl ServerHandler for Pointe {
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+    }
+}
+
+/// KOB-317 : un outil `files.read` (ou au nom trop long) est proposé sous
+/// un nom valide pour l'API, et appelé sous son vrai nom ; les règles et
+/// l'action portent sur le vrai nom.
+#[tokio::test]
+async fn outil_au_nom_hors_format() {
+    use kobi_perms::mcp::{Politique, Serveur};
+    let (cote_client, cote_serveur) = tokio::io::duplex(64 * 1024);
+    let lus = Arc::new(Mutex::new(Vec::new()));
+    let pointe = Pointe {
+        lus: lus.clone(),
+        tool_router: Pointe::tool_router(),
+    };
+    tokio::spawn(async move {
+        let serveur = pointe.serve(tokio::io::split(cote_serveur)).await.unwrap();
+        let _ = serveur.waiting().await;
+    });
+    let client = ().serve(tokio::io::split(cote_client)).await.unwrap();
+    let outils: Vec<Value> = client
+        .list_all_tools()
+        .await
+        .unwrap()
+        .iter()
+        .map(|o| serde_json::to_value(o).unwrap())
+        .collect();
+    let mut cat = Catalogue::default();
+    cat.serveurs.insert(
+        "fs".into(),
+        Serveur {
+            politique: Politique::Demander,
+            outils: [("files.read".to_owned(), Nature::Lecture)].into(),
+        },
+    );
+    let o = OutillageKobi::new(
+        &[],
+        vec![("fs".into(), client, outils)],
+        cat,
+        Acces::Complet,
+    );
+    let mcp: Vec<String> = noms(&o)
+        .into_iter()
+        .filter(|n| n.starts_with("mcp__"))
+        .collect();
+    assert_eq!(mcp.len(), 2, "{mcp:?}");
+    assert!(mcp.iter().all(|n| conforme(n)), "{mcp:?}");
+    assert!(mcp.contains(&"mcp__fs__files_read".to_owned()));
+    let long = mcp
+        .iter()
+        .find(|n| *n != "mcp__fs__files_read")
+        .unwrap()
+        .clone();
+
+    // Règles sur le vrai nom : `files.read` est une lecture connue, l'outil
+    // au nom long est hors catalogue.
+    assert_eq!(o.autorisation("mcp__fs__files_read"), Autorisation::Libre);
+    assert_eq!(o.autorisation(&long), Autorisation::Carte);
+    // Le nom brut n'a jamais été proposé.
+    assert_eq!(o.autorisation("mcp__fs__files.read"), Autorisation::Refus);
+    assert!(matches!(
+        o.action("mcp__fs__files_read", &json!({})),
+        kobi_brain::Action::Mcp { serveur, outil, .. } if serveur == "fs" && outil == "files.read"
+    ));
+    assert_eq!(
+        o.appeler("mcp__fs__files_read", &json!({})).await.unwrap(),
+        "contenu"
+    );
+    assert_eq!(o.appeler(&long, &json!({})).await.unwrap(), "long");
+    assert!(o.appeler("mcp__fs__files.read", &json!({})).await.is_err());
+    assert_eq!(*lus.lock().unwrap(), ["files.read", "long"]);
+    o.fermer().await;
+}
