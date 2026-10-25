@@ -314,6 +314,12 @@ export class Stage {
     this.say(options.undoable ? t('kobi.scene.termineeAnnulable') : t('kobi.scene.terminee'));
   }
 
+  /** Raccourci sans effet pendant la pause de la réunion (KOB-310). */
+  rappelPause(): void {
+    this.rec.rappelPause();
+    if (this.meeting?.paused) this.announce(t('kobi.meeting.pauseMicroCoupeAria'));
+  }
+
   /** La fin ne s'annule plus : « Annuler » disparaît. */
   closeUndo(): void {
     this.rec.closeUndo();

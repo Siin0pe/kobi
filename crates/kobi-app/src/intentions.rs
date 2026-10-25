@@ -221,6 +221,18 @@ const QUESTIONS: &[&str] = &[
     " why ",
 ];
 
+/// Réponse à une carte MCP (KOB-336) : seulement les mots de décision nets
+/// (« oui », « non », « valide », « refuse »). « Stop » ou « annule » font
+/// taire Kobi ou annulent la fin, pas la carte ; « ok » ou « d'accord » se
+/// disent trop souvent à autre chose pour valider une écriture.
+pub fn reponse_carte_mcp(texte: &str) -> Option<bool> {
+    const NETS: &[&str] = &["oui", "non", "valide", "refuse", "yes", "no"];
+    let reponse = reponse_validation(texte)?;
+    let n = normaliser(texte);
+    let premier = n.split_whitespace().find(|m| *m != "kobi")?;
+    NETS.contains(&premier).then_some(reponse)
+}
+
 /// Réponse à une carte de validation, tant qu'elle attend (KOB-156) :
 /// `Some(true)` pour « oui », `Some(false)` pour « non ». La phrase entière
 /// doit être la réponse : « oui mais change le titre » n'en est pas une.
@@ -726,6 +738,25 @@ mod tests {
             "il reste des croissants si vous voulez, servez-vous avant de partir",
         ] {
             assert!(!annule_la_fin(texte), "{texte}");
+        }
+    }
+
+    /// KOB-336 : sur une carte MCP, seuls les mots de décision nets comptent.
+    #[test]
+    fn reponse_nette_pour_une_carte_mcp() {
+        for (texte, attendu) in [
+            ("Oui", Some(true)),
+            ("Kobi, oui vas-y.", Some(true)),
+            ("valide", Some(true)),
+            ("Non merci", Some(false)),
+            ("refuse", Some(false)),
+            ("ok", None),
+            ("d'accord", None),
+            ("stop", None),
+            ("annule", None),
+            ("oui mais change le titre", None),
+        ] {
+            assert_eq!(reponse_carte_mcp(texte), attendu, "{texte}");
         }
     }
 }
