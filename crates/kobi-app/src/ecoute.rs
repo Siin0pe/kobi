@@ -517,6 +517,28 @@ fn recevoir(
     }
 }
 
+/// Commandes à appliquer, dans l'ordre : celles mises de côté pendant une
+/// vidange, puis celles arrivées depuis. On n'attend `delai` une commande
+/// neuve que s'il n'y en avait aucune de côté : une écoute rouverte pendant
+/// la vidange rouvre le micro aussitôt (KOB-303). `None` : le canal est
+/// fermé.
+fn prochaines_commandes(
+    differees: &mut Vec<Commande>,
+    rx: &Receiver<Commande>,
+    delai: Duration,
+) -> Option<Vec<Commande>> {
+    let mut commandes = std::mem::take(differees);
+    if commandes.is_empty() {
+        match rx.recv_timeout(delai) {
+            Ok(c) => commandes.push(c),
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => return None,
+        }
+    }
+    commandes.extend(rx.try_iter());
+    Some(commandes)
+}
+
 /// L'écoute de Kobi sera-t-elle coupée une fois `commandes` appliquées ?
 /// Le raccourci la rouvre, comme la fin de la coupure (KOB-295).
 fn ecoute_en_pause_apres(en_pause: bool, commandes: &[Commande]) -> bool {
@@ -902,10 +924,15 @@ impl<R: Runtime> Fil<R> {
             // En pause (Kobi ou la réunion), ni micro ni transcription.
             if self.en_pause || session == "pause" || self.stt.is_err() {
                 self.fermer_micro(&rx);
-                match rx.recv_timeout(Duration::from_millis(500)) {
-                    Ok(commande) => self.commande(commande),
-                    Err(RecvTimeoutError::Timeout) => {}
-                    Err(RecvTimeoutError::Disconnected) => return,
+                // Mises de côté pendant la vidange, puis les nouvelles, dans
+                // l'ordre ; sans attendre s'il y en avait (KOB-303).
+                let Some(commandes) =
+                    prochaines_commandes(&mut self.differees, &rx, Duration::from_millis(500))
+                else {
+                    return;
+                };
+                for commande in commandes {
+                    self.commande(commande);
                 }
                 continue;
             }
@@ -2325,6 +2352,34 @@ mod tests {
             calcul.as_secs_f64(),
             calcul.as_secs_f64() / audio
         );
+    }
+
+    /// KOB-303 : les commandes mises de côté pendant la vidange passent avant
+    /// les plus récentes, et sans attente ; sans elles, on attend la
+    /// suivante.
+    #[test]
+    fn commandes_differees_d_abord_et_sans_attendre() {
+        use Commande::*;
+        let (tx, rx) = mpsc::channel();
+        let arret = Instant::now();
+        let mut differees = vec![Annulable(arret), Pause(false)];
+        tx.send(FinAnnulation).unwrap();
+        let debut = Instant::now();
+        let commandes = prochaines_commandes(&mut differees, &rx, Duration::from_secs(5)).unwrap();
+        assert!(debut.elapsed() < Duration::from_secs(1), "sans attendre");
+        assert_eq!(commandes, [Annulable(arret), Pause(false), FinAnnulation]);
+        assert!(differees.is_empty());
+        // Rien de côté : la suivante est attendue.
+        let envoi = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            tx.send(Raccourci).unwrap();
+        });
+        assert_eq!(
+            prochaines_commandes(&mut differees, &rx, Duration::from_secs(5)).unwrap(),
+            [Raccourci]
+        );
+        envoi.join().unwrap();
+        assert!(prochaines_commandes(&mut differees, &rx, Duration::from_millis(50)).is_none());
     }
 
     /// KOB-295 : écoute coupée pendant une réunion en cours, puis rouverte
