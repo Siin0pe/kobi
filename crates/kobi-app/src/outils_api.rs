@@ -40,22 +40,154 @@ const RESULTATS_MAX: usize = 300;
 /// Dossiers jamais parcourus.
 const DOSSIERS_IGNORES: &[&str] = &[".git", "node_modules", "target", ".venv", "__pycache__"];
 
+/// Bornes d'un parcours (`Grep`, `Glob`), KOB-335 : un arbre immense ne
+/// retient ni la mémoire ni le tour.
+#[derive(Debug, Clone, Copy)]
+struct Bornes {
+    /// Fichiers lus au plus par `Grep`.
+    fichiers: usize,
+    /// Entrées parcourues au plus par `Glob`.
+    entrees: usize,
+    /// Durée maximale d'un parcours.
+    duree: std::time::Duration,
+}
+
+impl Default for Bornes {
+    fn default() -> Self {
+        Self {
+            fichiers: 20_000,
+            entrees: 200_000,
+            duree: std::time::Duration::from_secs(10),
+        }
+    }
+}
+
 /// Lecture seule dans des dossiers permis.
 #[derive(Debug, Clone)]
 pub struct Lecteur {
     /// Dossiers permis, résolus.
     dossiers: Vec<PathBuf>,
+    /// Base des chemins relatifs : le premier dossier déclaré, même s'il
+    /// est contenu dans un autre.
+    base: Option<PathBuf>,
+    bornes: Bornes,
 }
 
 impl Lecteur {
-    /// Les dossiers absents sont ignorés.
+    /// Les dossiers absents sont ignorés, et un dossier contenu dans un
+    /// autre aussi : rien n'est parcouru ni compté deux fois.
     pub fn new(dossiers: &[PathBuf]) -> Self {
-        Self {
-            dossiers: dossiers
+        let resolus: Vec<PathBuf> = dossiers
+            .iter()
+            .filter_map(|d| d.canonicalize().ok())
+            .filter(|d| d.is_dir())
+            .collect();
+        let mut garde: Vec<PathBuf> = Vec::new();
+        for d in &resolus {
+            let dedans = resolus
                 .iter()
-                .filter_map(|d| d.canonicalize().ok())
-                .filter(|d| d.is_dir())
-                .collect(),
+                .any(|autre| autre != d && d.starts_with(autre));
+            if !dedans && !garde.contains(d) {
+                garde.push(d.clone());
+            }
+        }
+        Self {
+            dossiers: garde,
+            base: resolus.first().cloned(),
+            bornes: Bornes::default(),
+        }
+    }
+
+    fn dans_les_dossiers(&self, chemin: &Path) -> bool {
+        self.dossiers.iter().any(|d| chemin.starts_with(d))
+    }
+
+    fn hors(&self, chemin: &Path) -> String {
+        format!(
+            "{} est hors des dossiers permis ({})",
+            chemin.display(),
+            self.liste()
+        )
+    }
+
+    /// Ouvre un fichier déjà validé par [`Lecteur::permis`], sans laisser de
+    /// fenêtre entre la vérification et l'ouverture (KOB-335).
+    ///
+    /// Sous Linux :
+    /// * un premier descripteur `O_PATH | O_NOFOLLOW` désigne le fichier sans
+    ///   l'ouvrir : aucun effet de bord, même sur un périphérique ; un lien
+    ///   (dernier composant) n'est pas suivi et se voit refusé ;
+    /// * le type (fichier ordinaire seulement) et le vrai chemin
+    ///   (`/proc/self/fd`, dans les dossiers permis) sont vérifiés sur ce
+    ///   descripteur : un dossier remplacé par un lien après la vérification
+    ///   est refusé ;
+    /// * le fichier est ensuite ouvert par `/proc/self/fd/N`, donc le même
+    ///   inode, en `O_NONBLOCK | O_NOCTTY`.
+    ///
+    /// Ailleurs (Unix) : `O_NOFOLLOW | O_NONBLOCK | O_NOCTTY`, type vérifié
+    /// sur le descripteur, puis chemin résolu une seconde fois : plus
+    /// faible, à essayer sous macOS ; sous Windows, à essayer aussi.
+    ///
+    /// Limites connues : un lien physique vers un fichier extérieur, ou un
+    /// montage lié, posés dans un dossier permis, ne se détectent pas par le
+    /// chemin (il faut pouvoir écrire dans la codebase pour les créer).
+    fn ouvrir(&self, chemin: &Path) -> Result<(std::fs::File, u64), String> {
+        let erreur = |e: std::io::Error| format!("{} : {e}", chemin.display());
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::fd::AsRawFd;
+            use std::os::unix::fs::OpenOptionsExt;
+            let repere = std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_PATH | libc::O_NOFOLLOW)
+                .open(chemin)
+                .map_err(erreur)?;
+            let meta = repere.metadata().map_err(erreur)?;
+            if !meta.is_file() {
+                return Err(format!(
+                    "{} n'est pas un fichier ordinaire",
+                    chemin.display()
+                ));
+            }
+            let lien = format!("/proc/self/fd/{}", repere.as_raw_fd());
+            let reel = std::fs::read_link(&lien).map_err(|e| {
+                format!(
+                    "{} : vérification impossible (/proc indisponible : {e})",
+                    chemin.display()
+                )
+            })?;
+            if !self.dans_les_dossiers(&reel) {
+                return Err(self.hors(chemin));
+            }
+            let fichier = std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY)
+                .open(&lien)
+                .map_err(erreur)?;
+            Ok((fichier, meta.len()))
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let mut options = std::fs::OpenOptions::new();
+            options.read(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY);
+            }
+            let fichier = options.open(chemin).map_err(erreur)?;
+            let meta = fichier.metadata().map_err(erreur)?;
+            if !meta.is_file() {
+                return Err(format!(
+                    "{} n'est pas un fichier ordinaire",
+                    chemin.display()
+                ));
+            }
+            let reel = chemin.canonicalize().map_err(erreur)?;
+            if !self.dans_les_dossiers(&reel) {
+                return Err(self.hors(chemin));
+            }
+            Ok((fichier, meta.len()))
         }
     }
 
@@ -106,12 +238,12 @@ impl Lecteur {
     /// Chemin résolu, s'il est dans un dossier permis.
     fn permis(&self, chemin: &str) -> Result<PathBuf, String> {
         let brut = Path::new(chemin);
-        let brut = match (brut.is_absolute(), self.dossiers.first()) {
+        let brut = match (brut.is_absolute(), self.base.as_ref()) {
             (false, Some(base)) => base.join(brut),
             _ => brut.to_path_buf(),
         };
         let resolu = brut.canonicalize().map_err(|e| format!("{chemin} : {e}"))?;
-        if self.dossiers.iter().any(|d| resolu.starts_with(d)) {
+        if self.dans_les_dossiers(&resolu) {
             Ok(resolu)
         } else {
             Err(format!(
@@ -138,19 +270,45 @@ impl Lecteur {
         }
     }
 
-    /// Fichiers sous `depart`, sans les dossiers ignorés ni les liens qui
-    /// sortent des dossiers permis.
-    fn fichiers(&self, depart: &Path) -> impl Iterator<Item = PathBuf> + '_ {
-        walkdir::WalkDir::new(depart)
+    /// Parcourt `depart` (sans les dossiers ignorés, sans suivre les liens)
+    /// et appelle `fichier` pour chaque fichier ordinaire, jusqu'à ce qu'il
+    /// rende `false`. Chaque entrée parcourue compte, dossiers et liens
+    /// compris, et la durée est vérifiée à chaque entrée (KOB-335) : un arbre
+    /// immense ou très profond arrête le parcours, avec `parcours.arrete`.
+    fn parcourir(
+        &self,
+        depart: &Path,
+        parcours: &mut Parcours,
+        mut fichier: impl FnMut(PathBuf) -> bool,
+    ) {
+        let entrees = walkdir::WalkDir::new(depart)
             .follow_links(false)
             .into_iter()
             .filter_entry(|e| {
                 !(e.file_type().is_dir()
                     && DOSSIERS_IGNORES.contains(&e.file_name().to_string_lossy().as_ref()))
-            })
-            .filter_map(Result::ok)
-            .filter(|e| e.file_type().is_file())
-            .map(|e| e.into_path())
+            });
+        for entree in entrees {
+            parcours.vues += 1;
+            if parcours.vues > self.bornes.entrees || parcours.debut.elapsed() >= self.bornes.duree
+            {
+                parcours.arrete = true;
+                return;
+            }
+            let Ok(entree) = entree else { continue };
+            if entree.file_type().is_file() && !fichier(entree.into_path()) {
+                return;
+            }
+        }
+    }
+
+    /// Message d'un parcours arrêté par ses bornes.
+    fn arret(&self, parcours: &Parcours) -> String {
+        format!(
+            "… parcours arrêté après {} entrées ({} s au plus) : précise le dossier, le motif ou le filtre",
+            parcours.vues - 1,
+            self.bornes.duree.as_secs()
+        )
     }
 
     /// Lit `limit` lignes à partir de `offset`, sans jamais charger le
@@ -161,21 +319,10 @@ impl Lecteur {
         use std::io::{BufRead, BufReader, Read};
         let chemin = self.permis(texte(entree, "file_path")?)?;
         let erreur = |e: std::io::Error| format!("{} : {e}", chemin.display());
-        // Ni dossier, ni tube nommé (l'ouvrir attendrait sans fin), ni
-        // périphérique : un fichier ordinaire seulement.
-        let taille = std::fs::metadata(&chemin).map_err(erreur)?;
-        if !taille.is_file() {
-            return Err(format!(
-                "{} n'est pas un fichier ordinaire",
-                chemin.display()
-            ));
-        }
-        let taille = taille.len();
-        let mut lecteur = BufReader::new(
-            std::fs::File::open(&chemin)
-                .map_err(erreur)?
-                .take(LECTURE_MAX),
-        );
+        // Ni dossier, ni tube nommé, ni périphérique, ni chemin changé depuis
+        // la vérification (KOB-335).
+        let (fichier, taille) = self.ouvrir(&chemin)?;
+        let mut lecteur = BufReader::new(fichier.take(LECTURE_MAX));
         if lecteur.fill_buf().map_err(erreur)?.contains(&0) {
             return Err(format!("{} n'est pas un fichier texte", chemin.display()));
         }
@@ -216,36 +363,63 @@ impl Lecteur {
     }
 
     pub fn chercher(&self, entree: &Value) -> Result<String, String> {
+        use std::io::Read;
         let motif = regex::RegexBuilder::new(texte(entree, "pattern")?)
             .case_insensitive(entree["-i"].as_bool().unwrap_or(false))
             .build()
             .map_err(|e| format!("expression invalide : {e}"))?;
         let filtre = filtre(entree["glob"].as_str())?;
         let mut trouve = Vec::new();
-        'tout: for depart in self.departs(entree)? {
-            for fichier in self.fichiers(&depart) {
+        let mut parcours = Parcours::new();
+        let mut lus = 0;
+        let mut trop_de_fichiers = false;
+        let mut plein = false;
+        for depart in self.departs(entree)? {
+            self.parcourir(&depart, &mut parcours, |fichier| {
                 let nom = fichier.file_name().unwrap_or_default().to_string_lossy();
-                if filtre.as_ref().is_some_and(|f| !f.matches(&nom))
-                    || fichier.metadata().map_or(true, |m| m.len() > FICHIER_MAX)
-                {
-                    continue;
+                if filtre.as_ref().is_some_and(|f| !f.matches(&nom)) {
+                    return true;
                 }
-                let Ok(octets) = std::fs::read(&fichier) else {
-                    continue;
+                if lus >= self.bornes.fichiers {
+                    trop_de_fichiers = true;
+                    return false;
+                }
+                // Même ouverture que Read : rien hors des dossiers, aucun tube.
+                let Ok((ouvert, taille)) = self.ouvrir(&fichier) else {
+                    return true;
                 };
-                if octets.contains(&0) {
-                    continue;
+                if taille > FICHIER_MAX {
+                    return true;
+                }
+                lus += 1;
+                let mut octets = Vec::new();
+                if ouvert.take(FICHIER_MAX).read_to_end(&mut octets).is_err() || octets.contains(&0)
+                {
+                    return true;
                 }
                 for (i, ligne) in String::from_utf8_lossy(&octets).lines().enumerate() {
                     if motif.is_match(ligne) {
                         trouve.push(format!("{}:{}:{ligne}", fichier.display(), i + 1));
                         if trouve.len() >= RESULTATS_MAX {
-                            trouve.push(format!("… arrêté à {RESULTATS_MAX} lignes"));
-                            break 'tout;
+                            plein = true;
+                            return false;
                         }
                     }
                 }
+                true
+            });
+            if plein || trop_de_fichiers || parcours.arrete {
+                break;
             }
+        }
+        if plein {
+            trouve.push(format!("… arrêté à {RESULTATS_MAX} lignes"));
+        } else if trop_de_fichiers {
+            trouve.push(format!(
+                "… recherche arrêtée après {lus} fichiers lus : précise le dossier ou le filtre"
+            ));
+        } else if parcours.arrete {
+            trouve.push(self.arret(&parcours));
         }
         Ok(if trouve.is_empty() {
             "Aucun résultat.".into()
@@ -261,26 +435,67 @@ impl Lecteur {
             require_literal_separator: true,
             ..Default::default()
         };
-        let mut trouve = Vec::new();
+        // Seuls les RESULTATS_MAX premiers chemins (dans l'ordre) restent en
+        // mémoire (KOB-335).
+        let mut gardes = std::collections::BTreeSet::new();
+        let mut total = 0usize;
+        let mut parcours = Parcours::new();
         for depart in self.departs(entree)? {
-            for fichier in self.fichiers(&depart) {
+            self.parcourir(&depart, &mut parcours, |fichier| {
                 let relatif = fichier.strip_prefix(&depart).unwrap_or(&fichier);
-                if motif.matches_path_with(relatif, options) {
-                    trouve.push(fichier.display().to_string());
+                if !motif.matches_path_with(relatif, options) {
+                    return true;
                 }
+                // Le parcours peut avoir suivi un dossier remplacé par un lien
+                // pendant la descente : le vrai dossier du nom doit être
+                // dans les dossiers permis.
+                let dans = fichier
+                    .parent()
+                    .and_then(|d| d.canonicalize().ok())
+                    .is_some_and(|d| self.dans_les_dossiers(&d));
+                if dans {
+                    total += 1;
+                    gardes.insert(fichier.display().to_string());
+                    if gardes.len() > RESULTATS_MAX {
+                        gardes.pop_last();
+                    }
+                }
+                true
+            });
+            if parcours.arrete {
+                break;
             }
         }
-        trouve.sort();
-        let total = trouve.len();
-        trouve.truncate(RESULTATS_MAX);
+        let mut trouve: Vec<String> = gardes.into_iter().collect();
         if total > RESULTATS_MAX {
             trouve.push(format!("… {total} fichiers, {RESULTATS_MAX} montrés"));
+        }
+        if parcours.arrete {
+            trouve.push(self.arret(&parcours));
         }
         Ok(if trouve.is_empty() {
             "Aucun fichier.".into()
         } else {
             couper(trouve.join("\n"))
         })
+    }
+}
+
+/// État d'un parcours borné (`Grep`, `Glob`).
+struct Parcours {
+    debut: std::time::Instant,
+    /// Entrées parcourues, tous types confondus.
+    vues: usize,
+    arrete: bool,
+}
+
+impl Parcours {
+    fn new() -> Self {
+        Self {
+            debut: std::time::Instant::now(),
+            vues: 0,
+            arrete: false,
+        }
     }
 }
 

@@ -802,3 +802,152 @@ fn resultats_bornes() {
     let r = l.lister(&json!({ "pattern": "f*.txt" })).unwrap();
     assert_eq!(r.lines().count(), RESULTATS_MAX + 1);
 }
+
+// ----- Course entre vérification et ouverture, bornes (KOB-335) -----
+
+/// Un dossier intermédiaire remplacé par un lien vers l'extérieur entre la
+/// vérification du chemin et son ouverture : refusé (vrai chemin du
+/// descripteur, `/proc/self/fd`).
+#[cfg(target_os = "linux")]
+#[test]
+fn course_dossier_remplace_par_un_lien() {
+    let (dedans, dehors, _) = deux_dossiers();
+    fs::create_dir(dedans.path().join("sous")).unwrap();
+    fs::write(dedans.path().join("sous/note.txt"), "dedans").unwrap();
+    fs::write(dehors.path().join("note.txt"), "secret").unwrap();
+    let l = lecteur(&dedans);
+    let verifie = l.permis("sous/note.txt").unwrap();
+    // L'attaquant échange le dossier contre un lien.
+    fs::rename(dedans.path().join("sous"), dedans.path().join("ancien")).unwrap();
+    std::os::unix::fs::symlink(dehors.path(), dedans.path().join("sous")).unwrap();
+    let e = l.ouvrir(&verifie).unwrap_err();
+    assert!(e.contains("hors des dossiers permis"), "{e}");
+}
+
+/// Le fichier lui-même remplacé par un lien, même vers un fichier des
+/// dossiers permis : refusé (le lien n'est pas suivi, `O_NOFOLLOW`).
+#[cfg(unix)]
+#[test]
+fn course_fichier_remplace_par_un_lien() {
+    let dedans = codebase();
+    let l = lecteur(&dedans);
+    let verifie = l.permis("README.md").unwrap();
+    fs::remove_file(&verifie).unwrap();
+    std::os::unix::fs::symlink(dedans.path().join("src/main.rs"), &verifie).unwrap();
+    let e = l.ouvrir(&verifie).unwrap_err();
+    // Sous Linux, le lien est désigné sans être suivi (`O_PATH`) et refusé
+    // pour son type ; ailleurs, `O_NOFOLLOW` fait échouer l'ouverture.
+    assert!(
+        e.contains("pas un fichier ordinaire") || e.contains("symbolic links"),
+        "{e}"
+    );
+}
+
+/// Grep borné même quand le filtre écarte tout, et le parcours compte les
+/// dossiers (relecture de KOB-335).
+#[test]
+fn bornes_avant_le_filtre_et_sur_les_dossiers() {
+    let dedans = codebase();
+    for i in 0..30 {
+        fs::create_dir_all(dedans.path().join(format!("vide{i:02}/a/b"))).unwrap();
+    }
+    let mut l = lecteur(&dedans);
+    l.bornes.entrees = 20;
+    let r = l
+        .chercher(&json!({ "pattern": "x", "glob": "*.zzz" }))
+        .unwrap();
+    assert!(r.contains("parcours arrêté après 20 entrées"), "{r}");
+    let r = l.lister(&json!({ "pattern": "*.zzz" })).unwrap();
+    assert!(r.contains("parcours arrêté après 20 entrées"), "{r}");
+    // Durée : une borne nulle arrête tout de suite.
+    let mut l = lecteur(&dedans);
+    l.bornes.duree = std::time::Duration::ZERO;
+    let r = l.lister(&json!({ "pattern": "*" })).unwrap();
+    assert!(r.contains("parcours arrêté"), "{r}");
+}
+
+/// Dossiers permis imbriqués (mémoire sous une codebase) : rien n'est
+/// compté ni montré deux fois.
+#[test]
+fn dossiers_imbriques_comptes_une_fois() {
+    let dedans = codebase();
+    let l = Lecteur::new(&[dedans.path().to_path_buf(), dedans.path().join("src")]);
+    assert_eq!(l.dossiers.len(), 1);
+    // Le premier dossier déclaré reste la base des chemins relatifs, même
+    // contenu dans un autre.
+    let l2 = Lecteur::new(&[dedans.path().join("src"), dedans.path().to_path_buf()]);
+    assert!(l2
+        .lire(&json!({ "file_path": "main.rs" }))
+        .unwrap()
+        .contains("fn main"));
+    let r = l.lister(&json!({ "pattern": "**/*.rs" })).unwrap();
+    assert_eq!(r.lines().count(), 1, "{r}");
+}
+
+/// Le fichier remplacé par un tube nommé : refusé tout de suite, sans
+/// bloquer (`O_NONBLOCK`, type vérifié sur le descripteur).
+#[cfg(unix)]
+#[test]
+fn course_fichier_remplace_par_un_tube() {
+    let dedans = codebase();
+    let l = lecteur(&dedans);
+    let verifie = l.permis("README.md").unwrap();
+    fs::remove_file(&verifie).unwrap();
+    assert!(std::process::Command::new("mkfifo")
+        .arg(&verifie)
+        .status()
+        .unwrap()
+        .success());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(l.ouvrir(&verifie).map(|_| ()));
+    });
+    let r = rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("l'ouverture d'un tube a bloqué");
+    let e = r.unwrap_err();
+    assert!(e.contains("pas un fichier ordinaire"), "{e}");
+}
+
+/// Grep et Glob bornés en fichiers lus et en entrées parcourues ; Glob ne
+/// garde que les premiers chemins, dans l'ordre.
+#[test]
+fn parcours_bornes() {
+    let dedans = codebase();
+    for i in 0..40 {
+        fs::write(dedans.path().join(format!("f{i:02}.txt")), "cible\n").unwrap();
+    }
+    let mut l = lecteur(&dedans);
+    l.bornes.fichiers = 5;
+    let r = l.chercher(&json!({ "pattern": "cible" })).unwrap();
+    assert!(r.contains("recherche arrêtée après 5 fichiers"), "{r}");
+    assert!(
+        r.lines().filter(|x| x.contains(":1:cible")).count() <= 5,
+        "{r}"
+    );
+    l.bornes.entrees = 10;
+    let r = l.lister(&json!({ "pattern": "*.txt" })).unwrap();
+    assert!(r.contains("parcours arrêté après 10 entrées"), "{r}");
+    // Sans borne atteinte : les RESULTATS_MAX premiers chemins triés.
+    for i in 40..400 {
+        fs::write(dedans.path().join(format!("f{i:03}.txt")), "x").unwrap();
+    }
+    let l = lecteur(&dedans);
+    let r = l.lister(&json!({ "pattern": "f*.txt" })).unwrap();
+    let lignes: Vec<&str> = r.lines().collect();
+    assert_eq!(lignes.len(), RESULTATS_MAX + 1);
+    let mut tous: Vec<String> = fs::read_dir(dedans.path().canonicalize().unwrap())
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.file_name().unwrap().to_string_lossy().starts_with('f'))
+        .map(|p| p.display().to_string())
+        .collect();
+    tous.sort();
+    assert_eq!(&lignes[..RESULTATS_MAX], &tous[..RESULTATS_MAX]);
+    assert!(
+        lignes[RESULTATS_MAX].contains("400 fichiers"),
+        "{}",
+        lignes[RESULTATS_MAX]
+    );
+}
