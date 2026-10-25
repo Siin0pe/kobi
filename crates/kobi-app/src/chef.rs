@@ -470,7 +470,8 @@ pub struct Chef<R: Runtime> {
     /// Tours abandonnés : ce qui en revient encore est ignoré.
     interrompus: HashSet<u64>,
     /// Où va chaque échange, décidé à la question : les notes de la réunion
-    /// commencée à cet instant, ou le journal des conversations (`None`).
+    /// commencée à cet instant, ou le journal, dans une conversation
+    /// ([`Rangement`]).
     /// La réponse suit sa question, même si elle arrive après « Annuler »,
     /// la reprise, la fin ou dans une autre réunion (KOB-325, KOB-327,
     /// KOB-330), ou de la même conversation (KOB-340).
@@ -1259,10 +1260,11 @@ impl<R: Runtime> Chef<R> {
             );
             return;
         }
-        // Réponse d'une conversation déjà fermée (une réunion a démarré
-        // depuis) : elle n'en ouvre pas une autre où elle serait seule
-        // (KOB-340) ; la bulle la montre.
-        if rangement != Rangement::Journal(self.conversation_n) {
+        // Réponse d'une conversation fermée par le démarrage d'une réunion :
+        // elle n'en ouvre pas une autre où elle serait seule pendant la
+        // réunion (KOB-340) ; la bulle la montre. Hors réunion (micro coupé
+        // pendant une tâche…), elle va au journal comme avant.
+        if rangement != Rangement::Journal(self.conversation_n) && self.reunion.is_some() {
             tracing::info!(
                 tour,
                 "réponse arrivée après sa conversation : montrée, pas rangée"
@@ -4816,6 +4818,55 @@ mod tests {
                 .a_noter
                 .contains("Trois tickets."));
             assert!(c.rangement.is_empty());
+            // Sur le disque : une seule conversation, la question sans cette
+            // réponse orpheline.
+            c.ecrivain.attendre();
+            let stockage = crate::stockage::actuel(&c.app).unwrap();
+            let conversations = stockage.conversations().unwrap();
+            assert_eq!(conversations.len(), 1, "{conversations:?}");
+            let lue = stockage.lire_conversation(&conversations[0].id).unwrap();
+            let texte = format!("{lue:?}");
+            assert!(texte.contains("cherche les tickets"), "{texte}");
+            assert!(!texte.contains("Trois tickets."), "{texte}");
+        });
+    }
+
+    /// KOB-340 : hors réunion, une réponse arrivée après une coupure du micro
+    /// (conversation fermée) va encore au journal ; dans la même
+    /// conversation, la réponse y va avec sa question.
+    #[test]
+    fn reponse_hors_reunion_au_journal() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.question("quelle heure est-il ?".into(), true);
+            let tour = c.tour;
+            c.recevoir(Message::Cerveau(Retour::Fin {
+                tour,
+                texte: "Midi.".into(),
+            }));
+            c.question("cherche les tickets".into(), true);
+            let tache = c.tour;
+            c.recevoir(Message::EcouteCoupee);
+            c.recevoir(Message::Cerveau(Retour::Resultat {
+                tour: tache,
+                texte: "Trois tickets.".into(),
+            }));
+            c.ecrivain.attendre();
+            let stockage = crate::stockage::actuel(&c.app).unwrap();
+            let tout: String = stockage
+                .conversations()
+                .unwrap()
+                .iter()
+                .map(|r| format!("{:?}", stockage.lire_conversation(&r.id).unwrap()))
+                .collect();
+            for texte in [
+                "quelle heure est-il ?",
+                "Midi.",
+                "cherche les tickets",
+                "Trois tickets.",
+            ] {
+                assert!(tout.contains(texte), "{texte} : {tout}");
+            }
         });
     }
 
