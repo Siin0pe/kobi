@@ -455,10 +455,12 @@ pub struct Chef<R: Runtime> {
     annoncees: std::collections::BTreeSet<u64>,
     /// Tours abandonnés : ce qui en revient encore est ignoré.
     interrompus: HashSet<u64>,
-    /// Tours posés pendant la fin de la réunion ou sa pause : ni la question
-    /// ni la réponse n'entrent dans les notes, même si la réponse arrive
-    /// après « Annuler » ou la reprise (KOB-325).
-    hors_notes: HashSet<u64>,
+    /// Où va chaque échange, décidé à la question : les notes de la réunion
+    /// commencée à cet instant, ou le journal des conversations (`None`).
+    /// La réponse suit sa question, même si elle arrive après « Annuler »,
+    /// la reprise, la fin ou dans une autre réunion (KOB-325, KOB-327,
+    /// KOB-330).
+    rangement: HashMap<u64, Option<Instant>>,
     /// Cartes proposées par la prise de notes (tour 0, KOB-72), et si Kobi
     /// était au calme à leur ouverture : il y revient une fois décidées.
     cartes_des_notes: HashMap<u64, bool>,
@@ -784,7 +786,7 @@ impl<R: Runtime> Chef<R> {
             taches: BTreeMap::new(),
             annoncees: Default::default(),
             interrompus: HashSet::new(),
-            hors_notes: HashSet::new(),
+            rangement: HashMap::new(),
             cartes_des_notes: HashMap::new(),
             cartes_ouvertes: HashMap::new(),
             validations: Default::default(),
@@ -1168,28 +1170,35 @@ impl<R: Runtime> Chef<R> {
     /// posées pendant la fin ou la pause, elles vont au journal des
     /// conversations, comme hors réunion (KOB-325).
     fn ranger(&mut self, tour: u64, qui: Qui, texte: &str, voix: bool) {
-        let hors_notes = match qui {
+        // Aux notes de la réunion en cours, sauf pendant sa fin ou sa pause.
+        let notes_de = match qui {
             Qui::Moi => {
-                let hors = self
+                let notes_de = self
                     .reunion
                     .as_ref()
-                    .is_some_and(|r| r.fin_demandee || r.pause);
-                if hors {
-                    self.hors_notes.insert(tour);
-                }
-                hors
+                    .filter(|r| !r.fin_demandee && !r.pause)
+                    .map(|r| r.debut);
+                self.rangement.insert(tour, notes_de);
+                notes_de
             }
-            Qui::Kobi => self.hors_notes.remove(&tour),
+            Qui::Kobi => self.rangement.remove(&tour).flatten(),
         };
-        if let Some(r) = self.reunion.as_mut().filter(|_| !hors_notes) {
+        if let Some(r) = self.reunion.as_mut().filter(|r| Some(r.debut) == notes_de) {
             let t = r.debut.elapsed().as_secs();
-            let qui = match qui {
+            let qui_ = match qui {
                 Qui::Moi => "interpellation de Kobi",
                 Qui::Kobi => "réponse de Kobi",
             };
             let texte = texte.replace('\n', " ");
-            r.a_noter
-                .push_str(&format!("[{:02}:{:02} {qui}] {texte}\n", t / 60, t % 60));
+            let ligne = format!("[{:02}:{:02} {qui_}] {texte}\n", t / 60, t % 60);
+            // Le compte rendu est déjà demandé : la réponse lui manque, mais
+            // revient à la réunion si la fin est annulée, comme les segments
+            // (KOB-281, KOB-330).
+            if r.compte_rendu_demande {
+                r.pour_compte_rendu.push_str(&ligne);
+            } else {
+                r.a_noter.push_str(&ligne);
+            }
             return;
         }
         let Some(stockage) = crate::stockage::actuel(&self.app) else {
@@ -1826,7 +1835,7 @@ impl<R: Runtime> Chef<R> {
         let question = question.clone();
         self.taches.remove(&tour);
         self.interrompus.insert(tour);
-        self.hors_notes.remove(&tour);
+        self.rangement.remove(&tour);
         self.cerveau.demander(Demande::Annuler { tour });
         if let Some(b) = self.bulle(tour) {
             b.statut = "fini";
@@ -1848,7 +1857,7 @@ impl<R: Runtime> Chef<R> {
                 b.statut = "fini";
             }
             self.interrompus.insert(tour);
-            self.hors_notes.remove(&tour);
+            self.rangement.remove(&tour);
             self.cerveau.demander(Demande::Interrompre { tour });
             self.emettre_historique();
         }
@@ -1964,7 +1973,7 @@ impl<R: Runtime> Chef<R> {
             {
                 tracing::info!(tour, "phrase qui ne s'adressait pas à Kobi : silence");
                 self.tour_peut_etre = None;
-                self.hors_notes.remove(&tour);
+                self.rangement.remove(&tour);
                 if let Some(r) = &mut self.reunion {
                     r.latences.abandon(tour);
                 }
@@ -2076,7 +2085,7 @@ impl<R: Runtime> Chef<R> {
             }
             Retour::Erreur { tour, message } => {
                 tracing::warn!(tour, %message, "tour en erreur");
-                self.hors_notes.remove(&tour);
+                self.rangement.remove(&tour);
                 if let Some(r) = &mut self.reunion {
                     r.latences.abandon(tour);
                 }
@@ -3928,17 +3937,17 @@ mod tests {
             ] {
                 assert!(!notes.contains(texte), "{texte} : {notes}");
             }
-            assert!(c.hors_notes.is_empty());
+            assert!(c.rangement.is_empty());
             // Sans réponse (erreur), le tour ne reste pas retenu.
             c.commande(Intention::Pause);
             c.question("et sinon ?".into(), true);
             let tour = c.tour;
-            assert!(c.hors_notes.contains(&tour));
+            assert!(c.rangement.contains_key(&tour));
             c.recevoir(Message::Cerveau(Retour::Erreur {
                 tour,
                 message: "réseau".into(),
             }));
-            assert!(c.hors_notes.is_empty());
+            assert!(c.rangement.is_empty());
         });
     }
 
@@ -4043,6 +4052,59 @@ mod tests {
             "{:?}",
             roles.lock().unwrap()
         );
+    }
+
+    /// KOB-327, KOB-330 : la réponse suit sa question. Posée hors réunion
+    /// (question différée en veille) ou dans une autre réunion, elle n'entre
+    /// pas dans les notes de la réunion en cours ; arrivée après la demande
+    /// du compte rendu, elle revient à la réunion si la fin est annulée.
+    #[test]
+    fn la_reponse_suit_la_reunion_de_sa_question() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            // Hors réunion, puis une réunion démarre avant la réponse.
+            c.question("et le planning ?".into(), true);
+            let hors_reunion = c.tour;
+            // Dans une réunion A, terminée avant la réponse.
+            c.commande(Intention::DemarrerReunion);
+            c.question("et le budget ?".into(), true);
+            let reunion_a = c.tour;
+            c.reunion = None;
+            std::thread::sleep(Duration::from_millis(5));
+            c.commande(Intention::DemarrerReunion);
+            c.recevoir(Message::Cerveau(Retour::Resultat {
+                tour: hors_reunion,
+                texte: "Planning de la veille.".into(),
+            }));
+            c.recevoir(Message::Cerveau(Retour::Fin {
+                tour: reunion_a,
+                texte: "Budget de la réunion A.".into(),
+            }));
+            let notes = &c.reunion.as_ref().unwrap().a_noter;
+            assert!(!notes.contains("Planning de la veille."), "{notes}");
+            assert!(!notes.contains("Budget de la réunion A."), "{notes}");
+            // Réponse arrivée après la demande du compte rendu.
+            c.recevoir(Message::Segment(dit("Premier point."), Instant::now()));
+            c.question("et la date ?".into(), true);
+            let tour = c.tour;
+            c.commande(Intention::TerminerReunion);
+            assert!(c.reunion.as_ref().unwrap().compte_rendu_demande);
+            c.recevoir(Message::Cerveau(Retour::Fin {
+                tour,
+                texte: "Le 14 novembre.".into(),
+            }));
+            let r = c.reunion.as_ref().unwrap();
+            assert!(
+                r.pour_compte_rendu.contains("Le 14 novembre."),
+                "{}",
+                r.pour_compte_rendu
+            );
+            c.commande(Intention::Reprendre);
+            let notes = &c.reunion.as_ref().unwrap().a_noter;
+            assert!(notes.contains("et la date ?"), "{notes}");
+            assert!(notes.contains("Le 14 novembre."), "{notes}");
+            assert!(c.rangement.is_empty());
+        });
     }
 
     /// KOB-228 : un compte rendu demandé pendant qu'un bloc est à la prise
