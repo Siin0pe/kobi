@@ -4209,9 +4209,8 @@ mod tests {
                 dit_a: Some(avant),
             });
             let r = c.reunion.as_ref().unwrap();
-            if let Some(&(arret, annule, voix)) = r.fins_annulees.last() {
-                assert!(annule > arret && !voix);
-            }
+            let &(arret, annule, voix) = r.fins_annulees.last().expect("fin annulée");
+            assert!(annule > arret && !voix);
             c.commande(Intention::TerminerReunion);
             c.commande(Intention::Reprendre);
             let &(arret, annule, voix) = c.reunion.as_ref().unwrap().fins_annulees.last().unwrap();
