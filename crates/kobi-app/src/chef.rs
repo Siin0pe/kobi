@@ -473,6 +473,9 @@ pub struct Chef<R: Runtime> {
     validations: crate::validation::FileValidations,
     /// La question en cours de traitement ne s'adresse peut-être pas à Kobi.
     peut_etre: bool,
+    /// Instant de l'audio de la question en cours de traitement, si elle a
+    /// été dite (KOB-324).
+    question_dite_a: Option<Instant>,
     /// La question en cours est différée (KOB-307) : elle part sur une
     /// session sans pilotage.
     differee: bool,
@@ -553,8 +556,9 @@ pub fn avancer<R: Runtime>(app: &AppHandle<R>, source: kobi_stt::Source, jusqu_a
     publier(app, Message::Avancement(source, jusqu_a));
 }
 
-/// Fins annulées d'une réunion : (arrêt, annulation) (KOB-309).
-type FinsAnnulees = Vec<(Instant, Instant)>;
+/// Fins annulées d'une réunion : (arrêt, annulation, annulée à la voix)
+/// (KOB-309, KOB-324).
+type FinsAnnulees = Vec<(Instant, Instant, bool)>;
 
 /// Silence compté dans la fin d'un segment Nemotron, au plus : fin
 /// d'énoncé (0,8 s), bloc de décodage, et conclusion à la fermeture de la
@@ -569,13 +573,21 @@ const MARGE_FIN: Duration = Duration::from_millis(2400);
 /// [`MARGE_FIN`] après l'annulation, un segment commencé avant est encore
 /// de la fin. Au-delà, c'est de la parole qui a continué après la reprise :
 /// gardée, comme avant.
+///
+/// Annulée à la voix, `annule` est la fin de la trame qui conclut
+/// « reprends » : sur la piste du micro (`moi`), conclue dans l'ordre, tout
+/// segment conclu après a été dit après lui, et la marge ferait perdre la
+/// phrase d'après (KOB-324).
 fn dit_pendant_une_fin_annulee(
-    fins: &[(Instant, Instant)],
+    fins: &[(Instant, Instant, bool)],
+    moi: bool,
     commence_a: Instant,
     dit_a: Instant,
 ) -> bool {
-    fins.iter().any(|&(arret, annule)| {
-        dit_a > arret && (dit_a <= annule || (commence_a <= annule && dit_a <= annule + MARGE_FIN))
+    fins.iter().any(|&(arret, annule, voix)| {
+        let marge = !(voix && moi);
+        dit_a > arret
+            && (dit_a <= annule || (marge && commence_a <= annule && dit_a <= annule + MARGE_FIN))
     })
 }
 
@@ -791,6 +803,7 @@ impl<R: Runtime> Chef<R> {
             cartes_ouvertes: HashMap::new(),
             validations: Default::default(),
             peut_etre: false,
+            question_dite_a: None,
             differee: false,
             tour_peut_etre: None,
             compte_rendu_a_ecrire: false,
@@ -894,7 +907,9 @@ impl<R: Runtime> Chef<R> {
             }
             Message::Question { texte, voix, dit_a } => {
                 if !self.dit_avant_l_arret(dit_a, &texte) {
+                    self.question_dite_a = dit_a;
                     self.question(texte, voix);
+                    self.question_dite_a = None;
                 }
             }
             Message::Publier { affiche, consigne } => {
@@ -908,7 +923,9 @@ impl<R: Runtime> Chef<R> {
                     return;
                 }
                 self.peut_etre = true;
+                self.question_dite_a = Some(dit_a);
                 self.question(texte, true);
+                self.question_dite_a = None;
                 self.peut_etre = false;
             }
             Message::Segment(s, dit_a) => self.segment(s, dit_a),
@@ -1587,7 +1604,12 @@ impl<R: Runtime> Chef<R> {
         // (KOB-297, KOB-305).
         let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::RepriseReunion);
         if let Some(arret) = r.arret {
-            r.fins_annulees.push((arret, Instant::now()));
+            // « Reprends » dit à la voix : la fin s'arrête quand il a été dit,
+            // pas quand sa transcription, en retard sous charge, arrive ;
+            // ce qui est dit juste après reste dans les notes (KOB-324).
+            let annule = self.question_dite_a.filter(|&dit| dit > arret);
+            r.fins_annulees
+                .push((arret, annule.unwrap_or_else(Instant::now), annule.is_some()));
         }
         r.fin_demandee = false;
         r.annulable_jusqu = None;
@@ -1689,6 +1711,7 @@ impl<R: Runtime> Chef<R> {
             return;
         }
         let commence_a = commence_a(&s, dit_a);
+        let moi = s.source == kobi_stt::Source::Moi;
         let Some(r) = &mut self.reunion else {
             // Réunion close avant que la transcription ait rattrapé l'arrêt :
             // ce qui a été dit avant va encore dans sa transcription (KOB-281).
@@ -1697,7 +1720,7 @@ impl<R: Runtime> Chef<R> {
                 .reunion_close
                 .as_ref()
                 .and_then(|(debut, arret, fins)| {
-                    (dit_a <= *arret && !dit_pendant_une_fin_annulee(fins, commence_a, dit_a))
+                    (dit_a <= *arret && !dit_pendant_une_fin_annulee(fins, moi, commence_a, dit_a))
                         .then_some(*debut)
                 });
             if let Some(debut) = debut {
@@ -1722,7 +1745,7 @@ impl<R: Runtime> Chef<R> {
         }
         // Dit pendant une fin ensuite annulée, transcrit après l'annulation :
         // pas plus dans les notes que si la fin avait tenu (KOB-309).
-        if dit_pendant_une_fin_annulee(&r.fins_annulees, commence_a, dit_a) {
+        if dit_pendant_une_fin_annulee(&r.fins_annulees, moi, commence_a, dit_a) {
             return;
         }
         horodater(&mut s, r.debut, dit_a);
@@ -4139,6 +4162,94 @@ mod tests {
             assert!(notes.contains("et la date ?"), "{notes}");
             assert!(notes.contains("Le 14 novembre."), "{notes}");
             assert!(c.rangement.is_empty());
+        });
+    }
+
+    /// KOB-324 : sous retard, « reprends » arrive après ce qui a été dit
+    /// juste après lui ; la fin annulée s'arrête quand il a été dit, et la
+    /// phrase d'après reste dans les notes.
+    #[test]
+    fn phrase_dite_juste_apres_reprends_gardee_sous_charge() {
+        let (app, _dir) = chef_en_essai();
+        let bref = |texte: &str| {
+            let mut s = dit(texte);
+            s.start = s.end;
+            s
+        };
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            c.commande(Intention::TerminerReunion);
+            std::thread::sleep(Duration::from_millis(20));
+            let pendant = Instant::now();
+            std::thread::sleep(Duration::from_millis(20));
+            let reprends = Instant::now();
+            std::thread::sleep(Duration::from_millis(20));
+            let juste_apres = Instant::now();
+            std::thread::sleep(Duration::from_millis(40));
+            // « reprends » est traité maintenant, bien après avoir été dit.
+            c.recevoir(Message::Question {
+                texte: "reprends".into(),
+                voix: true,
+                dit_a: Some(reprends),
+            });
+            assert!(!c.fin_annulable());
+            assert!(!c.reunion.as_ref().unwrap().fin_demandee);
+            c.recevoir(Message::Segment(bref("Pendant la fin."), pendant));
+            c.recevoir(Message::Segment(
+                bref("Donc on valide le budget."),
+                juste_apres,
+            ));
+            // Au micro, une phrase commencée avant la conclusion de
+            // « reprends » (sa fin compte du silence) et finie juste après :
+            // dite après lui, gardée. Côté son de l'ordinateur, la marge de
+            // KOB-323 joue encore.
+            let fin = reprends + Duration::from_secs(1);
+            let a_cheval = |texte: &str, source| {
+                let mut s = dit(texte);
+                s.source = source;
+                s.start = 0.0;
+                s.end = (fin - (reprends - Duration::from_millis(500))).as_secs_f64();
+                s
+            };
+            c.recevoir(Message::Segment(
+                a_cheval("Au micro.", kobi_stt::Source::Moi),
+                fin,
+            ));
+            c.recevoir(Message::Segment(
+                a_cheval("Côté ordinateur.", kobi_stt::Source::Eux),
+                fin,
+            ));
+            let notes = &c.reunion.as_ref().unwrap().a_noter;
+            assert!(!notes.contains("Pendant la fin."), "{notes}");
+            assert!(notes.contains("Donc on valide le budget."), "{notes}");
+            assert!(notes.contains("Au micro."), "{notes}");
+            assert!(!notes.contains("Côté ordinateur."), "{notes}");
+            assert!(c.question_dite_a.is_none());
+        });
+    }
+
+    /// KOB-324 : un instant dit avant l'arrêt ne borne pas la fin annulée
+    /// (l'heure du traitement prend le relais), et le clic ne garde pas
+    /// l'instant d'une question précédente.
+    #[test]
+    fn reprends_sans_instant_valable_borne_au_traitement() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            let avant = Instant::now() - Duration::from_secs(1);
+            c.commande(Intention::TerminerReunion);
+            c.recevoir(Message::Question {
+                texte: "reprends".into(),
+                voix: true,
+                dit_a: Some(avant),
+            });
+            let r = c.reunion.as_ref().unwrap();
+            let &(arret, annule, voix) = r.fins_annulees.last().expect("fin annulée");
+            assert!(annule > arret && !voix);
+            c.commande(Intention::TerminerReunion);
+            c.commande(Intention::Reprendre);
+            let &(arret, annule, voix) = c.reunion.as_ref().unwrap().fins_annulees.last().unwrap();
+            assert!(annule > arret && !voix, "clic : l'heure du traitement");
         });
     }
 
