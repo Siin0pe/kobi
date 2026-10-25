@@ -4892,7 +4892,8 @@ mod tests {
                 accepte: Some(false),
             }));
             assert_eq!(c.activite(), Some("propose"), "quittée sur un écho");
-            // Une carte des notes refusée à la fin : une seule fermeture compte.
+            // Une carte des notes fermée, puis son écho : une seule fermeture
+            // compte.
             c.recevoir(Message::Cerveau(Retour::Carte {
                 tour: 0,
                 carte: 51,
