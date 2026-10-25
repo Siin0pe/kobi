@@ -2087,11 +2087,15 @@ impl<R: Runtime> Chef<R> {
             let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::CartesFermees);
         }
         // La carte montre déjà « Pas de réponse : refusé. » ; la voix ne le
-        // redit que si elle est le seul canal (KOB-215).
+        // redit que si elle est le seul canal (KOB-215), et pas si la carte
+        // suivante est annoncée aussitôt : dit plus tard, il semblerait
+        // répondre à celle-ci (KOB-366).
         if reponse == crate::validation::Reponse::Delai && self.voix_seul_canal() {
             let message = kobi_i18n::tr("coque.chef.delaiCarte", &[]);
             let _ = self.app.emit(EVENEMENT_REPONSE, &message);
-            self.annoncer(message);
+            if suivante.is_none() {
+                self.annoncer(message);
+            }
         }
         if let Some(resume) = suivante {
             self.annoncer_validation(&resume);
@@ -2227,6 +2231,15 @@ impl<R: Runtime> Chef<R> {
             }
             Retour::Detache { tour, annonce } => {
                 tracing::info!(tour, annonce, "tour détaché");
+                // Le tour ne parle plus par sa réponse en cours (son résultat
+                // viendra à part) : son énoncé se clôt, avec ou sans annonce
+                // (carte, tâche longue), sinon la voix resterait occupée
+                // (KOB-366).
+                if self.voix.as_ref().is_some_and(|(t, _)| *t == tour) {
+                    if let Some((_, r)) = self.voix.take() {
+                        r.lacher(&self.app);
+                    }
+                }
                 if annonce {
                     let question = self
                         .bulle(tour)
@@ -2241,11 +2254,6 @@ impl<R: Runtime> Chef<R> {
                     // tâche qui tarde est annoncée, une fois (`Patience`,
                     // KOB-215).
                     if tour == self.dernier {
-                        if self.voix.as_ref().is_some_and(|(t, _)| *t == tour) {
-                            if let Some((_, r)) = self.voix.take() {
-                                r.lacher(&self.app);
-                            }
-                        }
                         // Kobi reste « je m'en occupe » jusqu'au résultat
                         // (KOB-152), sans retour au calme après l'annonce.
                         self.calme_a = None;
@@ -3451,6 +3459,27 @@ mod tests {
                 assert!(Instant::now() < limite, "voix restée occupée");
                 std::thread::sleep(Duration::from_millis(20));
             }
+            // Détaché sans annonce (carte de permission) : pareil, et un
+            // rappel échu ensuite n'attend pas pour rien.
+            let mut r = crate::voix::Reponse::new(&c.app);
+            r.morceau(&c.app, "Je crée le fichier. Puis ");
+            c.voix = Some((6, r));
+            c.recevoir(Message::Cerveau(Retour::Detache {
+                tour: 6,
+                annonce: false,
+            }));
+            assert!(c.voix.is_none());
+            let limite = Instant::now() + Duration::from_secs(5);
+            while crate::voix::occupee(&c.app) {
+                assert!(Instant::now() < limite, "voix restée occupée");
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            c.recevoir(Message::Rappel(crate::rappels::RappelUi {
+                id: "r1".into(),
+                texte: "Appeler Paul".into(),
+                echeance_ms: None,
+            }));
+            assert!(c.annonces.is_empty(), "rappel dit tout de suite");
         });
     }
 
