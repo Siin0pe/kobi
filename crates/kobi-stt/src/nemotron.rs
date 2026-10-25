@@ -250,6 +250,18 @@ impl NemotronEngine {
     }
 }
 
+/// Début de l'énoncé quand arrive une trame qui commence à `t` (KOB-311) :
+/// après `nouvel_enonce` ou `conclure` (`a_poser`, consommé), la trame le
+/// donne, même datée avant `pos` (silence ajouté par la porte) ; sinon,
+/// [`debut_apres_un_trou`].
+fn debut_a_la_trame(a_poser: &mut bool, debut: f64, pos: f64, sans_mot: bool, t: f64) -> f64 {
+    if std::mem::take(a_poser) {
+        t
+    } else {
+        debut_apres_un_trou(debut, pos, sans_mot, t)
+    }
+}
+
 /// Début de l'énoncé quand arrive une trame qui commence à `t`, l'audio
 /// reçu finissant à `pos` : après un silence non transmis (`t` au-delà de
 /// `pos` de plus de [`TROU_SECS`]), un
@@ -288,16 +300,13 @@ impl SttEngine for NemotronEngine {
 
     fn push(&mut self, frame: &AudioFrame) -> Result<Vec<Segment>> {
         let track = self.track(frame.source);
-        track.utterance_start = if std::mem::take(&mut track.debut_a_poser) {
-            frame.t
-        } else {
-            debut_apres_un_trou(
-                track.utterance_start,
-                track.pos,
-                track.last_text.is_empty(),
-                frame.t,
-            )
-        };
+        track.utterance_start = debut_a_la_trame(
+            &mut track.debut_a_poser,
+            track.utterance_start,
+            track.pos,
+            track.last_text.is_empty(),
+            frame.t,
+        );
         track
             .stream
             .accept_waveform(SAMPLE_RATE as i32, &frame.samples);
@@ -461,6 +470,24 @@ mod tests {
         // Arrondi des positions de trames contiguës (6 × 0,1 > 0,6) : pas un
         // trou.
         assert_eq!(debut_apres_un_trou(0.0, 0.6, true, 6.0 * 0.1), 0.0);
+    }
+
+    /// KOB-329 : après `nouvel_enonce` ou `conclure`, la première trame
+    /// donne le début, une seule fois, même datée avant la fin de l'audio
+    /// reçu (silence ajouté par la porte).
+    #[test]
+    fn debut_pose_par_la_premiere_trame_d_un_enonce_neuf() {
+        let mut a_poser = true;
+        // Porte refermée à 10 s avec 1 s de silence ajouté (pos = 11), la
+        // parole reprend à 10,3 s.
+        assert_eq!(debut_a_la_trame(&mut a_poser, 11.0, 11.0, true, 10.3), 10.3);
+        assert!(!a_poser, "consommé");
+        // Trame suivante, contiguë : le début ne bouge plus.
+        assert_eq!(debut_a_la_trame(&mut a_poser, 10.3, 10.4, true, 10.4), 10.3);
+        // Sans drapeau, une trame datée avant `pos` ne change rien.
+        assert_eq!(debut_a_la_trame(&mut a_poser, 11.0, 11.0, true, 10.3), 11.0);
+        // Sans drapeau, après un trou : la règle du trou.
+        assert_eq!(debut_a_la_trame(&mut a_poser, 11.0, 11.0, true, 20.0), 20.0);
     }
 
     #[test]
