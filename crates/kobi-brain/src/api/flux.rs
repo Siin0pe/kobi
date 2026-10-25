@@ -67,6 +67,10 @@ pub enum Apport {
 #[derive(Debug, Default)]
 pub struct Reponse {
     blocs: BTreeMap<usize, Bloc>,
+    /// Entrées d'outils illisibles, par identifiant d'appel : le texte brut
+    /// n'est rendu à Claude que dans le résultat en erreur ; l'historique
+    /// garde `input: {}` (l'API exige un objet, KOB-318).
+    pub illisibles: BTreeMap<String, String>,
     pub stop_reason: Option<String>,
     pub usage: Map<String, Value>,
     pub fini: bool,
@@ -154,10 +158,17 @@ impl Reponse {
             "content_block_stop" => {
                 if let Some(bloc) = index.and_then(|i| self.blocs.get_mut(&i)) {
                     if !bloc.json.is_empty() {
-                        // Entrée illisible : l'appel est refusé plus loin
-                        // (voir `entree_illisible`), le texte brut est gardé.
-                        bloc.contenu["input"] = serde_json::from_str(&bloc.json)
-                            .unwrap_or_else(|_| Value::String(bloc.json.clone()));
+                        match serde_json::from_str::<Value>(&bloc.json) {
+                            Ok(entree) if entree.is_object() => bloc.contenu["input"] = entree,
+                            // Entrée illisible (ou qui n'est pas un objet) :
+                            // l'appel est refusé plus loin, et l'historique
+                            // garde un objet vide.
+                            _ => {
+                                bloc.contenu["input"] = Value::Object(Map::new());
+                                let id = bloc.contenu["id"].as_str().unwrap_or_default();
+                                self.illisibles.insert(id.to_owned(), bloc.json.clone());
+                            }
+                        }
                     }
                 }
                 Ok(Apport::Rien)
@@ -210,11 +221,6 @@ fn fusionner(usage: &mut Map<String, Value>, nouveau: &Value) {
             }
         }
     }
-}
-
-/// Entrée d'un `tool_use` que le flux n'a pas pu lire comme du JSON.
-pub fn entree_illisible(bloc: &Value) -> bool {
-    !bloc["input"].is_object()
 }
 
 /// Blocs à renvoyer dans l'historique. Après un repli sur un autre modèle
@@ -308,7 +314,7 @@ mod tests {
     }
 
     #[test]
-    fn entree_d_outil_illisible_gardee_brute() {
+    fn entree_d_outil_illisible_mise_a_part() {
         let mut r = Reponse::default();
         for d in [
             json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"t","name":"x","input":{}}}),
@@ -317,7 +323,9 @@ mod tests {
         ] {
             r.appliquer(&d.to_string()).unwrap();
         }
-        assert!(entree_illisible(&r.blocs()[0]));
+        // L'historique garde un objet vide, le texte brut est à part.
+        assert_eq!(r.blocs()[0]["input"], json!({}));
+        assert_eq!(r.illisibles["t"], "{\"a\": ");
     }
 
     #[test]

@@ -32,7 +32,7 @@ use crate::claude_code::{texte_ask, texte_compte_rendu, texte_notes, Usage, SYST
 use crate::outils::Action;
 use kobi_perms::{ApprovalRequest, Decision, PermissionRequest};
 
-use flux::{a_renvoyer, entree_illisible, Apport, Decoupeur, Reponse};
+use flux::{a_renvoyer, Apport, Decoupeur, Reponse};
 
 /// Modèle par défaut.
 pub const MODELE_PAR_DEFAUT: &str = "claude-sonnet-5-5";
@@ -390,7 +390,11 @@ async fn boucle(
         let mut resultats = Vec::new();
         let mut execute = false;
         for appel in &appels {
-            let (resultat, lance) = executer(partage, appel, events).await;
+            let brut = appel["id"]
+                .as_str()
+                .and_then(|id| reponse.illisibles.get(id))
+                .map(String::as_str);
+            let (resultat, lance) = executer(partage, appel, brut, events).await;
             execute |= lance;
             resultats.push(resultat);
         }
@@ -409,10 +413,12 @@ async fn boucle(
 }
 
 /// Exécute un appel d'outil et rend son bloc `tool_result`, et si l'outil
-/// a vraiment été lancé.
+/// a vraiment été lancé. `illisible` : texte brut d'une entrée que le flux
+/// n'a pas pu lire, rendu à Claude en erreur sans lancer l'outil.
 async fn executer(
     partage: &Partage,
     appel: &Value,
+    illisible: Option<&str>,
     events: &mpsc::Sender<BrainEvent>,
 ) -> (Value, bool) {
     let id = appel["id"].as_str().unwrap_or_default().to_owned();
@@ -428,8 +434,8 @@ async fn executer(
         })
         .await;
     let mut lance = false;
-    let resultat = if entree_illisible(appel) {
-        Err(json!({ "INVALID_JSON": entree }).to_string())
+    let resultat = if let Some(brut) = illisible {
+        Err(json!({ "INVALID_JSON": brut }).to_string())
     } else if let Err(refus) = autoriser(partage, &id, &nom, &entree, events).await {
         Err(refus)
     } else if events.is_closed() {
