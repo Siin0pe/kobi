@@ -42,6 +42,8 @@ pub const EVENEMENT_VOIX: &str = "voix";
 /// Après la fin de la voix, l'écho peut encore arriver : retard de la
 /// transcription (Nemotron sur un CPU lent) et réverbération de la pièce.
 const ECHO_APRES: Duration = Duration::from_secs(6);
+/// Texte de la voix d'avant gardé pour reconnaître son écho (KOB-374).
+const ECHO_GARDE: usize = 600;
 /// Une réponse confiée à la voix mais pas encore finie (voix qui se charge,
 /// phrases en file) compte comme dite pendant ce temps au plus.
 const ECHO_EN_FILE: Duration = Duration::from_secs(30);
@@ -94,6 +96,24 @@ struct Recent {
 }
 
 impl Recent {
+    /// Texte dont l'écho peut encore arriver quand un nouvel énoncé
+    /// commence (la voix d'avant joue encore, ou vient de finir) : gardé,
+    /// sinon cet écho, transcrit après coup, passerait pour l'utilisateur et
+    /// couperait l'énoncé suivant (KOB-374). Ses [`ECHO_GARDE`] derniers
+    /// caractères au plus.
+    fn encore_en_echo(&self, parle: bool) -> String {
+        if !self.actif(parle) {
+            return String::new();
+        }
+        let debut = self
+            .texte
+            .char_indices()
+            .rev()
+            .nth(ECHO_GARDE - 1)
+            .map_or(0, |(i, _)| i);
+        self.texte[debut..].to_owned()
+    }
+
     /// L'écho de ce texte peut-il arriver maintenant ?
     fn actif(&self, parle: bool) -> bool {
         parle
@@ -499,14 +519,19 @@ pub struct Reponse {
 impl Reponse {
     /// Nouvelle réponse ; muette si le contexte courant est en texte seul.
     pub fn new<R: Runtime>(app: &AppHandle<R>) -> Self {
-        let enonce = if etat_voix(app).actif {
+        let etat = etat_voix(app);
+        let enonce = if etat.actif {
             avec_parleur(app, Parleur::nouvel_enonce)
         } else {
             None
         };
         if enonce.is_some() {
             if let Some(v) = app.try_state::<Voix>() {
-                *v.recent.lock().unwrap_or_else(|e| e.into_inner()) = Recent::default();
+                let mut r = v.recent.lock().unwrap_or_else(|e| e.into_inner());
+                *r = Recent {
+                    texte: r.encore_en_echo(etat.parle),
+                    ..Recent::default()
+                };
             }
         }
         Self {
@@ -802,6 +827,41 @@ mod tests {
     use kobi_session::etat::Evenement;
     use tauri::test::{mock_builder, mock_context, noop_assets, MockRuntime};
     use tauri::App;
+
+    /// KOB-374 : un nouvel énoncé (annonce, confirmation) qui suit une
+    /// réponse garde le texte de celle-ci tant que son écho peut arriver ;
+    /// passé [`ECHO_APRES`], il l'oublie.
+    #[test]
+    fn echo_de_la_reponse_reconnu_apres_une_annonce() {
+        let app = session::installer(mock_builder())
+            .build(mock_context(noop_assets()))
+            .unwrap();
+        installer_factice(app.handle());
+        let h = app.handle();
+        let attendre_silence = || {
+            let limite = Instant::now() + Duration::from_secs(5);
+            while occupee(h) {
+                assert!(Instant::now() < limite, "voix restée occupée");
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        };
+        let mut r = Reponse::new(h);
+        r.fin(h, "Dans la réunion, validation du budget pour Annecy.");
+        attendre_silence();
+        // L'annonce part juste après, l'écho de la réponse arrive ensuite.
+        dire(h, "Le compte rendu est prêt.");
+        assert!(est_ma_voix(h, "Dans la réunion validation"), "écho oublié");
+        assert!(est_ma_voix(h, "le compte rendu est prêt"));
+        attendre_silence();
+        // Bien après la fin : l'ancien texte n'est plus gardé.
+        {
+            let v = h.state::<Voix>();
+            let mut recent = v.recent.lock().unwrap();
+            recent.fin = Some(Instant::now() - ECHO_APRES - Duration::from_secs(1));
+        }
+        dire(h, "Rappel : appeler Paul.");
+        assert!(!est_ma_voix(h, "Dans la réunion validation du budget"));
+    }
 
     fn app(reglage: VoiceConfig) -> App<MockRuntime> {
         let app = session::installer(mock_builder())
