@@ -1359,6 +1359,50 @@ async fn api_injoignable_erreur_d_api() {
     }
 }
 
+/// KOB-371 : un échec TLS n'est pas une absence de réseau : « envoi
+/// impossible », avec sa cause ; une connexion refusée reste « API
+/// injoignable ».
+#[tokio::test]
+async fn echec_tls_n_est_pas_hors_ligne() {
+    // Un serveur qui répond en clair, appelé en HTTPS : la poignée de main
+    // TLS reçoit des données invalides et échoue aussitôt.
+    let ecoute = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("https://{}", ecoute.local_addr().unwrap());
+    tokio::spawn(async move {
+        while let Ok((mut sock, _)) = ecoute.accept().await {
+            let _ = sock
+                .write_all(b"HTTP/1.1 400 Bad Request\r\ncontent-length: 0\r\n\r\n")
+                .await;
+            let _ = sock.shutdown().await;
+        }
+    });
+    let mut brain = ApiBrain::new(ApiConfig {
+        cle: CLE.into(),
+        url,
+        tentatives: 0,
+        ..Default::default()
+    })
+    .unwrap();
+    match fin(&tous(brain.ask(question("un"))).await) {
+        Err(BrainError::Api(m)) => {
+            assert!(m.starts_with("envoi impossible : "), "{m}");
+            assert!(m.len() > "envoi impossible : ".len() + 20, "{m}");
+        }
+        autre => panic!("{autre:?}"),
+    }
+    let mut refuse = ApiBrain::new(ApiConfig {
+        cle: CLE.into(),
+        url: "http://127.0.0.1:1".into(),
+        tentatives: 0,
+        ..Default::default()
+    })
+    .unwrap();
+    match fin(&tous(refuse.ask(question("un"))).await) {
+        Err(BrainError::Api(m)) => assert!(m.starts_with("API injoignable : "), "{m}"),
+        autre => panic!("{autre:?}"),
+    }
+}
+
 /// Réponse de compaction : le bloc arrive entier dans `content_block_start`.
 fn resume(texte: &str) -> Script {
     flux(&[

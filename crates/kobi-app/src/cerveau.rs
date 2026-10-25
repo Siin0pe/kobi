@@ -413,7 +413,14 @@ struct Question {
     relancee: bool,
     /// Relancée : résumé des derniers échanges, que la session neuve n'a pas vus.
     resume: Option<String>,
+    /// Remises en attente faute de réseau (KOB-371).
+    reprises: u32,
 }
+
+/// Essais au plus d'une question en attente du réseau, un toutes les
+/// [`REESSAI_RESEAU`] : au-delà, elle est abandonnée, avec celles qui la
+/// suivent (KOB-371).
+const REPRISES_MAX: u32 = 15;
 
 /// Échanges gardés pour le résumé d'une relance.
 const ECHANGES: usize = 5;
@@ -532,6 +539,7 @@ async fn conversation(
                             role: if differee { Role::Differee } else { Role::Conversation },
                             relancee: false,
                             resume: None,
+                            reprises: 0,
                         };
                         if en_attente.is_empty() {
                             (q, true)
@@ -900,12 +908,35 @@ fn reessai_depuis(reessai: &mut tokio::time::Interval, en_attente: &VecDeque<Que
 /// Hors ligne : la question attend, et l'interface le sait.
 fn mettre_en_attente(
     en_attente: &mut VecDeque<Question>,
-    q: Question,
+    mut q: Question,
     en_tete: bool,
     sortie: &Sortie,
 ) {
     let tour = q.tour;
     if en_tete {
+        // Remise en tête après un essai manqué : au-delà de
+        // `REPRISES_MAX`, la file entière est abandonnée, faute de réseau
+        // depuis longtemps.
+        q.reprises += 1;
+        if q.reprises > REPRISES_MAX {
+            let minutes = (u64::from(REPRISES_MAX) * REESSAI_RESEAU.as_secs()).div_ceil(60);
+            let message = kobi_i18n::tr(
+                "coque.pannes.attenteAbandonnee",
+                &[("minutes", &minutes.to_string())],
+            );
+            tracing::warn!(
+                tour,
+                abandonnees = en_attente.len() + 1,
+                "toujours pas de réseau : questions en attente abandonnées"
+            );
+            for abandonnee in std::iter::once(q).chain(en_attente.drain(..)) {
+                sortie(Retour::Erreur {
+                    tour: abandonnee.tour,
+                    message: message.clone(),
+                });
+            }
+            return;
+        }
         en_attente.push_front(q);
     } else {
         en_attente.push_back(q);
@@ -1968,6 +1999,48 @@ mod tests {
                 texte: "reçu : un".into()
             }));
         assert!(!recu(&recus, |r| matches!(r, Retour::Erreur { .. })));
+    }
+
+    /// KOB-371 : le réseau ne revient pas : après `REPRISES_MAX` essais, la
+    /// question et celles qui l'attendent sont abandonnées, sans attente sans
+    /// fin.
+    #[tokio::test(start_paused = true)]
+    async fn hors_ligne_trop_longtemps_questions_abandonnees() {
+        let (s, recus) = sortie();
+        let coupures = (0..=REPRISES_MAX + 1)
+            .map(|_| {
+                vec![Step::Fail(BrainError::Api(
+                    "API Error: Connection error.".into(),
+                ))]
+            })
+            .collect();
+        let c = Cerveau::lancer(fabrique(vec![coupures]), s);
+        c.demander(question(1, "un"));
+        attendre(&recus, |r| matches!(r, Retour::EnAttente { tour: 1, .. })).await;
+        c.demander(question(2, "deux"));
+        // Un essai toutes les `REESSAI_RESEAU` : plus de 5 min de temps
+        // virtuel, au-delà des 60 s de `attendre`.
+        for _ in 0..2400 {
+            if recu(&recus, |r| matches!(r, Retour::Erreur { tour: 2, .. })) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        let erreurs: Vec<_> = recus
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|(_, r)| match r {
+                Retour::Erreur { tour, message } => Some((*tour, message.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(erreurs.len(), 2, "{erreurs:?}");
+        assert_eq!(erreurs[0].0, 1);
+        // Pas « Pas d'Internet, je garde ta question » : abandonnée.
+        let (titre, explication) = crate::pannes::pour_l_utilisateur(&erreurs[0].1);
+        assert_eq!(titre, "Claude n'a pas répondu");
+        assert!(explication.contains("5 minutes"), "{explication}");
     }
 
     #[tokio::test]
