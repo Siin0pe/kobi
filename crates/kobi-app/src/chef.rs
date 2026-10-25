@@ -4488,6 +4488,15 @@ mod tests {
             c.tick();
             assert!(c.questions_differees.is_empty());
             assert_eq!(c.tour, tour + 1);
+            // B terminée pour de bon, compte rendu en cours : une question
+            // de B transcrite après sa fenêtre est encore gardée.
+            let encore_b = Instant::now();
+            c.commande(Intention::TerminerReunion);
+            c.reunion.as_mut().unwrap().annulable_jusqu = Some(Instant::now() - VIDANGE);
+            c.tick();
+            assert!(c.reunion.is_some());
+            c.recevoir(Message::QuestionDifferee("et le devis ?".into(), encore_b));
+            assert_eq!(c.questions_differees, ["et le devis ?"]);
         });
     }
 
