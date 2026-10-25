@@ -221,16 +221,16 @@ const QUESTIONS: &[&str] = &[
     " why ",
 ];
 
-/// Réponse à une carte MCP (KOB-336) : seulement les mots de décision nets
-/// (« oui », « non », « valide », « refuse »). « Stop » ou « annule » font
-/// taire Kobi ou annulent la fin, pas la carte ; « ok » ou « d'accord » se
-/// disent trop souvent à autre chose pour valider une écriture.
+/// Réponse à une carte MCP (KOB-336) : comme [`reponse_validation`], sauf
+/// « stop », « annule » ou « attends » dits seuls, qui font taire Kobi ou
+/// annulent la fin de la réunion : ce sont des ordres, pas des réponses.
 pub fn reponse_carte_mcp(texte: &str) -> Option<bool> {
-    const NETS: &[&str] = &["oui", "non", "valide", "refuse", "yes", "no"];
-    let reponse = reponse_validation(texte)?;
-    let n = normaliser(texte);
-    let premier = n.split_whitespace().find(|m| *m != "kobi")?;
-    NETS.contains(&premier).then_some(reponse)
+    const ORDRES: &[&str] = &["stop", "annule", "attends"];
+    let n = normaliser(texte).replace(" kobi ", " ");
+    if ORDRES.contains(&n.trim()) {
+        return None;
+    }
+    reponse_validation(texte)
 }
 
 /// Réponse à une carte de validation, tant qu'elle attend (KOB-156) :
@@ -239,34 +239,69 @@ pub fn reponse_carte_mcp(texte: &str) -> Option<bool> {
 pub fn reponse_validation(texte: &str) -> Option<bool> {
     const OUI: &[&str] = &[
         "oui",
+        "oui oui",
         "oui vas y",
         "vas y",
         "valide",
+        "oui valide",
         "ok",
         "okay",
+        "ok vas y",
+        "c est ok",
+        "oui c est ok",
         "d accord",
-        "oui valide",
+        "oui d accord",
+        "d accord vas y",
         "c est bon",
         "oui c est bon",
+        "ca marche",
+        "parfait",
+        "bien sur",
         "fais le",
         "oui fais le",
+        "vas y fais le",
+        "ajoute le",
+        "oui ajoute le",
+        "ajoute la",
+        "ajoute",
+        "cree le",
+        "oui cree le",
+        "cree la",
+        "envoie le",
+        "oui envoie le",
+        "envoie",
+        "publie le",
+        "enregistre le",
         "go",
         "yes",
+        "yes please",
+        "do it",
+        "go ahead",
+        "sure",
         "oui merci",
     ];
     const NON: &[&str] = &[
         "non",
+        "non non",
         "non laisse tomber",
         "non annule",
         "non merci",
+        "non pas maintenant",
+        "non c est pas bon",
         "annule",
         "attends",
         "refuse",
         "pas maintenant",
         "laisse tomber",
+        "laisse",
         "non attends",
+        "ne le fais pas",
+        "fais pas",
         "stop",
         "no",
+        "no thanks",
+        "not now",
+        "don t",
     ];
     let mut n = normaliser(texte);
     for p in [" kobi ", " s il te plait "] {
@@ -750,9 +785,18 @@ mod tests {
             ("valide", Some(true)),
             ("Non merci", Some(false)),
             ("refuse", Some(false)),
-            ("ok", None),
-            ("d'accord", None),
+            ("ok", Some(true)),
+            ("d'accord", Some(true)),
+            ("C'est ok", Some(true)),
+            ("Fais-le", Some(true)),
+            ("Ajoute-le.", Some(true)),
+            ("oui Kobi", Some(true)),
+            ("Crée-le, Kobi", Some(true)),
+            ("ça marche", Some(true)),
+            ("non, pas maintenant", Some(false)),
+            ("ne le fais pas", Some(false)),
             ("stop", None),
+            ("Kobi stop", None),
             ("annule", None),
             ("oui mais change le titre", None),
         ] {

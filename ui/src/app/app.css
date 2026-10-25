@@ -14,6 +14,28 @@ body {
 #app {
   height: 100%;
 }
+
+/* Barres de défilement de l'app : une pilule d'encre, sans rail, qui
+   s'épaissit au survol. Sans `scrollbar-color` ni `scrollbar-width`, qui
+   remplaceraient ce style dans WebView2. */
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  min-height: 36px;
+  border: 4px solid transparent;
+  border-radius: 999px;
+  background: var(--ink) padding-box;
+}
+::-webkit-scrollbar-thumb:hover,
+::-webkit-scrollbar-thumb:active {
+  border-width: 2px;
+}
 button {
   font-family: inherit;
 }
@@ -516,13 +538,16 @@ button {
 /* ----- Réglages (repris de l'ancienne fenêtre) ----- */
 
 .vue-reglages .reglages {
-  height: 100%;
-}
-.vue-reglages .reglages {
   display: grid;
   grid-template-columns: 240px 1fr;
+  /* Une rangée bornée à la fenêtre : chaque colonne défile seule. */
+  grid-template-rows: minmax(0, 1fr);
+  height: 100%;
 }
 .vue-reglages .cote {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   background: var(--acide);
   border-right: 3px solid var(--ink);
   padding: 18px 12px;

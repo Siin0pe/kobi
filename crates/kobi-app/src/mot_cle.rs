@@ -242,6 +242,9 @@ const INTERJECTIONS: &[&str] = &[
     "di", "dit", "oke", "okei", "okey", "voila", "allez", "bref", "attends",
 ];
 
+/// Interjections qui sont une réponse : « Oui Kobi » seul répond « oui ».
+const REPONSES_EN_TETE: &[&str] = &["oui", "non", "ok", "okay", "oke", "okei", "okey"];
+
 /// Mots qui, juste avant le nom, en font une citation : « à Kobi », « que Kobi ».
 const AVANT_CITATION: &[&str] = &[
     "a", "au", "aux", "de", "d", "du", "des", "que", "qu", "avec", "pour", "par", "sur", "chez",
@@ -369,7 +372,19 @@ pub fn interpellation(texte: &str) -> Option<(Adresse, String)> {
         let apres = apres.trim_start();
         nettoyer(&format!("et{}", apres.get(3..).unwrap_or_default())).to_string()
     } else if en_tete {
-        nettoyer(apres).to_string()
+        let question = nettoyer(apres);
+        // « Oui Kobi », « Non Kobi. » : rien après le nom, la réponse est
+        // devant (une carte, une question de Kobi, KOB-336).
+        let reponse: Vec<&str> = mots_avant
+            .iter()
+            .map(String::as_str)
+            .filter(|m| REPONSES_EN_TETE.contains(m))
+            .collect();
+        if question.chars().any(char::is_alphanumeric) || reponse.is_empty() {
+            question.to_string()
+        } else {
+            reponse.join(" ")
+        }
     } else {
         // Le nom et ses virgules d'apostrophe sortent ; la ponctuation de fin
         // reste (« quoi ? »).
@@ -1807,6 +1822,12 @@ mod tests {
                 "\"Hello\" en espagnol ?",
             ),
             ("Oui Kobé, vas-y", Appel, "vas-y"),
+            // KOB-336 : la réponse devant le nom, rien après.
+            ("Oui Kobi.", Appel, "oui"),
+            ("Euh, non Kobi", Appel, "non"),
+            ("Ok Kobi", Appel, "ok"),
+            ("C'est ok Kobi", Appel, "C'est ok"),
+            ("Euh Kobi.", Appel, ""),
             ("Kobi.", Appel, ""),
             // Nom à la fin : la phrase entière.
             ("Tu en penses quoi, Kobi ?", Appel, "Tu en penses quoi ?"),

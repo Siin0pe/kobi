@@ -308,8 +308,10 @@ fn activite_suivante(activite: Activite, evenement: Evenement) -> Option<Activit
         // Une écriture peut être demandée pendant la réflexion, la réponse
         // ou les notes (mode continu).
         (Reflechit | Repond | Note, E::PermissionDemandee) => Some(Propose),
-        (Propose, E::PermissionAccordee) => Some(Reflechit),
-        (Propose, E::PermissionRefusee) => Some(Calme),
+        // « Kobi, oui » : la réponse à la carte arrive pendant l'écoute
+        // ouverte par le nom ; elle vaut comme depuis la proposition (KOB-336).
+        (Propose | Ecoute, E::PermissionAccordee) => Some(Reflechit),
+        (Propose | Ecoute, E::PermissionRefusee) => Some(Calme),
         (Reflechit | Repond, E::ActionReussie) => Some(Fait),
 
         (Fait | Oups, E::Acquitter) => Some(Calme),
@@ -375,6 +377,12 @@ mod tests {
                 Reunion(A::Reflechit),
             ),
             (Reunion(A::Propose), E::PermissionRefusee, Reunion(A::Calme)),
+            (
+                Reunion(A::Ecoute),
+                E::PermissionAccordee,
+                Reunion(A::Reflechit),
+            ),
+            (Reunion(A::Ecoute), E::PermissionRefusee, Reunion(A::Calme)),
             (Reunion(A::Reflechit), E::ActionReussie, Reunion(A::Fait)),
             (Reunion(A::Repond), E::ActionReussie, Reunion(A::Fait)),
             (Reunion(A::Fait), E::Acquitter, Reunion(A::Calme)),
