@@ -271,6 +271,11 @@ const NOTES_MD = '- Budget : 12 k€\n- Fusée prête jeudi';
 test('copier, exporter, ouvrir le dossier', async ({ page }) => {
   const errors = await ouvrirCarnet(page);
   await page.locator('.element[data-genre="reunion"]').click();
+  // Les messages partent seuls au bout de quelques secondes : sous charge
+  // (train, cargo en parallèle), ils partaient avant d'être relus ou
+  // cliqués (KOB-284). L'horloge de la page est figée : ils restent.
+  await page.clock.install();
+  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
   await page.getByRole('button', { name: 'Copier', exact: true }).click();
   await page.getByRole('menuitem', { name: /Copier tout/ }).click();
   await expect(page.locator('.notif .notif-texte')).toHaveText(`Réunion copiée en entier · ${nbCar('# 2026-10-18_point-budget\n')} · markdown`);
@@ -280,6 +285,8 @@ test('copier, exporter, ouvrir le dossier', async ({ page }) => {
   await expect(page.locator('.notif').last().locator('.notif-apercu')).toHaveText('titre, compte rendu et transcription\ndans /home/test/Documents/');
   // Un seul message à la fois : « Exporté » remplace « Copié » (KOB-215).
   await expect(page.locator('.notif:not(.sort)')).toHaveCount(1);
+  // Le message remplacé finit de sortir (300 ms), l'horloge étant figée.
+  await page.clock.runFor(400);
   await expect(page.locator('.notif', { hasText: 'Réunion copiée' })).toHaveCount(0);
   // « Ouvrir » ouvre le fichier exporté ; la coque sait lequel, la fenêtre ne donne aucun chemin (KOB-224).
   await page.locator('.notif:not(.sort)').getByRole('button', { name: 'Ouvrir' }).click();
