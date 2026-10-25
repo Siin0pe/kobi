@@ -800,7 +800,6 @@ async fn lister(nom: &str, s: &Serveur, coffre: Arc<dyn Coffre>) -> Result<Vec<V
 /// Serveurs activés, connectés pour une réunion du backend clé API
 /// (KOB-102), avec leur `tools/list`. Un serveur injoignable est signalé
 /// et laissé de côté.
-#[allow(dead_code, reason = "branché avec KOB-103")]
 pub async fn connecter(
     config: &McpConfig,
     coffre: Arc<dyn Coffre>,
@@ -815,28 +814,47 @@ pub async fn connecter(
         .iter()
         .filter(|(n, s)| s.actif && nom_valide(n).is_ok())
     {
-        let essai = async {
-            let client = connexion(nom, s, coffre.clone()).await?;
-            match outils_de(&client).await {
-                Ok(outils) => Ok((client, outils)),
-                Err(e) => {
-                    let _ = client.cancel().await;
-                    Err(e)
-                }
-            }
-        };
-        match tokio::time::timeout(DELAI_TEST, essai).await {
-            Ok(Ok((client, outils))) => connectes.push((nom.clone(), client, outils)),
-            Ok(Err(Echec::Autorisation)) => {
-                tracing::warn!(serveur = %nom, "serveur MCP : autorisation de Kobi manquante")
-            }
-            Ok(Err(Echec::Autre(e))) => {
-                tracing::warn!(serveur = %nom, erreur = %e, "serveur MCP injoignable")
-            }
-            Err(_) => tracing::warn!(serveur = %nom, "serveur MCP : pas de réponse"),
-        }
+        connectes.extend(connecter_un(nom, s, coffre.clone()).await);
     }
     connectes
+}
+
+/// Un serveur connecté, avec son `tools/list` ; `None` s'il ne répond pas
+/// (signalé dans le journal). Sert aussi au MCP de Kobi (KOB-103).
+pub async fn connecter_un(
+    nom: &str,
+    s: &Serveur,
+    coffre: Arc<dyn Coffre>,
+) -> Option<(
+    String,
+    rmcp::service::RunningService<rmcp::RoleClient, ()>,
+    Vec<Value>,
+)> {
+    let essai = async {
+        let client = connexion(nom, s, coffre).await?;
+        match outils_de(&client).await {
+            Ok(outils) => Ok((client, outils)),
+            Err(e) => {
+                let _ = client.cancel().await;
+                Err(e)
+            }
+        }
+    };
+    match tokio::time::timeout(DELAI_TEST, essai).await {
+        Ok(Ok((client, outils))) => Some((nom.to_owned(), client, outils)),
+        Ok(Err(Echec::Autorisation)) => {
+            tracing::warn!(serveur = %nom, "serveur MCP : autorisation de Kobi manquante");
+            None
+        }
+        Ok(Err(Echec::Autre(e))) => {
+            tracing::warn!(serveur = %nom, erreur = %e, "serveur MCP injoignable");
+            None
+        }
+        Err(_) => {
+            tracing::warn!(serveur = %nom, "serveur MCP : pas de réponse");
+            None
+        }
+    }
 }
 
 /// Teste le serveur ; en cas de succès, ses outils et leur nature.

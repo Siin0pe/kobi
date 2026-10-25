@@ -463,7 +463,9 @@ impl OutillageKobi {
         }
     }
 
-    /// Ferme les connexions MCP (fin de réunion).
+    /// Ferme les connexions MCP. En réunion, elles se ferment quand la
+    /// session (l'`ApiBrain`) est lâchée ; les tests les ferment à la main.
+    #[cfg(test)]
     pub async fn fermer(self) {
         for s in self.serveurs {
             let _ = s.client.cancel().await;

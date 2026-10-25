@@ -33,6 +33,12 @@ fn etat_de(cle: Option<&str>) -> EtatCle {
     }
 }
 
+/// La clé elle-même, pour le backend clé API (jamais envoyée à
+/// l'interface ni écrite dans un journal).
+pub fn lire(coffre: &dyn Coffre) -> Result<Option<String>, String> {
+    coffre.lire(SERVEUR, NOM)
+}
+
 /// État de la clé enregistrée.
 pub fn etat(coffre: &dyn Coffre) -> Result<EtatCle, String> {
     Ok(etat_de(coffre.lire(SERVEUR, NOM)?.as_deref()))
