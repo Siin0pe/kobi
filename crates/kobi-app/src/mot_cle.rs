@@ -149,6 +149,57 @@ fn nettoyer(morceau: &str) -> &str {
     }
 }
 
+/// La phrase qui porte le nom, quand il l'ouvre après une autre phrase du même
+/// segment, et qu'une suite le suit : « … le mentionnera. Kobi, termine la
+/// réunion. » → « Kobi, termine la réunion. ». Sous charge, ou quand on
+/// enchaîne sans s'arrêter, Nemotron rend les deux phrases en un segment, et
+/// le nom n'y était ni en tête ni en fin (KOB-276). Le nom seul en fin
+/// (« Quelle heure est-il ? Kobi. ») garde la phrase d'avant pour question ;
+/// une abréviation (« M. Kobi ») ne coupe pas.
+fn phrase_du_nom(texte: &str) -> &str {
+    let Some((debut, fin)) = trouver(texte).or_else(|| trouver_variante(texte)) else {
+        return texte;
+    };
+    if nettoyer(&texte[fin..]).is_empty() {
+        return texte;
+    }
+    let avant = &texte[..debut];
+    let coupe = avant
+        .char_indices()
+        .filter(|&(i, c)| {
+            matches!(c, '.' | '?' | '!' | '…')
+                && avant[i + c.len_utf8()..].starts_with(char::is_whitespace)
+                // Le mot qui finit la phrase d'avant : pas une initiale.
+                && avant[..i]
+                    .trim_end()
+                    .split(|c: char| !c.is_alphanumeric())
+                    .next_back()
+                    .is_some_and(|m| m.chars().count() > 1)
+        })
+        .map(|(i, c)| i + c.len_utf8())
+        .next_back();
+    match coupe {
+        Some(i) => texte[i..].trim_start(),
+        None => texte,
+    }
+}
+
+/// Mots au plus d'un ordre sur la réunion collé à la phrase d'avant
+/// (KOB-276).
+const ORDRE_COLLE_MOTS: usize = 6;
+
+/// Ordre court sur la réunion (la terminer, la mettre en pause, la reprendre),
+/// qui est tout ce que dit la suite du nom (KOB-276).
+fn ordre_de_reunion(suite: &str) -> bool {
+    use crate::intentions::{fin_de_reunion_dite, intention, Intention};
+    mots(suite).len() <= ORDRE_COLLE_MOTS
+        && (fin_de_reunion_dite(suite)
+            || matches!(
+                intention(suite),
+                Some(Intention::TerminerReunion | Intention::Pause | Intention::Reprendre)
+            ))
+}
+
 /// Ce qui suit « Kobi » dans le texte, ou `None` s'il n'y est pas.
 pub fn reperer(texte: &str) -> Option<&str> {
     trouver(texte)
@@ -229,6 +280,7 @@ fn mots(morceau: &str) -> Vec<String> {
 /// virgules d'apostrophe (« Tu en penses quoi, Kobi ? » → « Tu en penses
 /// quoi ? »). `None` sans le nom.
 pub fn interpellation(texte: &str) -> Option<(Adresse, String)> {
+    let texte = phrase_du_nom(texte);
     let (debut, fin) = trouver(texte).or_else(|| trouver_variante(texte))?;
     let avant = &texte[..debut];
     let apres = &texte[fin..];
@@ -301,13 +353,26 @@ pub fn interpellation(texte: &str) -> Option<(Adresse, String)> {
         Adresse::Appel
     } else if cite_avant || (sujet && !toi) {
         Adresse::Cite
+    } else if ordre_de_reunion(nettoyer(apres)) {
+        // Le nom suivi d'un ordre court sur la réunion, qui finit le segment
+        // (« … le mentionnera Kobe termine la réunion ») : sous charge,
+        // Nemotron colle la phrase d'avant, souvent sans ponctuation
+        // (KOB-276).
+        Adresse::Appel
     } else {
         // Au milieu d'une phrase, sans virgules autour : pas un appel net,
         // même avec « tu » (une conversation de groupe en est pleine, KOB-237).
         Adresse::Doute
     };
 
-    let question = if est_pour_et {
+    let ordre_colle = !appel_en_tete
+        && !en_fin
+        && !(virgule_avant && virgule_apres)
+        && !cite_avant
+        && adresse == Adresse::Appel;
+    let question = if ordre_colle {
+        nettoyer(apres).to_string()
+    } else if est_pour_et {
         let apres = apres.trim_start();
         nettoyer(&format!("et{}", apres.get(3..).unwrap_or_default())).to_string()
     } else if en_tete {
@@ -501,7 +566,9 @@ impl Ecouteur {
             // « Merci Kobi » n'est pas une interpellation.
             Attente::Nom if fin_de_conversation(texte) => self.phrase_sans_nom(texte, finale, t),
             Attente::Nom | Attente::Phrase { .. } => match interpellation(texte) {
+                // L'adresse se juge sur la phrase qui porte le nom (KOB-276).
                 Some((adresse, q)) => {
+                    let texte = phrase_du_nom(texte);
                     self.phrase_avec_nom(texte, adresse, &q, finale, t, &mut actions)
                 }
                 // La reconnaissance a révisé la phrase : le nom n'y est plus.
@@ -763,7 +830,10 @@ impl Ecouteur {
         // tête suivi de sa question, seulement un début coupé (« Est-ce que tu
         // pourrais »… « Kobi, me rappeler… ») : en conversation de groupe, la
         // phrase d'avant est souvent celle d'un autre (KOB-237).
-        let appel_complet = !q.is_empty() && nom_en_tete(texte);
+        // Un ordre sur la réunion collé à la phrase d'avant compte comme un
+        // appel en tête (KOB-276).
+        let en_tete = nom_en_tete(texte) || ordre_de_reunion(q);
+        let appel_complet = !q.is_empty() && en_tete;
         let precedent = self
             .precedent
             .take()
@@ -776,7 +846,7 @@ impl Ecouteur {
             (Some(p), false) => format!("{p} {q}"),
             (None, _) => q.to_string(),
         };
-        let borne = if nom_en_tete(texte) {
+        let borne = if en_tete {
             QUESTION_CARACTERES_APPEL
         } else {
             QUESTION_CARACTERES
@@ -1788,5 +1858,74 @@ mod tests {
             actions,
             [Interpeller, Envoyer("Tu en penses quoi ?".into())]
         );
+    }
+
+    /// KOB-276 : le nom ouvre une phrase après une autre du même segment
+    /// (Nemotron les rend ensemble sous charge, ou quand on enchaîne) : un
+    /// appel. Le nom au milieu de sa phrase reste un doute ; seul en fin, il
+    /// garde la phrase d'avant pour question ; une initiale ne coupe pas.
+    #[test]
+    fn appel_qui_suit_une_autre_phrase() {
+        for texte in [
+            "Le budget est validé et le compte rendu le mentionnera. Kobe. termine la réunion.",
+            "Le budget est validé et le compte rendu le mentionnera. Kobi, termine la réunion.",
+            "Bon, on a fini ? Kobi, termine la réunion",
+            // Sans ponctuation, comme dans l'essai du 24/10.
+            "Le budget de la ligne vingt est validé, et le compte rendu, le mentionnera Kobe termine la réunion",
+        ] {
+            assert_eq!(
+                interpellation(texte),
+                Some((Adresse::Appel, "termine la réunion".into())),
+                "{texte}"
+            );
+            let mut e = Ecouteur::new(false);
+            assert_eq!(
+                e.segment(texte, true, 10.0),
+                vec![
+                    Action::Interpeller,
+                    Action::Envoyer("termine la réunion".into())
+                ],
+                "{texte}"
+            );
+        }
+        assert_ne!(
+            interpellation("On a fini. Alors du coup Kobe il a dit non à tout le monde.")
+                .map(|(a, _)| a),
+            Some(Adresse::Appel)
+        );
+        assert_eq!(
+            interpellation("Quelle heure est-il ? Kobi."),
+            Some((Adresse::Appel, "Quelle heure est-il ?".into()))
+        );
+        assert_eq!(
+            phrase_du_nom("J'ai vu M. Kobi hier soir."),
+            "J'ai vu M. Kobi hier soir."
+        );
+        // Précédé d'un segment tout proche, sans point final : la question
+        // reste l'ordre seul.
+        let mut e = Ecouteur::new(false);
+        e.segment("Le budget de la ligne dix-neuf est validé", true, 5.0);
+        assert_eq!(
+            e.segment(
+                "et le compte rendu le mentionnera Kobe termine la réunion",
+                true,
+                6.0
+            ),
+            vec![
+                Action::Interpeller,
+                Action::Envoyer("termine la réunion".into())
+            ]
+        );
+        // Un ordre long, ou cité, au milieu d'une phrase : pas un appel.
+        for texte in [
+            "il paraît que Kobe termine la réunion demain avec toute l'équipe",
+            "j'ai dit à Kobi termine la réunion",
+        ] {
+            assert_ne!(
+                interpellation(texte).map(|(a, _)| a),
+                Some(Adresse::Appel),
+                "{texte}"
+            );
+        }
     }
 }
