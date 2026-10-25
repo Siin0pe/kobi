@@ -1455,14 +1455,6 @@ impl<R: Runtime> Chef<R> {
         }
         horodater(&mut s, r.debut, dit_a);
         self.ecrivain.segment(s.clone());
-        // Arrivé après la demande de compte rendu : il manque à celui-ci, qui
-        // le dit, mais la transcription le garde (KOB-281).
-        if r.compte_rendu_demande {
-            tracing::info!(
-                "segment arrivé après la demande de compte rendu : ajouté à la transcription"
-            );
-            return;
-        }
         let t = s.start as u64;
         let ligne = format!(
             "[{:02}:{:02} {}] {}\n",
@@ -1474,6 +1466,16 @@ impl<R: Runtime> Chef<R> {
             },
             s.text
         );
+        // Arrivé après la demande de compte rendu : il manque à celui-ci, qui
+        // le dit, mais la transcription le garde (KOB-281). Si la fin est
+        // annulée, il revient à la réunion reprise avec le reste (KOB-288).
+        if r.compte_rendu_demande {
+            tracing::info!(
+                "segment arrivé après la demande de compte rendu : ajouté à la transcription"
+            );
+            r.pour_compte_rendu.push_str(&ligne);
+            return;
+        }
         r.a_noter.push_str(&ligne);
         if !r.titre_demande && r.debut_parole.len() < TITRE_PAROLE_MAX {
             r.debut_parole.push_str(&ligne);
@@ -3134,6 +3136,35 @@ mod tests {
             cr.contains(&kobi_i18n::tr("coque.chef.compteRenduIncomplet", &[])),
             "{cr}"
         );
+    }
+
+    /// KOB-288 : un segment dit avant l'arrêt arrive après la demande de
+    /// compte rendu, pendant « Annuler » ; la fin est annulée : il revient
+    /// à la réunion reprise avec le reste.
+    #[test]
+    fn annuler_garde_ce_qui_est_arrive_apres_le_compte_rendu() {
+        let (app, _dir) = chef_en_essai();
+        let avant = Instant::now() - Duration::from_secs(3);
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            c.recevoir(Message::Segment(dit("Premier point."), avant));
+            c.recevoir(Message::Avancement(
+                kobi_stt::Source::Moi,
+                Some(Instant::now() - Duration::from_secs(30)),
+            ));
+            c.commande(Intention::TerminerReunion);
+            c.reunion.as_mut().unwrap().vidange = Some(Instant::now());
+            c.tick();
+            assert!(c.reunion.as_ref().unwrap().compte_rendu_demande);
+            c.recevoir(Message::Segment(dit("Arrivé pendant Annuler."), avant));
+            assert!(c.fin_annulable());
+            c.commande(Intention::Reprendre);
+            let r = c.reunion.as_ref().unwrap();
+            assert!(!r.fin_demandee);
+            for texte in ["Premier point.", "Arrivé pendant Annuler."] {
+                assert!(r.a_noter.contains(texte), "{texte} : {}", r.a_noter);
+            }
+        });
     }
 
     /// KOB-281 : rien de transcrit, pistes en retard : le compte rendu
