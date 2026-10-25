@@ -1107,13 +1107,8 @@
   "session.cles.codebases": "Dossiers de code que Kobi peut lire (chemins complets).",
   "session.cles.audio.sources": "Son de l'ordinateur en réunion (la voix des autres en visio) : mic (micro seul, défaut) ou both.",
   "session.cles.audio.sortie": "Sortie audio captée pour le son de l'ordinateur ; vide : celle du système.",
-<<<<<<< HEAD
   "session.cles.stt.engine": "Moteur de transcription : auto (le gagnant du benchmark) ou nemotron.",
-  "session.cles.notes.mode": "Prise de notes : blocks, end ou continuous.",
-=======
-  "session.cles.stt.engine": "Moteur de transcription (auto : le gagnant du benchmark).",
   "session.cles.notes.mode": "Prise de notes : blocks, end ou continuous (expérimental : Kobi peut proposer une action, sur carte).",
->>>>>>> 83b3df1 (KOB-72 : notes en mode continu (expérimental) : un bloc toutes les 3 phrases, et une action proposée par Claude pendant les notes ouvre une carte ; hors continu, refusée sans carte)
   "session.cles.notes.interval_min": "Intervalle des notes en blocs, de 1 à 10 minutes.",
   "session.cles.taches.abandon_s": "Une tâche de Claude sans signe de vie (ni texte, ni outil en cours, ni carte en attente) est abandonnée après ce délai, de 30 à 3600 secondes (300 par défaut).",
   "session.cles.taches.duree_max_s": "Durée maximale d'une tâche de Claude, même active, de 60 à 7200 secondes (900 par défaut).",
