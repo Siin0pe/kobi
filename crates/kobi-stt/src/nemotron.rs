@@ -266,9 +266,11 @@ impl NemotronEngine {
             // l'audio reçu depuis le `reset` précédent : rien d'une phrase
             // déjà rendue ne revient, et un long silence ne se rejoue pas
             // en boucle.
-            let longueur =
-                track.pos - track.utterance_start + track.rejoue as f64 / SAMPLE_RATE as f64;
-            let rejeu = if fin || longueur >= LONGUEUR_MAX_ENONCE - 0.5 {
+            // Longueur vue par sherpa : l'audio mis dans ce flux, rejeu
+            // compris, plus ce qui restait à décoder du flux d'avant (au plus
+            // un bloc, ~1,1 s) : d'où la marge de 1,5 s.
+            let longueur = (track.depuis_reset + track.rejoue) as f64 / SAMPLE_RATE as f64;
+            let rejeu = if fin || longueur >= LONGUEUR_MAX_ENONCE - 1.5 {
                 Vec::new()
             } else {
                 a_rejouer(&track.queue, track.depuis_reset, text.is_empty())
@@ -791,6 +793,40 @@ mod tests {
         // pendant les 20 s de silence : pas de boucle.
         let rejeux = engine.tracks[&Source::Moi].rejeux;
         assert!(rejeux <= 4, "{rejeux} rejeux");
+
+        // Parole continue au-delà de 30 s (règle 3) : la fin d'énoncé par
+        // longueur ne rejoue rien, aucun mot ne revient.
+        let mut config = NemotronConfig::new(&dir);
+        config.language = Some("fr".into());
+        let mut engine = NemotronEngine::new(config).unwrap();
+        let mut audio = vec![0.0f32; SAMPLE_RATE as usize];
+        for _ in 0..6 {
+            audio.extend(&parole);
+        }
+        audio.extend(vec![0.0f32; 3 * SAMPLE_RATE as usize]);
+        let mut finals = Vec::new();
+        for (i, bloc) in audio.chunks(1600).enumerate() {
+            let frame = AudioFrame {
+                source: Source::Moi,
+                samples: bloc.to_vec(),
+                t: i as f64 * 0.1,
+            };
+            finals.extend(
+                engine
+                    .push(&frame)
+                    .unwrap()
+                    .into_iter()
+                    .filter(|s| s.is_final),
+            );
+        }
+        let tout: Vec<String> = finals.iter().flat_map(|s| mots(&s.text)).collect();
+        assert!(
+            tout.len() <= 6 * reference.len() + 2,
+            "parole continue : {} mots pour {} au plus : {:?}",
+            tout.len(),
+            6 * reference.len(),
+            finals.iter().map(|s| &s.text).collect::<Vec<_>>()
+        );
     }
 
     /// KOB-311, avec le modèle : une phrase dite après 8 s de silence,
