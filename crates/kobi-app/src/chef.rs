@@ -466,8 +466,9 @@ pub struct Chef<R: Runtime> {
     /// (KOB-133) : la fenêtre de 20 s repart quand Kobi se tait.
     suite_apres_voix: bool,
     /// Annonce de service (« compte rendu prêt ») qui attend la fin de la
-    /// réponse en cours pour ne pas la couper (KOB-365), et depuis quand.
-    annonce: Option<(String, Instant)>,
+    /// réponse en cours pour ne pas la couper (KOB-365) : texte, depuis
+    /// quand, et le compte des coupures de la voix à ce moment.
+    annonce: Option<(String, Instant, u64)>,
     /// Dernière question répondue et sa réponse (« répète », « plus court »…).
     derniere: Option<(String, String)>,
     /// Tâches longues en cours : début et question (« où en est… ? ») ;
@@ -2800,21 +2801,26 @@ impl<R: Runtime> Chef<R> {
         if self.voix.is_none() && !crate::voix::occupee(&self.app) {
             crate::voix::dire(&self.app, &texte);
         } else {
-            self.annonce = Some((texte, Instant::now()));
+            let coupures = crate::voix::interruptions(&self.app);
+            self.annonce = Some((texte, Instant::now(), coupures));
         }
     }
 
-    /// Annonce en attente : dite quand la voix est libre, abandonnée au-delà
-    /// de [`ANNONCE_ATTENTE`] (l'écran la montre déjà).
+    /// Annonce en attente : dite quand la voix est libre, abandonnée si
+    /// l'utilisateur a coupé la voix depuis, ou au-delà de
+    /// [`ANNONCE_ATTENTE`] (l'écran la montre déjà).
     fn annonce_en_attente(&mut self) {
-        let Some((_, depuis)) = &self.annonce else {
+        let Some((_, depuis, coupures)) = &self.annonce else {
             return;
         };
-        if depuis.elapsed() >= ANNONCE_ATTENTE {
+        if *coupures != crate::voix::interruptions(&self.app) {
+            self.annonce = None;
+            tracing::info!("voix : annonce abandonnée, l'utilisateur a coupé la voix");
+        } else if depuis.elapsed() >= ANNONCE_ATTENTE {
             self.annonce = None;
             tracing::info!("voix : annonce sautée, réponse toujours en cours");
         } else if self.voix.is_none() && !crate::voix::occupee(&self.app) {
-            if let Some((texte, _)) = self.annonce.take() {
+            if let Some((texte, ..)) = self.annonce.take() {
                 crate::voix::dire(&self.app, &texte);
             }
         }
@@ -3350,6 +3356,8 @@ mod tests {
     #[test]
     fn annonce_apres_la_reponse_en_cours() {
         let (app, _dir) = chef_en_essai();
+        // La voix (sans parleur) compte les coupures.
+        crate::voix::installer_sans_parleur(app.handle(), &Default::default());
         avec_chef(&app, |c| {
             // Pas de réponse en cours : dite tout de suite.
             c.annoncer("Compte rendu prêt.".into());
@@ -3373,7 +3381,15 @@ mod tests {
             c.annonce = Some((
                 "Compte rendu prêt.".into(),
                 Instant::now() - ANNONCE_ATTENTE,
+                crate::voix::interruptions(&c.app),
             ));
+            c.tick();
+            assert!(c.annonce.is_none());
+            // Voix coupée par l'utilisateur (il parle) sans passer par le
+            // chef : abandonnée au tic.
+            c.annoncer("Compte rendu prêt.".into());
+            assert!(c.annonce.is_some());
+            crate::voix::taire(&c.app, "l'utilisateur parle");
             c.tick();
             assert!(c.annonce.is_none());
         });
