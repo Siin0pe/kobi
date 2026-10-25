@@ -21,6 +21,11 @@ use crate::{AudioFrame, Result, Segment, Source, SttEngine, SttError, SAMPLE_RAT
 /// Silence ajouté en fin de flux pour vider le contexte droit de l'encodeur.
 const TAIL_PADDING_SECS: f64 = 0.3;
 
+/// Parole entendue au plus avant que le premier mot d'un énoncé sorte du
+/// modèle, en plus d'un bloc de l'encodeur (KOB-311) : large, pour ne
+/// jamais placer le début après la parole.
+const PREMIER_MOT_SECS: f64 = 2.0;
+
 /// Réglages du moteur.
 #[derive(Debug, Clone)]
 pub struct NemotronConfig {
@@ -106,7 +111,9 @@ struct Track {
     stream: OnlineStream,
     /// Fin de l'audio reçu, en secondes.
     pos: f64,
-    /// Début de l'énoncé en cours (position du dernier `reset`).
+    /// Début de l'énoncé en cours : position du dernier `reset`, avancée à
+    /// la reprise après un silence non transmis et au premier mot reconnu
+    /// (KOB-311).
     utterance_start: f64,
     /// Dernier texte émis pour l'énoncé en cours.
     last_text: String,
@@ -118,6 +125,8 @@ pub struct NemotronEngine {
     config: NemotronConfig,
     recognizer: OnlineRecognizer,
     tracks: HashMap<Source, Track>,
+    /// [`PREMIER_MOT_SECS`] plus un bloc de l'encodeur, en secondes.
+    premier_mot: f64,
 }
 
 impl NemotronEngine {
@@ -170,11 +179,13 @@ impl NemotronEngine {
         if config.provider == Provider::Cuda {
             name += "-cuda";
         }
+        let bloc = f64::from(config.chunk_ms().unwrap_or(1120)) / 1000.0;
         Ok(Self {
             name,
             config,
             recognizer,
             tracks: HashMap::new(),
+            premier_mot: PREMIER_MOT_SECS + bloc,
         })
     }
 
@@ -201,6 +212,7 @@ impl NemotronEngine {
     /// Décode tout ce qui est prêt et renvoie les segments produits.
     fn drain(&mut self, source: Source) -> Vec<Segment> {
         let recognizer = &self.recognizer;
+        let premier_mot = self.premier_mot;
         let track = self.tracks.get_mut(&source).expect("flux créé");
         while recognizer.is_ready(&track.stream) {
             recognizer.decode(&track.stream);
@@ -210,6 +222,10 @@ impl NemotronEngine {
             .get_result(&track.stream)
             .map(|r| clean_text(&r.text))
             .unwrap_or_default();
+        if !text.is_empty() && track.last_text.is_empty() {
+            track.utterance_start =
+                debut_au_premier_mot(track.utterance_start, track.pos, premier_mot);
+        }
 
         let mut out = Vec::new();
         let segment = |text: &str, is_final| Segment {
@@ -234,6 +250,25 @@ impl NemotronEngine {
         }
         out
     }
+}
+
+/// Début de l'énoncé quand arrive une trame qui commence à `t`, l'audio
+/// reçu finissant à `pos` : après un silence non transmis (`t > pos`), un
+/// énoncé encore `sans_mot` commence au plus tôt à `t` (KOB-311). Le début
+/// posé au `reset` précède sinon tout le silence.
+fn debut_apres_un_trou(debut: f64, pos: f64, sans_mot: bool, t: f64) -> f64 {
+    if sans_mot && t > pos {
+        debut.max(t)
+    } else {
+        debut
+    }
+}
+
+/// Début de l'énoncé quand son premier mot sort du modèle, la fin de
+/// l'audio reçu étant `pos` : au plus `premier_mot` secondes avant (KOB-311).
+/// Le silence transmis avant la parole n'en fait plus partie.
+fn debut_au_premier_mot(debut: f64, pos: f64, premier_mot: f64) -> f64 {
+    debut.max(pos - premier_mot)
 }
 
 /// Retire les balises de langue (`<fr-FR>`) et normalise les espaces.
@@ -261,6 +296,12 @@ impl SttEngine for NemotronEngine {
 
     fn push(&mut self, frame: &AudioFrame) -> Result<Vec<Segment>> {
         let track = self.track(frame.source);
+        track.utterance_start = debut_apres_un_trou(
+            track.utterance_start,
+            track.pos,
+            track.last_text.is_empty(),
+            frame.t,
+        );
         track
             .stream
             .accept_waveform(SAMPLE_RATE as i32, &frame.samples);
@@ -403,6 +444,23 @@ mod tests {
         assert_eq!(clean_text("x < y"), "x < y");
     }
 
+    /// KOB-311 : le début d'un énoncé ne précède plus le silence d'avant
+    /// la parole, transmis ou non.
+    #[test]
+    fn debut_d_enonce_apres_le_silence() {
+        // Silence non transmis : la trame suivante arrive à 40 s, le dernier
+        // énoncé s'est conclu à 12 s.
+        assert_eq!(debut_apres_un_trou(12.0, 12.0, true, 40.0), 40.0);
+        // Pas de trou : rien ne bouge.
+        assert_eq!(debut_apres_un_trou(12.0, 12.0, true, 12.0), 12.0);
+        // Énoncé déjà commencé (un mot reconnu) : un trou ne le coupe pas.
+        assert_eq!(debut_apres_un_trou(12.0, 20.0, false, 40.0), 12.0);
+        // Silence transmis : au premier mot, à 40 s, au plus 2,56 s avant.
+        assert!((debut_au_premier_mot(12.0, 40.0, 2.56) - 37.44).abs() < 1e-9);
+        // Parole sans silence avant : le début reste celui du reset.
+        assert_eq!(debut_au_premier_mot(39.0, 40.0, 2.56), 39.0);
+    }
+
     #[test]
     fn chunk_size_is_read_from_the_package_name() {
         let c = NemotronConfig::new(
@@ -449,5 +507,66 @@ mod tests {
         println!("{text:?}");
         assert!(!text.is_empty());
         assert!(out.emissions.iter().any(|e| !e.segment.is_final));
+    }
+
+    /// KOB-311, avec le modèle : une phrase dite après 8 s de silence,
+    /// transmis puis non transmis, commence au plus `premier_mot` avant la
+    /// parole, et pas après. Ignoré sans modèle :
+    /// `KOBI_NEMOTRON_DIR=<dossier du paquet> cargo test -p kobi-stt
+    /// --features nemotron -- --ignored`.
+    #[test]
+    #[ignore = "demande KOBI_NEMOTRON_DIR"]
+    fn debut_d_enonce_apres_le_silence_avec_le_modele() {
+        let dir = PathBuf::from(std::env::var("KOBI_NEMOTRON_DIR").expect("KOBI_NEMOTRON_DIR"));
+        let parole = crate::wav::read_wav_16k_mono(dir.join("test_wavs/fr.wav")).unwrap();
+        let duree = parole.len() as f64 / SAMPLE_RATE as f64;
+        for transmis in [true, false] {
+            let mut config = NemotronConfig::new(&dir);
+            config.language = Some("fr".into());
+            let mut engine = NemotronEngine::new(config).unwrap();
+            let premier_mot = engine.premier_mot;
+            let mut finals = Vec::new();
+            let mut pousser = |engine: &mut NemotronEngine, samples: &[f32], debut: f64| {
+                for (i, bloc) in samples.chunks(1600).enumerate() {
+                    let frame = AudioFrame {
+                        source: Source::Moi,
+                        samples: bloc.to_vec(),
+                        t: debut + i as f64 * 0.1,
+                    };
+                    finals.extend(
+                        engine
+                            .push(&frame)
+                            .unwrap()
+                            .into_iter()
+                            .filter(|s| s.is_final),
+                    );
+                }
+            };
+            // La porte de l'écoute laisse passer un peu de silence après la
+            // parole : la phrase se conclut. Puis 8 s de silence, transmis ou
+            // non ; sans, l'écoute demande un énoncé neuf (KOB-190).
+            pousser(&mut engine, &parole, 0.0);
+            let fin_de_phrase = vec![0.0f32; 3 * SAMPLE_RATE as usize];
+            pousser(&mut engine, &fin_de_phrase, duree);
+            let silence = vec![0.0f32; 8 * SAMPLE_RATE as usize];
+            if transmis {
+                pousser(&mut engine, &silence, duree + 3.0);
+            } else {
+                engine.nouvel_enonce(Source::Moi);
+            }
+            let reprise = duree + 11.0;
+            pousser(&mut engine, &parole, reprise);
+            finals.extend(engine.finish().unwrap());
+            let seconde = finals
+                .iter()
+                .find(|s| s.end > reprise)
+                .unwrap_or_else(|| panic!("pas de phrase après le silence : {finals:?}"));
+            println!("transmis={transmis} reprise={reprise:.2} {seconde:?}");
+            assert!(
+                seconde.start >= reprise - premier_mot && seconde.start <= reprise + 0.5,
+                "transmis={transmis} : début {} pour une parole à {reprise}",
+                seconde.start
+            );
+        }
     }
 }
