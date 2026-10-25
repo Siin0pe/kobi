@@ -1451,7 +1451,7 @@ mod tests {
         let avant = format!("{e:?}");
         for phrase in [
             "donc on garde le budget",
-            "Kobi, relance la réunion",
+            "Kobi, termine la réunion",
             "Kobi, reprends l'enregistrement",
             "Kobi",
             "reprends",

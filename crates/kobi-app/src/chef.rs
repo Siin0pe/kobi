@@ -3965,12 +3965,10 @@ mod tests {
                 dit_a: Some(dit_a),
             };
             // Ordres sur la réunion : rien ne part, la réunion n'est pas relancée.
-            for ordre in [
-                "relance la réunion",
-                "démarre la réunion",
-                "reprends",
-                "termine la réunion",
-            ] {
+            // (« relance la réunion », que le chef ne reconnaît pas, est
+            // différé : la session en lecture seule ne peut pas piloter,
+            // KOB-328.)
+            for ordre in ["démarre la réunion", "reprends", "termine la réunion"] {
                 c.recevoir(dite(ordre, avant));
             }
             c.recevoir(Message::QuestionPeutEtre(
@@ -3979,7 +3977,7 @@ mod tests {
             ));
             // L'écouteur fait écouter Kobi avant la question : il n'y reste pas.
             c.recevoir(Message::Interpelle);
-            c.recevoir(dite("relance la réunion", avant));
+            c.recevoir(dite("termine la réunion", avant));
             assert_ne!(c.activite(), Some("ecoute"));
             assert_eq!(c.tour, tour, "rien n'est parti sur la conversation");
             assert!(c.reunion.as_ref().is_none_or(|r| r.fin_demandee));
