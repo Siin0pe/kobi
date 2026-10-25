@@ -873,6 +873,13 @@ fn dossiers_imbriques_comptes_une_fois() {
     let dedans = codebase();
     let l = Lecteur::new(&[dedans.path().to_path_buf(), dedans.path().join("src")]);
     assert_eq!(l.dossiers.len(), 1);
+    // Le premier dossier déclaré reste la base des chemins relatifs, même
+    // contenu dans un autre.
+    let l2 = Lecteur::new(&[dedans.path().join("src"), dedans.path().to_path_buf()]);
+    assert!(l2
+        .lire(&json!({ "file_path": "main.rs" }))
+        .unwrap()
+        .contains("fn main"));
     let r = l.lister(&json!({ "pattern": "**/*.rs" })).unwrap();
     assert_eq!(r.lines().count(), 1, "{r}");
 }

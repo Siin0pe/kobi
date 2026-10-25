@@ -67,6 +67,9 @@ impl Default for Bornes {
 pub struct Lecteur {
     /// Dossiers permis, résolus.
     dossiers: Vec<PathBuf>,
+    /// Base des chemins relatifs : le premier dossier déclaré, même s'il
+    /// est contenu dans un autre.
+    base: Option<PathBuf>,
     bornes: Bornes,
 }
 
@@ -90,6 +93,7 @@ impl Lecteur {
         }
         Self {
             dossiers: garde,
+            base: resolus.first().cloned(),
             bornes: Bornes::default(),
         }
     }
@@ -234,7 +238,7 @@ impl Lecteur {
     /// Chemin résolu, s'il est dans un dossier permis.
     fn permis(&self, chemin: &str) -> Result<PathBuf, String> {
         let brut = Path::new(chemin);
-        let brut = match (brut.is_absolute(), self.dossiers.first()) {
+        let brut = match (brut.is_absolute(), self.base.as_ref()) {
             (false, Some(base)) => base.join(brut),
             _ => brut.to_path_buf(),
         };
