@@ -74,6 +74,9 @@ pub struct TurnSummary {
     /// Texte complet : la réponse, les notes complètes ou le compte rendu.
     pub text: String,
     pub usage: Option<Usage>,
+    /// Remarque du backend pour le journal d'activité (« conversation trop
+    /// longue, reprise à neuf », KOB-316).
+    pub avis: Option<String>,
 }
 
 /// Événement d'un tour.

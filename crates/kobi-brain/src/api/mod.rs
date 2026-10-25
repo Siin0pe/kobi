@@ -47,6 +47,9 @@ const VERSION_API: &str = "2026-10-21";
 const BETA_REPLI: &str = "server-side-fallback-2026-07-01";
 /// Modèles qui acceptent `fallbacks: "default"` sur l'API Anthropic.
 const MODELES_AVEC_REPLI: &[&str] = &["claude-sonnet-5-5", "claude-opus-5-5"];
+/// Remarque du journal d'activité quand la conversation repart à neuf
+/// (KOB-316).
+pub const AVIS_REPRISE: &str = "Conversation trop longue, reprise à neuf.";
 /// Statuts HTTP réessayés (limite, surcharge, panne passagère).
 const STATUTS_REESSAYES: &[u16] = &[429, 500, 502, 503, 504, 529];
 
@@ -129,6 +132,11 @@ pub struct ApiConfig {
     pub tentatives: u32,
     /// Délai de réponse à une carte de confirmation avant refus.
     pub delai_carte: Duration,
+    /// Au-delà de ce contexte (tokens d'entrée de la dernière requête), la
+    /// conversation de la réunion repart de zéro au tour suivant : chaque
+    /// message porte déjà les notes courantes et la transcription nouvelle
+    /// (KOB-316).
+    pub contexte_max: u64,
 }
 
 impl Default for ApiConfig {
@@ -144,6 +152,7 @@ impl Default for ApiConfig {
             max_etapes: 16,
             tentatives: 2,
             delai_carte: kobi_perms::DEFAULT_TIMEOUT,
+            contexte_max: 150_000,
         }
     }
 }
@@ -169,6 +178,11 @@ struct Partage {
     /// Définitions d'outils, figées à l'ouverture.
     outils: Vec<Value>,
     historique: Mutex<Vec<Value>>,
+    /// Tokens d'entrée de la dernière requête (contexte de la conversation).
+    contexte: std::sync::atomic::AtomicU64,
+    /// Remarque pour le journal d'activité, rendue avec le prochain tour
+    /// réussi.
+    avis: std::sync::Mutex<Option<String>>,
 }
 
 /// Conversation d'une réunion sur l'API Messages, vue comme un [`Brain`].
@@ -196,6 +210,8 @@ impl ApiBrain {
                 config,
                 outils,
                 historique: Mutex::new(Vec::new()),
+                contexte: std::sync::atomic::AtomicU64::new(0),
+                avis: std::sync::Mutex::new(None),
             }),
             busy: Arc::new(AtomicBool::new(false)),
             tache: None,
@@ -250,6 +266,17 @@ impl Brain for ApiBrain {
 /// ne pas la refaire au tour suivant (KOB-320).
 async fn tour(partage: &Partage, texte: String, events: &mpsc::Sender<BrainEvent>) -> BrainEvent {
     let mut historique = partage.historique.lock().await;
+    let contexte = partage.contexte.load(Ordering::SeqCst);
+    if contexte > partage.config.contexte_max && !historique.is_empty() {
+        tracing::info!(
+            contexte,
+            messages = historique.len(),
+            "conversation de la réunion trop longue : elle repart des notes courantes"
+        );
+        historique.clear();
+        partage.contexte.store(0, Ordering::SeqCst);
+        *partage.avis.lock().unwrap_or_else(|e| e.into_inner()) = Some(AVIS_REPRISE.to_owned());
+    }
     let debut = historique.len();
     // Après une écriture gardée, le dernier message est celui des
     // résultats d'outils : le texte du tour s'y ajoute (l'API veut des
@@ -305,6 +332,11 @@ async fn boucle(
             Err(e) => return BrainEvent::Error(e),
         };
         ajouter(&mut usage, &reponse.usage);
+        let n = |cle: &str| reponse.usage.get(cle).and_then(Value::as_u64).unwrap_or(0);
+        partage.contexte.store(
+            n("input_tokens") + n("cache_read_input_tokens") + n("cache_creation_input_tokens"),
+            Ordering::SeqCst,
+        );
         let raison = reponse.stop_reason.clone().unwrap_or_default();
         let blocs = a_renvoyer(reponse.blocs());
         match raison.as_str() {
@@ -319,7 +351,23 @@ async fn boucle(
                     config.max_tokens
                 )))
             }
-            _ => {}
+            "end_turn" | "tool_use" | "stop_sequence" => {}
+            // Contexte dépassé (`model_context_window_exceeded`), raison
+            // inconnue ou absente : la réponse est peut-être tronquée, le
+            // tour échoue plutôt que de remplacer les notes (KOB-316).
+            autre => {
+                if autre == "model_context_window_exceeded" {
+                    partage.contexte.store(u64::MAX, Ordering::SeqCst);
+                }
+                return BrainEvent::Error(BrainError::Api(format!(
+                    "réponse interrompue ({})",
+                    if autre.is_empty() {
+                        "sans raison"
+                    } else {
+                        autre
+                    }
+                )));
+            }
         }
         let appels: Vec<Value> = blocs
             .iter()
@@ -331,6 +379,12 @@ async fn boucle(
             return BrainEvent::Done(TurnSummary {
                 text: texte_final(historique),
                 usage: Some(usage),
+                // La reprise à neuf se montre avec le premier tour réussi.
+                avis: partage
+                    .avis
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .take(),
             });
         }
         let mut resultats = Vec::new();

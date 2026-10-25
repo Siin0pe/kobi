@@ -933,3 +933,99 @@ async fn tour_lache_pendant_le_flux() {
     let r = serveur.recues();
     assert_eq!(r[1].corps["messages"].as_array().unwrap().len(), 1);
 }
+
+/// KOB-316 : une raison d'arrêt autre que `end_turn`, `tool_use` ou
+/// `stop_sequence` fait échouer le tour (notes peut-être tronquées), qui
+/// est retiré ; un contexte dépassé fait repartir la conversation de zéro.
+#[tokio::test]
+async fn raison_d_arret_inconnue_et_contexte_depasse() {
+    let tronquee = flux(&[
+        json!({"type":"message_start","message":{"id":"msg","usage":{"input_tokens":5}}}),
+        json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
+        json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"- notes tronq"}}),
+        json!({"type":"content_block_stop","index":0}),
+        json!({"type":"message_delta","delta":{"stop_reason":"model_context_window_exceeded"},"usage":{"output_tokens":4}}),
+        json!({"type":"message_stop"}),
+    ]);
+    let serveur = Serveur::lancer(vec![
+        texte("A", "."),
+        tronquee,
+        arret("pause_turn"),
+        arret("quelque_chose_de_nouveau"),
+        texte("B", "."),
+    ])
+    .await;
+    let mut brain = cerveau(&serveur, Arc::new(SansOutils));
+    fin(&tous(brain.ask(question("un"))).await).unwrap();
+    for attendu in [
+        "model_context_window_exceeded",
+        "pause_turn",
+        "quelque_chose_de_nouveau",
+    ] {
+        match fin(&tous(brain.ask(question("q"))).await) {
+            Err(BrainError::Api(m)) => assert!(m.contains(attendu), "{m}"),
+            autre => panic!("{autre:?}"),
+        }
+    }
+    // La reprise à neuf est annoncée, une seule fois, avec le premier tour
+    // réussi (journal d'activité).
+    let resume = fin(&tous(brain.ask(question("deux"))).await).unwrap();
+    assert_eq!(resume.avis.as_deref(), Some(AVIS_REPRISE));
+    let r = serveur.recues();
+    // Après le contexte dépassé, la conversation repart de zéro.
+    assert_eq!(r[1].corps["messages"].as_array().unwrap().len(), 3);
+    assert_eq!(r.len(), 5);
+    for (i, requete) in r.iter().enumerate().skip(2) {
+        assert_eq!(
+            requete.corps["messages"].as_array().unwrap().len(),
+            1,
+            "requête {i}"
+        );
+    }
+}
+
+/// KOB-316 : au-delà du seuil de contexte, la conversation repart des
+/// seules notes courantes portées par le message du tour.
+#[tokio::test]
+async fn conversation_trop_longue_repart_de_zero() {
+    let serveur = Serveur::lancer(vec![texte("A", "."), texte("B", "."), texte("C", ".")]).await;
+    let mut brain = ApiBrain::new(ApiConfig {
+        cle: CLE.into(),
+        url: serveur.url.clone(),
+        // `texte` annonce 812 tokens d'entrée.
+        contexte_max: 1_000,
+        ..Default::default()
+    })
+    .unwrap();
+    for q in ["un", "deux", "trois"] {
+        fin(&tous(brain.ask(question(q))).await).unwrap();
+    }
+    let longueurs: Vec<usize> = serveur
+        .recues()
+        .iter()
+        .map(|r| r.corps["messages"].as_array().unwrap().len())
+        .collect();
+    // 812 puis 812 : sous le seuil, la conversation s'allonge ; le serveur
+    // factice annonce toujours 812, donc le seuil n'est pas franchi.
+    assert_eq!(longueurs, [1, 3, 5]);
+    let serveur = Serveur::lancer(vec![texte("A", "."), texte("B", ".")]).await;
+    let mut brain = ApiBrain::new(ApiConfig {
+        cle: CLE.into(),
+        url: serveur.url.clone(),
+        contexte_max: 500,
+        ..Default::default()
+    })
+    .unwrap();
+    let avis: Vec<Option<String>> = [
+        fin(&tous(brain.ask(question("un"))).await).unwrap().avis,
+        fin(&tous(brain.ask(question("deux"))).await).unwrap().avis,
+    ]
+    .into();
+    assert_eq!(avis, [None, Some(AVIS_REPRISE.to_owned())]);
+    let longueurs: Vec<usize> = serveur
+        .recues()
+        .iter()
+        .map(|r| r.corps["messages"].as_array().unwrap().len())
+        .collect();
+    assert_eq!(longueurs, [1, 1]);
+}
