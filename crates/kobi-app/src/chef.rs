@@ -548,19 +548,27 @@ pub fn avancer<R: Runtime>(app: &AppHandle<R>, source: kobi_stt::Source, jusqu_a
 /// Fins annulées d'une réunion : (arrêt, annulation) (KOB-309).
 type FinsAnnulees = Vec<(Instant, Instant)>;
 
-/// Dit, au moins en partie, pendant l'une des fins annulées `fins` (arrêt,
-/// annulation), pour un segment de `commence_a` à `dit_a` (KOB-309). Après
-/// l'arrêt, jugé sur la fin : le début d'une phrase dite avant peut
-/// précéder l'arrêt. Avant l'annulation, jugé sur le début : la fin d'une
-/// phrase dite juste avant le clic compte le silence qui la suit, et tombe
-/// après lui (KOB-323) ; le début est fiable depuis KOB-311.
+/// Silence compté dans la fin d'un segment Nemotron, au plus : fin
+/// d'énoncé (0,8 s), bloc de décodage, et conclusion à la fermeture de la
+/// porte (KOB-323).
+const MARGE_FIN: Duration = Duration::from_millis(2400);
+
+/// Dit pendant l'une des fins annulées `fins` (arrêt, annulation), pour un
+/// segment de `commence_a` à `dit_a` (KOB-309). Jugé sur la fin, comme pour
+/// KOB-198 : le début d'un segment peut précéder la parole (silence
+/// transmis, son de l'ordinateur). Une phrase dite juste avant le clic finit
+/// après lui de tout le silence qui la suit (KOB-323) : jusqu'à
+/// [`MARGE_FIN`] après l'annulation, un segment commencé avant est encore
+/// de la fin. Au-delà, c'est de la parole qui a continué après la reprise :
+/// gardée, comme avant.
 fn dit_pendant_une_fin_annulee(
     fins: &[(Instant, Instant)],
     commence_a: Instant,
     dit_a: Instant,
 ) -> bool {
-    fins.iter()
-        .any(|&(arret, annule)| dit_a > arret && commence_a <= annule)
+    fins.iter().any(|&(arret, annule)| {
+        dit_a > arret && (dit_a <= annule || (commence_a <= annule && dit_a <= annule + MARGE_FIN))
+    })
 }
 
 /// Début d'un segment fini à `dit_a`, d'après sa durée.
@@ -3673,6 +3681,16 @@ mod tests {
             a_cheval.start = 0.0;
             a_cheval.end = (fin - pendant).as_secs_f64();
             c.recevoir(Message::Segment(a_cheval, fin));
+            // Parole continue qui couvre toute la fin (clic par erreur) et
+            // déborde bien après la reprise : gardée, comme avant.
+            let longue_fin = Instant::now() + MARGE_FIN + Duration::from_secs(3);
+            let mut continue_ = dit("Sans pause.");
+            continue_.start = 0.0;
+            continue_.end = (longue_fin - avant).as_secs_f64() + 1.0;
+            c.recevoir(Message::Segment(continue_, longue_fin));
+            // Commencée juste après le clic : gardée.
+            let juste_apres = Instant::now() + Duration::from_millis(100);
+            c.recevoir(Message::Segment(dit("Juste après."), juste_apres));
             c.recevoir(Message::Segment(
                 dit("Après la reprise."),
                 Instant::now() + Duration::from_secs(2),
@@ -3681,6 +3699,8 @@ mod tests {
             assert!(!notes.contains("Pendant la fin."), "{notes}");
             assert!(!notes.contains("Reprends."), "{notes}");
             assert!(!notes.contains("Entre nous."), "{notes}");
+            assert!(notes.contains("Sans pause."), "{notes}");
+            assert!(notes.contains("Juste après."), "{notes}");
             assert!(notes.contains("Avant l'arrêt."), "{notes}");
             assert!(notes.contains("Après la reprise."), "{notes}");
         });
