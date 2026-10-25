@@ -124,10 +124,27 @@ impl Serveur {
                 let Some(recue) = lire_requete(&mut sock).await else {
                     continue;
                 };
+                // Comme l'API : un `tool_use` dont l'entrée n'est pas un
+                // objet est refusé (KOB-318), sans consommer le scénario.
+                let invalide = recue.corps["messages"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|m| m["content"].as_array())
+                    .flatten()
+                    .any(|b| b["type"] == "tool_use" && !b["input"].is_object());
                 journal.lock().unwrap().push(recue);
-                let s = scripts
-                    .pop_front()
-                    .unwrap_or_else(|| erreur(500, "api_error", "scénario épuisé"));
+                let s = if invalide {
+                    erreur(
+                        400,
+                        "invalid_request_error",
+                        "tool_use.input: Input should be an object",
+                    )
+                } else {
+                    scripts
+                        .pop_front()
+                        .unwrap_or_else(|| erreur(500, "api_error", "scénario épuisé"))
+                };
                 let mut tete = format!(
                     "HTTP/1.1 {} X\r\ncontent-length: {}\r\nconnection: close\r\n",
                     s.statut,
@@ -414,6 +431,18 @@ async fn outil_en_echec_rendu_en_erreur() {
         .as_str()
         .unwrap()
         .contains("INVALID_JSON"));
+    // KOB-318 : l'historique garde un objet vide pour l'entrée illisible
+    // (sinon l'API refuse la requête suivante en 400) ; le texte brut n'est
+    // que dans le résultat en erreur.
+    let appel = &recues[2].corps["messages"].as_array().unwrap()[3]["content"];
+    let appel = appel
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["type"] == "tool_use")
+        .unwrap();
+    assert_eq!(appel["input"], json!({}));
+    assert!(resultat(2)["content"].as_str().unwrap().contains("chemin"));
 }
 
 /// La conversation de la réunion ne fait que s'allonger : la deuxième
