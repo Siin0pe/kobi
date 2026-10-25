@@ -56,6 +56,11 @@ struct Partage {
     texte: Mutex<String>,
     /// Arrivée de la première phrase de l'énoncé en cours.
     t0: Mutex<Option<Instant>>,
+    /// Énoncé (numéro + 1, 0 : aucun) qui a encore à dire : posé par
+    /// [`Parleur::dire`], levé par sa propre fin (qui suit toujours ses
+    /// phrases, même en échec). La fin tardive d'un énoncé périmé ne le
+    /// lève pas (KOB-365).
+    a_dire: AtomicU64,
     rappel: Rappel,
 }
 
@@ -85,6 +90,7 @@ impl Parleur {
             parle: AtomicBool::new(false),
             texte: Mutex::new(String::new()),
             t0: Mutex::new(None),
+            a_dire: AtomicU64::new(0),
             rappel: Arc::new(rappel),
         });
         let (tx_s, rx_s) = mpsc::channel();
@@ -120,6 +126,9 @@ impl Parleur {
             let mut t0 = self.partage.t0.lock().unwrap_or_else(|e| e.into_inner());
             t0.get_or_insert_with(Instant::now);
         }
+        // Les numéros ne font que croître : un `dire` en retard sur un
+        // énoncé déjà remplacé n'écrase pas le suivant.
+        self.partage.a_dire.fetch_max(enonce + 1, Ordering::SeqCst);
         {
             let mut texte = self.partage.texte.lock().unwrap_or_else(|e| e.into_inner());
             texte.push_str(phrase);
@@ -153,6 +162,16 @@ impl Parleur {
     /// La voix est-elle en train de jouer ?
     pub fn parle(&self) -> bool {
         self.partage.parle.load(Ordering::SeqCst)
+    }
+
+    /// L'énoncé en cours a-t-il encore à dire : un son qui joue, ou des
+    /// phrases confiées dont la fin n'est pas venue (synthèse en cours, avant
+    /// le premier son). Une annonce qui ne doit rien couper attend ce
+    /// silence (KOB-365).
+    pub fn occupe(&self) -> bool {
+        self.parle()
+            || self.partage.a_dire.load(Ordering::SeqCst)
+                == self.partage.enonce.load(Ordering::SeqCst) + 1
     }
 
     /// Texte confié pour l'énoncé en cours.
@@ -292,6 +311,9 @@ fn lecture(sortie: Fabrique<Box<dyn Sortie>>, rx: Receiver<VersLecture>, p: Arc<
                 }
             }
             VersLecture::Fin { enonce } => {
+                let _ =
+                    p.a_dire
+                        .compare_exchange(enonce + 1, 0, Ordering::SeqCst, Ordering::SeqCst);
                 if commence == Some(enonce) {
                     commence = None;
                     fin(&p, !p.courant(enonce));
@@ -429,6 +451,41 @@ mod tests {
         assert_eq!(suite[2], Evenement::Fin { interrompu: false });
     }
 
+    /// KOB-365 : occupé dès la première phrase confiée, avant tout son ; la
+    /// fin tardive de l'énoncé coupé ne libère pas le suivant ; sa propre
+    /// fin, si.
+    #[test]
+    fn occupe_jusqu_a_la_fin_de_l_enonce_en_cours() {
+        let (p, _joue, rx) = parleur();
+        assert!(!p.occupe());
+        let a = p.nouvel_enonce();
+        p.dire(a, &"mot ".repeat(20));
+        assert!(p.occupe(), "avant le premier son");
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            Evenement::Debut { .. }
+        ));
+        let b = p.nouvel_enonce();
+        p.dire(b, "nouvelle réponse");
+        // La fin de A (interrompu) arrive après les phrases de B.
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            Evenement::Fin { interrompu: true }
+        );
+        assert!(p.occupe(), "B n'est pas dite");
+        p.finir(b);
+        let suite: Vec<_> = (0..2)
+            .map_while(|_| rx.recv_timeout(Duration::from_secs(2)).ok())
+            .collect();
+        assert_eq!(suite[1], Evenement::Fin { interrompu: false });
+        assert!(!p.occupe());
+        // Interrompre libère tout de suite.
+        let c = p.nouvel_enonce();
+        p.dire(c, "encore");
+        p.interrompre();
+        assert!(!p.occupe());
+    }
+
     #[test]
     fn voix_absente_signalee() {
         let (tx, rx) = mpsc::channel();
@@ -442,9 +499,16 @@ mod tests {
         );
         let e = p.nouvel_enonce();
         p.dire(e, "bonjour à tous");
+        p.finir(e);
         let Evenement::Erreur(m) = rx.recv_timeout(Duration::from_secs(2)).unwrap() else {
             panic!()
         };
         assert!(m.contains("pas de paquet"), "{m}");
+        // Sa fin, après l'échec, libère la voix.
+        let libre = (0..100).any(|_| {
+            std::thread::sleep(Duration::from_millis(10));
+            !p.occupe()
+        });
+        assert!(libre);
     }
 }

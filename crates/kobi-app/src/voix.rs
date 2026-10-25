@@ -79,6 +79,8 @@ pub struct Voix {
     /// Ce que Kobi dit (ou vient de dire) : on n'en coupe pas la voix et
     /// l'écoute ne le prend pas pour de la parole.
     recent: Mutex<Recent>,
+    /// Voir [`interruptions`].
+    interruptions: std::sync::atomic::AtomicU64,
 }
 
 /// Réponse dite en dernier.
@@ -193,6 +195,7 @@ pub fn installer<R: Runtime>(app: &AppHandle<R>, reglage: &VoiceConfig, config: 
         parleur: Some(parleur),
         config,
         recent: Mutex::default(),
+        interruptions: Default::default(),
     });
 }
 
@@ -205,6 +208,7 @@ pub fn installer_sans_parleur<R: Runtime>(app: &AppHandle<R>, reglage: &VoiceCon
         parleur: None,
         config: None,
         recent: Mutex::default(),
+        interruptions: Default::default(),
     });
 }
 
@@ -338,6 +342,10 @@ fn avec_parleur<R: Runtime, T>(app: &AppHandle<R>, f: impl FnOnce(&Parleur) -> T
 
 /// Coupe la voix tout de suite.
 pub fn taire<R: Runtime>(app: &AppHandle<R>, raison: &str) {
+    if let Some(v) = app.try_state::<Voix>() {
+        v.interruptions
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
     avec_parleur(app, |p| {
         if p.parle() {
             tracing::info!(%raison, "voix interrompue");
@@ -516,6 +524,21 @@ impl Reponse {
 pub fn dire<R: Runtime>(app: &AppHandle<R>, texte: &str) {
     let mut r = Reponse::new(app);
     r.fin(app, texte);
+}
+
+/// La voix a-t-elle encore quelque chose à dire (voir [`Parleur::occupe`]) ?
+/// Une annonce de service attend ce silence pour ne pas couper une réponse
+/// (KOB-365).
+pub fn occupee<R: Runtime>(app: &AppHandle<R>) -> bool {
+    avec_parleur(app, Parleur::occupe).unwrap_or(false)
+}
+
+/// Combien de fois la voix a été coupée par l'utilisateur (il parle, dit
+/// « Kobi » ou « stop ») : une annonce en attente n'est plus de mise.
+pub fn interruptions<R: Runtime>(app: &AppHandle<R>) -> u64 {
+    app.try_state::<Voix>().map_or(0, |v| {
+        v.interruptions.load(std::sync::atomic::Ordering::SeqCst)
+    })
 }
 
 /// La voix joue-t-elle ? (le retour au calme attend la fin).
@@ -743,6 +766,17 @@ mod tests {
         app
     }
 
+    /// KOB-365 : chaque coupure de la voix se compte, même sans parleur.
+    #[test]
+    fn interruptions_comptees() {
+        let a = app(VoiceConfig::default());
+        let h = a.handle();
+        assert!(!occupee(h));
+        let avant = interruptions(h);
+        taire(h, "l'utilisateur parle");
+        assert_eq!(interruptions(h), avant + 1);
+    }
+
     #[test]
     fn la_voix_ne_lit_qu_un_resume_des_reponses_longues() {
         let p = |t: &str| t.to_owned();
@@ -916,6 +950,7 @@ mod tests {
             parleur: None,
             config: Some(chemin.clone()),
             recent: Mutex::default(),
+            interruptions: Default::default(),
             verbosite: Mutex::new(Verbosite::default()),
         });
         regler(app.handle(), Some(false), Some(true));
@@ -939,6 +974,7 @@ mod tests {
             parleur: None,
             config: Some(chemin.clone()),
             recent: Mutex::default(),
+            interruptions: Default::default(),
             verbosite: Mutex::new(Verbosite::default()),
         });
         let etat = regler(app.handle(), Some(false), Some(true));
