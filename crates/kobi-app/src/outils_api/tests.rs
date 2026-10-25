@@ -458,7 +458,7 @@ fn dossier_declare_sous_un_nom_ignore_parcouru() {
     let debug = target.join("debug");
     let modules = target.join("node_modules");
     fs::create_dir_all(&modules).unwrap();
-    let l = Lecteur::new(&[target.clone(), debug, modules.clone()]);
+    let l = Lecteur::new(&[target.clone(), debug.clone(), modules.clone()]);
     assert_eq!(
         l.dossiers,
         vec![
@@ -466,6 +466,13 @@ fn dossier_declare_sous_un_nom_ignore_parcouru() {
             modules.canonicalize().unwrap()
         ]
     );
+    // Chaque composant compte, pas seulement le nom final ni le premier :
+    // `target/debug` et `src/node_modules` ne sont pas atteints depuis la
+    // racine.
+    let profond = racine.join("src/node_modules");
+    fs::create_dir_all(&profond).unwrap();
+    let l = Lecteur::new(&[racine.clone(), debug.clone(), profond.clone()]);
+    assert_eq!(l.dossiers.len(), 3, "{:?}", l.dossiers);
 }
 
 #[test]
