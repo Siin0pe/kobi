@@ -199,7 +199,7 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
     while i < c.len() {
         let ch = c[i];
         match ch {
-            ' ' | '\t' | '\r' => fin_mot(&mut jetons, &mut mot, &mut dans_mot),
+            ' ' | '\t' => fin_mot(&mut jetons, &mut mot, &mut dans_mot),
             '\'' => {
                 dans_mot = true;
                 i += 1;
@@ -260,8 +260,22 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
                     None => return Err("échappement en fin de ligne".into()),
                 }
             }
-            '#' if !dans_mot => break,
-            ';' | '\n' | '(' | ')' => {
+            // Commentaire. Règle prudente (KOB-298) : suivi d'un saut de
+            // ligne (`\n`, `\r\n`, `\r`), il n'est jamais une lecture, car
+            // la ligne suivante est une autre commande. Seul en fin de ligne,
+            // il clôt la commande. PowerShell : `<# … #>` est refusé.
+            '#' if !dans_mot => {
+                if ps && i > 0 && c[i - 1] == '<' {
+                    return Err("commentaire de bloc PowerShell `<# #>` non analysable".into());
+                }
+                if c[i..].iter().any(|&x| matches!(x, '\n' | '\r')) {
+                    return Err("commentaire suivi d'une autre ligne".into());
+                }
+                break;
+            }
+            // `\r` seul finit aussi une ligne (PowerShell) : un séparateur,
+            // comme `\n` (KOB-298).
+            ';' | '\n' | '\r' | '(' | ')' => {
                 fin_mot(&mut jetons, &mut mot, &mut dans_mot);
                 jetons.push(Jeton::Op(ch.to_string()));
             }
@@ -1573,6 +1587,13 @@ mod tests {
             "git log -3 # les trois derniers",
             "ls \"crates/kobi-app\"",
             "ls crates\\ avec\\ espace",
+            // KOB-298 : commentaire seul en fin de ligne, `#` collé à un mot,
+            // `#` entre guillemets (même avec un saut de ligne entre eux).
+            "cat Cargo.toml # commentaire",
+            "ls crates/a#b",
+            "grep -n '# titre' Cargo.toml",
+            "grep -n \"#\" Cargo.toml",
+            "grep -n '#\nx' Cargo.toml",
         ] {
             lecture(bash(ligne), ligne);
         }
@@ -1631,8 +1652,28 @@ mod tests {
             "git log {{},--output=x.txt}",
             "find . {{\"\\\"\"},-delete}",
             "cat {{a..c},../../.ssh/id_rsa}",
+            // KOB-298 : un commentaire suivi d'un saut de ligne.
+            "ls # liste\nrm -rf crates",
+            "cat Cargo.toml #\nfind . -delete",
+            "ls # x\r\nrm -rf crates",
+            "ls # x\rrm -rf crates",
+            "ls #\n",
+            "cat 'a#b' # c\nrm x",
+            // `\r` seul sépare deux commandes.
+            "ls\rrm -rf crates",
+            "ls\r\nrm -rf crates",
         ] {
             pas_lecture(bash(ligne), ligne);
+        }
+        for ligne in [
+            "Get-ChildItem # x\nRemove-Item -Recurse crates",
+            "Get-ChildItem # x\r\nRemove-Item -Recurse crates",
+            "Get-ChildItem # x\rRemove-Item -Recurse crates",
+            "Get-ChildItem <# x\n#> ; Remove-Item crates",
+            "Get-ChildItem <# x #>",
+            "Get-ChildItem\rRemove-Item crates",
+        ] {
+            pas_lecture(ps(ligne), ligne);
         }
     }
 
@@ -1842,6 +1883,9 @@ mod tests {
             "Get-Content Cargo.toml | Out-String",
             "Get-Item 'crates/kobi-app'",
             "Get-ChildItem 2>&1",
+            // KOB-298.
+            "Get-ChildItem # rien",
+            "Select-String -Pattern '#' -Path Cargo.toml",
         ] {
             lecture(ps(ligne), ligne);
         }
