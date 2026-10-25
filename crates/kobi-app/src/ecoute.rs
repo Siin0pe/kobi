@@ -916,6 +916,18 @@ impl<R: Runtime> Fil<R> {
             return false;
         };
         match resultat {
+            // Pause demandée pendant l'attente de l'ouverture : le micro, ouvert
+            // trop tard, est refermé aussitôt, et ce qu'il a capté est jeté
+            // (KOB-293).
+            Ok((entree, _)) if self.en_pause || etat(&self.app).etat == "pause" => {
+                let jetees = entree.fermer().len();
+                tracing::info!(
+                    trames = jetees,
+                    "écoute continue : micro ouvert pendant la pause, refermé aussitôt"
+                );
+                self.note("micro ouvert pendant la pause : refermé aussitôt");
+                false
+            }
             Ok((entree, description)) => {
                 if let Ok(stt) = self.stt.as_mut() {
                     stt.reset();
@@ -974,6 +986,12 @@ impl<R: Runtime> Fil<R> {
     }
 
     fn fermer_micro(&mut self) {
+        // Une ouverture encore en attente est lâchée : aboutie pendant la
+        // pause, sa capture se ferme d'elle-même au lieu d'enregistrer
+        // (KOB-293).
+        if self.ouverture.take().is_some() {
+            tracing::info!("écoute continue : ouverture du micro en attente abandonnée");
+        }
         if let Some(entree) = self.entree.take() {
             let reste = entree.fermer();
             tracing::info!("écoute continue : micro fermé");
@@ -2393,6 +2411,32 @@ mod tests {
             echec.attendre(Duration::from_secs(5)),
             Some(Err(e)) if e == "aucun micro"
         ));
+    }
+
+    /// KOB-293 : une ouverture lente, lâchée (pause) avant d'aboutir, ferme
+    /// sa capture dès qu'elle aboutit : rien n'est enregistré ni relayé.
+    #[test]
+    fn ouverture_lachee_ferme_sa_capture() {
+        let (debloquer, bloque) = mpsc::channel::<()>();
+        let (micro, trames_micro) = mpsc::channel::<AudioFrame>();
+        let (fini_tx, fini) = mpsc::channel::<()>();
+        let ouverture = Ouverture::lancer_avec(move || {
+            let _ = bloque.recv();
+            let _ = fini_tx.send(());
+            Ok((Ouvert::Fichier(trames_micro), "micro lent".into()))
+        });
+        assert!(ouverture.attendre(Duration::from_millis(100)).is_none());
+        // Pause : l'écoute lâche l'ouverture en attente.
+        drop(ouverture);
+        debloquer.send(()).unwrap();
+        fini.recv_timeout(Duration::from_secs(5)).unwrap();
+        // L'entrée ouverte n'a trouvé personne : elle est fermée, plus rien
+        // ne se capte.
+        let limite = Instant::now() + Duration::from_secs(5);
+        while micro.send(trame_a(0)).is_ok() {
+            assert!(Instant::now() < limite, "la capture reste ouverte");
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     /// KOB-285 : le porteur relaie les trames et les erreurs du flux, rend à
