@@ -9,6 +9,7 @@ mod translate;
 
 pub use detect::{ClaudeInstall, Detection};
 pub use event::{Event, McpServerStatus, ResultEvent, StreamEvent, SystemEvent, TurnResult, Usage};
+pub(crate) use meeting::{texte_ask, texte_compte_rendu, texte_notes};
 pub use meeting::{
     ArgsWithPerms, ClaudeCodeBrain, MeetingConfig, MEETING_DISALLOWED_TOOLS, SYSTEM_PROMPT,
     SYSTEM_PROMPT_VERSION,

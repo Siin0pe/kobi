@@ -9,6 +9,7 @@
 //! ([`BrainEvent`]) ; [`fake::FakeBrain`] sert aux tests de la session.
 
 pub mod actions;
+pub mod api;
 pub mod brain;
 pub mod claude_code;
 #[cfg(test)]
@@ -18,6 +19,7 @@ pub mod langue;
 pub mod outils;
 pub mod transcript;
 
+pub use api::{ApiBrain, ApiConfig, Outillage, SansOutils};
 pub use brain::{
     Ask, Brain, BrainError, BrainEvent, NotesUpdate, ReportRequest, Turn, TurnSummary,
 };
