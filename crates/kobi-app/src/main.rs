@@ -11,6 +11,7 @@ mod bienvenue;
 mod carnet;
 mod cerveau;
 mod chef;
+mod cle_api;
 mod commandes;
 mod controle;
 mod demarrage;
