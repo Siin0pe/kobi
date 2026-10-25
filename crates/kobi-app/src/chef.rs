@@ -554,12 +554,34 @@ pub fn avancer<R: Runtime>(app: &AppHandle<R>, source: kobi_stt::Source, jusqu_a
 /// Fins annulées d'une réunion : (arrêt, annulation) (KOB-309).
 type FinsAnnulees = Vec<(Instant, Instant)>;
 
-/// Dit pendant l'une des fins annulées `fins` (arrêt, annulation) : jugé
-/// sur la fin du segment, son début donné par Nemotron peut précéder le
-/// silence d'avant la parole (KOB-309).
-fn dit_pendant_une_fin_annulee(fins: &[(Instant, Instant)], dit_a: Instant) -> bool {
-    fins.iter()
-        .any(|&(arret, annule)| dit_a > arret && dit_a <= annule)
+/// Silence compté dans la fin d'un segment Nemotron, au plus : fin
+/// d'énoncé (0,8 s), bloc de décodage, et conclusion à la fermeture de la
+/// porte (KOB-323).
+const MARGE_FIN: Duration = Duration::from_millis(2400);
+
+/// Dit pendant l'une des fins annulées `fins` (arrêt, annulation), pour un
+/// segment de `commence_a` à `dit_a` (KOB-309). Jugé sur la fin, comme pour
+/// KOB-198 : le début d'un segment peut précéder la parole (silence
+/// transmis, son de l'ordinateur). Une phrase dite juste avant le clic finit
+/// après lui de tout le silence qui la suit (KOB-323) : jusqu'à
+/// [`MARGE_FIN`] après l'annulation, un segment commencé avant est encore
+/// de la fin. Au-delà, c'est de la parole qui a continué après la reprise :
+/// gardée, comme avant.
+fn dit_pendant_une_fin_annulee(
+    fins: &[(Instant, Instant)],
+    commence_a: Instant,
+    dit_a: Instant,
+) -> bool {
+    fins.iter().any(|&(arret, annule)| {
+        dit_a > arret && (dit_a <= annule || (commence_a <= annule && dit_a <= annule + MARGE_FIN))
+    })
+}
+
+/// Début d'un segment fini à `dit_a`, d'après sa durée.
+fn commence_a(s: &Segment, dit_a: Instant) -> Instant {
+    dit_a
+        .checked_sub(Duration::from_secs_f64((s.end - s.start).max(0.0)))
+        .unwrap_or(dit_a)
 }
 
 /// Horodate un segment sur la réunion commencée à `debut`, au moment où il a
@@ -1649,6 +1671,7 @@ impl<R: Runtime> Chef<R> {
         if !s.is_final {
             return;
         }
+        let commence_a = commence_a(&s, dit_a);
         let Some(r) = &mut self.reunion else {
             // Réunion close avant que la transcription ait rattrapé l'arrêt :
             // ce qui a été dit avant va encore dans sa transcription (KOB-281).
@@ -1657,7 +1680,8 @@ impl<R: Runtime> Chef<R> {
                 .reunion_close
                 .as_ref()
                 .and_then(|(debut, arret, fins)| {
-                    (dit_a <= *arret && !dit_pendant_une_fin_annulee(fins, dit_a)).then_some(*debut)
+                    (dit_a <= *arret && !dit_pendant_une_fin_annulee(fins, commence_a, dit_a))
+                        .then_some(*debut)
                 });
             if let Some(debut) = debut {
                 horodater(&mut s, debut, dit_a);
@@ -1670,9 +1694,6 @@ impl<R: Runtime> Chef<R> {
         // charge, il arrive après (KOB-261). Jugé sur le début du segment :
         // la dernière phrase, conclue à la fermeture du micro, finit après
         // la pause (marge de fin du moteur) et serait perdue (KOB-277).
-        let commence_a = dit_a
-            .checked_sub(Duration::from_secs_f64((s.end - s.start).max(0.0)))
-            .unwrap_or(dit_a);
         if r.pause && r.pause_a.is_none_or(|pause| commence_a > pause) {
             return;
         }
@@ -1684,7 +1705,7 @@ impl<R: Runtime> Chef<R> {
         }
         // Dit pendant une fin ensuite annulée, transcrit après l'annulation :
         // pas plus dans les notes que si la fin avait tenu (KOB-309).
-        if dit_pendant_une_fin_annulee(&r.fins_annulees, dit_a) {
+        if dit_pendant_une_fin_annulee(&r.fins_annulees, commence_a, dit_a) {
             return;
         }
         horodater(&mut s, r.debut, dit_a);
@@ -3688,8 +3709,8 @@ mod tests {
     }
 
     /// KOB-309 : fin, puis « Annuler » ; ce qui a été dit pendant la fin et
-    /// arrive après l'annulation (« reprends » transcrit en retard) n'entre
-    /// pas dans les notes. Ce qui a été dit avant l'arrêt, ou après
+    /// arrive après l'annulation (« reprends » transcrit en retard), même en
+    /// partie (KOB-323), n'entre pas dans les notes. Ce qui a été dit avant l'arrêt, ou après
     /// l'annulation, si.
     #[test]
     fn parole_pendant_une_fin_annulee_hors_des_notes() {
@@ -3717,6 +3738,23 @@ mod tests {
             long.end = 30.0;
             c.recevoir(Message::Segment(long, pendant));
             c.recevoir(Message::Segment(dit("Avant l'arrêt."), avant));
+            // KOB-323 : commencée pendant la fin, finie après le clic (le
+            // silence qui la suit compte dans sa fin) : écartée aussi.
+            let fin = Instant::now() + Duration::from_secs(1);
+            let mut a_cheval = dit("Entre nous.");
+            a_cheval.start = 0.0;
+            a_cheval.end = (fin - pendant).as_secs_f64();
+            c.recevoir(Message::Segment(a_cheval, fin));
+            // Parole continue qui couvre toute la fin (clic par erreur) et
+            // déborde bien après la reprise : gardée, comme avant.
+            let longue_fin = Instant::now() + MARGE_FIN + Duration::from_secs(3);
+            let mut continue_ = dit("Sans pause.");
+            continue_.start = 0.0;
+            continue_.end = (longue_fin - avant).as_secs_f64() + 1.0;
+            c.recevoir(Message::Segment(continue_, longue_fin));
+            // Commencée juste après le clic : gardée.
+            let juste_apres = Instant::now() + Duration::from_millis(100);
+            c.recevoir(Message::Segment(dit("Juste après."), juste_apres));
             c.recevoir(Message::Segment(
                 dit("Après la reprise."),
                 Instant::now() + Duration::from_secs(2),
@@ -3724,6 +3762,9 @@ mod tests {
             let notes = &c.reunion.as_ref().unwrap().a_noter;
             assert!(!notes.contains("Pendant la fin."), "{notes}");
             assert!(!notes.contains("Reprends."), "{notes}");
+            assert!(!notes.contains("Entre nous."), "{notes}");
+            assert!(notes.contains("Sans pause."), "{notes}");
+            assert!(notes.contains("Juste après."), "{notes}");
             assert!(notes.contains("Avant l'arrêt."), "{notes}");
             assert!(notes.contains("Après la reprise."), "{notes}");
         });
