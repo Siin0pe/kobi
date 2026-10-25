@@ -214,6 +214,14 @@ impl Outillage for OutilsTest {
         }
     }
 
+    fn autorisation(&self, nom: &str) -> Autorisation {
+        match nom {
+            "ecrire" => Autorisation::Carte,
+            "interdit" => Autorisation::Refus,
+            _ => Autorisation::Libre,
+        }
+    }
+
     fn appeler<'a>(
         &'a self,
         nom: &'a str,
@@ -222,6 +230,7 @@ impl Outillage for OutilsTest {
         Box::pin(async move {
             match nom {
                 "lire" => Ok(format!("contenu de {}", entree["chemin"].as_str().unwrap())),
+                "ecrire" => Ok("écrit".into()),
                 _ => Err("échec de l'outil".into()),
             }
         })
@@ -531,4 +540,128 @@ fn cle_absente_ou_masquee() {
         !debug.contains(CLE) && debug.contains("<masquée>"),
         "{debug}"
     );
+}
+
+/// Réponse donnée à chaque carte d'un tour.
+enum Reponse {
+    Oui,
+    Non(&'static str),
+    Rien,
+}
+
+/// Joue le tour en répondant aux cartes ; rend les événements et le nombre
+/// de cartes vues.
+async fn avec_cartes(mut turn: Turn, reponse: Reponse) -> (Vec<BrainEvent>, usize) {
+    let (mut events, mut cartes, mut gardees) = (Vec::new(), 0, Vec::new());
+    while let Some(e) = turn.next().await {
+        match e {
+            BrainEvent::Permission(demande) => {
+                cartes += 1;
+                assert_eq!(demande.request.tool_name, "ecrire");
+                assert_eq!(demande.request.tool_use_id.as_deref(), Some("toolu_1"));
+                match reponse {
+                    Reponse::Oui => demande.allow(),
+                    Reponse::Non(raison) => demande.deny(raison),
+                    Reponse::Rien => gardees.push(demande),
+                }
+            }
+            autre => events.push(autre),
+        }
+    }
+    (events, cartes)
+}
+
+fn resultat_rendu(serveur: &Serveur) -> Value {
+    let r = serveur.recues();
+    r[1].corps["messages"].as_array().unwrap().last().unwrap()["content"][0].clone()
+}
+
+/// KOB-103 : un outil qui écrit attend la carte ; accepté, il s'exécute.
+#[tokio::test]
+async fn carte_acceptee() {
+    let serveur = Serveur::lancer(vec![appel("toolu_1", "ecrire", "{}"), texte("Fait", ".")]).await;
+    let mut brain = cerveau(&serveur, Arc::new(OutilsTest));
+    let (events, cartes) = avec_cartes(brain.ask(question("écris")), Reponse::Oui).await;
+    assert_eq!(cartes, 1);
+    assert_eq!(fin(&events).unwrap().text, "Fait.");
+    assert_eq!(
+        resultat_rendu(&serveur),
+        json!({"type":"tool_result","tool_use_id":"toolu_1","content":"écrit"})
+    );
+}
+
+/// Refusée : l'outil ne s'exécute pas et Claude reçoit le refus.
+#[tokio::test]
+async fn carte_refusee() {
+    let serveur = Serveur::lancer(vec![
+        appel("toolu_1", "ecrire", "{}"),
+        texte("D'accord", "."),
+    ])
+    .await;
+    let mut brain = cerveau(&serveur, Arc::new(OutilsTest));
+    let (events, _) = avec_cartes(
+        brain.ask(question("écris")),
+        Reponse::Non("Refusé par l'utilisateur."),
+    )
+    .await;
+    assert!(fin(&events).is_ok());
+    let r = resultat_rendu(&serveur);
+    assert_eq!(r["is_error"], true);
+    assert_eq!(r["content"], "Refusé par l'utilisateur.");
+}
+
+/// Sans réponse dans le délai : refus.
+#[tokio::test]
+async fn carte_sans_reponse() {
+    let serveur = Serveur::lancer(vec![appel("toolu_1", "ecrire", "{}"), texte("Rien", ".")]).await;
+    let mut brain = ApiBrain::new(ApiConfig {
+        cle: CLE.into(),
+        url: serveur.url.clone(),
+        outils: Arc::new(OutilsTest),
+        delai_carte: Duration::from_millis(50),
+        ..Default::default()
+    })
+    .unwrap();
+    let (events, cartes) = avec_cartes(brain.ask(question("écris")), Reponse::Rien).await;
+    assert_eq!(cartes, 1);
+    assert!(fin(&events).is_ok());
+    let r = resultat_rendu(&serveur);
+    assert_eq!(r["is_error"], true);
+    assert!(
+        r["content"]
+            .as_str()
+            .unwrap()
+            .contains("Pas de confirmation"),
+        "{r}"
+    );
+}
+
+/// Un outil interdit dans la session est refusé sans carte ni appel.
+#[tokio::test]
+async fn outil_interdit_sans_carte() {
+    let serveur =
+        Serveur::lancer(vec![appel("toolu_1", "interdit", "{}"), texte("Non", ".")]).await;
+    let mut brain = cerveau(&serveur, Arc::new(OutilsTest));
+    let (events, cartes) = avec_cartes(brain.ask(question("fais")), Reponse::Oui).await;
+    assert_eq!(cartes, 0);
+    assert!(fin(&events).is_ok());
+    let r = resultat_rendu(&serveur);
+    assert_eq!(r["is_error"], true);
+    assert!(r["content"].as_str().unwrap().contains("pas permis"), "{r}");
+}
+
+/// Une lecture passe sans carte ; les tokens en cache sont rendus.
+#[tokio::test]
+async fn lecture_sans_carte_et_cache_visible() {
+    let serveur = Serveur::lancer(vec![
+        appel("toolu_1", "lire", r#"{"chemin": "a.md"}"#),
+        texte("Lu", "."),
+    ])
+    .await;
+    let mut brain = cerveau(&serveur, Arc::new(OutilsTest));
+    let (events, cartes) = avec_cartes(brain.ask(question("lis")), Reponse::Oui).await;
+    assert_eq!(cartes, 0);
+    let usage = fin(&events).unwrap().usage.unwrap();
+    assert_eq!(usage.cache_read_input_tokens, 800);
+    assert_eq!(usage.cache_creation_input_tokens, 800);
 }

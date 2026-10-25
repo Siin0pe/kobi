@@ -30,6 +30,7 @@ use crate::brain::{
 };
 use crate::claude_code::{texte_ask, texte_compte_rendu, texte_notes, Usage, SYSTEM_PROMPT};
 use crate::outils::Action;
+use kobi_perms::{ApprovalRequest, Decision, PermissionRequest};
 
 use flux::{a_renvoyer, entree_illisible, Apport, Decoupeur, Reponse};
 
@@ -64,6 +65,12 @@ pub trait Outillage: Send + Sync {
         }
     }
 
+    /// Ce que demande l'appel avant de s'exécuter (mêmes règles que le
+    /// backend Claude Code, KOB-320). Par prudence : une carte.
+    fn autorisation(&self, _nom: &str) -> Autorisation {
+        Autorisation::Carte
+    }
+
     /// Exécute l'appel ; `Err` est rendu à Claude comme un résultat en
     /// erreur.
     fn appeler<'a>(
@@ -71,6 +78,18 @@ pub trait Outillage: Send + Sync {
         nom: &'a str,
         entree: &'a Value,
     ) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send + 'a>>;
+}
+
+/// Ce qu'un appel d'outil demande avant de s'exécuter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Autorisation {
+    /// Lecture, ou écriture d'un serveur réglé « faire sans demander ».
+    Libre,
+    /// Carte de confirmation : l'utilisateur dit oui ou non.
+    Carte,
+    /// Interdit dans cette session (question différée en lecture seule),
+    /// refusé sans carte.
+    Refus,
 }
 
 /// Aucun outil.
@@ -108,6 +127,8 @@ pub struct ApiConfig {
     pub max_etapes: usize,
     /// Nouvelles tentatives sur une erreur passagère, avant le flux.
     pub tentatives: u32,
+    /// Délai de réponse à une carte de confirmation avant refus.
+    pub delai_carte: Duration,
 }
 
 impl Default for ApiConfig {
@@ -122,6 +143,7 @@ impl Default for ApiConfig {
             outils: Arc::new(SansOutils),
             max_etapes: 16,
             tentatives: 2,
+            delai_carte: kobi_perms::DEFAULT_TIMEOUT,
         }
     }
 }
@@ -311,6 +333,8 @@ async fn executer(partage: &Partage, appel: &Value, events: &mpsc::Sender<BrainE
         .await;
     let resultat = if entree_illisible(appel) {
         Err(json!({ "INVALID_JSON": entree }).to_string())
+    } else if let Err(refus) = autoriser(partage, &id, &nom, &entree, events).await {
+        Err(refus)
     } else {
         outils.appeler(&nom, &entree).await
     };
@@ -324,6 +348,41 @@ async fn executer(partage: &Partage, appel: &Value, events: &mpsc::Sender<BrainE
         bloc["is_error"] = Value::Bool(true);
     }
     bloc
+}
+
+/// Carte de confirmation avant un outil qui écrit (mêmes règles et même
+/// carte que le backend Claude Code, KOB-320). `Err` : le refus, rendu à
+/// Claude comme résultat de l'outil.
+async fn autoriser(
+    partage: &Partage,
+    id: &str,
+    nom: &str,
+    entree: &Value,
+    events: &mpsc::Sender<BrainEvent>,
+) -> Result<(), String> {
+    match partage.config.outils.autorisation(nom) {
+        Autorisation::Libre => return Ok(()),
+        Autorisation::Refus => return Err(format!("{nom} n'est pas permis dans cette session.")),
+        Autorisation::Carte => {}
+    }
+    let (demande, reponse) = ApprovalRequest::new(PermissionRequest {
+        tool_name: nom.to_owned(),
+        input: entree.clone(),
+        tool_use_id: Some(id.to_owned()),
+    });
+    if events.send(BrainEvent::Permission(demande)).await.is_err() {
+        return Err("Question abandonnée.".into());
+    }
+    let delai = partage.config.delai_carte;
+    match tokio::time::timeout(delai, reponse).await {
+        Ok(Ok(Decision::Allow)) => Ok(()),
+        Ok(Ok(Decision::Deny(raison))) => Err(raison),
+        Ok(Err(_)) => Err("Demande abandonnée par Kobi.".into()),
+        Err(_) => Err(format!(
+            "Pas de confirmation en {} s : refusé.",
+            delai.as_secs()
+        )),
+    }
 }
 
 /// Texte de la dernière réponse de Claude qui en contient.

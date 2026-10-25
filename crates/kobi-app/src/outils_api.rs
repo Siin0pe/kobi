@@ -7,15 +7,19 @@
 //!   restent communs. Rien ne sort des dossiers : chaque chemin est résolu
 //!   (liens compris) puis comparé aux dossiers permis.
 //! * **Serveurs MCP** du workspace, par le client `rmcp` de Kobi : outils
-//!   nommés `mcp__<serveur>__<outil>` comme chez Claude Code. Seuls les
-//!   outils annoncés en lecture (`readOnlyHint`) sont proposés ; les
-//!   écritures attendent la carte de confirmation (KOB-103).
+//!   nommés `mcp__<serveur>__<outil>` comme chez Claude Code, avec les
+//!   mêmes règles (KOB-320) : nature et politique lues dans le catalogue des
+//!   réglages ; la lecture passe, l'écriture demande une carte (sauf
+//!   serveur « faire sans demander »), un outil inconnu aussi. En lecture
+//!   seule (question différée), seuls les outils connus en lecture sont
+//!   proposés et rien ne demande de carte.
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
-use kobi_perms::mcp::Nature;
+use kobi_brain::Autorisation;
+use kobi_perms::mcp::{Catalogue, Nature, Verdict};
 use rmcp::service::RunningService;
 use rmcp::RoleClient;
 use serde_json::{json, Value};
@@ -261,8 +265,20 @@ fn couper(mut s: String) -> String {
 struct ServeurMcp {
     nom: String,
     client: RunningService<RoleClient, ()>,
-    /// Outils de lecture proposés à Claude (nom côté serveur).
+    /// Outils proposés à Claude (nom côté serveur).
     outils: Vec<String>,
+}
+
+/// Ce que la session peut faire avec les outils MCP (comme les sessions
+/// Claude Code, KOB-320).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Acces {
+    /// Conversation et notes : la lecture passe, l'écriture demande une
+    /// carte (sauf serveur réglé « faire sans demander »).
+    Complet,
+    /// Question différée (KOB-307) : seuls les outils connus en lecture
+    /// sont proposés ; rien ne demande de carte, le reste est refusé.
+    LectureSeule,
 }
 
 /// Outils de la réunion : lecture des dossiers et serveurs MCP.
@@ -270,24 +286,32 @@ pub struct OutillageKobi {
     lecteur: Lecteur,
     serveurs: Vec<ServeurMcp>,
     definitions: Vec<Value>,
+    /// Nature et politique de chaque outil, tirées des réglages (dernier
+    /// test de connexion), jamais des annotations reçues en direct.
+    catalogue: Catalogue,
+    acces: Acces,
 }
 
 impl OutillageKobi {
     /// `serveurs` : clients déjà connectés (voir [`crate::mcp::connecter`]),
-    /// avec leur `tools/list`.
+    /// avec leur `tools/list`. `catalogue` : le même que pour les sessions
+    /// Claude Code ([`crate::mcp::pour_session`]).
     pub fn new(
         dossiers: &[PathBuf],
         serveurs: Vec<(String, RunningService<RoleClient, ()>, Vec<Value>)>,
+        catalogue: Catalogue,
+        acces: Acces,
     ) -> Self {
         let mut definitions = Lecteur::definitions();
         let mut connectes = Vec::new();
         for (nom, client, outils) in serveurs {
-            let mut lecture = Vec::new();
+            let mut proposes = Vec::new();
             for o in &outils {
                 let Some(outil) = o["name"].as_str() else {
                     continue;
                 };
-                if Nature::depuis_annotations(o.get("annotations")) != Nature::Lecture {
+                if acces == Acces::LectureSeule && catalogue.nature(&nom, outil) != Nature::Lecture
+                {
                     continue;
                 }
                 definitions.push(json!({
@@ -296,19 +320,21 @@ impl OutillageKobi {
                     "input_schema": o.get("inputSchema").cloned()
                         .unwrap_or_else(|| json!({ "type": "object" })),
                 }));
-                lecture.push(outil.to_owned());
+                proposes.push(outil.to_owned());
             }
-            tracing::info!(serveur = %nom, outils = ?lecture, "outils MCP de lecture du backend clé API");
+            tracing::info!(serveur = %nom, outils = ?proposes, ?acces, "outils MCP du backend clé API");
             connectes.push(ServeurMcp {
                 nom,
                 client,
-                outils: lecture,
+                outils: proposes,
             });
         }
         Self {
             lecteur: Lecteur::new(dossiers),
             serveurs: connectes,
             definitions,
+            catalogue,
+            acces,
         }
     }
 
@@ -362,6 +388,30 @@ impl kobi_brain::Outillage for OutillageKobi {
 
     fn action(&self, nom: &str, entree: &Value) -> kobi_brain::Action {
         kobi_brain::claude_code::outils::action(nom, entree)
+    }
+
+    /// Lecture des dossiers : libre. Outil MCP : verdict du catalogue,
+    /// comme pour Claude Code (inconnu = carte) ; en lecture seule, ce qui
+    /// demanderait une carte est refusé.
+    fn autorisation(&self, nom: &str) -> Autorisation {
+        if matches!(nom, "Read" | "Grep" | "Glob") {
+            return Autorisation::Libre;
+        }
+        let libre = nom
+            .strip_prefix("mcp__")
+            .and_then(|r| r.split_once("__"))
+            .is_some_and(|(serveur, outil)| {
+                let verdict = self.catalogue.verdict(serveur, outil);
+                match self.acces {
+                    Acces::Complet => verdict == Verdict::Libre,
+                    Acces::LectureSeule => self.catalogue.nature(serveur, outil) == Nature::Lecture,
+                }
+            });
+        match (libre, self.acces) {
+            (true, _) => Autorisation::Libre,
+            (false, Acces::Complet) => Autorisation::Carte,
+            (false, Acces::LectureSeule) => Autorisation::Refus,
+        }
     }
 
     fn appeler<'a>(

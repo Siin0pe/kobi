@@ -222,28 +222,71 @@ async fn serveur_notes() -> (
     (client, outils, ecrites)
 }
 
-/// KOB-102 : les outils MCP de lecture sont proposés et appelés ; les
-/// écritures ne sont pas proposées, et un appel quand même n'atteint pas le
-/// serveur (carte de confirmation : KOB-103).
+fn catalogue(politique: kobi_perms::mcp::Politique) -> Catalogue {
+    use kobi_perms::mcp::Serveur;
+    let mut c = Catalogue::default();
+    c.serveurs.insert(
+        "notes".into(),
+        Serveur {
+            politique,
+            outils: [
+                ("lire_notes".to_owned(), Nature::Lecture),
+                ("ecrire_note".to_owned(), Nature::Ecriture),
+                ("effacer".to_owned(), Nature::Suppression),
+            ]
+            .into(),
+        },
+    );
+    c
+}
+
+fn noms(o: &OutillageKobi) -> Vec<String> {
+    o.definitions()
+        .iter()
+        .map(|d| d["name"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// KOB-102 et KOB-320 : tous les outils MCP sont proposés et appelés ; la
+/// lecture connue passe, l'écriture demande une carte. Les outils internes
+/// passent par le même point d'entrée.
 #[tokio::test]
-async fn outils_mcp_de_lecture_seulement() {
+async fn outils_mcp_et_autorisations() {
+    use kobi_perms::mcp::Politique;
     let dir = codebase();
     let (client, outils, ecrites) = serveur_notes().await;
     let o = OutillageKobi::new(
         &[dir.path().to_path_buf()],
         vec![("notes".into(), client, outils)],
+        catalogue(Politique::Demander),
+        Acces::Complet,
     );
-    let noms: Vec<String> = o
-        .definitions()
-        .iter()
-        .map(|d| d["name"].as_str().unwrap().to_owned())
-        .collect();
-    assert_eq!(noms, ["Read", "Grep", "Glob", "mcp__notes__lire_notes"]);
+    assert_eq!(
+        noms(&o),
+        [
+            "Read",
+            "Grep",
+            "Glob",
+            "mcp__notes__ecrire_note",
+            "mcp__notes__lire_notes"
+        ]
+    );
     for d in o.definitions() {
         assert_eq!(d["input_schema"]["type"], "object", "{d}");
         assert!(!d["description"].as_str().unwrap().is_empty(), "{d}");
     }
-
+    for (nom, attendu) in [
+        ("Read", Autorisation::Libre),
+        ("Grep", Autorisation::Libre),
+        ("Glob", Autorisation::Libre),
+        ("mcp__notes__lire_notes", Autorisation::Libre),
+        ("mcp__notes__ecrire_note", Autorisation::Carte),
+        ("mcp__notes__effacer", Autorisation::Carte),
+        ("mcp__autre__lire_notes", Autorisation::Carte),
+        ("Bash", Autorisation::Carte),
+    ] {
+        assert_eq!(o.autorisation(nom), attendu, "{nom}");
+    }
     assert_eq!(
         o.appeler("mcp__notes__lire_notes", &json!({}))
             .await
@@ -251,29 +294,107 @@ async fn outils_mcp_de_lecture_seulement() {
         "- Décision : livrer vendredi."
     );
     assert!(matches!(
-        o.action("mcp__notes__lire_notes", &json!({})),
-        kobi_brain::Action::Mcp { serveur, outil, .. } if serveur == "notes" && outil == "lire_notes"
+        o.action("mcp__notes__ecrire_note", &json!({ "texte": "x" })),
+        kobi_brain::Action::Mcp { serveur, outil, .. } if serveur == "notes" && outil == "ecrire_note"
     ));
+    // L'appel, une fois la carte acceptée par le cerveau, arrive au serveur.
+    assert_eq!(
+        o.appeler("mcp__notes__ecrire_note", &json!({ "texte": "x" }))
+            .await
+            .unwrap(),
+        "ok"
+    );
+    assert_eq!(*ecrites.lock().unwrap(), ["x"]);
     let e = o
-        .appeler("mcp__notes__ecrire_note", &json!({ "texte": "x" }))
+        .appeler("mcp__notes__inconnu", &json!({}))
         .await
         .unwrap_err();
     assert!(e.contains("outil inconnu"), "{e}");
-    assert!(ecrites.lock().unwrap().is_empty());
-
-    // Les outils internes passent par le même point d'entrée.
     assert!(o
         .appeler("Grep", &json!({ "pattern": "Assistant" }))
         .await
         .unwrap()
         .contains("README.md:2:"));
-    assert!(matches!(
-        o.action("Read", &json!({ "file_path": "/a/b.md" })),
-        kobi_brain::Action::LireFichier { .. }
-    ));
     assert!(o
         .appeler("Bash", &json!({ "command": "ls" }))
         .await
         .is_err());
+    o.fermer().await;
+}
+
+/// KOB-320 : la nature vient du catalogue, pas des annotations reçues en
+/// direct. Un outil annoncé en lecture mais absent du catalogue (jamais
+/// testé) demande une carte, comme chez Claude Code.
+#[tokio::test]
+async fn annotation_seule_ne_suffit_pas() {
+    let (client, outils, _) = serveur_notes().await;
+    let lecture_annoncee = outils
+        .iter()
+        .any(|o| o["name"] == "lire_notes" && o["annotations"]["readOnlyHint"] == true);
+    assert!(lecture_annoncee);
+    let o = OutillageKobi::new(
+        &[],
+        vec![("notes".into(), client, outils)],
+        Catalogue::default(),
+        Acces::Complet,
+    );
+    assert_eq!(
+        o.autorisation("mcp__notes__lire_notes"),
+        Autorisation::Carte
+    );
+    o.fermer().await;
+}
+
+/// Serveur réglé « faire sans demander » : l'écriture passe sans carte,
+/// une suppression en demande toujours une.
+#[tokio::test]
+async fn serveur_sans_demander() {
+    use kobi_perms::mcp::Politique;
+    let (client, outils, _) = serveur_notes().await;
+    let o = OutillageKobi::new(
+        &[],
+        vec![("notes".into(), client, outils)],
+        catalogue(Politique::SansDemander),
+        Acces::Complet,
+    );
+    assert_eq!(
+        o.autorisation("mcp__notes__ecrire_note"),
+        Autorisation::Libre
+    );
+    assert_eq!(o.autorisation("mcp__notes__effacer"), Autorisation::Carte);
+    o.fermer().await;
+}
+
+/// Question différée (KOB-307) : seuls les outils connus en lecture sont
+/// proposés ; une écriture est refusée sans carte, même sur un serveur
+/// « faire sans demander ».
+#[tokio::test]
+async fn lecture_seule_sans_carte() {
+    use kobi_perms::mcp::Politique;
+    let (client, outils, ecrites) = serveur_notes().await;
+    let o = OutillageKobi::new(
+        &[],
+        vec![("notes".into(), client, outils)],
+        catalogue(Politique::SansDemander),
+        Acces::LectureSeule,
+    );
+    assert_eq!(noms(&o), ["Read", "Grep", "Glob", "mcp__notes__lire_notes"]);
+    assert_eq!(
+        o.autorisation("mcp__notes__lire_notes"),
+        Autorisation::Libre
+    );
+    for refuse in [
+        "mcp__notes__ecrire_note",
+        "mcp__notes__effacer",
+        "mcp__autre__x",
+        "Bash",
+    ] {
+        assert_eq!(o.autorisation(refuse), Autorisation::Refus, "{refuse}");
+    }
+    assert!(o
+        .appeler("mcp__notes__ecrire_note", &json!({ "texte": "x" }))
+        .await
+        .is_err());
+    assert!(ecrites.lock().unwrap().is_empty());
     o.fermer().await;
 }

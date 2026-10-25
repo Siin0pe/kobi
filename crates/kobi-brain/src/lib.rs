@@ -19,7 +19,7 @@ pub mod langue;
 pub mod outils;
 pub mod transcript;
 
-pub use api::{ApiBrain, ApiConfig, Outillage, SansOutils};
+pub use api::{ApiBrain, ApiConfig, Autorisation, Outillage, SansOutils};
 pub use brain::{
     Ask, Brain, BrainError, BrainEvent, NotesUpdate, ReportRequest, Turn, TurnSummary,
 };
