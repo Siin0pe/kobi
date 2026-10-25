@@ -448,6 +448,9 @@ pub struct Chef<R: Runtime> {
     validations: crate::validation::FileValidations,
     /// La question en cours de traitement ne s'adresse peut-être pas à Kobi.
     peut_etre: bool,
+    /// La question en cours est différée (KOB-307) : elle part sur une
+    /// session sans pilotage.
+    differee: bool,
     /// Tour d'une telle question : sa réponse n'est montrée qu'une fois
     /// finie, et une réponse « rien » le laisse silencieux (KOB-168).
     tour_peut_etre: Option<u64>,
@@ -734,6 +737,7 @@ impl<R: Runtime> Chef<R> {
             interrompus: HashSet::new(),
             validations: Default::default(),
             peut_etre: false,
+            differee: false,
             tour_peut_etre: None,
             compte_rendu_a_ecrire: false,
             comptes_rendus_abandonnes: 0,
@@ -1045,6 +1049,7 @@ impl<R: Runtime> Chef<R> {
             question: self.avec_contexte(consigne.unwrap_or_else(|| texte.clone())),
             transcript: std::mem::take(&mut self.pour_conversation),
             notes,
+            differee: self.differee,
         });
         tracing::info!(
             tour = self.tour,
@@ -1217,6 +1222,14 @@ impl<R: Runtime> Chef<R> {
     }
 
     fn demarrer(&mut self) -> String {
+        if self.reunion.is_none() && !self.questions_differees.is_empty() {
+            // Rien d'une réunion passée ne part dans la nouvelle.
+            tracing::info!(
+                nombre = self.questions_differees.len(),
+                "questions dites avant l'arrêt abandonnées : nouvelle réunion"
+            );
+            self.questions_differees.clear();
+        }
         if let Some(r) = &self.reunion {
             return if r.fin_demandee {
                 kobi_i18n::tr("coque.chef.compteRenduEnCours", &[])
@@ -1386,15 +1399,27 @@ impl<R: Runtime> Chef<R> {
         if self.questions_differees.is_empty() || self.fin_annulable() {
             return;
         }
-        // Une à la fois, Kobi au calme : la réponse de l'une ne passe pas
-        // sous celle de la suivante.
-        if !matches!(self.activite(), Some("calme") | None) {
+        // Une à la fois, Kobi au calme : dans la réunion reprise, ou en
+        // veille une fois le compte rendu écrit (pas pendant qu'il
+        // s'écrit), ni pendant une autre réponse, sa lecture ou un résultat
+        // à montrer. La réponse de l'une ne passe pas sous la suivante.
+        let calme = match self.activite() {
+            Some(activite) => activite == "calme",
+            None => etat(&self.app).etat == "veille",
+        };
+        if !calme
+            || self.calme_a.is_some()
+            || !self.a_livrer.is_empty()
+            || crate::voix::parle(&self.app)
+        {
             return;
         }
         let q = self.questions_differees.remove(0);
         tracing::info!(longueur = q.len(), "question dite avant l'arrêt, posée");
         self.transition(&[Evenement::Interpellation]);
+        self.differee = true;
         self.question(q, true);
+        self.differee = false;
     }
 
     /// « Annuler » : la même réunion reprend (même dossier, compteur
@@ -2727,6 +2752,13 @@ mod tests {
     /// Réunion menée par le vrai chef, avec un Claude qui ne répond jamais :
     /// les comptes rendus sont injectés à la main.
     fn chef_en_essai() -> (tauri::App<tauri::test::MockRuntime>, tempfile::TempDir) {
+        let jamais: Fabrique = Arc::new(|_| Box::pin(std::future::pending()));
+        chef_en_essai_avec(jamais)
+    }
+
+    fn chef_en_essai_avec(
+        fabrique: Fabrique,
+    ) -> (tauri::App<tauri::test::MockRuntime>, tempfile::TempDir) {
         use tauri::test::{mock_builder, mock_context, noop_assets};
         let dir = tempfile::tempdir().unwrap();
         let app = crate::session::installer(mock_builder())
@@ -2735,8 +2767,7 @@ mod tests {
         let mut cfg = kobi_session::config::Config::default();
         cfg.stockage.dossier = Some(dir.path().join("donnees"));
         crate::stockage::installer(app.handle(), &cfg, None);
-        let jamais: Fabrique = Arc::new(|_| Box::pin(std::future::pending()));
-        installer(app.handle(), jamais, 5, cerveau::Delais::default());
+        installer(app.handle(), fabrique, 5, cerveau::Delais::default());
         (app, dir)
     }
 
@@ -3437,24 +3468,101 @@ mod tests {
         });
     }
 
+    /// Fabrique qui note les rôles des sessions demandées, sans en ouvrir.
+    fn fabrique_qui_note() -> (Fabrique, Arc<Mutex<Vec<cerveau::Role>>>) {
+        let roles = Arc::new(Mutex::new(Vec::new()));
+        let notes = roles.clone();
+        let fabrique: Fabrique = Arc::new(move |role| {
+            notes.lock().unwrap().push(role);
+            Box::pin(std::future::pending())
+        });
+        (fabrique, roles)
+    }
+
+    /// Une session `Differee` a été demandée au cerveau (2 s au plus).
+    fn session_differee_demandee(roles: &Mutex<Vec<cerveau::Role>>) -> bool {
+        let fin = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < fin {
+            if roles.lock().unwrap().contains(&cerveau::Role::Differee) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        false
+    }
+
     /// KOB-307 : une question dite avant l'arrêt est gardée tant que
-    /// « Annuler » est ouvert, puis posée une fois la fin confirmée.
+    /// « Annuler » est ouvert. La fin confirmée, elle attend que le compte
+    /// rendu soit écrit (pas de réponse pendant qu'il s'écrit), puis part
+    /// sur une session sans pilotage de la réunion.
     #[test]
-    fn question_dite_avant_l_arret_posee_apres_annuler() {
-        let (app, _dir) = chef_en_essai();
+    fn question_dite_avant_l_arret_posee_apres_la_fin() {
+        let (fabrique, roles) = fabrique_qui_note();
+        let (app, _dir) = chef_en_essai_avec(fabrique);
         avec_chef(&app, |c| {
             c.commande(Intention::DemarrerReunion);
+            c.recevoir(Message::Segment(dit("Premier point."), Instant::now()));
             c.commande(Intention::TerminerReunion);
             assert!(c.fin_annulable());
             c.recevoir(Message::QuestionDifferee("note l'action budget".into()));
             c.tick();
             assert_eq!(c.questions_differees, ["note l'action budget"]);
-            // « Annuler » se ferme : la question est posée.
+            // « Annuler » se ferme : le compte rendu s'écrit, elle attend.
             c.reunion.as_mut().unwrap().annulable_jusqu = Some(Instant::now() - VIDANGE);
             c.tick();
-            assert!(!c.fin_annulable());
-            // Posée au tick suivant (250 ms).
             c.tick();
+            assert!(!c.fin_annulable());
+            assert_eq!(c.questions_differees, ["note l'action budget"]);
+            c.recevoir(Message::Cerveau(Retour::CompteRendu(Ok(
+                "# Compte rendu\n\nPremier point.\n".into(),
+            ))));
+            c.tick();
+            assert!(c.reunion.is_none());
+            c.tick();
+            assert!(c.questions_differees.is_empty());
+        });
+        assert!(
+            session_differee_demandee(&roles),
+            "{:?}",
+            roles.lock().unwrap()
+        );
+    }
+
+    /// KOB-307 : « Annuler » : la question part dans la réunion reprise, sur
+    /// une session sans pilotage ; une seule à la fois.
+    #[test]
+    fn questions_dites_avant_l_arret_posees_apres_annuler_une_a_la_fois() {
+        let (fabrique, roles) = fabrique_qui_note();
+        let (app, _dir) = chef_en_essai_avec(fabrique);
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            c.commande(Intention::TerminerReunion);
+            c.recevoir(Message::QuestionDifferee("note l'action budget".into()));
+            c.recevoir(Message::QuestionDifferee("et le planning ?".into()));
+            c.commande(Intention::Reprendre);
+            c.tick();
+            assert_eq!(c.questions_differees, ["et le planning ?"]);
+            // La première attend sa réponse : la seconde aussi.
+            c.tick();
+            c.tick();
+            assert_eq!(c.questions_differees, ["et le planning ?"]);
+            assert!(!c.differee);
+        });
+        assert!(
+            session_differee_demandee(&roles),
+            "{:?}",
+            roles.lock().unwrap()
+        );
+    }
+
+    /// KOB-307 : une nouvelle réunion n'hérite pas des questions de la
+    /// précédente.
+    #[test]
+    fn nouvelle_reunion_sans_les_questions_d_avant() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.questions_differees.push("note l'action budget".into());
+            c.commande(Intention::DemarrerReunion);
             assert!(c.questions_differees.is_empty());
         });
     }

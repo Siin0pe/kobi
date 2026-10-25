@@ -301,8 +301,12 @@ pub fn session_claude(
         .into_iter()
         .filter(|(n, _)| nom_valide(n).is_ok())
         .collect();
-    // La conversation pilote la réunion (KOB-165), pas les notes.
+    // La conversation pilote la réunion (KOB-165), pas les notes. Une
+    // question différée n'a que la liste blanche de lecture (KOB-307) : ni
+    // les serveurs de l'utilisateur, ni le serveur de permission.
     let pilote = role == crate::cerveau::Role::Conversation;
+    let lecture_seule = role == crate::cerveau::Role::Differee;
+    let serveurs = if lecture_seule { Vec::new() } else { serveurs };
     let role = format!("{role:?}").to_lowercase();
     let args = kobi_brain::ArgsWithPerms(Arc::new(move |perms: &Value| {
         let dossier = config::kobi_dir()
@@ -323,13 +327,24 @@ pub fn session_claude(
                 outils_autorises: Vec::new(),
             })
             .collect();
-        utilisateur.push(crate::mcp_config::ServeurMcp {
-            nom: kobi_perms::SERVER_NAME.into(),
-            config: perms.clone(),
-            outils_autorises: Vec::new(),
-        });
+        if !lecture_seule {
+            utilisateur.push(crate::mcp_config::ServeurMcp {
+                nom: kobi_perms::SERVER_NAME.into(),
+                config: perms.clone(),
+                outils_autorises: Vec::new(),
+            });
+        }
         let mut mcp = crate::mcp_config::assembler(&fichier, utilisateur)
             .map_err(|e| kobi_i18n::tr("coque.mcp.configSession", &[("erreur", &e.to_string())]))?;
+        if lecture_seule {
+            return Ok(crate::lecture::arguments_lecture_seule(
+                modele,
+                kobi_brain::SYSTEM_PROMPT,
+                &codebases,
+                memoire.as_ref(),
+                Some(&mcp),
+            ));
+        }
         mcp.permission_prompt_tool = Some(kobi_perms::PERMISSION_PROMPT_TOOL.into());
         mcp.prompt = prompt.clone();
         // Commandes validées par le hook de Kobi (KOB-154).

@@ -102,6 +102,10 @@ const OUTILS_INTERNES: &[&str] = &["ToolSearch", "TodoWrite"];
 pub enum Role {
     Conversation,
     Notes,
+    /// Question dite avant l'arrêt de la réunion, posée après « Annuler »
+    /// (KOB-307) : session à part, en liste blanche de lecture, sans outil
+    /// qui pilote la réunion ou touche la session.
+    Differee,
 }
 
 type Session = Box<dyn Brain + Send>;
@@ -119,6 +123,8 @@ pub enum Demande {
         /// Transcription que la conversation n'a pas encore vue.
         transcript: String,
         notes: String,
+        /// Posée sur une session [`Role::Differee`] (KOB-307).
+        differee: bool,
     },
     Notes {
         transcript: String,
@@ -388,6 +394,8 @@ fn reserve(fabrique: &Fabrique) -> Reserve {
 struct Question {
     tour: u64,
     ask: Ask,
+    /// Session où elle se pose, et se repose après un plantage.
+    role: Role,
     /// Déjà relancée après un plantage : un second plantage est une erreur.
     relancee: bool,
     /// Relancée : résumé des derniers échanges, que la session neuve n'a pas vus.
@@ -504,10 +512,11 @@ async fn conversation(
                         None => rx.recv().await,
                     }
                 } => match demande {
-                    Some(Demande::Question { tour, question, transcript, notes }) => {
+                    Some(Demande::Question { tour, question, transcript, notes, differee }) => {
                         let q = Question {
                             tour,
                             ask: Ask { question, transcript, notes },
+                            role: if differee { Role::Differee } else { Role::Conversation },
                             relancee: false,
                             resume: None,
                         };
@@ -548,6 +557,36 @@ async fn conversation(
             }
         };
         let tour = q.tour;
+        if q.role != Role::Conversation {
+            // Jamais sur la session de la conversation, qui pilote la
+            // réunion : sur une session à part, fermée avec le tour.
+            tracing::info!(tour, role = ?q.role, "question sur une session à part");
+            // Son résultat se montre comme celui d'une tâche (`Resultat`).
+            sortie(Retour::Detache {
+                tour,
+                annonce: true,
+            });
+            let reprise = Reprise {
+                fabrique: fabrique.clone(),
+                question: q,
+                attente: attente_tx.clone(),
+                echanges: echanges.iter().cloned().collect(),
+                delais,
+            };
+            let (sortie, cartes) = (sortie.clone(), cartes.clone());
+            detacher(&taches, tour, async move {
+                match (reprise.fabrique)(reprise.question.role).await {
+                    Ok(s) => {
+                        let mut s = Some(s);
+                        let turn = poser(&mut s, &reprise.question);
+                        let vigie = Vigie::new(reprise.delais);
+                        finir(turn, String::new(), vigie, reprise, &sortie, &cartes).await;
+                    }
+                    Err(e) => echec_d_ouverture(e, reprise.question, &reprise.attente, &sortie),
+                }
+            });
+            continue;
+        }
         let arrivee = tokio::time::Instant::now();
         let en_rafale = neuve && derniere.is_some_and(|d| arrivee.duration_since(d) < RAFALE);
         // La question a attendu la tâche de sa rafale : déjà annoncée avec
@@ -1131,7 +1170,7 @@ async fn finir(
                 Panne::Plantage if !reprise.question.relancee => {
                     tracing::warn!(tour, erreur = %e, "tâche : Claude a planté, question renvoyée");
                     sortie(Retour::Relance { tour });
-                    match (reprise.fabrique)(Role::Conversation).await {
+                    match (reprise.fabrique)(reprise.question.role).await {
                         Ok(s) => {
                             let mut s = Some(s);
                             let mut reprise = reprise;
@@ -1373,6 +1412,7 @@ mod tests {
             question: texte.into(),
             transcript: String::new(),
             notes: String::new(),
+            differee: false,
         }
     }
 
@@ -2345,7 +2385,7 @@ mod tests {
                     *o += 1;
                     *o
                 }
-                Role::Conversation => 0,
+                Role::Conversation | Role::Differee => 0,
             };
             Box::pin(async move {
                 let b = FakeBrain::new().then(vec![Step::Text(format!("session {n}"))]);
@@ -2375,6 +2415,57 @@ mod tests {
             .collect();
         assert_eq!(textes, ["session 1", "session 2"]);
         assert_eq!(*ouvertes.lock().unwrap(), 2);
+    }
+
+    /// KOB-307 : une question différée part sur une session `Differee`, à
+    /// part : jamais sur celle de la conversation, qui pilote la réunion ;
+    /// la conversation n'en hérite pas non plus.
+    #[tokio::test]
+    async fn question_differee_sur_sa_session() {
+        let (s, recus) = sortie();
+        let roles = Arc::new(Mutex::new(Vec::new()));
+        let r = roles.clone();
+        let fabrique: Fabrique = Arc::new(move |role| {
+            r.lock().unwrap().push(role);
+            let texte = format!("{role:?}");
+            Box::pin(async move {
+                let b = FakeBrain::new()
+                    .then(vec![Step::Text(texte.clone())])
+                    .then(vec![Step::Text(texte)]);
+                Ok(Box::new(b) as Session)
+            })
+        });
+        let c = Cerveau::lancer(fabrique, s);
+        c.demander(Demande::Question {
+            tour: 1,
+            question: "et le budget ?".into(),
+            transcript: String::new(),
+            notes: String::new(),
+            differee: true,
+        });
+        attendre(&recus, |r| matches!(r, Retour::Resultat { tour: 1, .. })).await;
+        c.demander(question(2, "et après ?"));
+        attendre(&recus, |r| matches!(r, Retour::Fin { tour: 2, .. })).await;
+        let recus = recus.lock().unwrap();
+        let texte = |t: u64| {
+            recus.iter().find_map(|(_, r)| match r {
+                Retour::Resultat { tour, texte } | Retour::Fin { tour, texte } if *tour == t => {
+                    Some(texte.clone())
+                }
+                _ => None,
+            })
+        };
+        assert_eq!(texte(1).as_deref(), Some("Differee"));
+        assert_eq!(texte(2).as_deref(), Some("Conversation"));
+        assert_eq!(
+            roles
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|r| **r == Role::Differee)
+                .count(),
+            1
+        );
     }
 
     #[tokio::test]

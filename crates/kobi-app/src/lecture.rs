@@ -146,15 +146,79 @@ pub fn arguments(
     mcp: Option<&McpSession>,
     pilote: bool,
 ) -> Vec<String> {
+    let acces = if pilote { Acces::Pilote } else { Acces::Notes };
+    assembler(modele, systeme, codebases, memoire, mcp, acces)
+}
+
+/// Arguments d'une session en liste blanche (KOB-307) : Read, Grep, Glob et
+/// les outils de lecture du MCP de Kobi hors `meeting_*` (réunions, notes,
+/// conversations), rien d'autre. Aucun outil qui écrit ni qui touche la
+/// session ou la réunion, aucun outil des serveurs de l'utilisateur, aucune
+/// carte : ce qui n'est pas permis est refusé.
+pub fn arguments_lecture_seule(
+    modele: &str,
+    systeme: &str,
+    codebases: &[PathBuf],
+    memoire: Option<&Memoire>,
+    mcp: Option<&McpSession>,
+) -> Vec<String> {
+    assembler(modele, systeme, codebases, memoire, mcp, Acces::Lecture)
+}
+
+/// Ajouté au prompt d'une session en liste blanche : Claude ne promet pas
+/// ce que ses outils ne permettent pas.
+pub const PROMPT_LECTURE_SEULE: &str = "\
+## Lecture seule
+
+Dans cette conversation, seuls tes outils marqués [lecture] sont permis : tu ne peux ni \
+démarrer, mettre en pause ou arrêter la réunion, ni changer un réglage, ni ajouter un rappel. \
+Si on te le demande, dis en une phrase que tu ne peux pas le faire d'ici, sans prétendre l'avoir fait.";
+
+/// Ce que la session peut faire avec le MCP de Kobi.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Acces {
+    /// La conversation : elle pilote la réunion (KOB-165).
+    Pilote,
+    /// Les notes : tout sauf le pilotage.
+    Notes,
+    /// Liste blanche de lecture ([`arguments_lecture_seule`]).
+    Lecture,
+}
+
+fn assembler(
+    modele: &str,
+    systeme: &str,
+    codebases: &[PathBuf],
+    memoire: Option<&Memoire>,
+    mcp: Option<&McpSession>,
+    acces: Acces,
+) -> Vec<String> {
+    let pilote = acces == Acces::Pilote;
     let mut autorises = OUTILS_LECTURE.map(String::from).to_vec();
     let mut refuses: Vec<String> = OUTILS_REFUSES.iter().map(|o| o.to_string()).collect();
     if let Some(mcp) = mcp {
-        autorises.extend(mcp.outils_autorises.iter().cloned());
-        let reunion = kobi_ctl::mcp::outils_de_reunion(crate::mcp_config::SERVEUR_KOBI);
-        if pilote {
-            autorises.extend(reunion);
+        let serveur = crate::mcp_config::SERVEUR_KOBI;
+        if acces == Acces::Lecture {
+            // Aucun outil `meeting_*`, même en lecture (`meeting_status` :
+            // `status` dit déjà l'état de la réunion).
+            let lecture: Vec<String> = kobi_ctl::mcp::outils_de_lecture(serveur)
+                .into_iter()
+                .filter(|o| !o.contains("__meeting_"))
+                .collect();
+            refuses.extend(
+                kobi_ctl::mcp::outils_de_l_agent(serveur)
+                    .into_iter()
+                    .filter(|o| !lecture.contains(o)),
+            );
+            autorises.extend(lecture);
         } else {
-            refuses.extend(reunion);
+            autorises.extend(mcp.outils_autorises.iter().cloned());
+            let reunion = kobi_ctl::mcp::outils_de_reunion(serveur);
+            if pilote {
+                autorises.extend(reunion);
+            } else {
+                refuses.extend(reunion);
+            }
         }
     }
     let mut args: Vec<String> = [
@@ -174,7 +238,10 @@ pub fn arguments(
     ]
     .map(String::from)
     .into();
-    match mcp.and_then(|m| m.permission_prompt_tool.as_deref()) {
+    let invite = mcp
+        .filter(|_| acces != Acces::Lecture)
+        .and_then(|m| m.permission_prompt_tool.as_deref());
+    match invite {
         // Ce qui n'est pas autorisé d'avance passe par le serveur de
         // permission de Kobi : outils MCP qui écrivent → carte (KOB-155).
         Some(outil) => args.extend(
@@ -195,7 +262,8 @@ pub fn arguments(
         args.push(dossier.display().to_string());
     }
     let mut prompt = format!("{systeme}\n\n{PROMPT_LECTURE}");
-    if pilote {
+    // Une question de la conversation, même en liste blanche.
+    if acces != Acces::Notes {
         prompt.push_str("\n\n");
         prompt.push_str(PROMPT_CONVERSATION);
     }
@@ -212,7 +280,11 @@ pub fn arguments(
             prompt.push_str("\n\n");
             prompt.push_str(crate::mcp_config::PROMPT_PILOTAGE_REUNION);
         }
-        if let Some(utilisateur) = &mcp.prompt {
+        if acces == Acces::Lecture {
+            prompt.push_str("\n\n");
+            prompt.push_str(PROMPT_LECTURE_SEULE);
+        }
+        if let Some(utilisateur) = mcp.prompt.as_ref().filter(|_| acces != Acces::Lecture) {
             prompt.push_str("\n\n");
             prompt.push_str(utilisateur);
         }
@@ -480,6 +552,74 @@ mod tests {
         assert!(valeur(&args, "--disallowedTools")[0].contains("mcp__kobi__meeting_stop"));
         assert!(!prompt.contains("## Piloter la réunion"));
         assert!(!prompt.contains("## Au quotidien comme en réunion"));
+    }
+
+    /// KOB-307 : la session des questions différées n'a que la liste
+    /// blanche de lecture. Aucun outil `meeting_*`, ni rien qui écrive ou
+    /// touche la session, ni les outils des serveurs de l'utilisateur ; pas
+    /// de carte, ce qui n'est pas permis est refusé.
+    #[test]
+    fn session_en_liste_blanche_sans_pilotage() {
+        let mcp = McpSession {
+            fichier: PathBuf::from("C:/Users/moi/Kobi/mcp/session-differee.json"),
+            outils_autorises: vec![
+                "mcp__kobi__meeting_stop".into(),
+                "mcp__kobi__config_set".into(),
+                "mcp__agenda__creer".into(),
+            ],
+            permission_prompt_tool: Some("mcp__kobi-perms__permission".into()),
+            prompt: Some("## Serveurs de l'utilisateur".into()),
+        };
+        let args = arguments_lecture_seule("haiku", "Tu es Kobi.", &[], None, Some(&mcp));
+        let autorises: Vec<&str> = valeur(&args, "--allowedTools")[0].split(',').collect();
+        let lecture: Vec<String> = kobi_ctl::mcp::outils_de_lecture("kobi")
+            .into_iter()
+            .filter(|o| o != "mcp__kobi__meeting_status")
+            .collect();
+        let mut attendus = vec!["Read", "Grep", "Glob"];
+        attendus.extend(lecture.iter().map(String::as_str));
+        assert_eq!(autorises, attendus);
+        assert!(autorises.contains(&"mcp__kobi__notes_last"));
+        assert!(autorises.contains(&"mcp__kobi__meetings_get"));
+        assert!(
+            !autorises.iter().any(|o| o.contains("meeting_")),
+            "{autorises:?}"
+        );
+        let refuses: Vec<&str> = valeur(&args, "--disallowedTools")[0].split(',').collect();
+        for outil in kobi_ctl::mcp::outils_de_l_agent("kobi") {
+            assert_eq!(
+                refuses.contains(&outil.as_str()),
+                !lecture.contains(&outil),
+                "{outil}"
+            );
+        }
+        for outil in [
+            "meeting_start",
+            "meeting_stop",
+            "meeting_pause",
+            "meeting_resume",
+            "meeting_rename",
+            "meeting_status",
+            "listen_pause",
+            "listen_resume",
+            "config_set",
+            "app_quit",
+            "voice_say",
+            "reminders_add",
+        ] {
+            assert!(
+                refuses.contains(&format!("mcp__kobi__{outil}").as_str()),
+                "{outil}"
+            );
+        }
+        assert_eq!(valeur(&args, "--tools"), ["Read,Grep,Glob"]);
+        assert_eq!(valeur(&args, "--permission-mode"), ["dontAsk"]);
+        assert!(valeur(&args, "--permission-prompt-tool").is_empty());
+        let prompt = valeur(&args, "--append-system-prompt")[0];
+        assert!(!prompt.contains("## Piloter la réunion"));
+        assert!(!prompt.contains("## Serveurs de l'utilisateur"));
+        assert!(prompt.contains("## Au quotidien comme en réunion"));
+        assert!(prompt.contains(PROMPT_LECTURE_SEULE));
     }
 
     /// Conversation (KOB-165) : Claude pilote la réunion sans carte.
