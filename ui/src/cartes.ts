@@ -20,12 +20,39 @@ export interface CarteUi {
   status: ActionCard['status'];
 }
 
-/** Affiche une carte publiée par la coque. */
+/** Cartes encore en attente de chaque scène, dans l'ordre d'arrivée. */
+const enAttente = new WeakMap<Stage, Map<string, ActionCard>>();
+/** Carte affichée de chaque scène. */
+const affichee = new WeakMap<Stage, string>();
+
+/**
+ * Affiche une carte publiée par la coque. Plusieurs cartes peuvent attendre
+ * ensemble (une de la conversation, une des notes en continu) : la plus
+ * récente est montrée, et quand elle se ferme, la suivante encore en attente
+ * reprend sa place, au lieu de disparaître alors qu'elle attend (KOB-343).
+ */
 export function applyCarte(stage: Stage, c: CarteUi): void {
   if (isValidation(c)) return showValidation(stage, c);
   const action: ActionCard = { id: c.id, kicker: c.kicker, title: c.title, meta: c.meta ?? undefined, status: c.status };
-  if (c.status === 'pending') stage.setState('suggest', { action });
-  else if (c.status === 'confirmed') stage.setState('done', { action });
+  let file = enAttente.get(stage);
+  if (!file) enAttente.set(stage, (file = new Map()));
+  if (c.status === 'pending') {
+    file.delete(c.id);
+    file.set(c.id, action);
+    affichee.set(stage, c.id);
+    stage.setState('suggest', { action });
+    return;
+  }
+  file.delete(c.id);
+  // Une carte cachée (autre carte devant, réponse en cours) se ferme sans
+  // toucher à ce qui est montré.
+  if (affichee.get(stage) !== c.id || stage.currentState !== 'suggest') return;
+  affichee.delete(stage);
+  const suivante = [...file.values()].pop();
+  if (suivante) {
+    affichee.set(stage, suivante.id);
+    stage.setState('suggest', { action: suivante });
+  } else if (c.status === 'confirmed') stage.setState('done', { action });
   else stage.setState('idle');
 }
 
