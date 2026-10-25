@@ -109,6 +109,8 @@ const VIDANGE_PISTE: Duration = Duration::from_secs(45);
 struct Piste {
     capture: Capture,
     porte: Porte,
+    /// Début de l'énoncé en cours, resté sans final (KOB-364).
+    partiel: Option<f64>,
     /// Ouverture de la capture, sur l'horloge du système : l'instant des
     /// trames et des segments se compte depuis lui (KOB-198).
     origine: Instant,
@@ -262,6 +264,7 @@ impl<R: Runtime> Fil<R> {
                 self.piste = Some(Piste {
                     capture,
                     porte: Porte::new(kobi_stt::SAMPLE_RATE),
+                    partiel: None,
                     origine: Instant::now(),
                     defaut,
                 });
@@ -285,6 +288,7 @@ impl<R: Runtime> Fil<R> {
         };
         let origine = piste.origine;
         let mut porte = piste.porte;
+        let mut partiel = piste.partiel;
         let (reste, _) = piste.capture.stop();
         tracing::info!(%raison, trames = reste.len(), "son de l'ordinateur : capture fermée");
         self.signaler(false);
@@ -303,6 +307,7 @@ impl<R: Runtime> Fil<R> {
             transcrites += 1;
             self.transcrire(
                 &mut porte,
+                &mut partiel,
                 origine,
                 frame.t.as_secs_f64(),
                 frame.samples,
@@ -376,7 +381,14 @@ impl<R: Runtime> Fil<R> {
             return;
         };
         let t = frame.t.as_secs_f64();
-        self.transcrire(&mut piste.porte, piste.origine, t, samples, true);
+        self.transcrire(
+            &mut piste.porte,
+            &mut piste.partiel,
+            piste.origine,
+            t,
+            samples,
+            true,
+        );
         self.piste = Some(piste);
     }
 
@@ -386,6 +398,7 @@ impl<R: Runtime> Fil<R> {
     fn transcrire(
         &mut self,
         porte: &mut Porte,
+        partiel: &mut Option<f64>,
         origine: Instant,
         t: f64,
         samples: Vec<f32>,
@@ -394,7 +407,13 @@ impl<R: Runtime> Fil<R> {
         let duree = samples.len() as f64 / kobi_stt::SAMPLE_RATE as f64;
         let Some(stt) = &mut self.stt else { return };
         let mut finis = Vec::new();
-        for (debut, samples) in passer_la_porte(porte, stt, t, samples) {
+        let etait_ouverte = porte.ouverte();
+        let sorties = passer_la_porte(porte, stt, t, samples);
+        if porte.ouverte() && !etait_ouverte {
+            // Énoncé neuf : l'ancien partiel ne viendra plus.
+            *partiel = None;
+        }
+        for (debut, samples) in sorties {
             let morceau = kobi_stt::AudioFrame {
                 source: kobi_stt::Source::Eux,
                 samples,
@@ -409,6 +428,11 @@ impl<R: Runtime> Fil<R> {
                             &s.text,
                             s.is_final,
                         );
+                        if s.is_final {
+                            *partiel = None;
+                        } else if !s.text.trim().is_empty() {
+                            *partiel = Some(s.start);
+                        }
                     }
                     finis.extend(segments)
                 }
@@ -417,8 +441,10 @@ impl<R: Runtime> Fil<R> {
         }
         self.publier(origine, finis);
         if avancer {
-            // Tout l'audio reçu jusqu'ici est transcrit.
-            let jusqu_a = origine + Duration::from_secs_f64((t + duree).max(0.0));
+            // Tout l'audio reçu jusqu'ici est transcrit, sauf l'énoncé en
+            // cours (KOB-364).
+            let fin = crate::ecoute::transcrit_jusqu_a(t + duree, porte.ouverte(), *partiel);
+            let jusqu_a = origine + Duration::from_secs_f64(fin.max(0.0));
             crate::chef::avancer(&self.app, kobi_stt::Source::Eux, Some(jusqu_a));
         }
     }

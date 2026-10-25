@@ -1822,14 +1822,16 @@ impl<R: Runtime> Chef<R> {
         let moi = s.source == kobi_stt::Source::Moi;
         let Some(r) = &mut self.reunion else {
             // Réunion close avant que la transcription ait rattrapé l'arrêt :
-            // ce qui a été dit avant va encore dans sa transcription (KOB-281).
+            // ce qui a été dit avant va encore dans sa transcription (KOB-281),
+            // y compris un énoncé commencé avant et fini après (KOB-364).
             // Sauf ce qui a été dit pendant une fin annulée (KOB-309).
             let debut = self
                 .reunion_close
                 .as_ref()
                 .and_then(|(debut, arret, fins)| {
-                    (dit_a <= *arret && !dit_pendant_une_fin_annulee(fins, moi, commence_a, dit_a))
-                        .then_some(*debut)
+                    (commence_a <= *arret
+                        && !dit_pendant_une_fin_annulee(fins, moi, commence_a, dit_a))
+                    .then_some(*debut)
                 });
             if let Some(debut) = debut {
                 horodater(&mut s, debut, dit_a);
@@ -1847,8 +1849,10 @@ impl<R: Runtime> Chef<R> {
         }
         // Dit avant la fin mais transcrit après (charge, file d'attente) :
         // gardé jusqu'au compte rendu. Ce qui est dit après (le « annule »
-        // d'« Annuler »…) ne l'est pas (KOB-198).
-        if r.fin_demandee && r.arret.is_none_or(|arret| dit_a > arret) {
+        // d'« Annuler »…) ne l'est pas (KOB-198). Jugé sur le début, comme
+        // en pause : un énoncé encore en cours à l'arrêt au clic est de la
+        // réunion, sinon il serait perdu en entier (KOB-364).
+        if r.fin_demandee && r.arret.is_none_or(|arret| commence_a > arret) {
             if r.annulable_jusqu.is_some() {
                 r.apres_l_arret.push((s, dit_a));
             }
@@ -3549,6 +3553,50 @@ mod tests {
                 "phrase {i} perdue"
             );
         }
+    }
+
+    /// KOB-364 : un énoncé commencé avant l'arrêt au clic et fini après
+    /// entre au compte rendu, en entier ; un énoncé commencé après l'arrêt
+    /// n'y entre pas.
+    #[test]
+    fn enonce_a_cheval_sur_l_arret_garde() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            // Pistes en retard : le compte rendu attend leur transcription.
+            let avant = Instant::now() - Duration::from_secs(30);
+            c.recevoir(Message::Avancement(kobi_stt::Source::Moi, Some(avant)));
+            c.commande(Intention::TerminerReunion);
+            let arret = c.reunion.as_ref().unwrap().arret.unwrap();
+            let a_cheval = Segment {
+                start: 0.0,
+                end: 12.0,
+                source: kobi_stt::Source::Moi,
+                text: "Point un validé, point deux reporté.".into(),
+                is_final: true,
+            };
+            c.recevoir(Message::Segment(a_cheval, arret + Duration::from_secs(1)));
+            c.recevoir(Message::Segment(
+                dit("Après l'arrêt."),
+                arret + Duration::from_secs(3),
+            ));
+            c.recevoir(Message::Avancement(kobi_stt::Source::Moi, None));
+            c.recevoir(Message::Avancement(kobi_stt::Source::Eux, None));
+            c.tick();
+            let r = c.reunion.as_ref().unwrap();
+            assert!(r.compte_rendu_demande);
+            assert!(
+                r.pour_compte_rendu
+                    .contains("Point un validé, point deux reporté."),
+                "{}",
+                r.pour_compte_rendu
+            );
+            assert!(
+                !r.pour_compte_rendu.contains("Après l'arrêt."),
+                "{}",
+                r.pour_compte_rendu
+            );
+        });
     }
 
     /// KOB-261 : ce qui a été dit avant la pause mais transcrit après est
