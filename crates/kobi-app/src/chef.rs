@@ -1504,7 +1504,8 @@ impl<R: Runtime> Chef<R> {
     /// Une action proposée par les notes en continu (KOB-72) ne vaut que
     /// pendant la réunion : à sa fin, sa carte est refusée (KOB-331). Un oui
     /// tardif n'agit plus après la fin, et le tour de notes qui l'attendait
-    /// finit sans retenir le compte rendu.
+    /// finit sans retenir le compte rendu. Si la fin est ensuite annulée, la
+    /// proposition ne revient pas : les notes suivantes pourront la refaire.
     fn refuser_cartes_des_notes(&mut self) {
         let cartes: Vec<u64> = self.cartes_des_notes.keys().copied().collect();
         for carte in cartes {
@@ -2182,6 +2183,16 @@ impl<R: Runtime> Chef<R> {
                 entree,
             } => {
                 tracing::info!(tour, carte, %outil, "carte de confirmation");
+                // Proposée par les notes après « Terminer » (tour de notes
+                // déjà en cours) : refusée sans être montrée (KOB-331).
+                if tour == 0 && self.reunion.as_ref().is_none_or(|r| r.fin_demandee) {
+                    tracing::info!(carte, "carte des notes après la fin : refusée");
+                    self.cerveau.demander(Demande::Decision {
+                        carte,
+                        accepte: false,
+                    });
+                    return;
+                }
                 let ui = carte_ui(carte, &outil, &entree);
                 self.cartes.insert(carte, ui.clone());
                 self.cartes_ouvertes.insert(carte, Instant::now());
@@ -3524,7 +3535,73 @@ mod tests {
                 c.cartes.contains_key(&22),
                 "carte de la conversation fermée"
             );
+            // Proposée après « Terminer » : refusée sans être montrée.
+            c.recevoir(carte(0, 23));
+            assert!(!c.cartes.contains_key(&23) && c.cartes_des_notes.is_empty());
         });
+    }
+
+    /// KOB-331, de bout en bout avec le cerveau : la proposition des notes
+    /// attend sa carte ; « Terminer » la refuse auprès de kobi-perms, et le
+    /// tour de notes finit sans attendre l'échéance.
+    #[test]
+    fn fin_de_reunion_refuse_la_proposition_aupres_du_cerveau() {
+        use kobi_brain::fake::{FakeBrain, Step};
+        let journal = Arc::new(Mutex::new(None));
+        let j = journal.clone();
+        let fabrique: Fabrique = Arc::new(move |role| {
+            let b = match role {
+                cerveau::Role::Notes => FakeBrain::new().then(vec![
+                    Step::Permission(kobi_brain::PermissionRequest {
+                        tool_name: "mcp__linear__save_issue".into(),
+                        input: serde_json::json!({"title": "Envoyer le devis"}),
+                        tool_use_id: None,
+                    }),
+                    Step::Text("- Devis".into()),
+                ]),
+                _ => FakeBrain::new(),
+            };
+            if role == cerveau::Role::Notes {
+                *j.lock().unwrap() = Some(b.journal());
+            }
+            Box::pin(async move { Ok(Box::new(b) as Box<dyn kobi_brain::Brain + Send>) })
+        });
+        let (app, _dir) = chef_en_essai_avec(fabrique);
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            c.reunion.as_mut().unwrap().continu = true;
+            for texte in ["Un.", "Deux.", "Il faut envoyer le devis."] {
+                c.recevoir(Message::Segment(dit(texte), Instant::now()));
+            }
+            c.tick();
+            assert!(c.reunion.as_ref().unwrap().envoye.is_some());
+        });
+        let fin = Instant::now() + Duration::from_secs(5);
+        while avec_chef(&app, |c| c.cartes_des_notes.is_empty()) && Instant::now() < fin {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            !avec_chef(&app, |c| c.cartes_des_notes.is_empty()),
+            "carte des notes"
+        );
+        avec_chef(&app, |c| {
+            c.commande(Intention::TerminerReunion);
+        });
+        let decisions = || {
+            journal
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|j| j.decisions())
+                .unwrap_or_default()
+        };
+        let fin = Instant::now() + Duration::from_secs(5);
+        while decisions().is_empty() && Instant::now() < fin {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let decisions = decisions();
+        assert_eq!(decisions.len(), 1, "{decisions:?}");
+        assert_ne!(decisions[0].1, kobi_brain::Decision::Allow);
     }
 
     /// KOB-72 : en continu, un bloc en échec n'est pas renvoyé au tick
