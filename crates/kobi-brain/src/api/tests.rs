@@ -445,7 +445,6 @@ async fn outil_en_echec_rendu_en_erreur() {
     assert!(resultat(2)["content"].as_str().unwrap().contains("chemin"));
 }
 
-/// La conversation de la réunion ne fait que s'allonger : la deuxième
 /// KOB-331 : sans outil sur carte, les notes en continu ne demandent pas
 /// de proposition d'action à Claude.
 #[tokio::test]
@@ -463,6 +462,7 @@ async fn notes_sans_consigne_de_proposition() {
     assert!(!corps.contains("Mode continu"), "{corps}");
 }
 
+/// La conversation de la réunion ne fait que s'allonger : la deuxième
 /// requête reprend la première mot pour mot (cache et réflexion valides).
 #[tokio::test]
 async fn conversation_seulement_allongee() {
