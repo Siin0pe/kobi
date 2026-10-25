@@ -367,7 +367,7 @@ mod tests {
 
     /// WER de Nemotron mesuré sur la première minute du corpus synthétique
     /// français, le 25/10/2026 (KOB-45).
-    const WER_REFERENCE: f64 = f64::NAN;
+    const WER_REFERENCE: f64 = 8.4;
 
     /// KOB-45 : taux d'erreur de Nemotron sur la première minute du corpus
     /// synthétique français (voix Piper, `bench/corpus/generate.py`), au plus
