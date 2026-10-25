@@ -344,6 +344,10 @@ struct EnCours {
     /// Début de la pause : ce qui a été dit avant est gardé, même transcrit
     /// après (KOB-261).
     pause_a: Option<Instant>,
+    /// Plages de fins annulées, de l'arrêt à l'annulation : ce qui y a été
+    /// dit (« reprends », au revoir) n'entre pas dans les notes de la
+    /// réunion reprise, même transcrit après (KOB-309).
+    fins_annulees: FinsAnnulees,
     notes: String,
     derniere_note: Option<String>,
     /// Transcription pas encore passée aux notes.
@@ -406,9 +410,10 @@ pub struct Chef<R: Runtime> {
     /// Transcription que la conversation n'a pas encore vue.
     pour_conversation: String,
     /// Dernière réunion close sur une transcription incomplète : son début
-    /// et son arrêt. Ce qui a été dit avant l'arrêt et arrive encore va dans
-    /// sa transcription (KOB-281).
-    reunion_close: Option<(Instant, Instant)>,
+    /// et son arrêt, et ses fins annulées. Ce qui a été dit avant l'arrêt et
+    /// arrive encore va dans sa transcription (KOB-281), sauf ce qui a été
+    /// dit pendant une fin annulée (KOB-309).
+    reunion_close: Option<(Instant, Instant, FinsAnnulees)>,
     /// Retour au calme prévu (fin de lecture d'une réponse, d'une erreur).
     calme_a: Option<(Instant, Evenement)>,
     /// Résultats de tâches à montrer, un à la fois (KOB-238) : tour, texte,
@@ -508,6 +513,17 @@ impl Avancement {
 /// publiés par la piste (KOB-261).
 pub fn avancer<R: Runtime>(app: &AppHandle<R>, source: kobi_stt::Source, jusqu_a: Option<Instant>) {
     publier(app, Message::Avancement(source, jusqu_a));
+}
+
+/// Fins annulées d'une réunion : (arrêt, annulation) (KOB-309).
+type FinsAnnulees = Vec<(Instant, Instant)>;
+
+/// Dit pendant l'une des fins annulées `fins` (arrêt, annulation) : jugé
+/// sur la fin du segment, son début donné par Nemotron peut précéder le
+/// silence d'avant la parole (KOB-309).
+fn dit_pendant_une_fin_annulee(fins: &[(Instant, Instant)], dit_a: Instant) -> bool {
+    fins.iter()
+        .any(|&(arret, annule)| dit_a > arret && dit_a <= annule)
 }
 
 /// Horodate un segment sur la réunion commencée à `debut`, au moment où il a
@@ -1235,6 +1251,7 @@ impl<R: Runtime> Chef<R> {
             incomplet: false,
             compte_rendu_demande: false,
             pause_a: None,
+            fins_annulees: Vec::new(),
             titre: None,
             titre_manuel: false,
             debut_parole: String::new(),
@@ -1363,6 +1380,9 @@ impl<R: Runtime> Chef<R> {
         // La réunion reprend sans pause : l'écoute oublie toute pause notée
         // (KOB-297, KOB-305).
         let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::RepriseReunion);
+        if let Some(arret) = r.arret {
+            r.fins_annulees.push((arret, Instant::now()));
+        }
         r.fin_demandee = false;
         r.annulable_jusqu = None;
         r.pause = false;
@@ -1465,7 +1485,14 @@ impl<R: Runtime> Chef<R> {
         let Some(r) = &mut self.reunion else {
             // Réunion close avant que la transcription ait rattrapé l'arrêt :
             // ce qui a été dit avant va encore dans sa transcription (KOB-281).
-            if let Some((debut, _)) = self.reunion_close.filter(|(_, arret)| dit_a <= *arret) {
+            // Sauf ce qui a été dit pendant une fin annulée (KOB-309).
+            let debut = self
+                .reunion_close
+                .as_ref()
+                .and_then(|(debut, arret, fins)| {
+                    (dit_a <= *arret && !dit_pendant_une_fin_annulee(fins, dit_a)).then_some(*debut)
+                });
+            if let Some(debut) = debut {
                 horodater(&mut s, debut, dit_a);
                 tracing::info!("segment arrivé après le compte rendu : ajouté à la transcription");
                 self.ecrivain.segment(s);
@@ -1486,6 +1513,11 @@ impl<R: Runtime> Chef<R> {
         // gardé jusqu'au compte rendu. Ce qui est dit après (le « annule »
         // d'« Annuler »…) ne l'est pas (KOB-198).
         if r.fin_demandee && r.arret.is_none_or(|arret| dit_a > arret) {
+            return;
+        }
+        // Dit pendant une fin ensuite annulée, transcrit après l'annulation :
+        // pas plus dans les notes que si la fin avait tenu (KOB-309).
+        if dit_pendant_une_fin_annulee(&r.fins_annulees, dit_a) {
             return;
         }
         horodater(&mut s, r.debut, dit_a);
@@ -2013,7 +2045,9 @@ impl<R: Runtime> Chef<R> {
         // Transcription en retard au moment du compte rendu : il le dit, et la
         // suite va dans la transcription de cette réunion (KOB-281).
         let texte = if r.incomplet {
-            self.reunion_close = r.arret.map(|arret| (r.debut, arret));
+            self.reunion_close = r
+                .arret
+                .map(|arret| (r.debut, arret, r.fins_annulees.clone()));
             format!(
                 "{}\n\n{}",
                 texte.trim_end(),
@@ -3127,7 +3161,8 @@ mod tests {
     /// KOB-281 : la vidange expire, la transcription est en retard ; ce qui
     /// a été dit avant l'arrêt et arrive ensuite, avant ou après l'écriture
     /// du compte rendu, va dans la transcription. Le compte rendu dit qu'il
-    /// est incomplet ; ce qui est dit après l'arrêt reste dehors.
+    /// est incomplet ; ce qui est dit après l'arrêt, ou pendant une fin
+    /// annulée plus tôt (KOB-309), reste dehors.
     #[test]
     fn fin_sous_charge_rien_ne_manque_a_la_transcription() {
         let (app, dir) = chef_en_essai();
@@ -3139,6 +3174,13 @@ mod tests {
                 kobi_stt::Source::Moi,
                 Some(Instant::now() - Duration::from_secs(30)),
             ));
+            // Une première fin, annulée : la transcription en retard, son
+            // compte rendu n'est pas encore demandé.
+            c.commande(Intention::TerminerReunion);
+            std::thread::sleep(Duration::from_millis(20));
+            let fin_annulee = Instant::now();
+            std::thread::sleep(Duration::from_millis(20));
+            c.commande(Intention::Reprendre);
             c.commande(Intention::TerminerReunion);
             // La vidange expire : compte rendu demandé sans la fin.
             c.reunion.as_mut().unwrap().vidange = Some(Instant::now());
@@ -3161,6 +3203,9 @@ mod tests {
                 dit("Dit après la fin."),
                 Instant::now() + Duration::from_secs(1),
             ));
+            let mut pendant = dit("Dit pendant la fin annulée.");
+            pendant.start = pendant.end;
+            c.recevoir(Message::Segment(pendant, fin_annulee));
             c.ecrivain.attendre();
         });
         let reunions = dir.path().join("donnees").join("reunions");
@@ -3178,10 +3223,9 @@ mod tests {
         ] {
             assert!(transcription.contains(texte), "{texte} : {transcription}");
         }
-        assert!(
-            !transcription.contains("Dit après la fin."),
-            "{transcription}"
-        );
+        for texte in ["Dit après la fin.", "Dit pendant la fin annulée."] {
+            assert!(!transcription.contains(texte), "{texte} : {transcription}");
+        }
         let cr = std::fs::read_to_string(dossier.join("compte-rendu.md")).unwrap();
         assert!(
             cr.contains(&kobi_i18n::tr("coque.chef.compteRenduIncomplet", &[])),
@@ -3317,6 +3361,48 @@ mod tests {
             let r = c.reunion.as_ref().unwrap();
             assert!(!r.fin_demandee && !r.pause && r.pause_a.is_none());
             assert!(c.enregistrement().actif && !c.enregistrement().pause);
+        });
+    }
+
+    /// KOB-309 : fin, puis « Annuler » ; ce qui a été dit pendant la fin et
+    /// arrive après l'annulation (« reprends » transcrit en retard) n'entre
+    /// pas dans les notes. Ce qui a été dit avant l'arrêt, ou après
+    /// l'annulation, si.
+    #[test]
+    fn parole_pendant_une_fin_annulee_hors_des_notes() {
+        let (app, _dir) = chef_en_essai();
+        // Segments brefs : leur début est l'instant donné.
+        let dit = |texte: &str| {
+            let mut s = dit(texte);
+            s.start = s.end;
+            s
+        };
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            let avant = Instant::now() - Duration::from_millis(50);
+            c.commande(Intention::TerminerReunion);
+            std::thread::sleep(Duration::from_millis(20));
+            let pendant = Instant::now();
+            std::thread::sleep(Duration::from_millis(20));
+            c.commande(Intention::Reprendre);
+            assert!(!c.fin_annulable());
+            c.recevoir(Message::Segment(dit("Pendant la fin."), pendant));
+            // Début placé bien avant (silence d'avant la parole, Nemotron) :
+            // jugé sur la fin, écarté aussi.
+            let mut long = dit("Reprends.");
+            long.start = 0.0;
+            long.end = 30.0;
+            c.recevoir(Message::Segment(long, pendant));
+            c.recevoir(Message::Segment(dit("Avant l'arrêt."), avant));
+            c.recevoir(Message::Segment(
+                dit("Après la reprise."),
+                Instant::now() + Duration::from_secs(2),
+            ));
+            let notes = &c.reunion.as_ref().unwrap().a_noter;
+            assert!(!notes.contains("Pendant la fin."), "{notes}");
+            assert!(!notes.contains("Reprends."), "{notes}");
+            assert!(notes.contains("Avant l'arrêt."), "{notes}");
+            assert!(notes.contains("Après la reprise."), "{notes}");
         });
     }
 
