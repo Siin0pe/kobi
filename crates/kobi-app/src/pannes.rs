@@ -29,6 +29,8 @@ pub enum Panne {
     Deconnecte,
     /// Claude Code introuvable ou qui ne répond pas.
     Absent,
+    /// Backend clé API : la clé enregistrée est refusée (401, 403).
+    CleRefusee,
     /// Pas d'accès à Internet.
     HorsLigne,
     /// Autre erreur renvoyée par Claude.
@@ -49,6 +51,8 @@ const RESEAU: &[&str] = &[
     "unable to connect",
     "socket hang up",
     "internet",
+    // Backend clé API (KOB-361).
+    "api injoignable",
 ];
 
 /// Signes d'une limite d'usage.
@@ -70,6 +74,8 @@ pub fn classer_message(message: &str) -> Panne {
         Panne::LimiteUsage
     } else if contient(RESEAU) {
         Panne::HorsLigne
+    } else if m.contains("clé api refusée") || m.contains("accès refusé") {
+        Panne::CleRefusee
     } else if m.contains("pas connecté") || m.contains("auth login") || m.contains("not logged in")
     {
         Panne::Deconnecte
@@ -100,8 +106,7 @@ pub fn classer(e: &BrainError) -> Panne {
         },
         BrainError::Timeout(_) => Panne::Lenteur,
         BrainError::Unavailable(m) => match classer_message(m) {
-            Panne::Deconnecte => Panne::Deconnecte,
-            Panne::HorsLigne => Panne::HorsLigne,
+            p @ (Panne::Deconnecte | Panne::HorsLigne | Panne::CleRefusee) => p,
             _ => Panne::Absent,
         },
         BrainError::Api(m) => match classer_message(m) {
@@ -166,6 +171,10 @@ pub fn expliquer(panne: &Panne, detail: &str) -> (&'static str, String) {
         Panne::Absent => (
             kobi_i18n::tr("coque.pannes.absentTitre", &[]),
             kobi_i18n::tr("coque.pannes.absentMessage", &[("suite", c)]),
+        ),
+        Panne::CleRefusee => (
+            kobi_i18n::tr("coque.pannes.cleRefuseeTitre", &[]),
+            kobi_i18n::tr("coque.pannes.cleRefuseeMessage", &[("suite", c)]),
         ),
         Panne::HorsLigne => (
             kobi_i18n::tr("coque.pannes.horsLigneTitre", &[]),
@@ -339,6 +348,56 @@ mod tests {
         let (titre, message) = pour_l_utilisateur("erreur d'API : Invalid request");
         assert_eq!(titre, "Claude n'a pas répondu");
         assert!(message.starts_with("erreur d'API : Invalid request"));
+    }
+
+    /// KOB-361 : backend clé API. Une clé refusée renvoie aux Réglages, pas
+    /// à Claude Code ; l'API injoignable est une coupure de réseau (question
+    /// gardée). Messages tels que les rend `kobi-brain`.
+    #[test]
+    fn pannes_du_backend_cle_api() {
+        use kobi_i18n::Langue;
+        assert_eq!(
+            classer(&BrainError::Unavailable(
+                "clé API refusée : invalid x-api-key".into()
+            )),
+            Panne::CleRefusee
+        );
+        assert_eq!(
+            classer(&BrainError::Unavailable("accès refusé : forbidden".into())),
+            Panne::CleRefusee
+        );
+        assert_eq!(
+            classer(&BrainError::Api(
+                "API injoignable : error sending request for url (https://api.anthropic.com/v1/messages)"
+                    .into()
+            )),
+            Panne::HorsLigne
+        );
+        // Claude Code absent reste « introuvable ».
+        assert_eq!(
+            classer(&BrainError::Unavailable(
+                "Claude Code indisponible : NotFound".into()
+            )),
+            Panne::Absent
+        );
+        let (titre, message) =
+            pour_l_utilisateur("cerveau indisponible : clé API refusée : invalid x-api-key");
+        assert_eq!(titre, "Clé API refusée");
+        assert!(message.contains("Réglages") && !message.contains("Claude Code"));
+        assert!(message.ends_with("L'écoute et l'enregistrement continuent."));
+        let (titre, _) =
+            pour_l_utilisateur("erreur d'API : API injoignable : error sending request");
+        assert_eq!(titre, "Pas d'Internet");
+        let suite = kobi_i18n::t(Langue::En, "coque.pannes.continue", &[]);
+        assert_eq!(
+            kobi_i18n::t(
+                Langue::En,
+                "coque.pannes.cleRefuseeMessage",
+                &[("suite", &suite)]
+            ),
+            "The Anthropic API refuses the saved key. Check or replace it in Settings, API key \
+             section, then ask your question again. Listening and recording carry on."
+        );
     }
 
     /// KOB-210 : l'Oups en anglais, mêmes variables qu'en français.

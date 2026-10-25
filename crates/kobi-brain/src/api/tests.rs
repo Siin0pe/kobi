@@ -1322,6 +1322,28 @@ async fn flux_coupe_apres_un_texte_erreur_sans_perte() {
         .contains("trois"));
 }
 
+/// KOB-361 : API injoignable : erreur d'API (la session et sa conversation
+/// restent), reconnaissable comme une coupure de réseau.
+#[tokio::test]
+async fn api_injoignable_erreur_d_api() {
+    // Port libéré aussitôt : la connexion est refusée.
+    let url = {
+        let ecoute = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        format!("http://{}", ecoute.local_addr().unwrap())
+    };
+    let mut brain = ApiBrain::new(ApiConfig {
+        cle: CLE.into(),
+        url,
+        tentatives: 0,
+        ..Default::default()
+    })
+    .unwrap();
+    match fin(&tous(brain.ask(question("un"))).await) {
+        Err(BrainError::Api(m)) => assert!(m.starts_with("API injoignable"), "{m}"),
+        autre => panic!("{autre:?}"),
+    }
+}
+
 /// Réponse de compaction : le bloc arrive entier dans `content_block_start`.
 fn resume(texte: &str) -> Script {
     flux(&[
