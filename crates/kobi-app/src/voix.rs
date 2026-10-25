@@ -467,17 +467,35 @@ fn dit_avant<R: Runtime>(app: &AppHandle<R>) -> Option<String> {
 const ECHO_MOTS_AVANT: usize = 3;
 
 /// `texte` est-il l'écho de l'énoncé en cours (`dit`, si `actif`), ou, s'il
-/// a assez de mots, de la voix d'avant ?
-fn echo_reconnu<R: Runtime>(app: &AppHandle<R>, texte: &str, dit: &str, actif: bool) -> bool {
+/// a assez de mots, de la voix d'avant ? Pour décider de couper la voix
+/// (`pour_couper`), un début de partiel plus court n'en est un que si tous
+/// ses mots y sont : il attend le partiel suivant au lieu de couper
+/// l'énoncé sur le premier mot d'un écho (KOB-374).
+fn echo_reconnu<R: Runtime>(
+    app: &AppHandle<R>,
+    texte: &str,
+    dit: &str,
+    actif: bool,
+    pour_couper: bool,
+) -> bool {
     if actif && est_echo(texte, dit) {
         return true;
     }
-    let mots = normaliser(texte)
-        .split(' ')
-        .filter(|m| !m.is_empty())
-        .count();
-    mots >= ECHO_MOTS_AVANT
-        && dit_avant(app).is_some_and(|avant| est_echo(texte, &format!("{avant} {dit}")))
+    let Some(avant) = dit_avant(app) else {
+        return false;
+    };
+    let entendu = normaliser(texte);
+    let mots: Vec<&str> = entendu.split(' ').filter(|m| !m.is_empty()).collect();
+    let connu = format!("{avant} {dit}");
+    if mots.len() >= ECHO_MOTS_AVANT {
+        est_echo(texte, &connu)
+    } else if pour_couper {
+        let connu = normaliser(&connu);
+        let connus: std::collections::HashSet<&str> = connu.split(' ').collect();
+        mots.iter().all(|m| connus.contains(m))
+    } else {
+        false
+    }
 }
 
 /// Ce segment transcrit est-il la voix de Kobi (son écho dans le micro),
@@ -490,7 +508,7 @@ pub fn est_ma_voix<R: Runtime>(app: &AppHandle<R>, texte: &str) -> bool {
     let Some((dit, _, actif)) = texte_dit(app) else {
         return false;
     };
-    echo_reconnu(app, texte, &dit, actif)
+    echo_reconnu(app, texte, &dit, actif, false)
 }
 
 /// Segment transcrit pendant que Kobi parle : s'il n'est pas l'écho de sa
@@ -500,7 +518,7 @@ pub fn entendu<R: Runtime>(app: &AppHandle<R>, texte: &str) {
     let Some((dit, parle, _)) = texte_dit(app) else {
         return;
     };
-    if parle && !echo_reconnu(app, texte, &dit, true) {
+    if parle && !echo_reconnu(app, texte, &dit, true, true) {
         taire(app, "l'utilisateur parle");
     }
 }
@@ -914,6 +932,10 @@ mod tests {
         dire(h, "Le compte rendu est prêt.");
         assert!(est_ma_voix(h, "la réunion valide le budget"), "écho oublié");
         assert!(est_ma_voix(h, "le compte rendu est prêt"));
+        // Premier partiel de l'écho (« la réunion ») pendant l'annonce : pas
+        // de quoi la couper. Un « non » n'est pas ignoré pour autant.
+        assert!(echo_reconnu(h, "la réunion", "", false, true));
+        assert!(!echo_reconnu(h, "la réunion", "", false, false));
         attendre_silence();
         // Une nouvelle réponse qui n'a encore rien dit : l'écho d'avant
         // reste reconnu, mais pas un « non » de l'utilisateur.
