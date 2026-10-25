@@ -1667,7 +1667,9 @@ impl<R: Runtime> Chef<R> {
         if std::mem::take(&mut r.compte_rendu_demande) && r.compte_rendu_garde.take().is_none() {
             self.comptes_rendus_abandonnes += 1;
         }
-        let apres = std::mem::take(&mut r.apres_l_arret);
+        let mut apres = std::mem::take(&mut r.apres_l_arret);
+        // Dans l'ordre où ils ont été dits, « moi » et « eux » mêlés.
+        apres.sort_by_key(|(_, dit_a)| *dit_a);
         self.transition(&[Evenement::Reprendre]);
         self.emettre_enregistrement();
         tracing::info!(segments = apres.len(), "fin de la réunion annulée");
@@ -4721,6 +4723,7 @@ mod tests {
                     let notes = &c.reunion.as_ref().unwrap().a_noter;
                     assert!(notes.contains("Donc on valide le budget."), "{notes}");
                     assert!(!notes.contains("Pendant la fin."), "{notes}");
+                    assert!(c.reunion.as_ref().unwrap().apres_l_arret.is_empty());
                 } else {
                     c.reunion.as_mut().unwrap().annulable_jusqu = Some(Instant::now() - VIDANGE);
                     c.tick();
@@ -4731,6 +4734,25 @@ mod tests {
                 }
             });
         }
+    }
+
+    /// KOB-339 : annulée au clic, rien de ce qui a été mis de côté pendant
+    /// « Annuler » n'entre (tout a été dit avant le clic, pendant la fin).
+    #[test]
+    fn mis_de_cote_pendant_annuler_rien_n_entre_au_clic() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            c.commande(Intention::TerminerReunion);
+            std::thread::sleep(Duration::from_millis(20));
+            let mut s = dit("Entre nous.");
+            s.start = s.end;
+            c.recevoir(Message::Segment(s, Instant::now()));
+            c.commande(Intention::Reprendre);
+            let r = c.reunion.as_ref().unwrap();
+            assert!(!r.a_noter.contains("Entre nous."), "{}", r.a_noter);
+            assert!(r.apres_l_arret.is_empty());
+        });
     }
 
     /// KOB-228 : un compte rendu demandé pendant qu'un bloc est à la prise
