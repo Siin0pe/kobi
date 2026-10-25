@@ -1336,6 +1336,7 @@ impl<R: Runtime> Chef<R> {
         if r.annulable_jusqu.take().is_none() {
             return;
         }
+        let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::FinAnnulation);
         tracing::info!("fin de la réunion confirmée");
         match r.compte_rendu_garde.take() {
             Some(resultat) => self.compte_rendu(resultat),
@@ -1350,6 +1351,9 @@ impl<R: Runtime> Chef<R> {
         let Some(r) = &mut self.reunion else {
             return kobi_i18n::tr("coque.chef.aucuneReunion", &[]);
         };
+        // La fin est annulée : la fenêtre « Annuler » ne doit plus se
+        // rouvrir avec le micro, dans une réunion en cours (KOB-299).
+        let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::FinAnnulation);
         r.fin_demandee = false;
         r.annulable_jusqu = None;
         r.pause = false;

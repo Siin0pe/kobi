@@ -557,10 +557,18 @@ impl Ecouteur {
             // reste est ignoré. Dit avant (l'ordre de fin lui-même, transcrit
             // en retard après une fin anticipée), il ne ferme pas « Annuler »
             // (KOB-287).
-            Attente::Annulation { depuis, .. } => {
+            Attente::Annulation { depuis, jusqu } => {
                 if t >= depuis && reperer(texte).is_some() {
                     self.attente = Attente::Nom;
                     actions = self.segment(texte, finale, t);
+                } else if finale && reperer(texte).is_some() {
+                    // Dit avant l'arrêt, transcrit pendant « Annuler » : un
+                    // ordre comme un autre (« Kobi, note l'action X »),
+                    // puis l'annulation reprend. L'ordre de fin lui-même est
+                    // écarté plus loin, déjà exécuté (KOB-265, KOB-299).
+                    self.attente = Attente::Nom;
+                    actions = self.segment(texte, finale, t);
+                    self.attente = Attente::Annulation { depuis, jusqu };
                 }
             }
             // « Merci Kobi » n'est pas une interpellation.
@@ -1251,8 +1259,30 @@ mod tests {
         let mut e = Ecouteur::new(false);
         e.annulable(100.0, 10.0);
         assert!(e.segment("Kobi, termine la", false, 80.0).is_empty());
-        assert!(e.segment("Kobi, termine la réunion", true, 80.0).is_empty());
+        // L'ordre de fin, déjà exécuté, est écarté plus loin
+        // (`sans_ordres_deja_executes`) ; l'annulation reste ouverte.
+        e.segment("Kobi, termine la réunion", true, 80.0);
         assert!(e.en_annulation());
+        assert_eq!(
+            e.segment("reprends", true, 105.0),
+            [Interpeller, Envoyer("reprends".into())]
+        );
+    }
+
+    /// KOB-299 : un autre ordre dit avant l'arrêt, transcrit pendant
+    /// « Annuler », part encore ; l'annulation reste ouverte.
+    #[test]
+    fn ordre_dit_avant_l_arret_part_pendant_annuler() {
+        let mut e = Ecouteur::new(false);
+        e.annulable(100.0, 10.0);
+        assert!(e.segment("Kobi, note l'action", false, 75.0).is_empty());
+        assert_eq!(
+            e.segment("Kobi, note l'action budget", true, 75.0),
+            [Interpeller, Envoyer("note l'action budget".into())]
+        );
+        assert!(e.en_annulation());
+        // Sans le nom, dit avant l'arrêt : rien.
+        assert!(e.segment("on en reparle lundi", true, 78.0).is_empty());
         assert_eq!(
             e.segment("reprends", true, 105.0),
             [Interpeller, Envoyer("reprends".into())]
