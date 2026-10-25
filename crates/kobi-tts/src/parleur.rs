@@ -252,6 +252,10 @@ fn lecture(sortie: Fabrique<Box<dyn Sortie>>, rx: Receiver<VersLecture>, p: Arc<
             Err(mpsc::RecvTimeoutError::Timeout) => None,
             Err(mpsc::RecvTimeoutError::Disconnected) => return,
         };
+        // Une sortie en panne lâche son flux mort sans attendre (KOB-279).
+        if let Ok(s) = sortie.as_mut() {
+            s.entretenir();
+        }
         if let Some(e) = commence {
             if !p.courant(e) {
                 commence = None;

@@ -9,6 +9,10 @@ use crate::{Arret, Erreur, Resultat};
 /// que `arret` est levé.
 pub trait Sortie {
     fn jouer(&mut self, echantillons: &[f32], frequence: u32, arret: &Arret) -> Resultat<()>;
+
+    /// Appelé régulièrement par le fil de lecture, entre deux sons : une
+    /// sortie en panne y lâche son flux mort (KOB-279).
+    fn entretenir(&mut self) {}
 }
 
 /// Pas de temps pour suivre la lecture et l'arrêt.
@@ -49,6 +53,86 @@ pub(crate) fn attendre_lecture(
             ));
         }
         std::thread::sleep(PAS);
+    }
+}
+
+/// Une panne, ce sont des erreurs qui durent : au moins [`ERREURS_PANNE`]
+/// sur au moins [`DUREE_PANNE`] d'affilée. Un flux mort en rend des milliers
+/// par seconde, sans fin. Un flux vivant en rend une isolée de temps en
+/// temps, ou une rafale de quelques dizaines en une milliseconde à son
+/// ouverture quand le serveur audio vient de démarrer (PulseAudio,
+/// `snd_pcm_avail_delay`) : ni l'une ni l'autre n'est une panne.
+#[cfg(any(feature = "lecture", test))]
+const ERREURS_PANNE: u32 = 20;
+#[cfg(any(feature = "lecture", test))]
+const DUREE_PANNE: Duration = Duration::from_millis(250);
+/// Sans erreur depuis ce temps, la rafale suivante repart de zéro.
+#[cfg(any(feature = "lecture", test))]
+const FIN_RAFALE: Duration = Duration::from_secs(1);
+/// Une erreur isolée se journalise au plus une fois par minute.
+#[cfg(any(feature = "lecture", test))]
+const JOURNAL_ERREURS: Duration = Duration::from_secs(60);
+
+/// Ce que fait le rappel d'erreur du flux de sortie.
+#[cfg(any(feature = "lecture", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Verdict {
+    /// Rien à faire (xrun, ou erreur déjà journalisée il y a peu).
+    Rien,
+    /// Erreur isolée, à journaliser.
+    Journaliser,
+    /// Panne : la sortie est rouverte à la phrase suivante (KOB-263).
+    Panne,
+}
+
+/// Suivi des erreurs d'un flux de sortie (KOB-279, KOB-283) : une sortie
+/// disparue, ou des erreurs en rafale, font une panne ; une erreur isolée
+/// est seulement journalisée, sans couper la voix.
+#[cfg(any(feature = "lecture", test))]
+#[derive(Debug)]
+pub(crate) struct SuiviErreurs {
+    /// Début de la rafale en cours et dernière erreur.
+    rafale: Option<(Instant, Instant)>,
+    nombre: u32,
+    journal: Option<Instant>,
+}
+
+#[cfg(any(feature = "lecture", test))]
+impl SuiviErreurs {
+    pub(crate) fn new() -> Self {
+        Self {
+            rafale: None,
+            nombre: 0,
+            journal: None,
+        }
+    }
+
+    pub(crate) fn noter(&mut self, maintenant: Instant, xrun: bool, disparue: bool) -> Verdict {
+        if xrun {
+            return Verdict::Rien;
+        }
+        let debut = match self.rafale {
+            Some((debut, derniere)) if maintenant.duration_since(derniere) < FIN_RAFALE => debut,
+            _ => {
+                self.nombre = 0;
+                maintenant
+            }
+        };
+        self.rafale = Some((debut, maintenant));
+        self.nombre += 1;
+        if disparue
+            || (self.nombre >= ERREURS_PANNE && maintenant.duration_since(debut) >= DUREE_PANNE)
+        {
+            return Verdict::Panne;
+        }
+        if self
+            .journal
+            .is_some_and(|t| maintenant.duration_since(t) < JOURNAL_ERREURS)
+        {
+            return Verdict::Rien;
+        }
+        self.journal = Some(maintenant);
+        Verdict::Journaliser
     }
 }
 
@@ -145,7 +229,9 @@ mod haut_parleur {
     /// Sortie audio par défaut (ou `nom`, exact ou extrait), par cpal. Le flux reste ouvert ;
     /// les échantillons sont rééchantillonnés et copiés sur chaque canal.
     pub struct HautParleur {
-        _flux: cpal::Stream,
+        /// `None` : flux en panne, lâché (KOB-279) ; rouvert à la phrase
+        /// suivante.
+        flux: Option<cpal::Stream>,
         file: Arc<Mutex<VecDeque<f32>>>,
         /// Levé par le flux en erreur (sortie débranchée) : plus rien ne se
         /// joue, la voix rend la main tout de suite (KOB-235).
@@ -205,7 +291,7 @@ mod haut_parleur {
             }?;
             flux.play().map_err(|e| Erreur::Sortie(e.to_string()))?;
             Ok(Self {
-                _flux: flux,
+                flux: Some(flux),
                 file,
                 panne,
                 frequence,
@@ -235,6 +321,7 @@ mod haut_parleur {
     {
         let lue = Arc::clone(file);
         let panne = Arc::clone(panne);
+        let suivi = Mutex::new(super::SuiviErreurs::new());
         device
             .build_output_stream::<T, _, _>(
                 config.config(),
@@ -245,10 +332,22 @@ mod haut_parleur {
                     }
                 },
                 move |e| {
-                    tracing::warn!(erreur = %e, "sortie audio");
-                    // Sortie disparue (casque débranché) : plus rien ne se joue.
-                    if e.kind() == cpal::ErrorKind::DeviceNotAvailable {
-                        panne.store(true, std::sync::atomic::Ordering::SeqCst);
+                    use std::sync::atomic::Ordering;
+                    let verdict = suivi.lock().unwrap_or_else(|e| e.into_inner()).noter(
+                        Instant::now(),
+                        e.kind() == cpal::ErrorKind::Xrun,
+                        e.kind() == cpal::ErrorKind::DeviceNotAvailable,
+                    );
+                    match verdict {
+                        // Sortie disparue (casque débranché, serveur audio
+                        // arrêté) : plus rien ne se joue. Journalisé une fois.
+                        super::Verdict::Panne => {
+                            if !panne.swap(true, Ordering::SeqCst) {
+                                tracing::warn!(erreur = %e, "sortie audio en panne");
+                            }
+                        }
+                        super::Verdict::Journaliser => tracing::warn!(erreur = %e, "sortie audio"),
+                        super::Verdict::Rien => {}
                     }
                 },
                 None,
@@ -283,6 +382,15 @@ mod haut_parleur {
                     + MARGE
             };
             attendre_lecture(&self.file, arret, &self.panne, echeance)
+        }
+
+        fn entretenir(&mut self) {
+            // Un flux mort rappelle son erreur en boucle et tient un cœur :
+            // il est lâché tout de suite, pas à la phrase suivante (KOB-279).
+            if self.flux.is_some() && self.panne.load(std::sync::atomic::Ordering::SeqCst) {
+                self.flux = None;
+                tracing::info!(sortie = %self.description, "sortie audio en panne lâchée");
+            }
         }
     }
 }
@@ -358,6 +466,58 @@ mod tests {
         assert_eq!(rouvrir(None, casque_parti).unwrap(), "Haut-parleurs");
         let rien = |_: Option<&str>| -> Resultat<String> { Err(Erreur::Sortie("aucune".into())) };
         assert!(rouvrir(Some("Casque"), rien).is_err());
+    }
+
+    /// KOB-279, KOB-283 : un flux mort qui rappelle son erreur 10 000 fois
+    /// fait une panne ; une erreur isolée d'un flux vivant (une par phrase
+    /// sous PulseAudio) est journalisée au plus une fois par minute, sans
+    /// panne ; une sortie disparue est une panne tout de suite ; un xrun,
+    /// rien.
+    #[test]
+    fn erreurs_du_flux() {
+        let t0 = Instant::now();
+        let mut s = SuiviErreurs::new();
+        assert_eq!(s.noter(t0, true, false), Verdict::Rien, "xrun");
+        // Erreurs isolées, une toutes les 10 s : une ligne, pas de panne.
+        let isolees: Vec<_> = (0..6)
+            .map(|i| s.noter(t0 + Duration::from_secs(10 * i), false, false))
+            .collect();
+        assert_eq!(isolees[0], Verdict::Journaliser);
+        assert!(
+            isolees[1..].iter().all(|v| *v == Verdict::Rien),
+            "{isolees:?}"
+        );
+        assert_eq!(
+            s.noter(t0 + Duration::from_secs(61), false, false),
+            Verdict::Journaliser
+        );
+        // Rafale à l'ouverture : 50 erreurs en une milliseconde, puis plus
+        // rien ; pas de panne.
+        let t1 = t0 + Duration::from_secs(120);
+        let mut s = SuiviErreurs::new();
+        let rafale: Vec<_> = (0..50)
+            .map(|i| s.noter(t1 + Duration::from_micros(20 * i), false, false))
+            .collect();
+        assert!(!rafale.contains(&Verdict::Panne), "{rafale:?}");
+        // Flux mort : 10 000 erreurs par seconde, sans fin ; panne passé
+        // 250 ms, une seule ligne avant.
+        let t2 = t1 + Duration::from_secs(10);
+        let mut s = SuiviErreurs::new();
+        let verdicts: Vec<_> = (0..10_000)
+            .map(|i| s.noter(t2 + Duration::from_micros(100 * i), false, false))
+            .collect();
+        assert_eq!(
+            verdicts
+                .iter()
+                .filter(|v| **v == Verdict::Journaliser)
+                .count(),
+            1
+        );
+        let premiere = verdicts.iter().position(|v| *v == Verdict::Panne).unwrap();
+        assert_eq!(premiere, 2_500, "panne à 250 ms");
+        // Sortie disparue : panne tout de suite.
+        let mut s = SuiviErreurs::new();
+        assert_eq!(s.noter(t2, false, true), Verdict::Panne);
     }
 
     #[test]
