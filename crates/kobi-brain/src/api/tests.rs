@@ -1276,11 +1276,11 @@ fn cerveau_compact(serveur: &Serveur, compaction: bool) -> ApiBrain {
 }
 
 /// Attend que le faux serveur ait reçu `n` requêtes (le résumé part en
-/// tâche de fond après le tour), puis laisse au bloc le temps d'être posé.
-async fn attendre_requetes(serveur: &Serveur, n: usize) {
-    for _ in 0..500 {
-        if serveur.recues().len() >= n {
-            tokio::time::sleep(Duration::from_millis(150)).await;
+/// tâche de fond après le tour), puis que le résumé soit fini (bloc posé ou
+/// écarté) : sur l'état du cerveau, pas sur une durée.
+async fn attendre_requetes(serveur: &Serveur, brain: &ApiBrain, n: usize) {
+    for _ in 0..1000 {
+        if serveur.recues().len() >= n && !brain.partage.en_resume.load(Ordering::SeqCst) {
             return;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1306,7 +1306,7 @@ async fn conversation_resumee_par_l_api() {
         .avis
         .is_none());
     // Le résumé part après la réponse (KOB-350).
-    attendre_requetes(&serveur, 2).await;
+    attendre_requetes(&serveur, &brain, 2).await;
     let deux = fin(&tous(brain.ask(question("deux"))).await).unwrap();
     assert_eq!(deux.text, "B.");
     assert_eq!(deux.avis.as_deref(), Some(AVIS_RESUME));
@@ -1354,7 +1354,7 @@ async fn sans_resume_reprise_a_neuf() {
     let serveur = Serveur::lancer(vec![texte("A", "."), arret("refusal"), texte("B", ".")]).await;
     let mut brain = cerveau_compact(&serveur, true);
     fin(&tous(brain.ask(question("un"))).await).unwrap();
-    attendre_requetes(&serveur, 2).await;
+    attendre_requetes(&serveur, &brain, 2).await;
     let deux = fin(&tous(brain.ask(question("deux"))).await).unwrap();
     assert_eq!(deux.avis.as_deref(), Some(AVIS_REPRISE));
     let r = serveur.recues();
@@ -1395,14 +1395,14 @@ async fn resume_passager_garde_la_conversation() {
     .await;
     let mut brain = cerveau_compact(&serveur, true);
     fin(&tous(brain.ask(question("un"))).await).unwrap();
-    attendre_requetes(&serveur, 4).await;
+    attendre_requetes(&serveur, &brain, 4).await;
     let deux = fin(&tous(brain.ask(question("deux"))).await).unwrap();
     // Rien d'effacé, pas d'avis.
     assert!(deux.avis.is_none());
     let r = serveur.recues();
     assert_eq!(r[4].corps["messages"].as_array().unwrap().len(), 3);
     // Nouvel essai de résumé après ce tour, réussi cette fois.
-    attendre_requetes(&serveur, 6).await;
+    attendre_requetes(&serveur, &brain, 6).await;
     assert_eq!(serveur.recues()[5].corps["compaction"]["type"], "summarize");
     let trois = fin(&tous(brain.ask(question("trois"))).await).unwrap();
     assert_eq!(trois.avis.as_deref(), Some(AVIS_RESUME));
@@ -1430,8 +1430,11 @@ async fn resume_hors_du_chemin_critique() {
     fin(&tous(brain.ask(question("un"))).await).unwrap();
     assert!(debut.elapsed() < Duration::from_millis(1500));
     // Pendant le résumé (2 s), une autre question passe, conversation
-    // entière.
-    attendre_requetes(&serveur, 2).await;
+    // entière : on attend seulement que la demande de résumé soit partie.
+    while serveur.recues().len() < 2 {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(brain.partage.en_resume.load(Ordering::SeqCst));
     let deux = fin(&tous(brain.ask(question("deux"))).await).unwrap();
     assert_eq!(deux.text, "B.");
     assert_eq!(
@@ -1443,7 +1446,12 @@ async fn resume_hors_du_chemin_critique() {
     );
     // Le résumé arrivé, le bloc prend la place des deux premiers messages ;
     // la question « deux » et sa réponse le suivent.
-    tokio::time::sleep(Duration::from_millis(2500)).await;
+    for _ in 0..1000 {
+        if brain.partage.compacte.load(Ordering::SeqCst) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
     fin(&tous(brain.ask(question("trois"))).await).unwrap();
     let m = serveur.recues()[3].corps["messages"].clone();
     let m = m.as_array().unwrap();
@@ -1481,7 +1489,7 @@ async fn limite_dure_reprise_a_neuf() {
     })
     .unwrap();
     fin(&tous(brain.ask(question("un"))).await).unwrap();
-    attendre_requetes(&serveur, 4).await;
+    attendre_requetes(&serveur, &brain, 4).await;
     let deux = fin(&tous(brain.ask(question("deux"))).await).unwrap();
     assert_eq!(deux.avis.as_deref(), Some(AVIS_REPRISE));
     assert_eq!(
@@ -1491,4 +1499,44 @@ async fn limite_dure_reprise_a_neuf() {
             .len(),
         1
     );
+}
+
+/// Relecture de KOB-349 : une erreur de la requête de résumé elle-même
+/// (4xx) se reproduirait à chaque essai : reprise à neuf au tour suivant,
+/// pas d'essais sans fin.
+#[tokio::test]
+async fn resume_en_erreur_4xx_reprise_a_neuf() {
+    let serveur = Serveur::lancer(vec![
+        texte("A", "."),
+        erreur(
+            400,
+            "invalid_request_error",
+            "compaction_nothing_to_summarize",
+        ),
+        texte("B", "."),
+    ])
+    .await;
+    let mut brain = cerveau_compact(&serveur, true);
+    fin(&tous(brain.ask(question("un"))).await).unwrap();
+    attendre_requetes(&serveur, &brain, 2).await;
+    let deux = fin(&tous(brain.ask(question("deux"))).await).unwrap();
+    assert_eq!(deux.avis.as_deref(), Some(AVIS_REPRISE));
+    assert_eq!(
+        serveur.recues()[2].corps["messages"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+/// Pas de résumé après le compte rendu final : la conversation s'arrête là.
+#[tokio::test]
+async fn pas_de_resume_apres_le_compte_rendu() {
+    let serveur = Serveur::lancer(vec![texte("Compte", " rendu.")]).await;
+    let mut brain = cerveau_compact(&serveur, true);
+    fin(&tous(brain.final_report(ReportRequest::default())).await).unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(serveur.recues().len(), 1);
+    assert!(!brain.partage.en_resume.load(Ordering::SeqCst));
 }

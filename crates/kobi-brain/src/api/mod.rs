@@ -247,7 +247,9 @@ impl ApiBrain {
         })
     }
 
-    fn submit(&mut self, texte: String) -> Turn {
+    /// `resumer` : un résumé peut suivre le tour (pas après le compte rendu
+    /// final, la conversation s'arrête là).
+    fn submit(&mut self, texte: String, resumer: bool) -> Turn {
         if self.busy.swap(true, Ordering::SeqCst) {
             return Turn::failed(BrainError::Busy);
         }
@@ -261,7 +263,7 @@ impl ApiBrain {
             let _ = events.send(fin).await;
             // Résumé après la réponse, jamais avant : il ne retarde ni une
             // réponse, ni le compte rendu (KOB-350).
-            if fini {
+            if fini && resumer {
                 resumer_si_besoin(&partage).await;
             }
         }));
@@ -284,21 +286,24 @@ impl Brain for ApiBrain {
     }
 
     fn ask(&mut self, ask: Ask) -> Turn {
-        self.submit(texte_ask(&ask))
+        self.submit(texte_ask(&ask), true)
     }
 
     fn update_notes(&mut self, update: NotesUpdate) -> Turn {
         // Pas d'outil sur carte ici (KOB-320) : une proposition d'action
         // (notes en continu, KOB-72) ne serait qu'une consigne sur des outils
         // absents (KOB-331).
-        self.submit(texte_notes(&NotesUpdate {
-            propositions: false,
-            ..update
-        }))
+        self.submit(
+            texte_notes(&NotesUpdate {
+                propositions: false,
+                ..update
+            }),
+            true,
+        )
     }
 
     fn final_report(&mut self, report: ReportRequest) -> Turn {
-        self.submit(texte_compte_rendu(&report))
+        self.submit(texte_compte_rendu(&report), false)
     }
 }
 
@@ -316,7 +321,7 @@ async fn tour(partage: &Partage, texte: String, events: &mpsc::Sender<BrainEvent
     let reprise = contexte > max
         && (!partage.config.compaction
             || partage.reprise_demandee.swap(false, Ordering::SeqCst)
-            || contexte > 2 * max);
+            || contexte > max.saturating_mul(2));
     if reprise && !historique.is_empty() {
         tracing::info!(
             contexte,
@@ -675,10 +680,20 @@ async fn resumer_si_besoin(partage: &Partage) {
     let config = &partage.config;
     if !config.compaction
         || partage.contexte.load(Ordering::SeqCst) <= config.contexte_max
+        // Résumé impossible : la reprise à neuf attend le tour suivant.
+        || partage.reprise_demandee.load(Ordering::SeqCst)
         || partage.en_resume.swap(true, Ordering::SeqCst)
     {
         return;
     }
+    // Remis à faux en sortant, même sur une panique.
+    struct Fin<'a>(&'a AtomicBool);
+    impl Drop for Fin<'_> {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::SeqCst);
+        }
+    }
+    let _fin = Fin(&partage.en_resume);
     let copie = partage.historique.lock().await.clone();
     let issue = if copie.is_empty() {
         Resume::Passager
@@ -698,6 +713,7 @@ async fn resumer_si_besoin(partage: &Partage) {
                 historique.splice(..n, [json!({ "role": "assistant", "content": [bloc] })]);
                 partage.compacte.store(true, Ordering::SeqCst);
                 partage.contexte.store(0, Ordering::SeqCst);
+                partage.reprise_demandee.store(false, Ordering::SeqCst);
                 *partage.avis.lock().unwrap_or_else(|e| e.into_inner()) =
                     Some(AVIS_RESUME.to_owned());
             } else {
@@ -707,7 +723,6 @@ async fn resumer_si_besoin(partage: &Partage) {
         Resume::Passager => tracing::info!("résumé reporté après le tour suivant"),
         Resume::Impossible => partage.reprise_demandee.store(true, Ordering::SeqCst),
     }
-    partage.en_resume.store(false, Ordering::SeqCst);
 }
 
 /// Demande à l'API le résumé de `historique` (compaction à la demande).
@@ -727,8 +742,20 @@ async fn compacter(partage: &Partage, historique: &[Value]) -> Resume {
     let reponse = match reponse {
         Ok(r) => r,
         Err(e) => {
-            tracing::warn!(erreur = %e, "résumé impossible pour l'instant");
-            return Resume::Passager;
+            // Abandon, réseau, surcharge (429, 5xx, 529) : passager. Une
+            // erreur de la requête elle-même (4xx, clé refusée) se
+            // reproduirait à chaque essai : reprise à neuf.
+            let definitive = match &e {
+                BrainError::Api(m) => m.starts_with("HTTP 4") && !m.starts_with("HTTP 429"),
+                BrainError::Unavailable(m) => !m.starts_with("API injoignable"),
+                _ => false,
+            };
+            tracing::warn!(erreur = %e, definitive, "pas de résumé");
+            return if definitive {
+                Resume::Impossible
+            } else {
+                Resume::Passager
+            };
         }
     };
     // Coût du résumé : l'API le rend dans `usage.iterations`, le premier
@@ -741,10 +768,18 @@ async fn compacter(partage: &Partage, historique: &[Value]) -> Resume {
             .filter_map(|i| i[cle].as_u64())
             .sum::<u64>()
     };
-    let (entree, sortie) = (somme("input_tokens"), somme("output_tokens"));
+    let (entree, cache_lu, cache_ecrit, sortie) = (
+        somme("input_tokens"),
+        somme("cache_read_input_tokens"),
+        somme("cache_creation_input_tokens"),
+        somme("output_tokens"),
+    );
     tracing::info!(
         modele = %partage.config.modele,
+        detail = iterations.is_some(),
         entree,
+        cache_lu,
+        cache_ecrit,
         sortie,
         "API Messages : tokens du résumé"
     );
