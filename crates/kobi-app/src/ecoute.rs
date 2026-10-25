@@ -1384,17 +1384,23 @@ impl<R: Runtime> Fil<R> {
         let app = &self.app;
         let annulation = self.ecouteur.en_annulation();
         let kobi_parle = crate::voix::parle(app);
+        self.ecouteur.arret_clos = self.arret_clos.map(|a| instant_audio(self.origine, a));
+        // Dit avant l'arrêt d'une réunion terminée, transcrit en retard : ce
+        // n'est pas quelqu'un qui parle à Kobi maintenant, il ne se tait pas
+        // (KOB-333).
+        let avant_l_arret = dit_avant_un_arret_clos(t, self.ecouteur.arret_clos);
         let entendu = |texte: &str| {
             if crate::voix::est_ma_voix(app, texte)
                 && !ordre_d_annulation(texte, annulation, crate::voix::parle(app))
             {
                 return true;
             }
-            crate::voix::entendu(app, texte);
+            if !avant_l_arret {
+                crate::voix::entendu(app, texte);
+            }
             false
         };
         let ouverte_avant = self.porte.ouverte();
-        self.ecouteur.arret_clos = self.arret_clos.map(|a| instant_audio(self.origine, a));
         let (actions, finals) = transcrire(
             stt,
             &mut self.porte,
@@ -1662,6 +1668,12 @@ fn fenetre_annulation(
     (!reste.is_zero()).then(|| (instant_audio(origine, arret), reste.as_secs_f64()))
 }
 
+/// L'audio qui finit à `t` a-t-il été dit avant l'arrêt clos `arret`
+/// (KOB-326, KOB-333) ?
+fn dit_avant_un_arret_clos(t: f64, arret: Option<f64>) -> bool {
+    arret.is_some_and(|arret| t < arret)
+}
+
 /// Instant `quand` dans le temps de l'audio du micro ouvert à `origine`.
 fn instant_audio(origine: Instant, quand: Instant) -> f64 {
     quand.saturating_duration_since(origine).as_secs_f64()
@@ -1820,6 +1832,13 @@ mod tests {
             e.segment("reprends", true, 2.0),
             [Action::Interpeller, Action::Envoyer("reprends".into())]
         );
+    }
+
+    #[test]
+    fn audio_dit_avant_un_arret_clos() {
+        assert!(dit_avant_un_arret_clos(70.0, Some(100.0)));
+        assert!(!dit_avant_un_arret_clos(130.0, Some(100.0)));
+        assert!(!dit_avant_un_arret_clos(70.0, None));
     }
 
     #[test]
