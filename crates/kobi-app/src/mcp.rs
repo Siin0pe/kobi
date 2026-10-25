@@ -701,11 +701,15 @@ impl<E: std::fmt::Display> From<E> for Echec {
     }
 }
 
-/// `tools/list` du serveur, par le client MCP de Kobi.
-async fn lister(nom: &str, s: &Serveur, coffre: Arc<dyn Coffre>) -> Result<Vec<Value>, Echec> {
+/// Client MCP de Kobi connecté au serveur (test, backend clé API).
+async fn connexion(
+    nom: &str,
+    s: &Serveur,
+    coffre: Arc<dyn Coffre>,
+) -> Result<rmcp::service::RunningService<rmcp::RoleClient, ()>, Echec> {
     use rmcp::ServiceExt;
     let config = config_claude(s, |cle| coffre.lire(nom, cle).ok().flatten());
-    let outils = match s.transport {
+    match s.transport {
         Transport::Stdio => {
             let mut cmd = tokio::process::Command::new(&s.commande);
             cmd.args(&s.args);
@@ -725,10 +729,9 @@ async fn lister(nom: &str, s: &Serveur, coffre: Arc<dyn Coffre>) -> Result<Vec<V
                         &[("commande", &s.commande), ("erreur", &e.to_string())],
                     ))
                 })?;
-            let client = ().serve(transport).await.map_err(|e| Echec::Autre(e.to_string()))?;
-            let outils = client.list_all_tools().await;
-            let _ = client.cancel().await;
-            outils?
+            ().serve(transport)
+                .await
+                .map_err(|e| Echec::Autre(e.to_string()))
         }
         Transport::Http => {
             use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
@@ -753,13 +756,13 @@ async fn lister(nom: &str, s: &Serveur, coffre: Arc<dyn Coffre>) -> Result<Vec<V
             }
             let conf = StreamableHttpClientTransportConfig::with_uri(s.url.clone())
                 .custom_headers(entetes);
-            let client = match autorisation_existante(nom, &s.url, coffre.clone()).await {
+            match autorisation_existante(nom, &s.url, coffre.clone()).await {
                 Some(manager) => {
                     let http =
                         rmcp::transport::auth::AuthClient::new(reqwest::Client::new(), manager);
                     ().serve(StreamableHttpClientTransport::with_client(http, conf))
                         .await
-                        .map_err(Echec::from)?
+                        .map_err(Echec::from)
                 }
                 None => ()
                     .serve(StreamableHttpClientTransport::with_client(
@@ -767,18 +770,73 @@ async fn lister(nom: &str, s: &Serveur, coffre: Arc<dyn Coffre>) -> Result<Vec<V
                         conf,
                     ))
                     .await
-                    .map_err(Echec::from)?,
-            };
-            let outils = client.list_all_tools().await;
-            let _ = client.cancel().await;
-            outils?
+                    .map_err(Echec::from),
+            }
         }
-        Transport::Sse => return Err(Echec::Autre(kobi_i18n::tr("coque.mcp.sseNonTestable", &[]))),
-    };
-    Ok(outils
+        Transport::Sse => Err(Echec::Autre(kobi_i18n::tr("coque.mcp.sseNonTestable", &[]))),
+    }
+}
+
+/// `tools/list` d'un client connecté.
+async fn outils_de(
+    client: &rmcp::service::RunningService<rmcp::RoleClient, ()>,
+) -> Result<Vec<Value>, Echec> {
+    Ok(client
+        .list_all_tools()
+        .await?
         .iter()
         .filter_map(|o| serde_json::to_value(o).ok())
         .collect())
+}
+
+/// `tools/list` du serveur, par le client MCP de Kobi.
+async fn lister(nom: &str, s: &Serveur, coffre: Arc<dyn Coffre>) -> Result<Vec<Value>, Echec> {
+    let client = connexion(nom, s, coffre).await?;
+    let outils = outils_de(&client).await;
+    let _ = client.cancel().await;
+    outils
+}
+
+/// Serveurs activés, connectés pour une réunion du backend clé API
+/// (KOB-102), avec leur `tools/list`. Un serveur injoignable est signalé
+/// et laissé de côté.
+#[allow(dead_code, reason = "branché avec KOB-103")]
+pub async fn connecter(
+    config: &McpConfig,
+    coffre: Arc<dyn Coffre>,
+) -> Vec<(
+    String,
+    rmcp::service::RunningService<rmcp::RoleClient, ()>,
+    Vec<Value>,
+)> {
+    let mut connectes = Vec::new();
+    for (nom, s) in config
+        .serveurs
+        .iter()
+        .filter(|(n, s)| s.actif && nom_valide(n).is_ok())
+    {
+        let essai = async {
+            let client = connexion(nom, s, coffre.clone()).await?;
+            match outils_de(&client).await {
+                Ok(outils) => Ok((client, outils)),
+                Err(e) => {
+                    let _ = client.cancel().await;
+                    Err(e)
+                }
+            }
+        };
+        match tokio::time::timeout(DELAI_TEST, essai).await {
+            Ok(Ok((client, outils))) => connectes.push((nom.clone(), client, outils)),
+            Ok(Err(Echec::Autorisation)) => {
+                tracing::warn!(serveur = %nom, "serveur MCP : autorisation de Kobi manquante")
+            }
+            Ok(Err(Echec::Autre(e))) => {
+                tracing::warn!(serveur = %nom, erreur = %e, "serveur MCP injoignable")
+            }
+            Err(_) => tracing::warn!(serveur = %nom, "serveur MCP : pas de réponse"),
+        }
+    }
+    connectes
 }
 
 /// Teste le serveur ; en cas de succès, ses outils et leur nature.

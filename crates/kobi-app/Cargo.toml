@@ -37,6 +37,10 @@ tracing = "0.1"
 # système plus bas).
 async-trait = "0.1"
 reqwest = { version = "0.13", default-features = false }
+# Outils de lecture du backend clé API (KOB-102).
+glob = "0.3"
+regex = "1"
+walkdir = "2"
 rmcp = { version = "3.5", features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "reqwest", "auth"] }
 
 [target.'cfg(windows)'.dependencies]
