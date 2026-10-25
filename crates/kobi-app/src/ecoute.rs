@@ -1633,7 +1633,7 @@ impl<R: Runtime> Fil<R> {
                         longueur = q.len(),
                         "question dite avant l'arrêt, gardée jusqu'à la fin de « Annuler »"
                     );
-                    Message::QuestionDifferee(q)
+                    Message::QuestionDifferee(q, dit_a)
                 }
             };
             publier(&self.app, message);
