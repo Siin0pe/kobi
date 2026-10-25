@@ -1127,6 +1127,12 @@ impl<R: Runtime> Chef<R> {
         Some(match intention {
             Intention::DemarrerReunion => self.demarrer(),
             Intention::Pause => match &mut self.reunion {
+                // Fin demandée (« Annuler » encore possible, ou compte rendu
+                // en cours) : pas de pause. L'automate la refuserait, et
+                // l'écoute garderait une pause qui n'a pas eu lieu (KOB-305).
+                Some(r) if r.fin_demandee => {
+                    kobi_i18n::tr("coque.chef.compteRenduDejaEnCours", &[])
+                }
                 Some(r) if !r.pause => {
                     let maintenant = Instant::now();
                     r.pause = true;
@@ -1354,6 +1360,9 @@ impl<R: Runtime> Chef<R> {
         // La fin est annulée : la fenêtre « Annuler » ne doit plus se
         // rouvrir avec le micro, dans une réunion en cours (KOB-299).
         let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::FinAnnulation);
+        // La réunion reprend sans pause : l'écoute oublie toute pause notée
+        // (KOB-297, KOB-305).
+        let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::RepriseReunion);
         r.fin_demandee = false;
         r.annulable_jusqu = None;
         r.pause = false;
@@ -3285,6 +3294,29 @@ mod tests {
                 "{}",
                 r.pour_compte_rendu
             );
+        });
+    }
+
+    /// KOB-305 : « Kobi, pause » pendant « Annuler » est refusé (la fin est
+    /// demandée) ; « Annuler » rend ensuite une réunion sans pause.
+    #[test]
+    fn pause_refusee_pendant_annuler() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            c.recevoir(Message::Segment(dit("On commence."), Instant::now()));
+            c.commande(Intention::TerminerReunion);
+            assert!(c.fin_annulable());
+            assert_eq!(
+                c.executer(Intention::Pause).as_deref(),
+                Some(kobi_i18n::tr("coque.chef.compteRenduDejaEnCours", &[]).as_str())
+            );
+            let r = c.reunion.as_ref().unwrap();
+            assert!(!r.pause && r.pause_a.is_none());
+            c.commande(Intention::Reprendre);
+            let r = c.reunion.as_ref().unwrap();
+            assert!(!r.fin_demandee && !r.pause && r.pause_a.is_none());
+            assert!(c.enregistrement().actif && !c.enregistrement().pause);
         });
     }
 
