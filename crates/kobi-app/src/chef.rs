@@ -146,6 +146,9 @@ pub enum Message {
     QuestionPeutEtre(String),
     /// L'interpellation n'a pas été suivie d'une question.
     SansQuestion,
+    /// Question dite avant l'arrêt, transcrite pendant « Annuler » : gardée
+    /// jusqu'à la fin de la fenêtre (KOB-307).
+    QuestionDifferee(String),
     /// Ces secondes de parole dites avant la pause n'ont pas pu être
     /// transcrites (reprise pendant la vidange sous charge, KOB-277).
     TranscriptionIncomplete(f64),
@@ -454,6 +457,9 @@ pub struct Chef<R: Runtime> {
     /// Comptes rendus demandés puis abandonnés par « Annuler » (KOB-245) :
     /// leurs réponses sont ignorées.
     comptes_rendus_abandonnes: u32,
+    /// Questions dites avant l'arrêt, à poser une fois « Annuler » fermé
+    /// (KOB-307).
+    questions_differees: Vec<String>,
     /// Jusqu'où les pistes ont transcrit leur audio (KOB-198).
     avancement: Avancement,
 }
@@ -731,6 +737,7 @@ impl<R: Runtime> Chef<R> {
             tour_peut_etre: None,
             compte_rendu_a_ecrire: false,
             comptes_rendus_abandonnes: 0,
+            questions_differees: Vec::new(),
             avancement: Avancement::default(),
             reunion_close: None,
         }
@@ -804,6 +811,10 @@ impl<R: Runtime> Chef<R> {
                 let _ = self.app.emit(EVENEMENT_QUESTION, &q);
             }
             Message::TranscriptionIncomplete(secondes) => self.transcription_incomplete(secondes),
+            Message::QuestionDifferee(q) => {
+                self.questions_differees.push(q);
+                self.poser_questions_differees();
+            }
             Message::SansQuestion => {
                 self.transition(&[Evenement::PasDeQuestion]);
             }
@@ -1364,6 +1375,20 @@ impl<R: Runtime> Chef<R> {
         match r.compte_rendu_garde.take() {
             Some(resultat) => self.compte_rendu(resultat),
             None => self.emettre_enregistrement(),
+        }
+    }
+
+    /// Questions dites avant l'arrêt (KOB-307) : posées une fois « Annuler »
+    /// fermé, la fin annulée ou confirmée. Aucune ne peut plus alors relancer
+    /// ni refaire la fin, ni par le chef ni par Claude.
+    fn poser_questions_differees(&mut self) {
+        if self.questions_differees.is_empty() || self.fin_annulable() {
+            return;
+        }
+        for q in std::mem::take(&mut self.questions_differees) {
+            tracing::info!(longueur = q.len(), "question dite avant l'arrêt, posée");
+            self.transition(&[Evenement::Interpellation]);
+            self.question(q, true);
         }
     }
 
@@ -2308,6 +2333,7 @@ impl<R: Runtime> Chef<R> {
 
     /// Délais : retour au calme, blocs de notes.
     pub fn tick(&mut self) {
+        self.poser_questions_differees();
         let parle = crate::voix::parle(&self.app);
         if let Some((quand, evenement)) = self.calme_a {
             // Le retour au calme attend que Kobi ait fini de parler.
@@ -3403,6 +3429,28 @@ mod tests {
             assert!(!notes.contains("Reprends."), "{notes}");
             assert!(notes.contains("Avant l'arrêt."), "{notes}");
             assert!(notes.contains("Après la reprise."), "{notes}");
+        });
+    }
+
+    /// KOB-307 : une question dite avant l'arrêt est gardée tant que
+    /// « Annuler » est ouvert, puis posée une fois la fin confirmée.
+    #[test]
+    fn question_dite_avant_l_arret_posee_apres_annuler() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            c.commande(Intention::TerminerReunion);
+            assert!(c.fin_annulable());
+            c.recevoir(Message::QuestionDifferee("note l'action budget".into()));
+            c.tick();
+            assert_eq!(c.questions_differees, ["note l'action budget"]);
+            // « Annuler » se ferme : la question est posée.
+            c.reunion.as_mut().unwrap().annulable_jusqu = Some(Instant::now() - VIDANGE);
+            c.tick();
+            assert!(!c.fin_annulable());
+            // Posée au tick suivant (250 ms).
+            c.tick();
+            assert!(c.questions_differees.is_empty());
         });
     }
 

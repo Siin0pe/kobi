@@ -429,6 +429,10 @@ pub enum Action {
     EnvoyerPeutEtre(String),
     /// Rien n'a suivi l'interpellation : retour au calme.
     Abandonner,
+    /// Question dite avant l'arrêt de la réunion, transcrite pendant
+    /// « Annuler » (KOB-307) : le chef la garde jusqu'à la fin de la
+    /// fenêtre, pour que rien ne relance ni ne refasse la fin depuis elle.
+    Differer(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -453,6 +457,30 @@ enum Attente {
     /// `jusqu`, « reprends » part sans le nom ; toute autre phrase est
     /// ignorée, comme ce qui a été dit avant l'arrêt (KOB-265).
     Annulation { depuis: f64, jusqu: f64 },
+}
+
+/// Une question dite avant l'arrêt peut-elle attendre la fin de « Annuler »
+/// (KOB-307) ? Pas si elle touche à la fin ou à la reprise de la réunion
+/// (comme le chef la jugerait), répond à une carte ou commande la voix : dite
+/// avant l'arrêt, elle ne vaut plus après.
+fn differable(question: &str) -> bool {
+    use crate::intentions::{annule_la_fin, fin_de_reunion_dite, intention, Intention};
+    !question.trim().is_empty()
+        && !annule_la_fin(question)
+        && !fin_de_reunion_dite(question)
+        && !matches!(
+            intention(question),
+            Some(
+                Intention::DemarrerReunion
+                    | Intention::Pause
+                    | Intention::Reprendre
+                    | Intention::TerminerReunion
+                    | Intention::Annuler
+                    | Intention::Interrompre
+            )
+        )
+        && crate::intentions::reponse_validation(question).is_none()
+        && crate::voix::commande_vocale(question).is_none()
 }
 
 /// Silence qui clôt une conversation, en secondes.
@@ -562,6 +590,21 @@ impl Ecouteur {
                 if t >= depuis && reperer(texte).is_some() {
                     self.attente = Attente::Nom;
                     actions = self.segment(texte, finale, t);
+                } else if finale && reperer(texte).is_some() {
+                    // Dit avant l'arrêt (KOB-307) : la question est jugée
+                    // telle que l'écouteur l'enverrait (phrase d'avant
+                    // collée, ordre collé sous charge compris), sur un essai
+                    // qui ne touche pas à l'état de l'écouteur. Une question
+                    // ordinaire est différée ; rien qui touche à la fin.
+                    let mut essai = self.clone();
+                    essai.attente = Attente::Nom;
+                    if let [Action::Interpeller, Action::Envoyer(q)] =
+                        essai.segment(texte, finale, t).as_slice()
+                    {
+                        if differable(q) {
+                            actions.push(Action::Differer(q.clone()));
+                        }
+                    }
                 }
             }
             // « Merci Kobi » n'est pas une interpellation.
@@ -1268,14 +1311,11 @@ mod tests {
         );
     }
 
-    /// Suite de KOB-299 : pendant « Annuler », rien de ce qui a été dit
-    /// avant l'arrêt ne part, quelle que soit la forme de l'ordre, pour ne
-    /// jamais relancer ni refaire la fin ; « reprends » dit après l'arrêt,
-    /// si. Un ordre ordinaire dit avant l'arrêt non plus, pour l'instant :
-    /// la question réellement envoyée (phrase d'avant collée, ordre collé
-    /// sous charge) n'est pas encore jugée.
+    /// Suite de KOB-299, KOB-307 : pendant « Annuler », un ordre dit avant
+    /// l'arrêt qui touche à la fin ne part jamais, quelle que soit sa forme,
+    /// et l'écouteur reste tel quel ; « reprends » dit après l'arrêt, si.
     #[test]
-    fn rien_de_dit_avant_l_arret_ne_part_pendant_annuler() {
+    fn ordre_sur_la_fin_dit_avant_l_arret_ne_part_pas() {
         for ordre in [
             "Kobi, continue",
             "Kobi, continue sur le budget",
@@ -1291,22 +1331,52 @@ mod tests {
             "Kobi, mets la réunion en pause",
             "Kobi, démarre la réunion",
             "Kobi, undo",
+            "Kobi, stop",
+            "Kobi, oui",
+            "Kobi.",
+            // Ordre collé sous charge (KOB-289) : jugé tel qu'il partirait.
             "on en reparlera la semaine prochaine avec toute l'équipe Kobe reprends",
-            "Kobi, s'il te plaît",
-            "Kobi, quelle heure est-il ?",
         ] {
             let mut e = Ecouteur::new(false);
             e.sous_charge = true;
             e.annulable(100.0, 10.0);
-            assert!(e.segment("On continue", true, 79.0).is_empty(), "{ordre}");
+            let avant = format!("{e:?}");
             assert!(e.segment(ordre, true, 80.0).is_empty(), "{ordre}");
-            assert!(e.en_annulation(), "{ordre}");
+            assert_eq!(format!("{e:?}"), avant, "état inchangé : {ordre}");
             assert_eq!(
                 e.segment("reprends", true, 105.0),
                 [Interpeller, Envoyer("reprends".into())],
                 "{ordre}"
             );
         }
+    }
+
+    /// KOB-307 : la phrase d'avant, collée à la question (« On continue »
+    /// puis « Kobi, s'il te plaît »), est jugée avec elle : rien ne part.
+    #[test]
+    fn phrase_d_avant_collee_jugee_avec_la_question() {
+        let mut e = Ecouteur::new(false);
+        assert!(e.segment("On continue", true, 95.0).is_empty());
+        e.annulable(100.0, 10.0);
+        assert!(e.segment("Kobi, s'il te plaît", true, 96.0).is_empty());
+        assert!(e.en_annulation());
+    }
+
+    /// KOB-307 : un ordre ordinaire dit avant l'arrêt est différé jusqu'à la
+    /// fin de « Annuler », sans toucher à l'état de l'écouteur ; un partiel,
+    /// rien.
+    #[test]
+    fn ordre_ordinaire_dit_avant_l_arret_differe() {
+        let mut e = Ecouteur::new(false);
+        e.annulable(100.0, 10.0);
+        let avant = format!("{e:?}");
+        assert!(e.segment("Kobi, note l'action", false, 75.0).is_empty());
+        assert_eq!(
+            e.segment("Kobi, note l'action budget", true, 75.0),
+            [Differer("note l'action budget".into())]
+        );
+        assert_eq!(format!("{e:?}"), avant);
+        assert!(e.segment("on en reparle lundi", true, 78.0).is_empty());
     }
 
     /// KOB-302 : « Annuler » fait (clic) ou clos ; une phrase sans le nom
