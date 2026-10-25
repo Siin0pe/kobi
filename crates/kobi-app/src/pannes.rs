@@ -33,6 +33,9 @@ pub enum Panne {
     CleRefusee,
     /// Serveurs d'Anthropic surchargés ou en panne passagère (529, 5xx).
     Surcharge,
+    /// Backend clé API : connexion coupée pendant une réponse déjà en partie
+    /// montrée (KOB-370). Pas remise en attente : elle se repose à la main.
+    Coupure,
     /// Pas d'accès à Internet.
     HorsLigne,
     /// Autre erreur renvoyée par Claude.
@@ -65,6 +68,8 @@ const SURCHARGE: &[&str] = &[
     "http 502",
     "http 503",
     "http 504",
+    // Erreur interne annoncée dans le flux (KOB-370).
+    "api_error",
 ];
 
 /// Signes d'une limite d'usage.
@@ -102,6 +107,8 @@ pub fn classer_message(message: &str) -> Panne {
         Panne::Surcharge
     } else if contient(LIMITE) || code_429(&m) {
         Panne::LimiteUsage
+    } else if m.contains("flux interrompu") || m.contains("flux terminé sans fin") {
+        Panne::Coupure
     } else if contient(RESEAU) {
         Panne::HorsLigne
     } else if contient(SURCHARGE) {
@@ -142,7 +149,7 @@ pub fn classer(e: &BrainError) -> Panne {
             _ => Panne::Absent,
         },
         BrainError::Api(m) => match classer_message(m) {
-            p @ (Panne::LimiteUsage | Panne::HorsLigne | Panne::Surcharge) => p,
+            p @ (Panne::LimiteUsage | Panne::HorsLigne | Panne::Surcharge | Panne::Coupure) => p,
             _ => Panne::Autre,
         },
         BrainError::Busy => Panne::Autre,
@@ -207,6 +214,10 @@ pub fn expliquer(panne: &Panne, detail: &str) -> (&'static str, String) {
         Panne::CleRefusee => (
             kobi_i18n::tr("coque.pannes.cleRefuseeTitre", &[]),
             kobi_i18n::tr("coque.pannes.cleRefuseeMessage", &[("suite", c)]),
+        ),
+        Panne::Coupure => (
+            kobi_i18n::tr("coque.pannes.coupureTitre", &[]),
+            kobi_i18n::tr("coque.pannes.coupureMessage", &[("suite", c)]),
         ),
         Panne::Surcharge => (
             kobi_i18n::tr("coque.pannes.surchargeTitre", &[]),
@@ -523,6 +534,37 @@ mod tests {
         assert!(code_429("error 429"));
         assert!(!code_429("204291 tokens"));
         assert!(!code_429("14290"));
+    }
+
+    /// KOB-370 : un flux coupé après un texte montré est une coupure de la
+    /// connexion (pas remise en attente) ; une erreur interne annoncée dans
+    /// le flux est une surcharge passagère.
+    #[test]
+    fn flux_interrompu_et_api_error() {
+        use kobi_i18n::Langue;
+        let api = |m: &str| BrainError::Api(m.into());
+        assert_eq!(
+            classer(&api("flux interrompu : error decoding response body")),
+            Panne::Coupure
+        );
+        let (titre, message) =
+            pour_l_utilisateur("erreur d'API : flux interrompu : error decoding response body");
+        assert_eq!(titre, "Connexion coupée");
+        assert!(!message.contains("decoding"), "{message}");
+        assert_eq!(
+            classer(&api("api_error : Internal server error")),
+            Panne::Surcharge
+        );
+        let suite = kobi_i18n::t(Langue::En, "coque.pannes.continue", &[]);
+        assert_eq!(
+            kobi_i18n::t(
+                Langue::En,
+                "coque.pannes.coupureMessage",
+                &[("suite", &suite)]
+            ),
+            "The connection dropped during the answer: ask your question again. \
+             Listening and recording carry on."
+        );
     }
 
     /// KOB-210 : l'Oups en anglais, mêmes variables qu'en français.

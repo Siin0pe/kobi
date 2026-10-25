@@ -976,6 +976,8 @@
   "coque.pannes.cleRefuseeMessage": "The Anthropic API refuses the saved key. Check or replace it in Settings, API key section, then ask your question again. {suite}",
   "coque.pannes.surchargeTitre": "Claude is overloaded",
   "coque.pannes.surchargeMessage": "Anthropic's servers are very busy: ask your question again in a moment. {suite}",
+  "coque.pannes.coupureTitre": "Connection lost",
+  "coque.pannes.coupureMessage": "The connection dropped during the answer: ask your question again. {suite}",
   "coque.pannes.horsLigneTitre": "No Internet",
   "coque.pannes.horsLigneMessage": "I'm keeping your question and will ask it as soon as the connection is back. {suite}",
   "coque.pannes.tropLongtemps": "too long",

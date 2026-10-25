@@ -1105,6 +1105,13 @@ async fn surcharge_dans_le_flux_reessayee() {
         json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Début"}}),
         json!({"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}),
     ]);
+    let apres_reflexion = flux(&[
+        json!({"type":"message_start","message":{"id":"msg","usage":{"input_tokens":5}}}),
+        json!({"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}),
+        json!({"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig"}}),
+        json!({"type":"content_block_stop","index":0}),
+        json!({"type":"error","error":{"type":"api_error","message":"Internal server error"}}),
+    ]);
     let serveur = Serveur::lancer(vec![
         // Tour 1 : deux surcharges, puis la réponse.
         surcharge("overloaded_error"),
@@ -1118,6 +1125,10 @@ async fn surcharge_dans_le_flux_reessayee() {
         surcharge("overloaded_error"),
         // Tour 4 : une autre erreur de flux n'est pas réessayée.
         surcharge("invalid_request_error"),
+        // Tour 5 : surcharge après un bloc de réflexion, sans texte montré
+        // (KOB-370) : réessayée.
+        apres_reflexion,
+        texte("Ok", "."),
     ])
     .await;
     let mut brain = cerveau(&serveur, Arc::new(SansOutils));
@@ -1132,6 +1143,11 @@ async fn surcharge_dans_le_flux_reessayee() {
     assert_eq!(serveur.recues().len(), 7);
     assert!(fin(&tous(brain.ask(question("quatre"))).await).is_err());
     assert_eq!(serveur.recues().len(), 8);
+    assert_eq!(
+        fin(&tous(brain.ask(question("cinq"))).await).unwrap().text,
+        "Ok."
+    );
+    assert_eq!(serveur.recues().len(), 10);
 }
 
 /// KOB-319 : `max_etapes` allers-retours d'outils au plus, tous gardés ;
@@ -1327,10 +1343,9 @@ async fn flux_coupe_apres_un_texte_erreur_sans_perte() {
 #[tokio::test]
 async fn api_injoignable_erreur_d_api() {
     // Port libéré aussitôt : la connexion est refusée.
-    let url = {
-        let ecoute = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        format!("http://{}", ecoute.local_addr().unwrap())
-    };
+    // Port 1 : rien n'y écoute, la connexion est refusée (un port libéré
+    // pourrait être repris par un autre test, KOB-370).
+    let url = "http://127.0.0.1:1".to_owned();
     let mut brain = ApiBrain::new(ApiConfig {
         cle: CLE.into(),
         url,

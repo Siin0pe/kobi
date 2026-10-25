@@ -886,12 +886,13 @@ async fn requete_corps(
     }
 }
 
-/// Erreurs du flux réessayées si elles arrivent avant tout contenu.
+/// Erreurs du flux réessayées si elles arrivent avant tout texte montré.
 const ERREURS_FLUX_REESSAYEES: &[&str] = &["overloaded_error", "api_error"];
 
 /// Lit le flux d'une réponse en relayant le texte. `Ok(None)` : à réessayer
-/// (si `reessai`) : surcharge annoncée dans le flux avant tout bloc, ou flux
-/// coupé avant tout texte montré (KOB-360).
+/// (si `reessai`) : surcharge annoncée dans le flux ou flux coupé, avant
+/// tout texte montré (KOB-360, KOB-370) : un bloc de réflexion ou un outil
+/// pas encore fini ne fait rien, et rien n'a été montré.
 ///
 /// Un flux coupé est une erreur de réseau, pas un plantage : la
 /// conversation est intacte (le tour la remet en état), la session reste
@@ -933,7 +934,7 @@ async fn lire(
                 Err(e)
                     if reessai
                         && ERREURS_FLUX_REESSAYEES.contains(&e.genre.as_str())
-                        && message.blocs().is_empty() =>
+                        && !montre =>
                 {
                     tracing::warn!(genre = %e.genre, "API Anthropic : surcharge dans le flux");
                     return Ok(None);
