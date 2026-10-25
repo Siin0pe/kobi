@@ -191,7 +191,11 @@ async fn play(
             break;
         }
     }
-    BrainEvent::Done(TurnSummary { text, usage: None })
+    BrainEvent::Done(TurnSummary {
+        text,
+        usage: None,
+        avis: None,
+    })
 }
 
 #[cfg(test)]

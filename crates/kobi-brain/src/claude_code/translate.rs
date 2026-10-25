@@ -90,6 +90,7 @@ impl TurnTranslator {
                 events.push(BrainEvent::Done(TurnSummary {
                     text: std::mem::take(&mut self.text),
                     usage: result.usage,
+                    avis: None,
                 }));
                 events
             }

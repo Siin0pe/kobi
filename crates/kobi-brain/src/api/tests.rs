@@ -967,7 +967,10 @@ async fn raison_d_arret_inconnue_et_contexte_depasse() {
             autre => panic!("{autre:?}"),
         }
     }
-    fin(&tous(brain.ask(question("deux"))).await).unwrap();
+    // La reprise à neuf est annoncée, une seule fois, avec le premier tour
+    // réussi (journal d'activité).
+    let resume = fin(&tous(brain.ask(question("deux"))).await).unwrap();
+    assert_eq!(resume.avis.as_deref(), Some(AVIS_REPRISE));
     let r = serveur.recues();
     // Après le contexte dépassé, la conversation repart de zéro.
     assert_eq!(r[1].corps["messages"].as_array().unwrap().len(), 3);
@@ -1013,9 +1016,12 @@ async fn conversation_trop_longue_repart_de_zero() {
         ..Default::default()
     })
     .unwrap();
-    for q in ["un", "deux"] {
-        fin(&tous(brain.ask(question(q))).await).unwrap();
-    }
+    let avis: Vec<Option<String>> = [
+        fin(&tous(brain.ask(question("un"))).await).unwrap().avis,
+        fin(&tous(brain.ask(question("deux"))).await).unwrap().avis,
+    ]
+    .into();
+    assert_eq!(avis, [None, Some(AVIS_REPRISE.to_owned())]);
     let longueurs: Vec<usize> = serveur
         .recues()
         .iter()
