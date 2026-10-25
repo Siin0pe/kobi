@@ -378,7 +378,9 @@ fn porter(
 
 /// Ouverture du micro en cours dans un fil à part (KOB-285).
 struct Ouverture {
-    resultat: Receiver<Result<(Entree, String), String>>,
+    /// L'entrée, sa description, et l'instant où son flux a démarré : la
+    /// base de l'horloge de ses trames (KOB-294).
+    resultat: Receiver<Result<(Entree, String, Instant), String>>,
     depuis: Instant,
 }
 
@@ -395,14 +397,14 @@ impl Ouverture {
         let (tx, resultat) = mpsc::channel();
         let lance = std::thread::Builder::new()
             .name("ouverture-micro".into())
-            .spawn(move || match ouvrir() {
+            .spawn(move || match ouvrir().map(|o| (o, Instant::now())) {
                 Err(e) => {
                     let _ = tx.send(Err(e));
                 }
-                Ok((Ouvert::Fichier(rx), description)) => {
-                    let _ = tx.send(Ok((Entree::Fichier(rx), description)));
+                Ok(((Ouvert::Fichier(rx), description), demarre)) => {
+                    let _ = tx.send(Ok((Entree::Fichier(rx), description, demarre)));
                 }
-                Ok((Ouvert::Micro(capture), description)) => {
+                Ok(((Ouvert::Micro(capture), description), demarre)) => {
                     let (trames_tx, trames) = mpsc::channel();
                     let (erreurs_tx, erreurs) = mpsc::channel();
                     let (fermer, fermer_rx) = mpsc::channel();
@@ -412,7 +414,10 @@ impl Ouverture {
                         fermer,
                     };
                     // L'écoute a renoncé entre-temps : la capture se ferme.
-                    if tx.send(Ok((Entree::Micro(porteur), description))).is_ok() {
+                    if tx
+                        .send(Ok((Entree::Micro(porteur), description, demarre)))
+                        .is_ok()
+                    {
                         porter(capture, trames_tx, erreurs_tx, fermer_rx);
                     }
                 }
@@ -432,7 +437,7 @@ impl Ouverture {
     }
 
     /// Le résultat, s'il arrive avant `delai` ; `None` : toujours en cours.
-    fn attendre(&self, delai: Duration) -> Option<Result<(Entree, String), String>> {
+    fn attendre(&self, delai: Duration) -> Option<Result<(Entree, String, Instant), String>> {
         match self.resultat.recv_timeout(delai) {
             Ok(r) => Some(r),
             Err(RecvTimeoutError::Timeout) => None,
@@ -941,7 +946,7 @@ impl<R: Runtime> Fil<R> {
             // Pause demandée pendant l'attente de l'ouverture : le micro, ouvert
             // trop tard, est refermé aussitôt, et ce qu'il a capté est jeté
             // (KOB-293).
-            Ok((entree, _)) if self.en_pause || etat(&self.app).etat == "pause" => {
+            Ok((entree, _, _)) if self.en_pause || etat(&self.app).etat == "pause" => {
                 let jetees = entree.fermer().len();
                 tracing::info!(
                     trames = jetees,
@@ -950,14 +955,17 @@ impl<R: Runtime> Fil<R> {
                 self.note("micro ouvert pendant la pause : refermé aussitôt");
                 false
             }
-            Ok((entree, description)) => {
+            Ok((entree, description, demarre)) => {
                 if let Ok(stt) = self.stt.as_mut() {
                     stt.reset();
                 }
                 self.ecouteur = Ecouteur::new(!self.en_reunion);
                 self.porte = Porte::new(kobi_stt::SAMPLE_RATE);
                 self.t = 0.0;
-                self.origine = Instant::now();
+                // L'horloge des trames part du démarrage du flux, pas de
+                // l'instant où l'écoute relève l'ouverture, jusqu'à 5 s plus
+                // tard (KOB-294).
+                self.origine = demarre;
                 // Réunion terminée micro fermé (pendant la pause) : la
                 // fenêtre « Annuler » vaut encore pour le micro rouvert
                 // (KOB-287).
@@ -1000,8 +1008,10 @@ impl<R: Runtime> Fil<R> {
         let rouvert = self.ouvrir_micro();
         self.ecouteur = ecouteur;
         if rouvert {
+            // `ouvrir_micro` a posé l'origine au démarrage du nouveau flux.
+            let demarre = self.origine;
             self.origine = origine;
-            self.decalage = reprise_de_l_horloge(origine, Instant::now());
+            self.decalage = reprise_de_l_horloge(origine, demarre);
             self.t = self.decalage;
         }
         rouvert
@@ -2457,7 +2467,7 @@ mod tests {
         assert!(ouverture.attendre(Duration::from_millis(200)).is_none());
         assert!(debut.elapsed() < Duration::from_secs(2));
         debloquer.send(()).unwrap();
-        let Some(Ok((Entree::Fichier(_), description))) =
+        let Some(Ok((Entree::Fichier(_), description, _))) =
             ouverture.attendre(Duration::from_secs(5))
         else {
             panic!("l'ouverture reprise doit aboutir");
@@ -2468,6 +2478,28 @@ mod tests {
             echec.attendre(Duration::from_secs(5)),
             Some(Err(e)) if e == "aucun micro"
         ));
+    }
+
+    /// KOB-294 : l'instant de démarrage du flux est pris quand l'ouverture
+    /// aboutit, dans son fil, pas quand l'écoute relève le résultat.
+    #[test]
+    fn horloge_au_demarrage_du_flux() {
+        let ouverture = Ouverture::lancer_avec(|| {
+            let (_tx, rx) = mpsc::channel();
+            Ok((Ouvert::Fichier(rx), "fichier".into()))
+        });
+        let avant = Instant::now();
+        // L'écoute relève le résultat 300 ms après (elle attendait ailleurs).
+        std::thread::sleep(Duration::from_millis(300));
+        let releve = Instant::now();
+        let Some(Ok((_, _, demarre))) = ouverture.attendre(Duration::from_secs(5)) else {
+            panic!("ouverture");
+        };
+        assert!(
+            demarre <= avant + Duration::from_millis(100),
+            "pris à l'ouverture"
+        );
+        assert!(releve.duration_since(demarre) >= Duration::from_millis(250));
     }
 
     /// KOB-293 : une ouverture lente, lâchée (pause) avant d'aboutir, ferme
