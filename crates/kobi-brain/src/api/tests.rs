@@ -1170,3 +1170,67 @@ async fn outil_demande_malgre_l_interdiction() {
     assert_eq!(*outils.appels.lock().unwrap(), ["lire"]);
     assert_eq!(serveur.recues().len(), 2);
 }
+
+/// Journaux capturés pendant un test.
+#[derive(Clone, Default)]
+struct Capture(Arc<StdMutex<Vec<u8>>>);
+
+impl std::io::Write for Capture {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Capture {
+    type Writer = Capture;
+    fn make_writer(&'a self) -> Capture {
+        self.clone()
+    }
+}
+
+impl Capture {
+    fn texte(&self) -> String {
+        String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned()
+    }
+}
+
+/// KOB-322 : ni la clé, ni le contenu de la conversation (question,
+/// réponse, charge d'un événement illisible) n'entrent dans les journaux ou
+/// dans l'erreur affichée.
+#[tokio::test]
+async fn ni_cle_ni_conversation_dans_les_journaux() {
+    let capture = Capture::default();
+    let abonne = tracing_subscriber::fmt()
+        .with_writer(capture.clone())
+        .with_max_level(tracing::Level::TRACE)
+        .finish();
+    let _garde = tracing::subscriber::set_default(abonne);
+    let illisible = Script {
+        statut: 200,
+        entetes: vec![("content-type", "text/event-stream".into())],
+        corps: "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5}}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"budget confidentiel de 4 millions\n\n".into(),
+        pause: None,
+    };
+    let serveur = Serveur::lancer(vec![texte("Le budget est ", "de 4 millions."), illisible]).await;
+    let mut brain = cerveau(&serveur, Arc::new(OutilsTest::default()));
+    let r = fin(&tous(brain.ask(question("quel est le budget confidentiel ?"))).await);
+    assert!(r.is_ok());
+    let erreur = fin(&tous(brain.ask(question("et le détail ?"))).await).unwrap_err();
+    let erreur = erreur.to_string();
+    assert!(erreur.contains("flux_illisible"), "{erreur}");
+    let journaux = capture.texte();
+    for secret in [CLE, "confidentiel", "4 millions", "budget"] {
+        assert!(
+            !journaux.contains(secret),
+            "{secret} dans les journaux :\n{journaux}"
+        );
+        assert!(
+            !erreur.contains(secret),
+            "{secret} dans l'erreur : {erreur}"
+        );
+    }
+}

@@ -93,9 +93,12 @@ pub struct ErreurFlux {
 impl Reponse {
     /// Applique la charge `data:` d'un événement.
     pub fn appliquer(&mut self, donnee: &str) -> Result<Apport, ErreurFlux> {
+        // Jamais la charge elle-même dans l'erreur : elle peut contenir la
+        // réponse, des notes ou de la transcription, et l'erreur s'affiche
+        // et part dans les journaux (KOB-322).
         let ev: Value = serde_json::from_str(donnee).map_err(|e| ErreurFlux {
             genre: "flux_illisible".into(),
-            message: format!("{e} : {donnee}"),
+            message: format!("{e} (événement de {} octets)", donnee.len()),
         })?;
         let index = ev["index"].as_u64().map(|i| i as usize);
         match ev["type"].as_str().unwrap_or_default() {
@@ -310,7 +313,13 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(e.genre, "overloaded_error");
-        assert!(r.appliquer("pas du json").is_err());
+        // KOB-322 : rien de la charge dans le message.
+        let e = r
+            .appliquer(r#"{"type":"content_block_delta","delta":{"text":"compte rendu secret"#)
+            .unwrap_err();
+        assert_eq!(e.genre, "flux_illisible");
+        assert!(!e.message.contains("secret"), "{}", e.message);
+        assert!(e.message.contains("octets"), "{}", e.message);
     }
 
     #[test]

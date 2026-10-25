@@ -16,6 +16,8 @@ tracing = "0.1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["net"] }
+# Journaux capturés : ni clé ni contenu de conversation (KOB-322).
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
 
 [[bin]]
 name = "claude-essai"
