@@ -101,6 +101,7 @@ impl Ecrivain {
     pub fn nommer(&self, titre: String, origine: Origine) {
         self.envoyer(move |d| {
             let Some(r) = &mut d.reunion else { return };
+            let avant = r.nom().to_owned();
             let nouvelle = match r.nommer(&titre, origine) {
                 Ok(ancien) => Nouvelle::ReunionNommee {
                     dossier: r.dossier().to_path_buf(),
@@ -109,6 +110,16 @@ impl Ecrivain {
                 },
                 Err(e) => {
                     tracing::warn!(erreur = %e, "titre de la réunion");
+                    // Le dossier a pu bouger avant l'erreur (KOB-292) : le
+                    // chef suit quand même le nouveau dossier (KOB-301).
+                    if r.nom() != avant {
+                        let nommee = Nouvelle::ReunionNommee {
+                            dossier: r.dossier().to_path_buf(),
+                            ancien: Some(avant),
+                            titre: r.meta().titre.clone(),
+                        };
+                        d.compter(nommee);
+                    }
                     Nouvelle::Erreur(kobi_i18n::tr(
                         "coque.ecrivain.renommerImpossible",
                         &[("erreur", &e.to_string())],
@@ -258,6 +269,46 @@ mod tests {
             .unwrap();
         assert_eq!(lue.resume.fin_ms, Some(2_000));
         assert_eq!(lue.notes.trim(), "- budget");
+    }
+
+    /// KOB-301 : le dossier bouge, puis `reunion.json` ne s'écrit pas ; le
+    /// chef reçoit quand même le nouveau dossier, puis l'erreur.
+    #[test]
+    fn dossier_suivi_meme_si_le_titre_n_est_pas_ecrit() {
+        let dir = tempfile::tempdir().unwrap();
+        let stockage = Stockage::new(dir.path());
+        let comptes = Arc::new(Mutex::new(Vec::new()));
+        let c = comptes.clone();
+        let e = Ecrivain::lancer(move |compte| c.lock().unwrap().push(compte));
+        e.ouvrir_reunion(stockage, 1_000);
+        e.attendre();
+        let Some(Nouvelle::ReunionOuverte(dossier)) = comptes.lock().unwrap().first().cloned()
+        else {
+            panic!("{:?}", comptes.lock().unwrap());
+        };
+        // Un dossier à la place de `reunion.json` : son écriture échoue.
+        let meta = dossier.join("reunion.json");
+        std::fs::remove_file(&meta).unwrap();
+        std::fs::create_dir(&meta).unwrap();
+        e.nommer("Rétro du sprint".into(), Origine::Manuel);
+        e.attendre();
+        let comptes = comptes.lock().unwrap();
+        match &comptes[1] {
+            Nouvelle::ReunionNommee {
+                dossier: neuf,
+                ancien,
+                ..
+            } => {
+                assert_ne!(neuf, &dossier);
+                assert!(neuf.exists(), "{neuf:?}");
+                assert_eq!(
+                    ancien.as_deref(),
+                    dossier.file_name().and_then(|n| n.to_str())
+                );
+            }
+            autre => panic!("{autre:?}"),
+        }
+        assert!(matches!(comptes[2], Nouvelle::Erreur(_)), "{comptes:?}");
     }
 
     /// KOB-288 : la réunion suivante ne s'ouvre pas (dossier de stockage

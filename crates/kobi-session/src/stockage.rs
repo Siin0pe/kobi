@@ -221,7 +221,7 @@ impl ReunionOuverte {
         // Le titre ne change qu'une fois le dossier déplacé. Le titre et la
         // table des renommages s'écrivent chacun même si l'autre échoue : le
         // dossier a bougé, l'ancien nom doit mener à lui (KOB-266, KOB-292).
-        let ancien = self.reunion.deplacer(titre, self.meta.titre.as_deref())?;
+        let ancien = self.reunion.deplacer(titre)?;
         if origine == Origine::Auto {
             self.meta.changements_auto += 1;
         }
@@ -1328,6 +1328,21 @@ mod tests {
             Some("2026-10-18-budget-2027")
         );
         assert_eq!(r.nom(), "2026-10-18-budget-2");
+    }
+
+    /// KOB-301 : « Budget 2 » dans `budget-2` (« budget » pris), renommé
+    /// « Budget » : son nom est déjà celui que Kobi choisirait, rien ne bouge.
+    #[test]
+    fn suffixe_valide_pour_le_nouveau_titre_garde() {
+        let (_d, st) = stockage();
+        let mut autre = st.nouvelle_reunion(T0, None).unwrap();
+        autre.nommer("Budget", Origine::Manuel).unwrap();
+        let mut r = st.nouvelle_reunion(T0 + 3_600_000, None).unwrap();
+        r.nommer("Budget 2", Origine::Manuel).unwrap();
+        assert_eq!(r.nom(), "2026-10-18-budget-2");
+        assert_eq!(r.nommer("Budget", Origine::Manuel).unwrap(), None);
+        assert_eq!(r.nom(), "2026-10-18-budget-2");
+        assert_eq!(r.meta().titre.as_deref(), Some("Budget"));
     }
 
     /// KOB-292 : `reunion.json` illisible en écriture après le déplacement
