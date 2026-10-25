@@ -323,11 +323,15 @@ async fn boucle(
         None => historique.push(json!({ "role": "user", "content": [bloc] })),
     }
     let mut usage = Usage::default();
-    for _ in 0..=config.max_etapes {
+    // `max_etapes` allers-retours d'outils au plus, puis une dernière
+    // requête sans outil possible pour la réponse finale (KOB-319) : aucun
+    // lot d'outils n'est exécuté pour rien.
+    for etape in 0..=config.max_etapes {
+        let derniere = etape == config.max_etapes;
         if events.is_closed() {
             return BrainEvent::Error(BrainError::Crashed("tour abandonné".into()));
         }
-        let reponse = match requete(partage, historique, events).await {
+        let reponse = match requete(partage, historique, derniere, events).await {
             Ok(r) => r,
             Err(e) => return BrainEvent::Error(e),
         };
@@ -374,6 +378,14 @@ async fn boucle(
             .filter(|b| b["type"] == "tool_use")
             .cloned()
             .collect();
+        if derniere && !appels.is_empty() {
+            // Claude demande encore un outil malgré `tool_choice: none` :
+            // rien n'est exécuté.
+            return BrainEvent::Error(BrainError::Api(format!(
+                "plus de {} allers-retours d'outils dans un tour",
+                config.max_etapes
+            )));
+        }
         historique.push(json!({ "role": "assistant", "content": blocs }));
         if raison != "tool_use" || appels.is_empty() {
             return BrainEvent::Done(TurnSummary {
@@ -406,8 +418,9 @@ async fn boucle(
             *garde = Some(historique.len());
         }
     }
+    // La dernière étape rend toujours une fin de tour ; par prudence.
     BrainEvent::Error(BrainError::Api(format!(
-        "plus de {} appels d'outils dans un tour",
+        "plus de {} allers-retours d'outils dans un tour",
         config.max_etapes
     )))
 }
@@ -532,7 +545,7 @@ fn ajouter(total: &mut Usage, usage: &serde_json::Map<String, Value>) {
 }
 
 /// Corps d'une requête.
-fn corps(partage: &Partage, historique: &[Value]) -> Value {
+fn corps(partage: &Partage, historique: &[Value], sans_outil: bool) -> Value {
     let config = &partage.config;
     let mut corps = json!({
         "model": config.modele,
@@ -550,6 +563,12 @@ fn corps(partage: &Partage, historique: &[Value]) -> Value {
     });
     if !partage.outils.is_empty() {
         corps["tools"] = Value::Array(partage.outils.clone());
+        // Dernier aller-retour : la liste d'outils reste la même (cache et
+        // réflexion en dépendent), seul `tool_choice` interdit de s'en
+        // servir.
+        if sans_outil {
+            corps["tool_choice"] = json!({ "type": "none" });
+        }
     }
     if let Some(effort) = &config.effort {
         corps["output_config"] = json!({ "effort": effort });
@@ -564,10 +583,11 @@ fn corps(partage: &Partage, historique: &[Value]) -> Value {
 async fn requete(
     partage: &Partage,
     historique: &[Value],
+    sans_outil: bool,
     events: &mpsc::Sender<BrainEvent>,
 ) -> Result<Reponse, BrainError> {
     let config = &partage.config;
-    let corps = corps(partage, historique);
+    let corps = corps(partage, historique, sans_outil);
     let mut essai = 0;
     let abandon = || BrainError::Crashed("tour abandonné".into());
     // Un essai : la requête, puis la lecture du flux. Une surcharge, qu'elle
