@@ -105,6 +105,32 @@ test('50 clics sur « N étapes », dans toutes les situations : 50 dépliages, 
   await expectNoErrors(errors);
 });
 
+test('clic pendant que la réponse en flux s’allonge en bas de la vue : la ligne ne monte pas sous le doigt, la boîte s’ouvre (KOB-376)', async ({ page }) => {
+  const errors = await ouvrir(page);
+  const box = vue(page).locator('.vex-etapes').nth(2);
+  const corps = vue(page).locator('.lecture-corps');
+  await emit(page, 'state', { etat: 'assistant', activite: 'repond', mascotte: 'answer', transcrit: false });
+  await emit(page, 'question', 'question 4');
+  await emit(page, 'answer', 'Réponse 4 en cours. ');
+  await corps.evaluate((c) => (c.scrollTop = c.scrollHeight));
+  const enBas = () => corps.evaluate((c) => c.scrollHeight - c.clientHeight - c.scrollTop);
+  await expect.poll(enBas).toBeLessThan(2);
+  const s = box.locator('summary');
+  const b = (await s.boundingBox())!;
+  await page.mouse.move(b.x + 40, b.y + b.height / 2);
+  await page.mouse.down();
+  // Le texte s'allonge pendant l'appui, tenu comme une main qui hésite : le
+  // suivi ne glisse pas sous le doigt.
+  await emit(page, 'answer', 'Réponse 4 en cours. '.repeat(30));
+  await page.waitForTimeout(300);
+  expect(Math.abs((await s.boundingBox())!.y - b.y)).toBeLessThan(1);
+  await page.mouse.up();
+  await expect(box).toHaveAttribute('open', '');
+  // Relâché : le suivi reprend jusqu'en bas.
+  await expect.poll(enBas).toBeLessThan(2);
+  await expectNoErrors(errors);
+});
+
 test('l’état déplié est gardé par réponse quand l’historique se redessine (nouvelles étapes, nouvelle réponse)', async ({ page }) => {
   const errors = await ouvrir(page);
   const boxes = vue(page).locator('.vex-etapes');
