@@ -580,6 +580,11 @@ impl FileValidations {
     pub fn est_vide(&self) -> bool {
         self.0.is_empty()
     }
+
+    /// Une autre carte que `id` attend-elle ?
+    pub fn autre_que(&self, id: &str) -> bool {
+        self.0.iter().any(|(i, _)| i != id)
+    }
 }
 
 /// Une carte de Kobi attend sa réponse : le cerveau ne laisse pas tomber
