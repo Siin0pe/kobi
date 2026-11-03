@@ -469,6 +469,11 @@ pub struct Chef<R: Runtime> {
     /// cours (KOB-365, KOB-366), dans l'ordre : « compte rendu prêt »,
     /// rappel échu, carte expirée.
     annonces: std::collections::VecDeque<Annonce>,
+    /// Carte de Kobi dont « Je le fais ? » attend que la voix se libère
+    /// (KOB-375) : dit avant les annonces, abandonné si la carte n'est plus
+    /// celle qui attend sa réponse ou si l'utilisateur a coupé la voix
+    /// depuis (coupures de la voix au moment de l'ouverture).
+    validation_a_dire: Option<(String, u64)>,
     /// Dernière question répondue et sa réponse (« répète », « plus court »…).
     derniere: Option<(String, String)>,
     /// Tâches longues en cours : début et question (« où en est… ? ») ;
@@ -844,6 +849,7 @@ impl<R: Runtime> Chef<R> {
             voix: None,
             suite_apres_voix: false,
             annonces: Default::default(),
+            validation_a_dire: None,
             derniere: None,
             taches: BTreeMap::new(),
             annoncees: Default::default(),
@@ -2101,8 +2107,8 @@ impl<R: Runtime> Chef<R> {
         let annonce = self.validations.ouvrir(id, resume);
         self.calme_a = None;
         self.transition(&[Evenement::PermissionDemandee]);
-        if let Some(resume) = annonce {
-            self.annoncer_validation(&resume);
+        if annonce.is_some() {
+            self.annoncer_validation();
         }
         // « Oui » ou « non » sans le nom, tant que la carte attend (KOB-197).
         let _ = crate::ecoute::commander(
@@ -2134,8 +2140,8 @@ impl<R: Runtime> Chef<R> {
                 self.annoncer(message);
             }
         }
-        if let Some(resume) = suivante {
-            self.annoncer_validation(&resume);
+        if suivante.is_some() {
+            self.annoncer_validation();
             // La carte suivante attend à son tour sa réponse (KOB-197).
             let _ = crate::ecoute::commander(
                 &self.app,
@@ -2193,20 +2199,43 @@ impl<R: Runtime> Chef<R> {
             .map(|(carte, _)| *carte)
     }
 
-    /// La carte se lit à l'écran : la voix demande seulement « Je le fais ? ».
-    /// Fenêtre de Kobi cachée, la voix est le seul canal : elle relit la
-    /// demande (KOB-215). Tout de suite, pas en annonce : la carte vient le
-    /// plus souvent du tour qui répond, dont l'énoncé reste ouvert tant
-    /// qu'elle attend ; attendre la voix libre la ferait attendre pour rien
-    /// (KOB-366). La carte ne dit pas de quel tour elle vient : celle d'un
-    /// tour détaché coupe encore la réponse d'un autre.
-    fn annoncer_validation(&self, resume: &str) {
+    /// La carte affichée se lit à l'écran : la voix demande seulement « Je
+    /// le fais ? ». Fenêtre de Kobi cachée, la voix est le seul canal : elle
+    /// relit la demande (KOB-215). Dès que la voix est libre, sans couper la
+    /// réponse d'un autre tour (KOB-375) : l'outil de Kobi qui demande la
+    /// carte a détaché son tour, dont l'énoncé est déjà lâché (KOB-366) ;
+    /// une réponse encore ouverte est donc celle d'une autre question.
+    fn annoncer_validation(&mut self) {
+        let coupures = crate::voix::interruptions(&self.app);
+        self.validation_a_dire = self
+            .validations
+            .cible()
+            .map(|id| (id.to_string(), coupures));
+        self.annonce_en_attente();
+    }
+
+    /// « Je le fais ? » en attente, s'il est encore de mise : sa carte
+    /// attend sa réponse et l'utilisateur n'a pas fait taire Kobi depuis
+    /// (la carte reste à l'écran).
+    fn dire_validation(&mut self) -> bool {
+        let Some((id, coupures)) = self.validation_a_dire.take() else {
+            return false;
+        };
+        let Some(resume) = self.validations.resume(&id) else {
+            tracing::info!(%id, "voix : carte tranchée avant « Je le fais ? »");
+            return false;
+        };
+        if coupures != crate::voix::interruptions(&self.app) {
+            tracing::info!(%id, "voix : « Je le fais ? » abandonné, voix coupée");
+            return false;
+        }
         let phrase = if self.voix_seul_canal() {
-            kobi_i18n::tr("coque.chef.resumeJeLeFais", &[("resume", resume)])
+            kobi_i18n::tr("coque.chef.resumeJeLeFais", &[("resume", &resume)])
         } else {
             kobi_i18n::tr("coque.chef.jeLeFais", &[])
         };
         crate::voix::dire(&self.app, &phrase);
+        true
     }
 
     /// La fenêtre de Kobi n'est pas à l'écran : ce qui s'affiche ne se voit pas.
@@ -2963,7 +2992,7 @@ impl<R: Runtime> Chef<R> {
         if self.annonces.len() < avant {
             tracing::info!("voix : annonce abandonnée (voix coupée ou réponse trop longue)");
         }
-        if self.voix.is_none() && !crate::voix::occupee(&self.app) {
+        if self.voix.is_none() && !crate::voix::occupee(&self.app) && !self.dire_validation() {
             if let Some(annonce) = self.annonces.pop_front() {
                 crate::voix::dire(&self.app, &annonce.texte);
             }
@@ -3605,8 +3634,16 @@ mod tests {
             c.tick();
             assert_eq!(c.annonces.len(), 2, "rien pendant la réponse");
             assert!(c.annonces[0].texte.contains("Appeler Paul"));
-            // Réponse finie : une annonce par tic, dans l'ordre.
+            assert_eq!(
+                c.validation_a_dire.as_ref().map(|v| v.0.as_str()),
+                Some("v1")
+            );
+            // Réponse finie : « Je le fais ? » d'abord (la carte attend),
+            // puis une annonce par tic, dans l'ordre.
             c.voix = None;
+            c.tick();
+            assert!(c.validation_a_dire.is_none());
+            assert_eq!(c.annonces.len(), 2);
             c.tick();
             assert_eq!(c.annonces.len(), 1);
             c.tick();
@@ -3620,6 +3657,61 @@ mod tests {
             }));
             c.interrompre();
             assert!(c.annonces.is_empty());
+        });
+    }
+
+    /// KOB-375 : la carte demandée par l'outil d'un tour détaché ne coupe
+    /// pas la réponse d'une autre question : « Je le fais ? » attend la fin
+    /// de cette réponse ; tranchée avant, la carte n'est plus annoncée.
+    #[test]
+    fn carte_d_un_tour_detache_sans_couper_la_reponse() {
+        let (app, _dir) = chef_en_essai();
+        crate::voix::installer_factice(app.handle());
+        avec_chef(&app, |c| {
+            let mut r = crate::voix::Reponse::new(&c.app);
+            r.morceau(&c.app, "La réunion de demain commence à dix heures. Puis ");
+            c.voix = Some((7, r));
+            // Le tour 6 est parti en tâche ; son outil demande la carte.
+            c.validation_ouverte("v1".into(), "Créer budget.md");
+            c.tick();
+            assert_eq!(
+                c.validation_a_dire.as_ref().map(|v| v.0.as_str()),
+                Some("v1")
+            );
+            assert!(!crate::voix::est_ma_voix(&c.app, "Je le fais ?"));
+            let texte = "La réunion de demain commence à dix heures. Puis la revue.";
+            c.recevoir(Message::Cerveau(Retour::Fin {
+                tour: 7,
+                texte: texte.into(),
+            }));
+            let limite = Instant::now() + Duration::from_secs(5);
+            while c.validation_a_dire.is_some() {
+                assert!(Instant::now() < limite, "« Je le fais ? » jamais dit");
+                std::thread::sleep(Duration::from_millis(20));
+                c.tick();
+            }
+            assert!(crate::voix::est_ma_voix(&c.app, "Je le fais ?"));
+            c.validation_fermee("v1", crate::validation::Reponse::Accepte);
+            while crate::voix::occupee(&c.app) {
+                assert!(Instant::now() < limite, "voix restée occupée");
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            // Tranchée au clic pendant la réponse : rien n'est dit après.
+            c.voix = Some((9, crate::voix::Reponse::new(&c.app)));
+            c.validation_ouverte("v2".into(), "Créer budget.md");
+            c.validation_fermee("v2", crate::validation::Reponse::Accepte);
+            c.voix = None;
+            c.tick();
+            assert!(c.validation_a_dire.is_none());
+            assert!(!crate::voix::occupee(&c.app));
+            // Kobi coupé par l'utilisateur : rien n'est dit juste après.
+            c.voix = Some((10, crate::voix::Reponse::new(&c.app)));
+            c.validation_ouverte("v3".into(), "Créer budget.md");
+            c.interrompre();
+            c.tick();
+            assert!(c.validation_a_dire.is_none());
+            assert!(!crate::voix::occupee(&c.app));
+            c.validation_fermee("v3", crate::validation::Reponse::Refuse);
         });
     }
 

@@ -569,6 +569,14 @@ impl FileValidations {
         self.0.front().map(|(i, _)| i.as_str())
     }
 
+    /// Résumé de la carte `id` si elle est encore celle qui est affichée.
+    pub fn resume(&self, id: &str) -> Option<String> {
+        self.0
+            .front()
+            .filter(|(i, _)| i == id)
+            .map(|(_, r)| r.clone())
+    }
+
     pub fn est_vide(&self) -> bool {
         self.0.is_empty()
     }
