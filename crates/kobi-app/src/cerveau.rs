@@ -1043,6 +1043,13 @@ impl Vigie {
     }
 }
 
+/// Flux du cerveau fermé sans fin de tour (process mort, connexion coupée) :
+/// un plantage, relancé une fois puis montré en erreur. Sans lui, la question
+/// restait « en attente » pour toujours (KOB-423).
+fn flux_sans_fin() -> BrainEvent {
+    BrainEvent::Error(BrainError::Crashed("flux fermé sans fin de tour".into()))
+}
+
 enum Suivi {
     /// Fini, avec la réponse s'il y en a une.
     Fini(Option<String>),
@@ -1079,34 +1086,32 @@ async fn suivre(
         tokio::select! {
             evenement = turn.next() => {
                 inactif.as_mut().reset(tokio::time::Instant::now() + delais.abandon);
-                if let Some(e) = &evenement {
-                    vigie.voir(e);
-                }
+                let evenement = evenement.unwrap_or_else(flux_sans_fin);
+                vigie.voir(&evenement);
                 match evenement {
-                    Some(BrainEvent::Text(t)) => {
+                    BrainEvent::Text(t) => {
                         texte.push_str(&t);
                         sortie(Retour::Texte { tour, texte: texte.clone() });
                     }
-                    Some(BrainEvent::ToolCall { id, name, action, .. }) if !interne(&action) => {
+                    BrainEvent::ToolCall { id, name, action, .. } if !interne(&action) => {
                         journaliser_outil(&name);
                         activite(tour, id, action, sortie);
                         sortie(Retour::Detache { tour, annonce: true });
                         return Suivi::Detache(turn, texte, vigie);
                     }
-                    Some(BrainEvent::ToolCall { .. } | BrainEvent::OutilRendu { .. } | BrainEvent::Vie) => {}
-                    Some(BrainEvent::Permission(demande)) => {
+                    BrainEvent::ToolCall { .. } | BrainEvent::OutilRendu { .. } | BrainEvent::Vie => {}
+                    BrainEvent::Permission(demande) => {
                         carte(tour, demande, sortie, cartes);
                         sortie(Retour::Detache { tour, annonce: false });
                         return Suivi::Detache(turn, texte, vigie);
                     }
-                    Some(BrainEvent::Done(fin)) => {
+                    BrainEvent::Done(fin) => {
                         avis(&fin, sortie);
                         let texte = if fin.text.is_empty() { texte } else { fin.text };
                         sortie(Retour::Fin { tour, texte: texte.clone() });
                         return Suivi::Fini(Some(texte));
                     }
-                    Some(BrainEvent::Error(e)) => return Suivi::Erreur(e),
-                    None => return Suivi::Fini(None),
+                    BrainEvent::Error(e) => return Suivi::Erreur(e),
                 }
             },
             Some(arret) = arrets.recv() => {
@@ -1187,9 +1192,7 @@ async fn finir(
         inactif
             .as_mut()
             .reset(tokio::time::Instant::now() + abandon);
-        let Some(evenement) = evenement else {
-            return false;
-        };
+        let evenement = evenement.unwrap_or_else(flux_sans_fin);
         vigie.voir(&evenement);
         match evenement {
             BrainEvent::Text(t) => {
@@ -1585,6 +1588,66 @@ mod tests {
                 texte: "reçu : un".into()
             }));
         assert!(!recu(&recus, |r| matches!(r, Retour::Erreur { .. })));
+    }
+
+    /// KOB-423 : flux fermé sans fin de tour (process mort) : la question
+    /// est renvoyée une fois, comme après un plantage, et sa réponse arrive.
+    /// Avant, ni fin ni erreur : elle restait « en attente » pour toujours.
+    #[tokio::test]
+    async fn flux_coupe_question_renvoyee() {
+        let (s, recus) = sortie();
+        let c = Cerveau::lancer(fabrique(vec![vec![vec![Step::Coupe]]]), s);
+        c.demander(question(1, "un"));
+        attendre(&recus, |r| matches!(r, Retour::Fin { tour: 1, .. })).await;
+        assert!(recu(&recus, |r| *r == Retour::Relance { tour: 1 }));
+        assert!(recu(&recus, |r| *r
+            == Retour::Fin {
+                tour: 1,
+                texte: "reçu : un".into()
+            }));
+    }
+
+    /// KOB-423 : coupé deux fois de suite : une erreur, et la question
+    /// suivante passe.
+    #[tokio::test]
+    async fn flux_coupe_deux_fois_erreur() {
+        let (s, recus) = sortie();
+        let coupe = || vec![vec![Step::Coupe]];
+        let c = Cerveau::lancer(fabrique(vec![coupe(), coupe()]), s);
+        c.demander(question(1, "un"));
+        attendre(&recus, |r| matches!(r, Retour::Erreur { tour: 1, .. })).await;
+        c.demander(question(2, "deux"));
+        attendre(&recus, |r| matches!(r, Retour::Fin { tour: 2, .. })).await;
+    }
+
+    /// KOB-423 : une tâche détachée dont le flux se ferme sans fin : elle est
+    /// renvoyée une fois et son résultat arrive.
+    #[tokio::test(start_paused = true)]
+    async fn flux_coupe_d_une_tache() {
+        let (s, recus) = sortie();
+        let longue = vec![vec![Step::Wait(Duration::from_secs(20)), Step::Coupe]];
+        let c = Cerveau::lancer(fabrique(vec![longue]), s);
+        c.demander(question(1, "longue"));
+        attendre(&recus, |r| {
+            matches!(
+                r,
+                Retour::Resultat { tour: 1, .. } | Retour::Erreur { tour: 1, .. }
+            )
+        })
+        .await;
+        assert!(recu(&recus, |r| matches!(
+            r,
+            Retour::Detache {
+                tour: 1,
+                annonce: true
+            }
+        )));
+        assert!(recu(&recus, |r| *r == Retour::Relance { tour: 1 }));
+        assert!(
+            recu(&recus, |r| matches!(r, Retour::Resultat { tour: 1, .. })),
+            "{:?}",
+            recus.lock().unwrap()
+        );
     }
 
     /// Plantage après un premier échange : la session neuve reçoit le résumé

@@ -35,6 +35,8 @@ pub enum Step {
     Wait(Duration),
     /// Termine le tour en erreur (les étapes suivantes sont ignorées).
     Fail(BrainError),
+    /// Ferme le flux sans fin de tour, comme un process mort (KOB-423).
+    Coupe,
 }
 
 /// Appel reçu par le cerveau factice.
@@ -105,7 +107,9 @@ impl FakeBrain {
             // Libéré avant la fin du tour : un appel fait dès réception de
             // `Done` doit être accepté.
             busy.store(false, Ordering::SeqCst);
-            let _ = tx.send(end).await;
+            if let Some(end) = end {
+                let _ = tx.send(end).await;
+            }
         });
         turn
     }
@@ -138,12 +142,12 @@ fn echo(request: &Request) -> Vec<Step> {
     vec![Step::Text("reçu : ".into()), Step::Text(content.clone())]
 }
 
-/// Joue les étapes et renvoie l'événement de fin.
+/// Joue les étapes et renvoie l'événement de fin (aucun : flux coupé).
 async fn play(
     steps: Vec<Step>,
     tx: &mpsc::Sender<BrainEvent>,
     decisions: &Mutex<Vec<(String, Decision)>>,
-) -> BrainEvent {
+) -> Option<BrainEvent> {
     let mut text = String::new();
     for step in steps {
         let event = match step {
@@ -185,17 +189,18 @@ async fn play(
                 tokio::time::sleep(d).await;
                 continue;
             }
-            Step::Fail(error) => return BrainEvent::Error(error),
+            Step::Fail(error) => return Some(BrainEvent::Error(error)),
+            Step::Coupe => return None,
         };
         if tx.send(event).await.is_err() {
             break;
         }
     }
-    BrainEvent::Done(TurnSummary {
+    Some(BrainEvent::Done(TurnSummary {
         text,
         usage: None,
         avis: None,
-    })
+    }))
 }
 
 #[cfg(test)]
