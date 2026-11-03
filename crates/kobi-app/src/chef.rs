@@ -847,11 +847,12 @@ pub fn carte_ui(carte: u64, outil: &str, entree: &serde_json::Value) -> CarteUi 
 /// La carte MCP dite à voix haute, quand la voix est le seul canal :
 /// « Carnet, ecrire note : relire le budget » (KOB-388).
 fn resume_carte(ui: &CarteUi) -> String {
-    let kicker = ui.kicker.replace(" · ", ", ");
-    if ui.title.is_empty() || kicker.ends_with(&ui.title) {
+    let kicker = ui.kicker.replace(" · ", ", ").replace('\n', " ");
+    let titre = ui.title.replace('\n', " ");
+    if titre.trim().is_empty() || kicker.ends_with(&titre) {
         kicker
     } else {
-        format!("{kicker} : {}", ui.title)
+        format!("{kicker} : {titre}")
     }
 }
 
@@ -2167,12 +2168,12 @@ impl<R: Runtime> Chef<R> {
         self.si_plus_aucune_carte();
         // La carte montre déjà « Pas de réponse : refusé. » ; la voix ne le
         // redit que si elle est le seul canal (KOB-215), et pas si la carte
-        // suivante est annoncée aussitôt : dit plus tard, il semblerait
-        // répondre à celle-ci (KOB-366).
+        // suivante, de Kobi ou MCP (KOB-388), est annoncée aussitôt : dit
+        // plus tard, il semblerait répondre à celle-ci (KOB-366).
         if reponse == crate::validation::Reponse::Delai && self.voix_seul_canal() {
             let message = kobi_i18n::tr("coque.chef.delaiCarte", &[]);
             let _ = self.app.emit(EVENEMENT_REPONSE, &message);
-            if suivante.is_none() {
+            if suivante.is_none() && !self.carte_mcp_de_la_conversation() {
                 self.annoncer(message);
             }
         }
@@ -2183,6 +2184,8 @@ impl<R: Runtime> Chef<R> {
                 &self.app,
                 crate::ecoute::Commande::ReponseAttendue(crate::validation::ECHEANCE),
             );
+        } else {
+            self.annoncer_carte_mcp();
         }
     }
 
@@ -2332,7 +2335,17 @@ impl<R: Runtime> Chef<R> {
         let Some((carte, coupures)) = self.carte_a_dire.take() else {
             return false;
         };
-        let Some(ui) = self.cartes.get(&carte) else {
+        // Une carte de Kobi attend : « oui » irait à elle, pas à celle-ci,
+        // qui sera annoncée à la fermeture de la dernière.
+        if !self.validations.est_vide() {
+            tracing::info!(carte, "voix : carte MCP annoncée après la carte de Kobi");
+            return false;
+        }
+        let ouverte = self
+            .cartes_ouvertes
+            .get(&carte)
+            .is_some_and(|t| t.elapsed() < kobi_perms::DEFAULT_TIMEOUT);
+        let Some(ui) = self.cartes.get(&carte).filter(|_| ouverte) else {
             tracing::info!(carte, "voix : carte MCP tranchée avant « Je le fais ? »");
             return false;
         };
@@ -2343,6 +2356,29 @@ impl<R: Runtime> Chef<R> {
         let resume = resume_carte(ui);
         self.dire_je_le_fais(&resume);
         true
+    }
+
+    /// Plus de carte de Kobi, ou la carte MCP affichée vient d'être
+    /// tranchée : celle de la conversation qui attend encore (la plus
+    /// récente) est annoncée à son tour (KOB-388).
+    fn annoncer_carte_mcp(&mut self) {
+        if !self.validations.est_vide() {
+            return;
+        }
+        let affichee = self
+            .cartes_ouvertes
+            .iter()
+            .filter(|(carte, ouverte)| {
+                self.cartes.contains_key(carte)
+                    && !self.cartes_des_notes.contains_key(carte)
+                    && ouverte.elapsed() < kobi_perms::DEFAULT_TIMEOUT
+            })
+            .max_by_key(|(carte, ouverte)| (**ouverte, **carte))
+            .map(|(carte, _)| *carte);
+        if let Some(carte) = affichee {
+            self.carte_a_dire = Some((carte, crate::voix::interruptions(&self.app)));
+            self.annonce_en_attente();
+        }
     }
 
     fn dire_je_le_fais(&self, resume: &str) {
@@ -2672,6 +2708,9 @@ impl<R: Runtime> Chef<R> {
                 self.cartes_ouvertes.remove(&carte);
                 self.si_plus_aucune_carte();
                 let des_notes = self.cartes_des_notes.remove(&carte);
+                if des_notes.is_none() {
+                    self.annoncer_carte_mcp();
+                }
                 let tour = self.tours_des_cartes.remove(&carte);
                 self.notes_acceptees.remove(&carte);
                 // Une action des notes acceptée laisse sa trace dans les notes
@@ -4002,6 +4041,46 @@ mod tests {
             c.interrompre();
             c.tick();
             assert!(c.carte_a_dire.is_none());
+            assert!(!crate::voix::occupee(&c.app));
+            c.recevoir(Message::Cerveau(Retour::CarteFermee {
+                carte: 4,
+                accepte: Some(false),
+            }));
+            attendre(c);
+            // Une carte de Kobi attend : « oui » irait à elle, la carte MCP
+            // n'est annoncée qu'après sa fermeture.
+            c.validation_ouverte("v1".into(), "Créer budget.md");
+            attendre(c);
+            carte(c, 5);
+            c.tick();
+            assert!(
+                !crate::voix::occupee(&c.app),
+                "rien par-dessus la carte de Kobi"
+            );
+            assert!(c.carte_a_dire.is_none());
+            c.validation_fermee("v1", crate::validation::Reponse::Accepte);
+            assert!(
+                crate::voix::occupee(&c.app),
+                "carte MCP annoncée à son tour"
+            );
+            attendre(c);
+            // Deux cartes MCP : la plus récente est annoncée, l'autre à sa
+            // fermeture.
+            carte(c, 6);
+            attendre(c);
+            c.recevoir(Message::Cerveau(Retour::CarteFermee {
+                carte: 6,
+                accepte: Some(true),
+            }));
+            assert!(
+                crate::voix::occupee(&c.app),
+                "la carte 5 annoncée de nouveau"
+            );
+            attendre(c);
+            c.recevoir(Message::Cerveau(Retour::CarteFermee {
+                carte: 5,
+                accepte: Some(true),
+            }));
             assert!(!crate::voix::occupee(&c.app));
         });
     }
