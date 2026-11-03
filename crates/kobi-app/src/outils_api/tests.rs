@@ -427,6 +427,52 @@ fn chemins_que_win32_traduit_juges_tels_que_nt_les_ouvre() {
     ));
 }
 
+/// KOB-411 : sous Windows, NT réduit le `..` d'une cible de lien sur le
+/// texte du nom substitué, pas après un lien intermédiaire. Prouvé sur
+/// windows-latest : `t` (cible `x\..\y`, `x` lien vers `loin\autre`) et
+/// `d\y` (`d` vise `x\..`) ouvrent `racine\y`, un lien vers le réseau
+/// (erreur 53 après une tentative SMB), quand le parcours jugeait `loin\y`.
+#[cfg(windows)]
+#[test]
+fn point_point_d_une_cible_reduit_sur_le_texte() {
+    use std::os::windows::fs::{symlink_dir, symlink_file};
+    let dir = codebase();
+    let racine = dir.path().to_path_buf();
+    let autre = racine.join(r"loin\autre");
+    fs::create_dir_all(&autre).unwrap();
+    fs::write(racine.join(r"loin\y"), "ordinaire").unwrap();
+    if symlink_dir(&autre, racine.join("x")).is_err() {
+        assert!(std::env::var_os("CI").is_none(), "liens impossibles en CI");
+        return;
+    }
+    symlink_file(r"\\attaquant\p", racine.join("y")).unwrap();
+    symlink_file(r"x\..\y", racine.join("t")).unwrap();
+    symlink_file(racine.join(r"x\..\y"), racine.join("t2")).unwrap();
+    symlink_dir(r"x\..", racine.join("d")).unwrap();
+    for nom in ["t", "t2", r"d\y"] {
+        assert!(lien_vers_le_reseau(&racine.join(nom), true), "{nom}");
+    }
+    let l = lecteur(&dir);
+    for chemin in ["t", r"d\y"] {
+        let e = l.lire(&json!({ "file_path": chemin })).unwrap_err();
+        assert!(e.contains("chemin réseau"), "{chemin} : {e}");
+    }
+    // Un `..` de cible qui remonterait au-dessus de la racine : refusé.
+    let profondeur = racine.components().count() + 2;
+    let trop_haut = format!(r"{}UNC\attaquant\p", r"..\".repeat(profondeur));
+    symlink_file(&trop_haut, racine.join("haut")).unwrap();
+    assert!(
+        lien_vers_le_reseau(&racine.join("haut"), true),
+        "{trop_haut}"
+    );
+    // Sans lien réseau au bout, la même forme se lit : `u` vise `x\..\z`,
+    // et `z`, voisin du lien, est ordinaire.
+    fs::write(racine.join("z"), "ordinaire").unwrap();
+    symlink_file(r"x\..\z", racine.join("u")).unwrap();
+    assert!(!lien_vers_le_reseau(&racine.join("u"), true));
+    assert_eq!(l.lire(&json!({ "file_path": "u" })).map(|_| ()), Ok(()));
+}
+
 /// Rien ne se lit hors des dossiers permis : chemin absolu, `..`, lien
 /// symbolique qui sort.
 #[test]

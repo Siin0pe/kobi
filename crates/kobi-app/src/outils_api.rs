@@ -1036,6 +1036,41 @@ fn lien_vers_le_reseau(chemin: &Path, peripheriques: bool) -> bool {
         }
         // La cible prend la place du lien : absolue, elle repart de sa
         // racine ; relative, du dossier où est le lien.
+        if peripheriques {
+            // Sous Windows, NT réduit `..` sur le texte du nom substitué
+            // (dossier du lien + cible), pas après un lien intermédiaire de
+            // la cible : `x\..\y` mène au `y` voisin du lien, même si `x` est
+            // un lien vers ailleurs (KOB-411). Le reste du chemin suit.
+            // Une cible absolue avec `.` ou `..` ne vient que de données
+            // de reparse forgées, où la réduction de NT n'est pas prouvée ;
+            // un `..` qui remonterait au-dessus de la racine non plus :
+            // refusés plutôt que devinés.
+            let substitue = if cible.is_absolute() {
+                if cible.components().any(|c| {
+                    matches!(
+                        c,
+                        std::path::Component::CurDir | std::path::Component::ParentDir
+                    )
+                }) {
+                    return true;
+                }
+                cible.clone()
+            } else {
+                resolu.join(&cible)
+            };
+            if remonte_au_dessus_de_la_racine(&substitue) {
+                return true;
+            }
+            let reste: Vec<PathBuf> = a_lire.drain(..).collect();
+            resolu = PathBuf::new();
+            a_lire.extend(
+                reduire_sur_le_texte(&substitue)
+                    .components()
+                    .map(|c| PathBuf::from(c.as_os_str())),
+            );
+            a_lire.extend(reste);
+            continue;
+        }
         if cible.is_absolute() {
             resolu = PathBuf::new();
         }
@@ -1046,9 +1081,24 @@ fn lien_vers_le_reseau(chemin: &Path, peripheriques: bool) -> bool {
     false
 }
 
+/// Un `..` du chemin remonterait-il au-dessus de sa racine (ou de son
+/// préfixe) ? `reduire_sur_le_texte` l'ignorerait sans rien dire (KOB-411).
+fn remonte_au_dessus_de_la_racine(chemin: &Path) -> bool {
+    use std::path::Component;
+    let mut profondeur = 0usize;
+    for composant in chemin.components() {
+        match composant {
+            Component::Normal(_) => profondeur += 1,
+            Component::ParentDir if profondeur == 0 => return true,
+            Component::ParentDir => profondeur -= 1,
+            _ => {}
+        }
+    }
+    false
+}
+
 /// `.` et `..` retirés sur le texte, sans remonter au-dessus de la racine ni
 /// du préfixe, sans rien lire sur le disque (KOB-352, Windows).
-#[cfg_attr(not(windows), allow(dead_code))]
 fn reduire_sur_le_texte(chemin: &Path) -> PathBuf {
     use std::path::Component;
     let mut reduit = PathBuf::new();
