@@ -1030,7 +1030,7 @@ fn lien_vers_le_reseau(chemin: &Path, peripheriques: bool) -> bool {
         if chemin_reseau(&cible.to_string_lossy())
             || !prefixe_local(&cible)
             || racine_sans_disque(&cible)
-            || (peripheriques && a_deux_points(&cible))
+            || (peripheriques && (a_deux_points(&cible) || lecteur_sans_racine(&cible)))
         {
             return true;
         }
