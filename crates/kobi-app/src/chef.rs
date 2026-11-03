@@ -3269,6 +3269,19 @@ impl<R: Runtime> Chef<R> {
         if self.a_livrer.is_empty() {
             return;
         }
+        // La dernière question attend encore sa réponse (réseau coupé, ou
+        // Kobi ramené au calme par le début d'une réunion…) : le résultat
+        // d'une tâche plus ancienne passe après elle. Montré avant, il
+        // devenait la dernière question, celle qui attendait n'était plus en
+        // cours et sa réponse arrivait sans être montrée ni lue (KOB-422).
+        let dernier = self.dernier;
+        if self
+            .historique
+            .iter()
+            .any(|b| b.tour == dernier && b.statut == "attente")
+        {
+            return;
+        }
         let activite = self.activite();
         // Kobi réfléchit sans question en cours (carte acceptée après la
         // réponse à une autre question, son tour parti en tâche) : rien ne
@@ -3280,7 +3293,6 @@ impl<R: Runtime> Chef<R> {
         // Pareil s'il répondait déjà : le tour s'est détaché en cours de
         // réponse (permission refusée sans carte), rien d'autre ne le ferait
         // sortir de « répond » (KOB-415).
-        let dernier = self.dernier;
         let la_sienne = matches!(activite, Some("reflechit" | "repond"))
             && match self.a_livrer.iter().position(|(tour, ..)| *tour == dernier) {
                 Some(i) => {
@@ -4750,6 +4762,124 @@ mod tests {
                 c.tick();
             }
             assert_eq!(c.activite(), Some("propose"), "les cartes attendent");
+        });
+    }
+
+    /// KOB-422 : le résultat d'une ancienne tâche arrive pendant qu'une
+    /// question attend le réseau. Il passe après sa réponse, qui est montrée
+    /// et lue ; avant, il prenait sa place de dernière question et la réponse
+    /// n'apparaissait que dans l'historique.
+    #[test]
+    fn resultat_d_une_tache_pendant_l_attente_du_reseau() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.recevoir(Message::Interpelle);
+            c.question("résume le projet".into(), true);
+            let tache = c.tour;
+            c.recevoir(Message::Cerveau(Retour::Detache {
+                tour: tache,
+                annonce: true,
+            }));
+            c.recevoir(Message::Interpelle);
+            c.question("et la revue ?".into(), true);
+            let autre = c.tour;
+            c.recevoir(Message::Cerveau(Retour::EnAttente {
+                tour: autre,
+                nombre: 1,
+            }));
+            let avancer = |c: &mut Chef<tauri::test::MockRuntime>| {
+                if let Some((_, e)) = c.calme_a {
+                    c.calme_a = Some((Instant::now(), e));
+                }
+                c.livrable_a = None;
+                c.tick();
+            };
+            for _ in 0..3 {
+                avancer(c);
+            }
+            c.recevoir(Message::Cerveau(Retour::Resultat {
+                tour: tache,
+                texte: "Le projet avance.".into(),
+            }));
+            for _ in 0..5 {
+                avancer(c);
+            }
+            assert_eq!(c.dernier, autre, "la question qui attend reste la dernière");
+            assert!(c.question_en_cours());
+            assert_eq!(c.a_livrer.len(), 1, "le résultat attend la réponse");
+            c.recevoir(Message::Cerveau(Retour::Fin {
+                tour: autre,
+                texte: "Vendredi.".into(),
+            }));
+            assert!(
+                matches!(c.calme_a, Some((_, Evenement::ReponseTerminee))),
+                "la réponse est montrée et lue : {:?}",
+                c.activite()
+            );
+            for _ in 0..8 {
+                avancer(c);
+            }
+            assert!(c.a_livrer.is_empty(), "le résultat est livré ensuite");
+            assert_eq!(c.dernier, tache);
+            assert!(
+                matches!(c.activite(), Some("calme") | None),
+                "{:?}",
+                c.activite()
+            );
+        });
+    }
+
+    /// KOB-422, trouvé aussi par le test de propriété (graine 1) : la
+    /// réunion démarre pendant qu'une question attend sa réponse et ramène
+    /// Kobi au calme ; le résultat d'une ancienne tâche arrive. Il passe
+    /// après la réponse, qui est montrée et lue.
+    #[test]
+    fn resultat_d_une_tache_apres_le_debut_d_une_reunion() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.recevoir(Message::Interpelle);
+            c.question("résume le projet".into(), true);
+            let tache = c.tour;
+            c.recevoir(Message::Cerveau(Retour::Detache {
+                tour: tache,
+                annonce: true,
+            }));
+            c.recevoir(Message::Interpelle);
+            c.question("non".into(), true);
+            c.recevoir(Message::Interpelle);
+            c.question("oui".into(), true);
+            let autre = c.tour;
+            c.commande(Intention::DemarrerReunion);
+            let avancer = |c: &mut Chef<tauri::test::MockRuntime>| {
+                if let Some((_, e)) = c.calme_a {
+                    c.calme_a = Some((Instant::now(), e));
+                }
+                c.livrable_a = None;
+                c.tick();
+            };
+            c.recevoir(Message::Cerveau(Retour::Resultat {
+                tour: tache,
+                texte: "Le projet avance.".into(),
+            }));
+            for _ in 0..5 {
+                avancer(c);
+            }
+            assert_eq!(c.dernier, autre, "la question qui attend reste la dernière");
+            c.recevoir(Message::Cerveau(Retour::Fin {
+                tour: autre,
+                texte: "D'accord.".into(),
+            }));
+            assert!(
+                matches!(c.calme_a, Some((_, Evenement::ReponseTerminee))),
+                "la réponse est montrée et lue : {:?}",
+                c.activite()
+            );
+            for _ in 0..8 {
+                avancer(c);
+            }
+            assert!(c.a_livrer.is_empty(), "le résultat est livré ensuite");
+            assert_eq!(c.dernier, tache);
+            assert_eq!(etat(&c.app).etat, "reunion");
         });
     }
 
