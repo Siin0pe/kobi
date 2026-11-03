@@ -651,8 +651,10 @@ impl Ecouteur {
                 // L'adresse se juge sur la phrase qui porte le nom (KOB-276).
                 Some((adresse, q)) => {
                     // « Ok Kobi. », « Non Kobi » sans carte qui attend : un
-                    // appel seul, la question suit (KOB-378).
+                    // appel qui commence, la question suit ; pas la phrase
+                    // d'avant, souvent celle d'un autre (KOB-378).
                     let q = if reponse_devant_le_nom(texte, &q) && !self.carte_ouverte(t) {
+                        self.precedent = None;
                         String::new()
                     } else {
                         q
@@ -1722,9 +1724,11 @@ mod tests {
                 })
                 .collect()
         };
-        // En réunion.
+        // En réunion, juste après la phrase d'un autre.
         let mut e = Ecouteur::new(false);
-        assert_eq!(e.segment("Ok Kobi.", true, 1.0), vec![Interpeller]);
+        assert!(e.segment("On garde la date.", true, 0.2).is_empty());
+        assert_eq!(e.segment("Ok Kobi", false, 0.6), vec![Interpeller]);
+        assert_eq!(e.segment("Ok Kobi.", true, 1.0), vec![]);
         assert_eq!(
             envois(&e.segment("résume les décisions", true, 2.5)),
             ["résume les décisions"]
