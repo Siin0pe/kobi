@@ -2166,6 +2166,7 @@ impl<R: Runtime> Chef<R> {
 
     fn validation_fermee(&mut self, id: &str, reponse: crate::validation::Reponse) {
         let suivante = self.validations.fermer(id);
+        self.oublier_la_patience(reponse.acceptee());
         // Une carte MCP de la conversation attend encore : c'est elle qui
         // décidera, Kobi reste en proposition ; refusée, une carte des notes
         // venue du calme l'y garde aussi (KOB-338, KOB-380).
@@ -2730,6 +2731,7 @@ impl<R: Runtime> Chef<R> {
                 let _ = self.app.emit(EVENEMENT_CARTE, &ui);
                 self.cartes_ouvertes.remove(&carte);
                 self.si_plus_aucune_carte();
+                self.oublier_la_patience(accepte == Some(true));
                 let des_notes = self.cartes_des_notes.remove(&carte);
                 // La carte de la conversation de nouveau affichée s'annonce.
                 self.annoncer_carte_mcp();
@@ -3121,6 +3123,14 @@ impl<R: Runtime> Chef<R> {
         }
     }
 
+    /// Carte refusée : Kobi ne s'occupera de rien, la patience remise n'a
+    /// plus de sens (KOB-385).
+    fn oublier_la_patience(&mut self, acceptee: bool) {
+        if !acceptee && self.patience_reportee.take().is_some() {
+            tracing::info!("patience remise oubliée : carte refusée");
+        }
+    }
+
     /// Une carte attend-elle la décision de l'utilisateur : carte de Kobi,
     /// ou carte MCP de la conversation affichée ?
     fn carte_attend(&self) -> bool {
@@ -3130,14 +3140,21 @@ impl<R: Runtime> Chef<R> {
                 .is_some_and(|carte| !self.cartes_des_notes.contains_key(&carte))
     }
 
-    /// Patience remise pendant une carte (KOB-385) : dite si la tâche tourne
+    /// Patience remise pendant une carte (KOB-385) : dite si le tour tourne
     /// encore [`cerveau::PATIENCE`] après la dernière décision ; oubliée si
-    /// son résultat est arrivé (ou la carte refusée).
+    /// sa réponse est arrivée, s'il a été interrompu, ou si une carte a été
+    /// refusée (`oublier_la_patience`).
     fn patience_en_attente(&mut self) {
         let Some((tour, libre_depuis)) = self.patience_reportee else {
             return;
         };
-        if !self.taches.contains_key(&tour) {
+        // Le tour d'une carte MCP n'est pas une tâche annoncée (`taches`) :
+        // c'est sa bulle qui dit s'il tourne encore.
+        let en_cours = !self.interrompus.contains(&tour)
+            && self
+                .bulle(tour)
+                .is_some_and(|b| matches!(b.statut, "attente" | "reponse" | "tache"));
+        if !en_cours {
             self.patience_reportee = None;
         } else if self.carte_attend() {
             self.patience_reportee = Some((tour, None));
@@ -4272,6 +4289,52 @@ mod tests {
                 texte: "Rappel ajouté.".into(),
             }));
             c.tick();
+            assert!(c.patience_reportee.is_none());
+            // Carte MCP de la conversation (tour détaché sans annonce) :
+            // remise, le délai repart tant qu'une carte attend, puis dite.
+            c.question("écris dans le carnet".into(), true);
+            let tour = c.tour;
+            c.recevoir(Message::Cerveau(Retour::Carte {
+                tour,
+                carte: 1,
+                outil: "mcp__carnet__ecrire_note".into(),
+                entree: serde_json::json!({ "texte": "relire" }),
+            }));
+            c.recevoir(Message::Cerveau(Retour::Detache {
+                tour,
+                annonce: false,
+            }));
+            attendre(c);
+            c.recevoir(Message::Cerveau(Retour::Patience { tour }));
+            c.tick();
+            assert_eq!(c.patience_reportee, Some((tour, None)));
+            c.recevoir(Message::Cerveau(Retour::CarteFermee {
+                carte: 1,
+                accepte: Some(true),
+            }));
+            c.tick();
+            assert!(matches!(c.patience_reportee, Some((t, Some(_))) if t == tour));
+            c.validation_ouverte("v3".into(), "Ajoute un rappel");
+            c.tick();
+            assert_eq!(c.patience_reportee, Some((tour, None)), "le délai repart");
+            c.validation_fermee("v3", crate::validation::Reponse::Accepte);
+            attendre(c);
+            c.patience_reportee = Some((tour, Some(Instant::now() - cerveau::PATIENCE)));
+            c.tick();
+            assert!(c.patience_reportee.is_none());
+            assert!(crate::voix::est_ma_voix(&c.app, &patience));
+            attendre(c);
+            // Carte refusée : la patience remise est oubliée.
+            c.question("ajoute un rappel pour le dentiste".into(), true);
+            let tour = c.tour;
+            c.recevoir(Message::Cerveau(Retour::Detache {
+                tour,
+                annonce: true,
+            }));
+            c.validation_ouverte("v4".into(), "Ajoute un rappel");
+            c.recevoir(Message::Cerveau(Retour::Patience { tour }));
+            assert!(c.patience_reportee.is_some());
+            c.validation_fermee("v4", crate::validation::Reponse::Refuse);
             assert!(c.patience_reportee.is_none());
         });
     }
