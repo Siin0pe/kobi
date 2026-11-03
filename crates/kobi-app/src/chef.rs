@@ -482,6 +482,10 @@ pub struct Chef<R: Runtime> {
     /// (KOB-385) : son tour, et depuis quand plus aucune carte n'attend. Dit
     /// seulement si la tâche tourne encore [`cerveau::PATIENCE`] après.
     patience_reportee: Option<(u64, Option<Instant>)>,
+    /// Tours dont une carte MCP de la conversation a été acceptée : ils
+    /// continuent, un refus d'une autre de leurs cartes n'oublie pas leur
+    /// patience remise (KOB-396).
+    tours_acceptes: HashSet<u64>,
     /// Question dont l'attente du réseau montre l'Oups : une carte ou sa
     /// réponse l'acquitte (KOB-386), pas une autre erreur.
     oups_du_reseau: Option<u64>,
@@ -890,6 +894,7 @@ impl<R: Runtime> Chef<R> {
             validation_a_dire: None,
             question_a_la_carte: 0,
             patience_reportee: None,
+            tours_acceptes: HashSet::new(),
             oups_du_reseau: None,
             acceptee_en_attente: None,
             tours_des_cartes: HashMap::new(),
@@ -2193,7 +2198,7 @@ impl<R: Runtime> Chef<R> {
 
     fn validation_fermee(&mut self, id: &str, reponse: crate::validation::Reponse) {
         let suivante = self.validations.fermer(id);
-        self.oublier_la_patience(reponse.acceptee());
+        self.oublier_la_patience(reponse.acceptee(), None);
         // Une carte MCP de la conversation attend encore : c'est elle qui
         // décidera, Kobi reste en proposition ; refusée, une carte des notes
         // venue du calme l'y garde aussi (KOB-338, KOB-380).
@@ -2760,7 +2765,10 @@ impl<R: Runtime> Chef<R> {
                 let _ = self.app.emit(EVENEMENT_CARTE, &ui);
                 self.cartes_ouvertes.remove(&carte);
                 self.si_plus_aucune_carte();
-                self.oublier_la_patience(accepte == Some(true));
+                // Une carte des notes n'a pas de tour retenu : acceptée, elle ne
+                // fait continuer aucune tâche.
+                let tour_de_la_carte = self.tours_des_cartes.get(&carte).copied();
+                self.oublier_la_patience(accepte == Some(true), tour_de_la_carte);
                 let des_notes = self.cartes_des_notes.remove(&carte);
                 // La carte de la conversation de nouveau affichée s'annonce.
                 self.annoncer_carte_mcp();
@@ -3163,11 +3171,29 @@ impl<R: Runtime> Chef<R> {
     }
 
     /// Carte refusée : Kobi ne s'occupera de rien, la patience remise n'a
-    /// plus de sens (KOB-385).
-    fn oublier_la_patience(&mut self, acceptee: bool) {
-        if !acceptee && self.patience_reportee.take().is_some() {
+    /// plus de sens (KOB-385). Sauf si une carte MCP de son tour a déjà été
+    /// acceptée : la tâche continue, sa patience sera dite si elle tarde, et
+    /// oubliée si elle finit d'abord (KOB-396). Le tour d'une carte de Kobi
+    /// n'est pas connu : acceptée, elle n'est pas retenue.
+    fn oublier_la_patience(&mut self, acceptee: bool, tour: Option<u64>) {
+        if acceptee {
+            if let Some(tour) = tour {
+                self.tours_acceptes.insert(tour);
+            }
+        } else if self
+            .patience_reportee
+            .is_some_and(|(t, _)| !self.tours_acceptes.contains(&t))
+        {
+            self.patience_reportee = None;
             tracing::info!("patience remise oubliée : carte refusée");
         }
+        // Seuls comptent les tours qui tournent encore.
+        let historique = &self.historique;
+        self.tours_acceptes.retain(|t| {
+            historique
+                .iter()
+                .any(|b| b.tour == *t && matches!(b.statut, "attente" | "reponse" | "tache"))
+        });
     }
 
     /// Une carte attend-elle la décision de l'utilisateur : carte de Kobi,
@@ -7270,6 +7296,75 @@ mod tests {
             }
             assert!(c.a_livrer.is_empty());
             assert_eq!(c.activite(), Some("repond"));
+        });
+    }
+
+    /// KOB-396 : deux cartes de la même tâche, la première acceptée, la
+    /// dernière refusée : la tâche continue, sa patience remise n'est pas
+    /// oubliée et sera dite si elle tarde. Toutes refusées, elle l'est.
+    #[test]
+    fn patience_gardee_quand_une_carte_a_ete_acceptee() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            let carte = |tour, carte| {
+                Message::Cerveau(Retour::Carte {
+                    tour,
+                    carte,
+                    outil: "mcp__linear__save_issue".into(),
+                    entree: serde_json::json!({"title": "Corriger la connexion"}),
+                })
+            };
+            let fermee = |carte, accepte| {
+                Message::Cerveau(Retour::CarteFermee {
+                    carte,
+                    accepte: Some(accepte),
+                })
+            };
+            c.recevoir(Message::Interpelle);
+            c.envoyer("Écris deux notes".into(), None, true);
+            let tour = c.dernier;
+            c.recevoir(Message::Cerveau(Retour::Detache {
+                tour,
+                annonce: true,
+            }));
+            c.recevoir(carte(tour, 1));
+            c.recevoir(fermee(1, true));
+            c.recevoir(carte(tour, 2));
+            c.recevoir(Message::Cerveau(Retour::Patience { tour }));
+            assert!(c.patience_reportee.is_some(), "remise : une carte attend");
+            c.recevoir(fermee(2, false));
+            assert!(
+                c.patience_reportee.is_some(),
+                "la première carte acceptée : la tâche continue"
+            );
+            // La tâche tarde : sa patience est dite.
+            c.patience_reportee = Some((tour, Some(Instant::now() - cerveau::PATIENCE)));
+            c.tick();
+            assert!(c.patience_reportee.is_none());
+            assert!(c.annoncees.contains(&tour), "« Je m'en occupe » dit");
+        });
+        // Une seule carte, refusée : la patience est oubliée.
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.recevoir(Message::Interpelle);
+            c.envoyer("Écris une note".into(), None, true);
+            let tour = c.dernier;
+            c.recevoir(Message::Cerveau(Retour::Detache {
+                tour,
+                annonce: true,
+            }));
+            c.recevoir(Message::Cerveau(Retour::Carte {
+                tour,
+                carte: 1,
+                outil: "mcp__linear__save_issue".into(),
+                entree: serde_json::json!({"title": "Corriger la connexion"}),
+            }));
+            c.recevoir(Message::Cerveau(Retour::Patience { tour }));
+            c.recevoir(Message::Cerveau(Retour::CarteFermee {
+                carte: 1,
+                accepte: Some(false),
+            }));
+            assert!(c.patience_reportee.is_none());
         });
     }
 }
