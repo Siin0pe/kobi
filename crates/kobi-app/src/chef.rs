@@ -3112,13 +3112,15 @@ impl<R: Runtime> Chef<R> {
     /// attend la suite sans qu'on redise « Kobi » (KOB-133).
     fn lire(&mut self, texte: &str) {
         let lecture = LECTURE_MIN + Duration::from_millis(60 * texte.chars().count() as u64);
-        // Un Oups affiché pendant la réponse garde son acquittement : le
-        // retour au calme de la lecture n'est pas accepté depuis « oups », et
-        // Kobi y restait pour de bon (KOB-392).
-        if !self
-            .calme_a
-            .is_some_and(|(_, e)| matches!(e, Evenement::Acquitter))
-        {
+        // Un Oups encore affiché garde son acquittement : le retour au calme
+        // de la lecture n'est pas accepté depuis « oups », et Kobi y restait
+        // pour de bon (KOB-392). Déjà acquitté (réponse arrivée après
+        // l'attente du réseau, KOB-386), il laisse place à la lecture.
+        let oups_affiche = self.activite() == Some("oups")
+            && self
+                .calme_a
+                .is_some_and(|(_, e)| matches!(e, Evenement::Acquitter));
+        if !oups_affiche {
             self.calme_a = Some((
                 Instant::now() + lecture.min(Duration::from_secs(25)),
                 Evenement::ReponseTerminee,
@@ -4410,6 +4412,27 @@ mod tests {
             );
             // Délai de l'Oups passé : retour au calme.
             c.calme_a = Some((Instant::now(), Evenement::Acquitter));
+            c.tick();
+            assert_eq!(c.activite(), Some("calme"));
+            // Oups du réseau déjà acquitté par la réponse (KOB-386) : sa fin
+            // arme la lecture, pas l'ancien acquittement, et Kobi revient au
+            // calme.
+            c.recevoir(Message::Interpelle);
+            c.question("et la revue ?".into(), true);
+            let tour = c.tour;
+            c.recevoir(Message::Cerveau(Retour::EnAttente { tour, nombre: 1 }));
+            assert_eq!(c.activite(), Some("oups"));
+            c.recevoir(Message::Cerveau(Retour::Texte {
+                tour,
+                texte: "Vendredi. ".into(),
+            }));
+            assert_eq!(c.activite(), Some("repond"));
+            c.recevoir(Message::Cerveau(Retour::Fin {
+                tour,
+                texte: "Vendredi.".into(),
+            }));
+            assert!(matches!(c.calme_a, Some((_, Evenement::ReponseTerminee))));
+            c.calme_a = Some((Instant::now(), Evenement::ReponseTerminee));
             c.tick();
             assert_eq!(c.activite(), Some("calme"));
         });
