@@ -4724,6 +4724,35 @@ mod tests {
             c.recevoir(fermee(1, None));
             assert_ne!(c.activite(), Some("reflechit"));
         });
+        // Comme avec le vrai cerveau : la question part, son tour est détaché
+        // par ses cartes, et sa réponse arrive par `Resultat` (KOB-387).
+        for reunion in [true, false] {
+            let (app, _dir) = chef_en_essai();
+            avec_chef(&app, |c| {
+                if reunion {
+                    c.commande(Intention::DemarrerReunion);
+                }
+                c.recevoir(Message::Interpelle);
+                c.envoyer("Crée les deux tickets".into(), None, true);
+                let tour = c.dernier;
+                c.recevoir(Message::Cerveau(Retour::Detache {
+                    tour,
+                    annonce: false,
+                }));
+                c.recevoir(carte(tour, 1));
+                std::thread::sleep(Duration::from_millis(2));
+                c.recevoir(carte(tour, 2));
+                c.recevoir(fermee(2, Some(true)));
+                c.recevoir(fermee(1, Some(false)));
+                assert_eq!(c.activite(), Some("reflechit"), "réunion : {reunion}");
+                c.recevoir(Message::Cerveau(Retour::Resultat {
+                    tour,
+                    texte: "J'ai créé le second ticket.".into(),
+                }));
+                assert!(c.a_livrer.is_empty());
+                assert_eq!(c.activite(), Some("repond"));
+            });
+        }
     }
 
     /// KOB-379 : « Kobi, oui » sur une carte quand une autre attend : Kobi
