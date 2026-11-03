@@ -1,8 +1,59 @@
 # Kobi
 
-Assistant vocal de bureau, local et open source : on l'appelle par son nom, et en réunion il transcrit en local, prend des notes, répond quand on l'interpelle et agit via vos MCP après un clic de confirmation. Fonctionne avec Claude Code.
+Assistant vocal de bureau, local et open source : on l'appelle par son nom, et en réunion il transcrit en local, prend des notes, répond quand on l'interpelle et agit via vos MCP après un clic de confirmation. Fonctionne avec Claude Code, ou sans lui avec une clé de l'API Anthropic.
 
-Projet en cours de construction, pas encore utilisable.
+![Kobi en réunion : il prend des notes, on l'interpelle, il cherche dans le code et Linear, répond, puis propose un ticket créé d'un clic](docs/demo/kobi-demo.gif)
+
+Projet en cours de construction : pas encore de version publiée.
+
+## Ce que fait Kobi
+
+- **On lui parle.** « Kobi, … » au micro, ou un raccourci clavier (Ctrl+Maj+Espace pour parler, Ctrl+Alt+K pour écrire). Il répond dans une bulle, à voix haute s'il est réglé ainsi, et « stop » le fait taire.
+- **En réunion** (Ctrl+Maj+R, ou « Kobi, enregistre la réunion »), il transcrit votre micro et le son de l'ordinateur (les autres participants en visio), prend des notes par blocs (décisions, actions, questions) et écrit le compte rendu à la fin.
+- **Il cherche pour vous**, dans vos dossiers de code (en lecture seule) et vos outils MCP (Linear, Notion…), et montre chaque étape de son travail.
+- **Il n'agit qu'après confirmation.** Écrire un fichier, lancer une commande ou créer un ticket passe par une carte « Valider / Refuser », sauf ce que vous avez autorisé dans les permissions.
+- **Le Carnet** garde vos réunions, conversations et rappels en fichiers Markdown lisibles, consultables et cherchables dans l'app.
+- **En français ou en anglais**, au choix ou selon la langue du système, sans relancer.
+
+## Confidentialité
+
+- **L'audio ne quitte jamais votre ordinateur.** La transcription (Nemotron, par sherpa-onnx) et la voix de Kobi (Piper) tournent en local, sur le processeur. Aucun son n'est enregistré : hors réunion, Kobi écoute seulement pour entendre son nom, et seul le texte de vos échanges avec lui est gardé dans le Carnet.
+- **Ce qui part vers Claude**, par votre propre Claude Code ou par l'API d'Anthropic avec votre clé : le texte de vos questions, les extraits de transcription utiles aux notes et au compte rendu, et ce que Claude lit dans les dossiers et outils que vous lui avez ouverts. Les conditions d'Anthropic s'appliquent à ces échanges, comme à tout usage de Claude Code ou de l'API.
+- **Votre clé API**, si vous en utilisez une, est gardée dans le gestionnaire d'identifiants du système, jamais dans `config.toml` ni dans les journaux.
+- **Vos MCP** reçoivent seulement ce que Kobi leur demande, après votre confirmation pour toute écriture. Leurs secrets sont gardés dans le trousseau du système.
+- **Tout est stocké chez vous**, dans `~/Kobi` par défaut (dossier réglable) : réunions, conversations, rappels et `config.toml`, avec une durée de conservation réglable. Pas de compte, pas de télémétrie.
+- **Seuls téléchargements** : les modèles de transcription et de voix, au premier lancement, depuis les publications de sherpa-onnx sur GitHub.
+- **En réunion**, Kobi propose un message à coller dans le chat pour prévenir les participants.
+
+Kobi est un projet indépendant : il utilise Claude Code, mais il n'est ni affilié à Anthropic ni approuvé par Anthropic.
+
+## Installer depuis les sources
+
+Il faut :
+
+- [Rust](https://rustup.rs) (la version est fixée par `rust-toolchain.toml`) et [Node.js](https://nodejs.org) 20 ou plus ;
+- les dépendances système de Tauri 2 ([prérequis](https://v2.tauri.app/start/prerequisites/) : WebView2 sous Windows, `webkit2gtk-4.1` et ALSA/PulseAudio sous Linux) ;
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code), installé et connecté (`claude auth login`), **ou** une clé de l'API Anthropic, à saisir dans Réglages › Clé API.
+
+Le cerveau se choisit avec `brain` dans `config.toml` : `"auto"` (par défaut) prend Claude Code s'il est installé, sinon la clé API ; `"claude-code"` ou `"api"` l'imposent. Avec la clé API, Kobi lit lui-même vos dossiers de code (en lecture seule, sans jamais sortir des dossiers déclarés) et appelle vos MCP.
+
+```sh
+npm --prefix ui ci
+npm --prefix ui run build
+cargo build --release -p kobi-app --features custom-protocol
+./target/release/kobi
+```
+
+Au premier lancement, Kobi vous guide en dix étapes : langue, Claude Code, micro, son de l'ordinateur, modèle de transcription (téléchargé, environ 450 Mo), dossiers de code, outils MCP, démarrage avec le système, un essai « Kobi, bonjour » et les raccourcis. Tout se retrouve ensuite dans les Réglages.
+
+Pour développer : `npm --prefix ui run dev` dans un terminal, `cargo run -p kobi-app` dans un autre (l'interface se recharge à chaud). Les tests : `cargo test --workspace` et `npm --prefix ui test` (Playwright). La CI (GitHub Actions) lance les tests Rust sous Linux, Windows et macOS, et ceux de l'interface sous Linux. Voir aussi [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Guides
+
+- [Ajouter un moteur de transcription](docs/moteur-transcription.md)
+- [Stockage et conservation](docs/stockage.md)
+- [Démarrage avec le système](docs/demarrage.md)
+- Régénérer le GIF de démonstration : `npm --prefix ui run demo-gif` (Chromium de Playwright et ffmpeg ; la scène est dans `ui/tests/demo-gif.spec.ts`)
 
 ## Piloter Kobi : CLI et MCP
 
