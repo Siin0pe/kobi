@@ -314,11 +314,12 @@ fn lien_vers_un_chemin_reseau_refuse_sous_windows() {
     fs::create_dir_all(racine.join("vendor")).unwrap();
     let vendor = racine.join("vendor");
     symlink_dir(&vendor, racine.join("lib")).unwrap();
-    // Un dossier à point final ne s'écrit qu'en verbatim, et sa cible ne
-    // peut pas être rendue sans le préfixe : `lib2` reproduit KOB-367.
-    let vendor_point = PathBuf::from(format!(r"\\?\{}.", vendor.display()));
-    fs::create_dir_all(&vendor_point).unwrap();
-    symlink_dir(&vendor_point, racine.join("lib2")).unwrap();
+    // Une cible de plus de 260 caractères ne peut pas être rendue sans le
+    // préfixe : `lib2` reproduit KOB-367, sans nom ambigu dans la cible.
+    let long = vendor.join("a".repeat(120)).join("b".repeat(120));
+    let long = PathBuf::from(format!(r"\\?\{}", long.display()));
+    fs::create_dir_all(&long).unwrap();
+    symlink_dir(&long, racine.join("lib2")).unwrap();
     assert!(
         std::fs::read_link(racine.join("lib2"))
             .unwrap()
@@ -380,8 +381,18 @@ fn chemins_que_win32_traduit_juges_tels_que_nt_les_ouvre() {
             chemin.display()
         );
     }
+    // Par la lecture : B en absolu non verbatim (relatif, il est joint à la
+    // base verbatim et NT ouvre `x.` tel quel, absent) ; A en relatif. Un
+    // lecteur sans racine (`C:evil`) est refusé avant toute sonde.
     let l = lecteur(&dir);
-    for chemin in [r"lib3\x.", r"lib3\x ", r"lib\x."] {
+    let b_absolu = |nom: &str| racine.join(nom).display().to_string();
+    for chemin in [
+        b_absolu(r"lib3\x."),
+        b_absolu(r"lib3\x "),
+        r"lib\x.".to_string(),
+        "C:evil".to_string(),
+        r"C:lib\x.".to_string(),
+    ] {
         let e = l.lire(&json!({ "file_path": chemin })).unwrap_err();
         assert!(e.contains("chemin réseau"), "{chemin} : {e}");
     }

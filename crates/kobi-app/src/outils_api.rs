@@ -272,7 +272,12 @@ impl Lecteur {
         let brut = reduire_sur_le_texte(&brut);
         // Sous Windows, le parcours refuse aussi un nom de périphérique DOS,
         // du chemin comme des cibles de liens (KOB-353).
-        if !prefixe_local(&brut) || lien_vers_le_reseau(&brut, cfg!(windows)) {
+        // Un lecteur sans racine (`C:evil`) se résout depuis le dossier
+        // courant de ce lecteur, que le parcours ne connaît pas (KOB-398).
+        if !prefixe_local(&brut)
+            || lecteur_sans_racine(&brut)
+            || lien_vers_le_reseau(&brut, cfg!(windows))
+        {
             return Err(refus());
         }
         let resolu = brut.canonicalize().map_err(|e| format!("{chemin} : {e}"))?;
@@ -999,8 +1004,13 @@ fn lien_vers_le_reseau(chemin: &Path, peripheriques: bool) -> bool {
         let candidat = resolu.join(&morceau);
         // Sondé tel que NT l'ouvrira, sans traduction Win32 (KOB-398).
         let sonde = pour_nt(&candidat);
-        let est_un_lien =
-            std::fs::symlink_metadata(&sonde).is_ok_and(|m| m.file_type().is_symlink());
+        // Sous Windows, une sonde qui échoue autrement qu'« introuvable »
+        // (accès refusé, nom invalide) ne dit pas ce que NT suivra : refusé.
+        let est_un_lien = match std::fs::symlink_metadata(&sonde) {
+            Ok(m) => m.file_type().is_symlink(),
+            Err(e) if peripheriques && e.kind() != std::io::ErrorKind::NotFound => return true,
+            Err(_) => false,
+        };
         if !est_un_lien {
             resolu = candidat;
             continue;
@@ -1073,11 +1083,23 @@ fn racine_sans_disque(cible: &Path) -> bool {
 fn pour_nt(chemin: &Path) -> PathBuf {
     #[cfg(windows)]
     if let Some(std::path::Component::Prefix(p)) = chemin.components().next() {
-        if matches!(p.kind(), std::path::Prefix::Disk(_)) {
-            return PathBuf::from(format!(r"\\?\{}", chemin.display()));
+        if matches!(p.kind(), std::path::Prefix::Disk(_)) && chemin.has_root() {
+            // Sans perte : `display` changerait un UTF-16 isolé.
+            let mut verbatim = std::ffi::OsString::from(r"\\?\");
+            verbatim.push(chemin.as_os_str());
+            return PathBuf::from(verbatim);
         }
     }
     chemin.to_path_buf()
+}
+
+/// Un préfixe de lecteur sans racine (`C:evil`) : Win32 le résout depuis le
+/// dossier courant de ce lecteur (KOB-398, Windows).
+fn lecteur_sans_racine(chemin: &Path) -> bool {
+    matches!(
+        chemin.components().next(),
+        Some(std::path::Component::Prefix(_))
+    ) && !chemin.has_root()
 }
 
 /// Un nom à point ou espace final (`x.`, `d `) : Win32 les retire d'un
