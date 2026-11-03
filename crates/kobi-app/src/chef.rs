@@ -474,6 +474,12 @@ pub struct Chef<R: Runtime> {
     /// celle qui attend sa réponse ou si l'utilisateur a coupé la voix
     /// depuis (coupures de la voix au moment de l'ouverture).
     validation_a_dire: Option<(String, u64)>,
+    /// Question en attente du réseau (KOB-377) : son énoncé, muet, est lâché
+    /// pour que la voix reste libre (« Je le fais ? », annonces) ; sa réponse
+    /// repart sur un énoncé neuf quand elle arrive et que la voix est libre,
+    /// sauf si l'utilisateur a coupé la voix depuis (coupures au moment de
+    /// l'attente), comme les annonces.
+    voix_reportee: Option<(u64, u64)>,
     /// Dernière question répondue et sa réponse (« répète », « plus court »…).
     derniere: Option<(String, String)>,
     /// Tâches longues en cours : début et question (« où en est… ? ») ;
@@ -850,6 +856,7 @@ impl<R: Runtime> Chef<R> {
             suite_apres_voix: false,
             annonces: Default::default(),
             validation_a_dire: None,
+            voix_reportee: None,
             derniere: None,
             taches: BTreeMap::new(),
             annoncees: Default::default(),
@@ -1233,6 +1240,7 @@ impl<R: Runtime> Chef<R> {
         self.transition(&[Evenement::QuestionEnvoyee]);
         self.ranger(self.tour, Qui::Moi, &texte, voix);
         self.voix = Some((self.tour, crate::voix::Reponse::new(&self.app)));
+        self.voix_reportee = None;
         let notes = self
             .reunion
             .as_ref()
@@ -2080,6 +2088,7 @@ impl<R: Runtime> Chef<R> {
         tracing::info!(tour, en_cours, "réponse interrompue");
         crate::voix::taire(&self.app, "interruption");
         self.voix = None;
+        self.voix_reportee = None;
         self.suite_apres_voix = false;
         // On vient de faire taire Kobi : pas d'annonce juste après.
         if !self.annonces.is_empty() {
@@ -2329,6 +2338,7 @@ impl<R: Runtime> Chef<R> {
                     self.transition(&[Evenement::ReponseCommence]);
                     let _ = self.app.emit(EVENEMENT_REPONSE, &texte);
                 }
+                self.reprendre_voix();
                 if let Some((t, r)) = &mut self.voix {
                     if *t == tour {
                         r.morceau(&self.app, &texte);
@@ -2350,6 +2360,8 @@ impl<R: Runtime> Chef<R> {
                     b.reponse.clone_from(&texte);
                     b.statut = "fini";
                 }
+                let reportee = self.voix_reportee.is_some_and(|(t, _)| t == tour);
+                self.reprendre_voix();
                 if let Some((t, mut r)) = self.voix.take() {
                     if t == tour {
                         r.fin(&self.app, &texte);
@@ -2360,7 +2372,11 @@ impl<R: Runtime> Chef<R> {
                 if tour == self.dernier {
                     self.transition(&[Evenement::ReponseCommence]);
                     let _ = self.app.emit(EVENEMENT_REPONSE, &texte);
-                    self.lire(&texte);
+                    // Réponse reportée (KOB-377) : la lecture commence quand
+                    // elle est dite, ou abandonnée (`reprendre_voix`).
+                    if !reportee {
+                        self.lire(&texte);
+                    }
                 }
                 self.emettre_historique();
             }
@@ -2374,6 +2390,9 @@ impl<R: Runtime> Chef<R> {
                     if let Some((_, r)) = self.voix.take() {
                         r.lacher(&self.app);
                     }
+                }
+                if self.voix_reportee.is_some_and(|(t, _)| t == tour) {
+                    self.voix_reportee = None;
                 }
                 if annonce {
                     let question = self
@@ -2429,6 +2448,9 @@ impl<R: Runtime> Chef<R> {
                         r.lacher(&self.app);
                     }
                 }
+                if self.voix_reportee.is_some_and(|(t, _)| t == tour) {
+                    self.voix_reportee = None;
+                }
                 self.taches.remove(&tour);
                 // La cause en une phrase et la marche à suivre (KOB-68).
                 let (titre, explication) = crate::pannes::pour_l_utilisateur(&message);
@@ -2452,6 +2474,17 @@ impl<R: Runtime> Chef<R> {
                     // Pas « tache » : l'Oups dit déjà qu'elle attend, sans
                     // notification en double (sobriété).
                     b.statut = "attente";
+                }
+                // La question repart de zéro (le plus souvent sans rien avoir
+                // montré, KOB-370) : la voix est libre pendant l'attente, ce
+                // qui était confié se dit encore, et la réponse repartira sur
+                // un énoncé neuf.
+                if self.voix.as_ref().is_some_and(|(t, _)| *t == tour) {
+                    if let Some((_, r)) = self.voix.take() {
+                        r.lacher(&self.app);
+                    }
+                    self.voix_reportee = Some((tour, crate::voix::interruptions(&self.app)));
+                    self.annonce_en_attente();
                 }
                 self.emettre_historique();
                 if tour == self.dernier {
@@ -3012,11 +3045,68 @@ impl<R: Runtime> Chef<R> {
         if self.annonces.len() < avant {
             tracing::info!("voix : annonce abandonnée (voix coupée ou réponse trop longue)");
         }
+        // Réponse reportée et voix coupée depuis : abandonnée tout de suite,
+        // même si la voix joue encore (KOB-377).
+        if self.voix_reportee.is_some_and(|(_, c)| c != coupures) {
+            self.reprendre_voix();
+        }
         if self.voix.is_none() && !crate::voix::occupee(&self.app) && !self.dire_validation() {
-            if let Some(annonce) = self.annonces.pop_front() {
-                crate::voix::dire(&self.app, &annonce.texte);
+            self.reprendre_voix();
+            if self.voix.is_none() && !crate::voix::occupee(&self.app) {
+                if let Some(annonce) = self.annonces.pop_front() {
+                    crate::voix::dire(&self.app, &annonce.texte);
+                }
             }
         }
+    }
+
+    /// Réponse d'une question qui a attendu le réseau (KOB-377) : elle se dit
+    /// sur un énoncé neuf, une fois arrivée et la voix libre, sans couper
+    /// « Je le fais ? » ni une annonce dits pendant l'attente ; « Je le
+    /// fais ? » en attente passe d'abord. Abandonnée si l'utilisateur a coupé
+    /// la voix depuis (il parle, « Kobi »…) : la réponse reste à l'écran.
+    fn reprendre_voix(&mut self) {
+        let Some((tour, coupures)) = self.voix_reportee else {
+            return;
+        };
+        if coupures != crate::voix::interruptions(&self.app) {
+            tracing::info!(tour, "voix : réponse reportée abandonnée, voix coupée");
+            self.voix_reportee = None;
+            // Déjà arrivée : sa lecture à l'écran ramène Kobi au calme.
+            let fini = self.bulle(tour).filter(|b| b.statut == "fini");
+            if let Some(texte) = fini.map(|b| b.reponse.clone()) {
+                if tour == self.dernier {
+                    self.lire(&texte);
+                }
+            }
+            return;
+        }
+        if self.voix.is_some()
+            || self.validation_a_dire.is_some()
+            || crate::voix::occupee(&self.app)
+        {
+            return;
+        }
+        let Some((statut, texte)) = self.bulle(tour).map(|b| (b.statut, b.reponse.clone())) else {
+            self.voix_reportee = None;
+            return;
+        };
+        match statut {
+            "attente" => return,
+            "reponse" => {
+                let mut r = crate::voix::Reponse::new(&self.app);
+                r.morceau(&self.app, &texte);
+                self.voix = Some((tour, r));
+            }
+            "fini" => {
+                crate::voix::dire(&self.app, &texte);
+                if tour == self.dernier {
+                    self.lire(&texte);
+                }
+            }
+            _ => {}
+        }
+        self.voix_reportee = None;
     }
 
     pub fn tick(&mut self) {
@@ -3732,6 +3822,133 @@ mod tests {
             assert!(c.validation_a_dire.is_none());
             assert!(!crate::voix::occupee(&c.app));
             c.validation_fermee("v3", crate::validation::Reponse::Refuse);
+        });
+    }
+
+    /// KOB-377 : une carte ouverte pendant qu'une question attend le réseau
+    /// est annoncée (la voix est libre) ; la réponse, arrivée pendant
+    /// « Je le fais ? », passe après, sur un énoncé neuf, sans le couper.
+    #[test]
+    fn carte_annoncee_pendant_l_attente_du_reseau() {
+        let (app, _dir) = chef_en_essai();
+        crate::voix::installer_factice(app.handle());
+        avec_chef(&app, |c| {
+            c.question("résume le projet Hermès".into(), true);
+            let tour = c.tour;
+            assert_eq!(c.voix.as_ref().map(|v| v.0), Some(tour));
+            c.recevoir(Message::Cerveau(Retour::EnAttente { tour, nombre: 1 }));
+            assert!(c.voix.is_none(), "la question en attente lâche son énoncé");
+            assert_eq!(c.voix_reportee.map(|v| v.0), Some(tour));
+            c.validation_ouverte("v1".into(), "Créer budget.md");
+            assert!(c.validation_a_dire.is_none(), "dit tout de suite");
+            assert!(crate::voix::est_ma_voix(&c.app, "Je le fais ?"));
+            // Le réseau revient pendant « Je le fais ? » : la réponse attend
+            // (chaque son factice dure 50 ms : vérifié s'il joue encore).
+            let occupee = crate::voix::occupee(&c.app);
+            let debut = "Le projet Hermès avance bien. Puis ";
+            c.recevoir(Message::Cerveau(Retour::Texte {
+                tour,
+                texte: debut.into(),
+            }));
+            if occupee {
+                assert!(c.voix.is_none());
+                assert_eq!(c.voix_reportee.map(|v| v.0), Some(tour));
+            }
+            let limite = Instant::now() + Duration::from_secs(5);
+            while c.voix.is_none() {
+                assert!(Instant::now() < limite, "réponse jamais reprise");
+                std::thread::sleep(Duration::from_millis(20));
+                c.tick();
+            }
+            assert!(c.voix_reportee.is_none());
+            let texte = "Le projet Hermès avance bien. Puis la revue est vendredi.";
+            c.recevoir(Message::Cerveau(Retour::Fin {
+                tour,
+                texte: texte.into(),
+            }));
+            assert!(crate::voix::est_ma_voix(
+                &c.app,
+                "Le projet Hermès avance bien."
+            ));
+            assert!(crate::voix::est_ma_voix(&c.app, "la revue est vendredi"));
+            c.validation_fermee("v1", crate::validation::Reponse::Accepte);
+            while crate::voix::occupee(&c.app) {
+                assert!(Instant::now() < limite, "voix restée occupée");
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            // Réponse arrivée entière pendant une annonce : dite après.
+            c.question("et le budget ?".into(), true);
+            let tour = c.tour;
+            c.recevoir(Message::Cerveau(Retour::EnAttente { tour, nombre: 1 }));
+            c.validation_ouverte("v2".into(), "Créer budget.md");
+            let occupee = crate::voix::occupee(&c.app);
+            let texte = "Le budget tient en une page.";
+            c.recevoir(Message::Cerveau(Retour::Fin {
+                tour,
+                texte: texte.into(),
+            }));
+            if occupee {
+                assert_eq!(c.voix_reportee.map(|v| v.0), Some(tour));
+                assert!(c.calme_a.is_none(), "la lecture attend la réponse dite");
+            }
+            let limite = Instant::now() + Duration::from_secs(5);
+            while c.voix_reportee.is_some() {
+                assert!(Instant::now() < limite, "réponse jamais dite");
+                std::thread::sleep(Duration::from_millis(20));
+                c.tick();
+            }
+            assert!(crate::voix::est_ma_voix(&c.app, texte));
+            assert!(c.calme_a.is_some());
+            c.validation_fermee("v2", crate::validation::Reponse::Refuse);
+            while crate::voix::occupee(&c.app) {
+                assert!(Instant::now() < limite, "voix restée occupée");
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            // L'utilisateur coupe la voix pendant l'attente (« Kobi… ») : la
+            // réponse arrivée ensuite reste à l'écran, sans voix.
+            c.question("et le planning de mars ?".into(), true);
+            let tour = c.tour;
+            c.recevoir(Message::Cerveau(Retour::EnAttente { tour, nombre: 1 }));
+            crate::voix::taire(&c.app, "essai");
+            let texte = "Le planning de mars est prêt.";
+            c.recevoir(Message::Cerveau(Retour::Fin {
+                tour,
+                texte: texte.into(),
+            }));
+            c.tick();
+            assert!(c.voix_reportee.is_none());
+            assert!(!crate::voix::occupee(&c.app));
+            assert!(!crate::voix::est_ma_voix(&c.app, texte));
+            assert!(c.calme_a.is_some());
+            // Réponse arrivée pendant « Je le fais ? », puis l'utilisateur
+            // parle par-dessus : rien n'est dit, mais Kobi revient au calme.
+            c.question("et le planning d'avril ?".into(), true);
+            let tour = c.tour;
+            c.recevoir(Message::Cerveau(Retour::EnAttente { tour, nombre: 1 }));
+            c.validation_ouverte("v3".into(), "Créer budget.md");
+            let texte = "Le planning d'avril est prêt.";
+            c.recevoir(Message::Cerveau(Retour::Fin {
+                tour,
+                texte: texte.into(),
+            }));
+            if c.voix_reportee.is_some() {
+                assert!(c.calme_a.is_none());
+                crate::voix::taire(&c.app, "essai");
+                c.tick();
+                assert!(c.voix_reportee.is_none());
+                assert!(!crate::voix::est_ma_voix(&c.app, texte));
+            }
+            assert!(c.calme_a.is_some(), "Kobi ne reste pas en « répond »");
+            c.validation_fermee("v3", crate::validation::Reponse::Refuse);
+            // Erreur après l'attente (réseau jamais revenu) : rien à reprendre.
+            c.question("et le planning ?".into(), true);
+            let tour = c.tour;
+            c.recevoir(Message::Cerveau(Retour::EnAttente { tour, nombre: 1 }));
+            c.recevoir(Message::Cerveau(Retour::Erreur {
+                tour,
+                message: "toujours pas de réseau".into(),
+            }));
+            assert!(c.voix_reportee.is_none());
         });
     }
 
