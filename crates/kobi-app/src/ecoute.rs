@@ -2682,22 +2682,28 @@ mod tests {
     /// aboutit, dans son fil, pas quand l'écoute relève le résultat.
     #[test]
     fn horloge_au_demarrage_du_flux() {
-        let ouverture = Ouverture::lancer_avec(|| {
+        // L'ouverture dit quand elle a fini : le test ne suppose plus que son
+        // fil démarre en moins de 100 ms, ce qu'un runner chargé ne tient pas
+        // (KOB-410).
+        let (ouvert_tx, ouvert_rx) = mpsc::channel();
+        let ouverture = Ouverture::lancer_avec(move || {
             let (_tx, rx) = mpsc::channel();
+            let _ = ouvert_tx.send(Instant::now());
             Ok((Ouvert::Fichier(rx), "fichier".into()))
         });
-        let avant = Instant::now();
+        let ouvert = ouvert_rx.recv_timeout(Duration::from_secs(5)).unwrap();
         // L'écoute relève le résultat 300 ms après (elle attendait ailleurs).
         std::thread::sleep(Duration::from_millis(300));
         let releve = Instant::now();
         let Some(Ok((_, _, demarre))) = ouverture.attendre(Duration::from_secs(5)) else {
             panic!("ouverture");
         };
+        // Pris à l'ouverture, pas au relevé : plus près de l'une que de l'autre.
+        assert!(demarre >= ouvert, "pris après l'ouverture");
         assert!(
-            demarre <= avant + Duration::from_millis(100),
-            "pris à l'ouverture"
+            demarre.duration_since(ouvert) < releve.duration_since(demarre),
+            "pris à l'ouverture, pas au relevé"
         );
-        assert!(releve.duration_since(demarre) >= Duration::from_millis(250));
     }
 
     /// KOB-297 : le porteur relaie encore une trame (B) entre la demande de
