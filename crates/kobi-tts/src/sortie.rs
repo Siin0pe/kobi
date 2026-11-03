@@ -325,14 +325,25 @@ mod haut_parleur {
         let lue = Arc::clone(file);
         let panne = Arc::clone(panne);
         let suivi = Mutex::new(super::SuiviErreurs::new());
+        let (frequence, canaux) = (config.sample_rate(), config.channels().max(1) as usize);
+        let mut joue = Vec::new();
         device
             .build_output_stream::<T, _, _>(
                 config.config(),
                 move |sortie: &mut [T], _| {
                     let mut file = lue.lock().unwrap_or_else(|e| e.into_inner());
-                    for x in sortie.iter_mut() {
-                        *x = T::from_sample(file.pop_front().unwrap_or(0.0));
+                    joue.clear();
+                    for (i, x) in sortie.iter_mut().enumerate() {
+                        let v = file.pop_front().unwrap_or(0.0);
+                        if i % canaux == 0 {
+                            joue.push(v);
+                        }
+                        *x = T::from_sample(v);
                     }
+                    drop(file);
+                    // Ce qui part vers la carte son, silences compris, et quand
+                    // (KOB-248).
+                    crate::reference::deposer(&joue, frequence, std::time::Instant::now());
                 },
                 move |e| {
                     use std::sync::atomic::Ordering;

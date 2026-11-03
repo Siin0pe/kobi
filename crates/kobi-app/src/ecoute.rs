@@ -218,6 +218,19 @@ fn raccourci_enregistrement() -> String {
         .unwrap_or_else(|| kobi_session::config::Config::default().hotkey_record)
 }
 
+/// Annulation de l'écho réglée (KOB-248) : relue à chaque voix de Kobi.
+fn annulation_echo_reglee() -> bool {
+    kobi_session::config::default_path()
+        .filter(|p| p.exists())
+        .map(|p| {
+            kobi_session::config::load_or_create(&p)
+                .config
+                .audio
+                .annulation_echo
+        })
+        .unwrap_or(false)
+}
+
 /// D'où vient l'audio.
 enum Entree {
     Micro(Porteur),
@@ -893,6 +906,8 @@ struct Fil<R: Runtime> {
     decalage: f64,
     /// Dernière trame reçue du micro ouvert (KOB-280).
     derniere_trame: Instant,
+    /// La voix de Kobi retirée du micro (KOB-248).
+    echo: crate::echo::AnnulationEcho,
 }
 
 impl<R: Runtime> Fil<R> {
@@ -925,6 +940,7 @@ impl<R: Runtime> Fil<R> {
             pause_reunion: None,
             decalage: 0.0,
             derniere_trame: Instant::now(),
+            echo: Default::default(),
         }
     }
 
@@ -993,6 +1009,8 @@ impl<R: Runtime> Fil<R> {
     }
 
     fn ouvrir_micro(&mut self) -> bool {
+        // Flux neuf : rien de l'ancien ne s'y colle (KOB-248).
+        self.echo.reinitialiser();
         // Hors du fil d'écoute et avec une limite de temps : une ouverture
         // bloquée (serveur audio mort ou figé) ne fige plus l'écoute ; elle
         // est reprise au tour suivant, puis relancée (KOB-285).
@@ -1103,7 +1121,17 @@ impl<R: Runtime> Fil<R> {
             // En réunion, ce qui a été dit avant la pause est transcrit
             // (KOB-261) ; hors réunion, rien n'attend cet audio.
             if self.en_reunion {
-                self.file.extend(reste);
+                // La traîne du micro passe aussi par l'annulation d'écho : la
+                // voix de Kobi n'entre pas dans la vidange (KOB-248).
+                for mut frame in reste {
+                    let capte = self.origine + Duration::from_secs_f64(self.decalage) + frame.t;
+                    frame.samples =
+                        self.echo
+                            .traiter(&frame.samples, capte, annulation_echo_reglee);
+                    if !frame.samples.is_empty() {
+                        self.file.push_back(frame);
+                    }
+                }
                 // Sous charge, le micro se ferme après la pause : ce qui a
                 // été dit depuis n'est pas transcrit (KOB-277).
                 if let Some(pause) = self.pause_reunion.take() {
@@ -1117,6 +1145,9 @@ impl<R: Runtime> Fil<R> {
                 }
                 self.vider(commandes);
             }
+            // Ce qui attendait un bloc entier n'a plus de suite (moins de
+            // 10 ms) : rien ne se colle au flux de la réouverture (KOB-248).
+            self.echo.reinitialiser();
         }
         crate::chef::avancer(&self.app, kobi_stt::Source::Moi, None);
         self.signaler_retard(0.0);
@@ -1204,6 +1235,7 @@ impl<R: Runtime> Fil<R> {
         tracing::warn!(%cause, "écoute continue : le micro s'est arrêté");
         self.note(&format!("le micro s'est arrêté : {cause}"));
         self.entree = None;
+        self.echo.reinitialiser();
         // L'audio en retard n'est pas transcrit ici, à la différence de la
         // pause (KOB-261) : le micro par défaut se rouvre tout de suite.
         if !self.file.is_empty() {
@@ -1366,7 +1398,22 @@ impl<R: Runtime> Fil<R> {
                 return;
             }
         };
-        for frame in arrivees {
+        for mut frame in arrivees {
+            // À l'arrivée, en temps réel : la référence du haut-parleur est
+            // alignée sur le micro, même quand la transcription a du retard.
+            // Instant réel de la capture : un micro rouvert après une panne
+            // repart de 0, d'où le décalage de la session (KOB-278).
+            let capte = self.origine + Duration::from_secs_f64(self.decalage) + frame.t;
+            frame.samples = self
+                .echo
+                .traiter(&frame.samples, capte, annulation_echo_reglee);
+            // Pendant la voix de Kobi, l'annulation travaille par blocs de
+            // 10 ms : une trame plus courte peut rester en attente. Une trame
+            // vide n'est ni veillée ni transcrite (la porte y verrait un
+            // silence absolu).
+            if frame.samples.is_empty() {
+                continue;
+            }
             self.veiller(&frame);
             self.file.push_back(frame);
         }
@@ -1495,10 +1542,13 @@ impl<R: Runtime> Fil<R> {
                 audio_s = self.audio as u64,
                 calcul_s = self.calcul.as_secs_f64() as u64,
                 rtf = format!("{:.3}", self.calcul.as_secs_f64() / self.audio.max(1.0)),
+                // Annulation de l'écho (KOB-248), seulement pendant la voix de Kobi.
+                echo_ms = self.echo.calcul.as_millis() as u64,
                 "écoute continue : charge"
             );
             self.audio = 0.0;
             self.calcul = Duration::ZERO;
+            self.echo.calcul = Duration::ZERO;
             self.bilan = Instant::now();
         }
     }

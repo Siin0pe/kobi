@@ -5,12 +5,15 @@
 //!   paquets Piper/VITS de sherpa-onnx, en CPU.
 //! - [`Sortie`] : où va le son ; [`sortie::Fichier`] l'écrit en WAV au rythme
 //!   de la lecture, [`sortie::Haut_parleur`] (fonction `lecture`) le joue.
+//! - [`reference`] : ce que le haut-parleur joue, pour l'annulation d'écho
+//!   de l'écoute (KOB-248).
 //! - [`Parleur`] : un fil qui synthétise la phrase suivante pendant que la
 //!   précédente se joue, et s'arrête net sur [`Parleur::interrompre`].
 
 pub mod parleur;
 #[cfg(feature = "piper")]
 pub mod piper;
+pub mod reference;
 pub mod sortie;
 pub mod texte;
 

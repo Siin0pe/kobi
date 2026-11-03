@@ -18,6 +18,7 @@ mod controle;
 mod demarrage;
 mod depots;
 mod diag;
+mod echo;
 mod ecoute;
 mod ecrivain;
 #[cfg(test)]

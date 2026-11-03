@@ -32,6 +32,9 @@ tauri = { version = "2.12", features = ["macos-private-api", "tray-icon"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-global-shortcut = "2"
 tracing = "0.1"
+# Annulation de l'écho de la voix de Kobi dans le micro (KOB-248) : portage
+# Rust pur de l'AEC3 de WebRTC (MIT ou BSD-3-Clause, octroi de brevets WebRTC).
+aec3 = "0.4"
 # Serveurs MCP connectés (KOB-155) : test des serveurs et autorisation OAuth,
 # secrets dans le gestionnaire d'identifiants du système (keyring, par
 # système plus bas).

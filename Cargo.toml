@@ -15,3 +15,11 @@ license = "Apache-2.0"
 # Le patch ne remplace que la 0.2.2 ; candle 0.9 vient toujours de crates.io.
 [patch.crates-io]
 candle-core = { path = "third_party/candle-core-0.2.2" }
+
+# L'annulation d'écho (KOB-248) suit le micro en temps réel : optimisée même
+# en debug, sinon les essais en debug prennent du retard.
+[profile.dev.package.aec3]
+opt-level = 3
+
+[profile.dev.package.rustfft]
+opt-level = 3

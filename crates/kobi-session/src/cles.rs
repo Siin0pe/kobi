@@ -70,6 +70,11 @@ pub const CLES: &[(&str, Application, &str)] = &[
         "Sortie audio captée pour le son de l'ordinateur ; vide : celle du système.",
     ),
     (
+        "audio.annulation_echo",
+        AChaud,
+        "Retire la voix de Kobi de ce qu'entend le micro (haut-parleurs sans casque) : true ou false (défaut), pris à la phrase suivante de Kobi.",
+    ),
+    (
         "stt.engine",
         AuRedemarrage,
         "Moteur de transcription : auto (le gagnant du benchmark) ou nemotron.",
