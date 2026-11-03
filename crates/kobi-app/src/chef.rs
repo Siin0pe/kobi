@@ -3199,6 +3199,9 @@ impl<R: Runtime> Chef<R> {
     }
 
     fn erreur(&mut self, titre: &str, message: &str) {
+        // Une nouvelle erreur : l'Oups n'est plus celui de l'attente du
+        // réseau, qui le remet après coup s'il s'agit d'elle (KOB-386).
+        self.oups_du_reseau = None;
         self.transition(&[Evenement::Erreur]);
         #[derive(Clone, Serialize)]
         struct ErreurUi<'a> {
@@ -7004,6 +7007,15 @@ mod tests {
             c.recevoir(Message::Cerveau(Retour::Texte {
                 tour,
                 texte: "Le budget tient".into(),
+            }));
+            assert_eq!(c.activite(), Some("oups"));
+            // L'Oups d'une attente du réseau passé, puis une autre erreur :
+            // la réponse ne l'efface pas.
+            c.recevoir(Message::Cerveau(Retour::EnAttente { tour, nombre: 1 }));
+            c.erreur("Notes", "Les notes n'ont pas pu être écrites.");
+            c.recevoir(Message::Cerveau(Retour::Texte {
+                tour,
+                texte: "Le budget tient en".into(),
             }));
             assert_eq!(c.activite(), Some("oups"));
             // Une carte d'une tâche plus ancienne ne l'efface pas non plus.
