@@ -149,7 +149,12 @@ test('pendant la frappe : lettres brouillées puis posées, Kobi suit le curseur
   await away(page);
   await page.evaluate(() => window.kobi.ecrire());
   await opened(page);
-  // Yeux relevés au moment même de chaque impatience (voir la fin du test).
+  // Yeux relevés pendant chaque impatience (voir la fin du test) : au moment
+  // même, puis à chaque fois qu'ils se repeignent jusqu'à sa fin. Sous
+  // charge, après un temps mort, l'impatience tombe dans le clignement dû en
+  // même temps (sa réouverture n'est programmée qu'à sa fermeture) : le
+  // regard en coin n'arrive que 120 ms plus tard, un seul relevé au moment
+  // même lisait « – » (KOB-421).
   await page.evaluate(() => {
     const w = window as unknown as { __impatience: string[] };
     w.__impatience = [];
@@ -157,7 +162,12 @@ test('pendant la frappe : lettres brouillées puis posées, Kobi suit le curseur
     const impatient = kobi.impatient.bind(kobi);
     kobi.impatient = () => {
       impatient();
-      w.__impatience.push(document.querySelector('.kobi .g')!.textContent ?? '');
+      const oeil = document.querySelector('.kobi .g')!;
+      const relever = (): void => void w.__impatience.push(oeil.textContent ?? '');
+      relever();
+      const suivi = new MutationObserver(relever);
+      suivi.observe(oeil, { childList: true, characterData: true, subtree: true });
+      setTimeout(() => suivi.disconnect(), 900);
     };
   });
   const gaze = () => page.locator('.kobi .gaze').evaluate((n) => new DOMMatrix(getComputedStyle(n).transform).m41);
