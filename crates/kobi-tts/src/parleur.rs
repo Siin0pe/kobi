@@ -305,7 +305,16 @@ fn lecture(sortie: Fabrique<Box<dyn Sortie>>, rx: Receiver<VersLecture>, p: Arc<
                     let premier_son = t0.map(|t| t.elapsed()).unwrap_or_default();
                     (p.rappel)(Evenement::Debut { premier_son });
                 }
-                let arret = p.arret.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                // L'arrêt se prend sous le verrou d'`interrompre`, qui change
+                // d'énoncé en le tenant : une interruption juste après
+                // `Debut` laissait jouer toute la phrase avec l'arrêt neuf
+                // (KOB-400). Énoncé périmé : rien ne se joue, la boucle dit
+                // sa fin.
+                let arret = {
+                    let a = p.arret.lock().unwrap_or_else(|e| e.into_inner());
+                    p.courant(enonce).then(|| a.clone())
+                };
+                let Some(arret) = arret else { continue };
                 if let Err(e) = s.jouer(&echantillons, frequence, &arret) {
                     (p.rappel)(Evenement::Erreur(e.to_string()));
                 }
@@ -484,6 +493,49 @@ mod tests {
         p.dire(c, "encore");
         p.interrompre();
         assert!(!p.occupe());
+    }
+
+    /// KOB-400 : une interruption qui tombe entre `Debut` et la prise de
+    /// l'arrêt coupe quand même la phrase. Le rappel de `Debut` attend que
+    /// le test ait interrompu : l'entrelacement est forcé, pas espéré.
+    #[test]
+    fn interrompre_juste_apres_le_debut_coupe_la_phrase() {
+        let joue = Arc::new(Mutex::new(Vec::new()));
+        let j = Arc::clone(&joue);
+        let (tx, rx) = mpsc::channel();
+        let (go_tx, go_rx) = mpsc::channel::<()>();
+        let (tx, go_rx) = (Mutex::new(tx), Mutex::new(go_rx));
+        let p = Parleur::new(
+            Box::new(|| Ok(Box::new(Factice) as Box<dyn Synthese>)),
+            Box::new(move || Ok(Box::new(Ecoute(j)) as Box<dyn Sortie>)),
+            move |e| {
+                let debut = matches!(e, Evenement::Debut { .. });
+                let _ = tx.lock().unwrap().send(e);
+                if debut {
+                    let _ = go_rx.lock().unwrap().recv_timeout(Duration::from_secs(2));
+                }
+            },
+        );
+        let a = p.nouvel_enonce();
+        p.dire(a, &"mot ".repeat(20)); // 2 s
+        p.finir(a);
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            Evenement::Debut { .. }
+        ));
+        p.interrompre();
+        let t = Instant::now();
+        go_tx.send(()).unwrap();
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            Evenement::Fin { interrompu: true }
+        );
+        assert!(
+            t.elapsed() < Duration::from_millis(500),
+            "{:?}",
+            t.elapsed()
+        );
+        assert!(joue.lock().unwrap().iter().all(|&n| n < 600), "{joue:?}");
     }
 
     #[test]
