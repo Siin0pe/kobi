@@ -7,13 +7,20 @@ import { onFrame } from './ticker';
 
 /** Écart (px) sous lequel on est « en bas ». */
 const BOTTOM = 4;
-/** Part de l'écart rattrapée à chaque image : un glissement doux, pas un saut. */
+/**
+ * Part de l'écart rattrapée par image de 60 Hz : un glissement doux, pas un
+ * saut. Rapportée au temps écoulé (KOB-405) : à cadence réduite ou sur un PC
+ * chargé, le suivi reste aussi rapide et ne traîne pas derrière la frappe.
+ */
 const EASE = 0.18;
+const IMAGE_MS = 1000 / 60;
 
 export class Defilement {
   /** Suit le flux (en bas), tant que l'utilisateur ne remonte pas. */
   private follow = true;
   private stopTick: (() => void) | null = null;
+  /** Heure de l'image précédente du glissement (null : premier pas). */
+  private glideAt: number | null = null;
   private drag: { y: number; top: number } | null = null;
   /** Le glisser a bougé : le clic du relâchement n'ouvre rien (KOB-246). */
   private glisse = false;
@@ -150,10 +157,11 @@ export class Defilement {
       this.zone.scrollTop = this.zone.scrollHeight;
       return;
     }
-    this.stopTick = onFrame(() => this.glide());
+    this.glideAt = null;
+    this.stopTick = onFrame((now) => this.glide(now));
   }
 
-  private glide(): boolean {
+  private glide(now: number): boolean {
     const z = this.zone;
     const target = z.scrollHeight - z.clientHeight;
     const gap = target - z.scrollTop;
@@ -161,7 +169,11 @@ export class Defilement {
       this.stopTick = null;
       return false;
     }
-    z.scrollTop += Math.max(1, gap * EASE);
+    // Images écoulées depuis la précédente (une au premier pas, au plus 30 :
+    // après une longue pause, on rejoint le bas sans le dépasser).
+    const images = this.glideAt === null ? 1 : Math.min(30, Math.max(0, now - this.glideAt) / IMAGE_MS);
+    this.glideAt = now;
+    z.scrollTop += Math.max(1, gap * (1 - (1 - EASE) ** images));
     return true;
   }
 

@@ -98,13 +98,13 @@ test('300 mots : hauteur maximale, puis défilement doux qui suit le flux ; on r
     await page.waitForTimeout(250);
   }
   await typed(page);
-  await page.waitForTimeout(600);
   await lisible(page, 18);
+  // Le suivi l'amène en bas : on attend qu'il y soit, pas une durée (KOB-405).
+  const ecart = () => zone(page).evaluate((n) => n.scrollTop + n.clientHeight - n.scrollHeight);
+  await expect.poll(ecart).toBeGreaterThanOrEqual(-6);
   // La bulle a atteint sa hauteur maximale : le texte défile, il ne déborde pas.
   const z = await zone(page).evaluate((n) => ({ s: n.scrollHeight, c: n.clientHeight, t: n.scrollTop }));
   expect(z.s).toBeGreaterThan(z.c + 50);
-  // Le suivi l'a amenée en bas.
-  expect(z.t + z.c).toBeGreaterThanOrEqual(z.s - 6);
   await expect(zone(page)).toHaveClass(/peut-monter/);
   await page.screenshot({ path: test.info().outputPath('300-mots-bas.png') });
   // On remonte à la molette : le suivi s'arrête, l'historique ne s'ouvre pas.
@@ -125,13 +125,34 @@ test('300 mots : hauteur maximale, puis défilement doux qui suit le flux ; on r
   await page.mouse.wheel(0, 4000);
   await page.waitForTimeout(500);
   await page.evaluate((t) => window.kobi.update({ answer: t }), `${full}\n\nEt une dernière phrase qui arrive après coup. Puis encore une autre, pour voir si on suit bien le flux jusqu’au bout.`);
-  // Pendant la frappe, la bulle suit…
-  await page.waitForTimeout(1_500);
-  expect(await zone(page).evaluate((n) => n.scrollTop + n.clientHeight - n.scrollHeight)).toBeGreaterThanOrEqual(-40);
+  // Pendant la frappe, la bulle suit : le suivi a repris et rattrape le bas.
+  // Un relevé à un instant fixe tombait parfois juste après l'arrivée d'une
+  // ligne, avant le rattrapage (KOB-405) : on attend l'état, pas une durée.
+  await expect.poll(ecart).toBeGreaterThanOrEqual(-40);
+  // La frappe finie, le suivi rejoint le bas.
   await typed(page);
-  await page.waitForTimeout(600);
-  const end = await zone(page).evaluate((n) => n.scrollTop + n.clientHeight - n.scrollHeight);
-  expect(end).toBeGreaterThanOrEqual(-6);
+  await expect.poll(ecart).toBeGreaterThanOrEqual(-6);
+  await expectNoErrors(errors);
+});
+
+test('à 15 images/s, le suivi rattrape le bas aussi vite qu’à 60 (temps écoulé, pas nombre d’images)', async ({ page }) => {
+  await page.clock.install();
+  const errors = await openUi(page, '');
+  await page.evaluate(() => window.kobiAnimations.poser({ fps: 15 }));
+  await answer(page, mots(300));
+  await page.clock.runFor(30_000);
+  const ecart = () => zone(page).evaluate((n) => n.scrollHeight - n.clientHeight - n.scrollTop);
+  await expect.poll(ecart).toBeLessThanOrEqual(6);
+  // Un bloc de 300 px arrive d'un coup sous le texte.
+  await zone(page).evaluate((n) => {
+    const bloc = document.createElement('div');
+    bloc.style.height = '300px';
+    n.querySelector('.text')!.append(bloc);
+  });
+  await page.clock.runFor(300);
+  // 18 % par 1/60 s : en 300 ms, plus de 95 % de l'écart est rattrapé. Avant
+  // KOB-405, 18 % par image : à 15 images/s, 4 ou 5 pas, 40 % restaient.
+  expect(await ecart()).toBeLessThan(30);
   await expectNoErrors(errors);
 });
 
