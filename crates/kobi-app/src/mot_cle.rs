@@ -245,6 +245,16 @@ const INTERJECTIONS: &[&str] = &[
 /// Interjections qui sont une réponse : « Oui Kobi » seul répond « oui ».
 const REPONSES_EN_TETE: &[&str] = &["oui", "non", "ok", "okay", "oke", "okei", "okey"];
 
+/// La question tirée de `texte` n'est-elle que la réponse dite devant le
+/// nom (« Oui Kobi. » → « oui »), rien après lui ?
+fn reponse_devant_le_nom(texte: &str, question: &str) -> bool {
+    !question.is_empty()
+        && question
+            .split_whitespace()
+            .all(|m| REPONSES_EN_TETE.contains(&m))
+        && reperer(texte).is_some_and(|apres| !apres.chars().any(char::is_alphanumeric))
+}
+
 /// Mots qui, juste avant le nom, en font une citation : « à Kobi », « que Kobi ».
 const AVANT_CITATION: &[&str] = &[
     "a", "au", "aux", "de", "d", "du", "des", "que", "qu", "avec", "pour", "par", "sur", "chez",
@@ -640,6 +650,13 @@ impl Ecouteur {
                 }
                 // L'adresse se juge sur la phrase qui porte le nom (KOB-276).
                 Some((adresse, q)) => {
+                    // « Ok Kobi. », « Non Kobi » sans carte qui attend : un
+                    // appel seul, la question suit (KOB-378).
+                    let q = if reponse_devant_le_nom(texte, &q) && !self.carte_ouverte(t) {
+                        String::new()
+                    } else {
+                        q
+                    };
                     let texte = phrase_du_nom(texte);
                     self.phrase_avec_nom(texte, adresse, &q, finale, t, &mut actions)
                 }
@@ -808,11 +825,12 @@ impl Ecouteur {
     /// Kobi attend une réponse à sa question pendant `duree` secondes (carte
     /// de validation, KOB-197) : « oui » ou « non » s'entend sans le nom tout
     /// ce temps, pas seulement les [`CONVERSATION`] secondes habituelles.
+    /// En réunion, seule la réponse devant le nom en dépend (KOB-378).
     pub fn reponse_attendue(&mut self, t: f64, duree: f64) {
+        self.carte = Some(t + duree);
         if !self.conversation {
             return;
         }
-        self.carte = Some(t + duree);
         if matches!(
             self.attente,
             Attente::Nom
@@ -838,7 +856,13 @@ impl Ecouteur {
     /// Une carte de validation attend-elle sa réponse à l'instant `t`
     /// (`reponse_attendue`), et pas seulement une suite de conversation ?
     pub fn attend_carte(&self, t: f64) -> bool {
-        self.carte.is_some_and(|fin| t <= fin) && self.attend_reponse()
+        self.conversation && self.carte_ouverte(t) && self.attend_reponse()
+    }
+
+    /// Une carte attend-elle sa réponse à l'instant `t`, en réunion comme
+    /// hors réunion ?
+    fn carte_ouverte(&self, t: f64) -> bool {
+        self.carte.is_some_and(|fin| t <= fin)
     }
 
     /// Une phrase sans le nom compte-t-elle en ce moment (suite, conversation) ?
@@ -1682,6 +1706,58 @@ mod tests {
         // Une nouvelle carte rouvre la fenêtre.
         e.reponse_attendue(20.0, 60.0);
         assert!(e.attend_carte(30.0));
+    }
+
+    /// KOB-378 : « Ok Kobi. » sans carte est un appel seul, la question suit ;
+    /// « Oui Kobi. » ne répond « oui » que si une carte attend, en réunion
+    /// comme hors réunion.
+    #[test]
+    fn reponse_devant_le_nom_seulement_pour_une_carte() {
+        let envois = |actions: &[Action]| -> Vec<String> {
+            actions
+                .iter()
+                .filter_map(|a| match a {
+                    Envoyer(q) => Some(q.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        // En réunion.
+        let mut e = Ecouteur::new(false);
+        assert_eq!(e.segment("Ok Kobi.", true, 1.0), vec![Interpeller]);
+        assert_eq!(
+            envois(&e.segment("résume les décisions", true, 2.5)),
+            ["résume les décisions"]
+        );
+        assert!(envois(&e.segment("Non Kobi", true, 5.0)).is_empty());
+        let mut e = Ecouteur::new(false);
+        e.reponse_attendue(10.0, 60.0);
+        assert!(
+            !e.attend_carte(12.0),
+            "en réunion, pas de réponse sans le nom"
+        );
+        assert_eq!(envois(&e.segment("Oui Kobi.", true, 12.0)), ["oui"]);
+        e.cartes_fermees(20.0);
+        assert!(envois(&e.segment("Euh, non Kobi", true, 25.0)).is_empty());
+        let mut e = Ecouteur::new(false);
+        e.reponse_attendue(30.0, 60.0);
+        assert!(
+            envois(&e.segment("Non Kobi", true, 95.0)).is_empty(),
+            "carte échue"
+        );
+        // Hors réunion.
+        let mut e = Ecouteur::default();
+        assert_eq!(e.segment("Ok Kobi.", true, 1.0), vec![Interpeller]);
+        assert_eq!(
+            envois(&e.segment("quelle heure est-il ?", true, 2.5)),
+            ["quelle heure est-il ?"]
+        );
+        // Le nom à la fin d'une vraie question ne change pas.
+        let mut e = Ecouteur::new(false);
+        assert_eq!(
+            envois(&e.segment("Tu en penses quoi, Kobi ?", true, 1.0)),
+            ["Tu en penses quoi ?"]
+        );
     }
 
     /// Graphies de Nemotron relevées sur le corpus de KOB-179 : retrouvées en
