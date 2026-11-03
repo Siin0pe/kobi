@@ -442,6 +442,60 @@ mod tests {
         assert_eq!(p.texte_en_cours(), "une deux trois quatre cinq ");
     }
 
+    /// DIAGNOSTIC KOB-407 v2, à retirer : décomposition de premier_son.
+    #[test]
+    fn diag_kob407_premier_son() {
+        type Marques = Arc<Mutex<Vec<(&'static str, Instant)>>>;
+        struct Mesuree(Marques);
+        impl Synthese for Mesuree {
+            fn frequence(&self) -> u32 {
+                1_000
+            }
+            fn synthetiser(&mut self, phrase: &str) -> Resultat<Vec<f32>> {
+                self.0.lock().unwrap().push(("synth_debut", Instant::now()));
+                std::thread::sleep(Duration::from_millis(30));
+                self.0.lock().unwrap().push(("synth_fin", Instant::now()));
+                Ok(vec![0.1; 100 * phrase.split_whitespace().count()])
+            }
+        }
+        let mut sommeils = Vec::new();
+        for _ in 0..5 {
+            let t = Instant::now();
+            std::thread::sleep(Duration::from_millis(30));
+            sommeils.push(t.elapsed().as_millis());
+        }
+        let marques: Marques = Default::default();
+        let (m1, m2, m3) = (marques.clone(), marques.clone(), marques.clone());
+        let (tx, rx) = mpsc::channel();
+        let tx = Mutex::new(tx);
+        let p = Parleur::new(
+            Box::new(move || {
+                m1.lock().unwrap().push(("voix_creee", Instant::now()));
+                Ok(Box::new(Mesuree(m1)) as Box<dyn Synthese>)
+            }),
+            Box::new(|| Ok(Box::new(Ecoute(Default::default())) as Box<dyn Sortie>)),
+            move |e| {
+                if matches!(e, Evenement::Debut { .. }) {
+                    m2.lock().unwrap().push(("rappel_debut", Instant::now()));
+                }
+                let _ = tx.lock().unwrap().send(e);
+            },
+        );
+        let e = p.nouvel_enonce();
+        let t0 = Instant::now();
+        p.dire(e, "une deux trois");
+        p.finir(e);
+        let debut = rx.recv_timeout(Duration::from_secs(10));
+        let recu = t0.elapsed();
+        let m: Vec<_> = m3
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(n, t)| format!("{n} {}", t.saturating_duration_since(t0).as_millis()))
+            .collect();
+        panic!("DIAG2 KOB-407 : sleep(30) ms {sommeils:?} ; marques ms depuis dire {m:?} ; {debut:?} reçu à {recu:?}");
+    }
+
     /// DIAGNOSTIC KOB-407, à retirer : chiffres réels du runner.
     #[test]
     fn diag_kob407_mesures() {
