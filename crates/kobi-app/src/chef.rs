@@ -4811,8 +4811,14 @@ mod tests {
     #[test]
     fn annuler_attend_le_micro_en_retard() {
         type Essai = Chef<tauri::test::MockRuntime>;
+        // Le fil du chef tourne aussi (`boucle`, un tic toutes les 250 ms) :
+        // entre deux `avec_chef`, il a pu clore la fin lui-même et la réunion
+        // n'est plus là. Ce qui compte, « Annuler » encore possible ou non,
+        // se lit pareil (KOB-408).
         let expire = |c: &mut Essai, depuis: Duration| {
-            c.reunion.as_mut().unwrap().annulable_jusqu = Some(Instant::now() - depuis);
+            if let Some(r) = c.reunion.as_mut() {
+                r.annulable_jusqu = Some(Instant::now() - depuis);
+            }
             c.tick();
             c.fin_annulable()
         };
