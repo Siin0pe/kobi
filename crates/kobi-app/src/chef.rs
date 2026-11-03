@@ -2992,20 +2992,7 @@ impl<R: Runtime> Chef<R> {
         if self.annonces.len() < avant {
             tracing::info!("voix : annonce abandonnée (voix coupée ou réponse trop longue)");
         }
-        if crate::voix::occupee(&self.app) {
-            return;
-        }
-        // Une question en attente du réseau garde son énoncé ouvert sans rien
-        // dire : la carte, elle, n'a que 60 s (KOB-375).
-        let reseau = self.voix.as_ref().is_some_and(|(t, _)| {
-            self.historique
-                .iter()
-                .any(|b| b.tour == *t && b.statut == "attente")
-        });
-        if (self.voix.is_none() || reseau) && self.dire_validation() {
-            return;
-        }
-        if self.voix.is_none() {
+        if self.voix.is_none() && !crate::voix::occupee(&self.app) && !self.dire_validation() {
             if let Some(annonce) = self.annonces.pop_front() {
                 crate::voix::dire(&self.app, &annonce.texte);
             }
@@ -3725,20 +3712,6 @@ mod tests {
             assert!(c.validation_a_dire.is_none());
             assert!(!crate::voix::occupee(&c.app));
             c.validation_fermee("v3", crate::validation::Reponse::Refuse);
-            // Question en attente du réseau : son énoncé reste ouvert, la
-            // carte est dite quand même.
-            c.ajouter(Bulle {
-                tour: 11,
-                question: "Quel temps fait-il ?".into(),
-                reponse: String::new(),
-                statut: "attente",
-                clavier: false,
-                etapes: Vec::new(),
-            });
-            c.voix = Some((11, crate::voix::Reponse::new(&c.app)));
-            c.validation_ouverte("v4".into(), "Créer budget.md");
-            assert!(c.validation_a_dire.is_none());
-            assert!(crate::voix::occupee(&c.app));
         });
     }
 
