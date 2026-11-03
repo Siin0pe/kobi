@@ -2998,13 +2998,28 @@ impl<R: Runtime> Chef<R> {
             return;
         }
         let activite = self.activite();
+        // Kobi réfléchit à la question en cours, dont le tour, détaché par
+        // une carte acceptée, livre sa réponse ici : elle passe tout de suite,
+        // devant les résultats plus anciens, qui suivent ensuite (KOB-387).
+        let dernier = self.dernier;
+        let la_sienne = activite == Some("reflechit")
+            && match self.a_livrer.iter().position(|(tour, ..)| *tour == dernier) {
+                Some(i) => {
+                    if let Some(sienne) = self.a_livrer.remove(i) {
+                        self.a_livrer.push_front(sienne);
+                    }
+                    true
+                }
+                None => false,
+            };
         let lit_encore = self
             .calme_a
             .is_some_and(|(_, e)| matches!(e, Evenement::ReponseTerminee));
-        if matches!(
+        if (matches!(
             activite,
             Some("ecoute" | "reflechit" | "repond" | "propose")
-        ) || lit_encore
+        ) && !la_sienne)
+            || lit_encore
             || crate::voix::parle(&self.app)
             || self.livrable_a.is_some_and(|t| Instant::now() < t)
         {
@@ -3013,7 +3028,7 @@ impl<R: Runtime> Chef<R> {
         // Réunion en pause ou qui se termine : pas d'état « au travail »,
         // le résultat est montré tel quel, sans attendre la reprise.
         let sans_activite = matches!(etat(&self.app).etat, "pause" | "fin");
-        if activite != Some("occupe") && !sans_activite {
+        if activite != Some("occupe") && !sans_activite && !la_sienne {
             // Sans état « au travail » possible ici (oups…), on réessaie au
             // prochain tic.
             self.livrable_a = Some(Instant::now() + TRANSITION_RESULTAT);
@@ -4545,6 +4560,55 @@ mod tests {
             }
             assert_eq!(c.activite(), Some("calme"));
         });
+    }
+
+    /// KOB-387 : la question en cours demande une carte (son tour est
+    /// détaché) ; acceptée, Kobi réfléchit, et la réponse du tour, livrée par
+    /// `Resultat`, passe tout de suite au lieu d'attendre pour toujours, même
+    /// derrière le résultat d'une question plus ancienne, qui suit ensuite.
+    #[test]
+    fn reponse_livree_apres_une_carte_acceptee() {
+        for reunion in [true, false] {
+            let (app, _dir) = chef_en_essai();
+            avec_chef(&app, |c| {
+                if reunion {
+                    c.commande(Intention::DemarrerReunion);
+                }
+                c.recevoir(Message::Interpelle);
+                c.envoyer("Crée le ticket".into(), None, true);
+                let tour = c.dernier;
+                c.recevoir(Message::Cerveau(Retour::Detache {
+                    tour,
+                    annonce: false,
+                }));
+                c.recevoir(Message::Cerveau(Retour::Carte {
+                    tour,
+                    carte: 1,
+                    outil: "mcp__linear__save_issue".into(),
+                    entree: serde_json::json!({"title": "Corriger la connexion"}),
+                }));
+                c.recevoir(Message::Cerveau(Retour::CarteFermee {
+                    carte: 1,
+                    accepte: Some(true),
+                }));
+                assert_eq!(c.activite(), Some("reflechit"));
+                // Le résultat d'une autre question, plus ancienne, attend.
+                c.recevoir(Message::Cerveau(Retour::Resultat {
+                    tour: tour + 100,
+                    texte: "Autre chose.".into(),
+                }));
+                assert_eq!(c.a_livrer.len(), 1, "pas pendant la réflexion");
+                assert_eq!(c.activite(), Some("reflechit"));
+                // La sienne passe devant ; l'ancienne suit ensuite.
+                c.recevoir(Message::Cerveau(Retour::Resultat {
+                    tour,
+                    texte: "C'est fait : le ticket est créé.".into(),
+                }));
+                assert_eq!(c.activite(), Some("repond"), "réunion : {reunion}");
+                assert_eq!(c.a_livrer.len(), 1);
+                assert_eq!(c.a_livrer[0].0, tour + 100);
+            });
+        }
     }
 
     /// KOB-379 : « Kobi, oui » sur une carte quand une autre attend : Kobi
