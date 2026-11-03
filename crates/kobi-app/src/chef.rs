@@ -474,6 +474,10 @@ pub struct Chef<R: Runtime> {
     /// celle qui attend sa réponse ou si l'utilisateur a coupé la voix
     /// depuis (coupures de la voix au moment de l'ouverture).
     validation_a_dire: Option<(String, u64)>,
+    /// Dernière question posée quand une carte de Kobi ou de la conversation
+    /// s'est ouverte : une question posée depuis passe avant de reproposer
+    /// la carte (KOB-384).
+    question_a_la_carte: u64,
     /// Tour d'une carte de la conversation acceptée pendant que d'autres
     /// attendaient : s'il est encore en cours, la dernière carte tranchée,
     /// même refusée, fait repartir Kobi sur lui (KOB-381).
@@ -877,6 +881,7 @@ impl<R: Runtime> Chef<R> {
             suite_apres_voix: false,
             annonces: Default::default(),
             validation_a_dire: None,
+            question_a_la_carte: 0,
             acceptee_en_attente: None,
             tours_des_cartes: HashMap::new(),
             carte_a_dire: None,
@@ -2141,6 +2146,7 @@ impl<R: Runtime> Chef<R> {
     /// (KOB-218).
     fn validation_ouverte(&mut self, id: String, resume: &str) {
         let annonce = self.validations.ouvrir(id, resume);
+        self.question_a_la_carte = self.dernier;
         self.calme_a = None;
         self.transition(&[Evenement::PermissionDemandee]);
         if annonce.is_some() {
@@ -2263,6 +2269,14 @@ impl<R: Runtime> Chef<R> {
         } else if !notes_du_calme {
             self.transition(&[Evenement::PermissionRefusee]);
         }
+    }
+
+    /// La dernière question posée attend-elle encore sa réponse (en cours,
+    /// partie en tâche, ou en attente du réseau) ?
+    fn question_en_cours(&self) -> bool {
+        self.historique
+            .iter()
+            .any(|b| b.tour == self.dernier && matches!(b.statut, "attente" | "reponse" | "tache"))
     }
 
     /// Une carte MCP de la conversation (pas des notes) attend-elle ?
@@ -2672,6 +2686,7 @@ impl<R: Runtime> Chef<R> {
                         ]);
                     }
                 } else {
+                    self.question_a_la_carte = self.dernier;
                     self.calme_a = None;
                     self.transition(&[Evenement::PermissionDemandee]);
                 }
@@ -3121,6 +3136,10 @@ impl<R: Runtime> Chef<R> {
             return;
         }
         let activite = self.activite();
+        // Kobi réfléchit sans question en cours (carte acceptée après la
+        // réponse à une autre question, son tour parti en tâche) : rien ne
+        // l'en sortira, le résultat passe par « au travail » (KOB-384).
+        let sans_question = activite == Some("reflechit") && !self.question_en_cours();
         // Kobi réfléchit à la question en cours, dont le tour, détaché par
         // une carte acceptée, livre sa réponse ici : elle passe tout de suite,
         // devant les résultats plus anciens, qui suivent ensuite (KOB-387).
@@ -3141,7 +3160,8 @@ impl<R: Runtime> Chef<R> {
         if (matches!(
             activite,
             Some("ecoute" | "reflechit" | "repond" | "propose")
-        ) && !la_sienne)
+        ) && !la_sienne
+            && !sans_question)
             || lit_encore
             || crate::voix::parle(&self.app)
             || self.livrable_a.is_some_and(|t| Instant::now() < t)
@@ -3291,6 +3311,32 @@ impl<R: Runtime> Chef<R> {
             && matches!(etat(&self.app).etat, "veille" | "reunion")
         {
             self.transition(&[Evenement::TacheLongue]);
+        }
+        // Une carte de Kobi ou de la conversation attend encore et Kobi est
+        // libre (réponse à une autre question finie) : il y repropose
+        // (KOB-384). Une carte des notes venue d'ailleurs n'y ramène pas
+        // (KOB-338), ni une carte MCP déjà refusée à l'échéance ; un
+        // résultat à livrer passe d'abord, et la question en cours, partie en
+        // tâche, livrera le sien sans attendre la carte (pas celle de la
+        // carte elle-même, partie en tâche pour la demander).
+        let carte_mcp = self.cartes.keys().any(|k| {
+            !self.cartes_des_notes.contains_key(k)
+                && self
+                    .cartes_ouvertes
+                    .get(k)
+                    .is_some_and(|o| o.elapsed() < kobi_perms::DEFAULT_TIMEOUT)
+        });
+        if (!self.validations.est_vide() || carte_mcp)
+            && !(self.question_en_cours() && self.dernier != self.question_a_la_carte)
+            && self.calme_a.is_none()
+            && self.a_livrer.is_empty()
+            && matches!(self.activite(), Some("calme" | "occupe") | None)
+            && matches!(etat(&self.app).etat, "veille" | "assistant" | "reunion")
+        {
+            if self.activite() != Some("occupe") {
+                self.transition(&[Evenement::TacheLongue]);
+            }
+            self.transition(&[Evenement::PermissionDemandee]);
         }
         // Longtemps en veille : la prochaine question ouvre une autre conversation.
         if self
@@ -4982,6 +5028,146 @@ mod tests {
                 assert_eq!(c.activite(), Some("repond"));
             });
         }
+    }
+
+    /// KOB-384 : une carte de Kobi attend, l'utilisateur pose une autre
+    /// question ; une fois sa réponse lue, Kobi repropose la carte au lieu de
+    /// rester au calme ou « au travail ».
+    #[test]
+    fn carte_reproposee_apres_une_autre_question() {
+        for reunion in [true, false] {
+            let (app, _dir) = chef_en_essai();
+            avec_chef(&app, |c| {
+                if reunion {
+                    c.commande(Intention::DemarrerReunion);
+                }
+                c.recevoir(Message::Interpelle);
+                c.envoyer("ajoute un rappel".into(), None, true);
+                let tour = c.dernier;
+                c.recevoir(Message::Cerveau(Retour::Detache {
+                    tour,
+                    annonce: true,
+                }));
+                c.validation_ouverte("v1".into(), "Ajoute un rappel");
+                assert_eq!(c.activite(), Some("propose"));
+                // Une autre question, sa réponse, puis la fin de la lecture.
+                c.recevoir(Message::Interpelle);
+                c.envoyer("Quelle est la date de la démo ?".into(), None, true);
+                let autre = c.dernier;
+                c.recevoir(Message::Cerveau(Retour::Fin {
+                    tour: autre,
+                    texte: "La démo est jeudi.".into(),
+                }));
+                assert_eq!(c.activite(), Some("repond"));
+                c.calme_a = c.calme_a.map(|(_, e)| (Instant::now(), e));
+                c.tick();
+                assert_eq!(c.activite(), Some("propose"), "réunion : {reunion}");
+                // La carte acceptée : son tour, parti en tâche, livre son
+                // résultat, qui passe « au travail » puis est dit.
+                c.recevoir(Message::ValidationFermee {
+                    id: "v1".into(),
+                    reponse: crate::validation::Reponse::Accepte,
+                });
+                c.recevoir(Message::Cerveau(Retour::Resultat {
+                    tour,
+                    texte: "J'ai ajouté le rappel.".into(),
+                }));
+                for _ in 0..3 {
+                    c.livrable_a = None;
+                    c.tick();
+                }
+                assert!(c.a_livrer.is_empty(), "réunion : {reunion}");
+                assert_eq!(c.activite(), Some("repond"));
+            });
+        }
+        // La question posée pendant la carte part en tâche : Kobi reste « au
+        // travail » et livre son résultat sans attendre la carte.
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            c.recevoir(Message::Interpelle);
+            c.envoyer("ajoute un rappel".into(), None, true);
+            let tour = c.dernier;
+            c.recevoir(Message::Cerveau(Retour::Detache {
+                tour,
+                annonce: true,
+            }));
+            c.validation_ouverte("v1".into(), "Ajoute un rappel");
+            c.recevoir(Message::Interpelle);
+            c.envoyer("Résume le projet".into(), None, true);
+            let autre = c.dernier;
+            c.recevoir(Message::Cerveau(Retour::Detache {
+                tour: autre,
+                annonce: true,
+            }));
+            c.tick();
+            assert_eq!(c.activite(), Some("occupe"));
+            c.recevoir(Message::Cerveau(Retour::Resultat {
+                tour: autre,
+                texte: "Le projet avance.".into(),
+            }));
+            assert!(c.a_livrer.is_empty());
+            assert_eq!(c.activite(), Some("repond"));
+        });
+        // Sans autre question : un faux appel (« Kobi » puis rien) ramène au
+        // calme puis « au travail » ; la carte, demandée par la question en
+        // cours partie en tâche, est reproposée.
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            c.recevoir(Message::Interpelle);
+            c.envoyer("ajoute un rappel".into(), None, true);
+            let tour = c.dernier;
+            c.recevoir(Message::Cerveau(Retour::Detache {
+                tour,
+                annonce: true,
+            }));
+            c.validation_ouverte("v1".into(), "Ajoute un rappel");
+            c.recevoir(Message::Interpelle);
+            c.recevoir(Message::SansQuestion);
+            c.tick();
+            assert_eq!(c.activite(), Some("propose"));
+        });
+        // Une carte MCP déjà refusée à l'échéance n'est pas reproposée.
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            c.recevoir(Message::Interpelle);
+            c.transition(&[Evenement::QuestionEnvoyee]);
+            c.recevoir(Message::Cerveau(Retour::Carte {
+                tour: 5,
+                carte: 1,
+                outil: "mcp__linear__save_issue".into(),
+                entree: serde_json::json!({"title": "Corriger la connexion"}),
+            }));
+            c.transition(&[Evenement::PermissionRefusee]);
+            assert_eq!(c.activite(), Some("calme"));
+            c.cartes_ouvertes
+                .insert(1, Instant::now() - kobi_perms::DEFAULT_TIMEOUT);
+            c.tick();
+            assert_eq!(c.activite(), Some("calme"));
+        });
+        // Une carte des notes venue pendant une réponse n'y ramène pas.
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            c.recevoir(Message::Interpelle);
+            c.envoyer("Quelle est la date de la démo ?".into(), None, true);
+            c.recevoir(Message::Cerveau(Retour::Carte {
+                tour: 0,
+                carte: 3,
+                outil: "mcp__linear__save_issue".into(),
+                entree: serde_json::json!({"title": "Corriger la connexion"}),
+            }));
+            let tour = c.dernier;
+            c.recevoir(Message::Cerveau(Retour::Fin {
+                tour,
+                texte: "La démo est jeudi.".into(),
+            }));
+            c.calme_a = c.calme_a.map(|(_, e)| (Instant::now(), e));
+            c.tick();
+            assert_eq!(c.activite(), Some("calme"));
+        });
     }
 
     /// KOB-379 : « Kobi, oui » sur une carte quand une autre attend : Kobi
