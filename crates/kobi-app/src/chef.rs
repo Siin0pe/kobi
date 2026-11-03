@@ -2360,6 +2360,7 @@ impl<R: Runtime> Chef<R> {
                     b.reponse.clone_from(&texte);
                     b.statut = "fini";
                 }
+                let reportee = self.voix_reportee.is_some_and(|(t, _)| t == tour);
                 self.reprendre_voix();
                 if let Some((t, mut r)) = self.voix.take() {
                     if t == tour {
@@ -2371,9 +2372,9 @@ impl<R: Runtime> Chef<R> {
                 if tour == self.dernier {
                     self.transition(&[Evenement::ReponseCommence]);
                     let _ = self.app.emit(EVENEMENT_REPONSE, &texte);
-                    // Réponse encore reportée (KOB-377) : la lecture commence
-                    // quand elle est dite.
-                    if !self.voix_reportee.is_some_and(|(t, _)| t == tour) {
+                    // Réponse reportée (KOB-377) : la lecture commence quand
+                    // elle est dite, ou abandonnée (`reprendre_voix`).
+                    if !reportee {
                         self.lire(&texte);
                     }
                 }
@@ -3044,6 +3045,11 @@ impl<R: Runtime> Chef<R> {
         if self.annonces.len() < avant {
             tracing::info!("voix : annonce abandonnée (voix coupée ou réponse trop longue)");
         }
+        // Réponse reportée et voix coupée depuis : abandonnée tout de suite,
+        // même si la voix joue encore (KOB-377).
+        if self.voix_reportee.is_some_and(|(_, c)| c != coupures) {
+            self.reprendre_voix();
+        }
         if self.voix.is_none() && !crate::voix::occupee(&self.app) && !self.dire_validation() {
             self.reprendre_voix();
             if self.voix.is_none() && !crate::voix::occupee(&self.app) {
@@ -3066,6 +3072,13 @@ impl<R: Runtime> Chef<R> {
         if coupures != crate::voix::interruptions(&self.app) {
             tracing::info!(tour, "voix : réponse reportée abandonnée, voix coupée");
             self.voix_reportee = None;
+            // Déjà arrivée : sa lecture à l'écran ramène Kobi au calme.
+            let fini = self.bulle(tour).filter(|b| b.statut == "fini");
+            if let Some(texte) = fini.map(|b| b.reponse.clone()) {
+                if tour == self.dernier {
+                    self.lire(&texte);
+                }
+            }
             return;
         }
         if self.voix.is_some()
@@ -3906,6 +3919,27 @@ mod tests {
             assert!(c.voix_reportee.is_none());
             assert!(!crate::voix::occupee(&c.app));
             assert!(!crate::voix::est_ma_voix(&c.app, texte));
+            assert!(c.calme_a.is_some());
+            // Réponse arrivée pendant « Je le fais ? », puis l'utilisateur
+            // parle par-dessus : rien n'est dit, mais Kobi revient au calme.
+            c.question("et le planning d'avril ?".into(), true);
+            let tour = c.tour;
+            c.recevoir(Message::Cerveau(Retour::EnAttente { tour, nombre: 1 }));
+            c.validation_ouverte("v3".into(), "Créer budget.md");
+            let texte = "Le planning d'avril est prêt.";
+            c.recevoir(Message::Cerveau(Retour::Fin {
+                tour,
+                texte: texte.into(),
+            }));
+            if c.voix_reportee.is_some() {
+                assert!(c.calme_a.is_none());
+                crate::voix::taire(&c.app, "essai");
+                c.tick();
+                assert!(c.voix_reportee.is_none());
+                assert!(!crate::voix::est_ma_voix(&c.app, texte));
+            }
+            assert!(c.calme_a.is_some(), "Kobi ne reste pas en « répond »");
+            c.validation_fermee("v3", crate::validation::Reponse::Refuse);
             // Erreur après l'attente (réseau jamais revenu) : rien à reprendre.
             c.question("et le planning ?".into(), true);
             let tour = c.tour;
