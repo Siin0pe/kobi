@@ -108,13 +108,22 @@ impl AnnulationEcho {
             .unwrap_or(capte);
         let blocs = (self.reste.len() + micro.len()) / BLOC;
         // La référence ne se reprend qu'une fois (`prendre` oublie ce qu'il
-        // rend) : celle de la trame au repos, celle des blocs pendant la voix.
-        let au_repos = self.reste.is_empty() && !self.en_voix(maintenant);
-        let n = if au_repos { micro.len() } else { blocs * BLOC };
+        // rend) : celle du reste et de la trame au repos, celle des blocs
+        // pendant la voix.
+        let au_repos = !self.en_voix(maintenant);
+        let n = if au_repos {
+            self.reste.len() + micro.len()
+        } else {
+            blocs * BLOC
+        };
         let reference = kobi_tts::reference::prendre(debut, n, FREQUENCE);
         if au_repos && reference.iter().all(|x| x.abs() <= SEUIL) {
+            // Le reste laissé par la fin d'une voix passe devant : le flux
+            // revient trame pour trame.
             self.voix = None;
-            return micro.to_vec();
+            let mut sortie = std::mem::take(&mut self.reste);
+            sortie.extend_from_slice(micro);
+            return sortie;
         }
         let mut reste = std::mem::take(&mut self.reste);
         reste.extend_from_slice(micro);
