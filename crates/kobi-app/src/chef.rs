@@ -961,6 +961,23 @@ impl<R: Runtime> Chef<R> {
         self.historique.iter_mut().find(|b| b.tour == tour)
     }
 
+    /// `evenement` (carte proposée, réponse qui commence) arrive alors que
+    /// Kobi montre une erreur (question en attente du réseau), « fait », ou
+    /// est revenu au calme : l'Oups est acquitté, le calme passe « au
+    /// travail », seul chemin de la machine vers la proposition et la
+    /// réponse (KOB-386). Sinon (écoute, réponse en cours…), seul l'événement.
+    fn depuis_le_repos(&mut self, evenement: Evenement) {
+        if matches!(self.activite(), Some("oups" | "fait")) {
+            self.transition(&[Evenement::Acquitter]);
+        }
+        if matches!(self.activite(), Some("calme") | None)
+            && matches!(etat(&self.app).etat, "veille" | "assistant" | "reunion")
+        {
+            self.transition(&[Evenement::TacheLongue]);
+        }
+        self.transition(&[evenement]);
+    }
+
     fn transition(&self, evenements: &[Evenement]) -> bool {
         appliquer(&self.app, evenements).is_ok()
     }
@@ -2153,7 +2170,7 @@ impl<R: Runtime> Chef<R> {
         let annonce = self.validations.ouvrir(id, resume);
         self.question_a_la_carte = self.dernier;
         self.calme_a = None;
-        self.transition(&[Evenement::PermissionDemandee]);
+        self.depuis_le_repos(Evenement::PermissionDemandee);
         if annonce.is_some() {
             self.annoncer_validation();
         }
@@ -2481,7 +2498,7 @@ impl<R: Runtime> Chef<R> {
                     b.statut = "reponse";
                 }
                 if tour == self.dernier {
-                    self.transition(&[Evenement::ReponseCommence]);
+                    self.depuis_le_repos(Evenement::ReponseCommence);
                     let _ = self.app.emit(EVENEMENT_REPONSE, &texte);
                 }
                 self.reprendre_voix();
@@ -2516,7 +2533,7 @@ impl<R: Runtime> Chef<R> {
                     }
                 }
                 if tour == self.dernier {
-                    self.transition(&[Evenement::ReponseCommence]);
+                    self.depuis_le_repos(Evenement::ReponseCommence);
                     let _ = self.app.emit(EVENEMENT_REPONSE, &texte);
                     // Réponse reportée (KOB-377) : la lecture commence quand
                     // elle est dite, ou abandonnée (`reprendre_voix`).
@@ -2694,7 +2711,7 @@ impl<R: Runtime> Chef<R> {
                 } else {
                     self.question_a_la_carte = self.dernier;
                     self.calme_a = None;
-                    self.transition(&[Evenement::PermissionDemandee]);
+                    self.depuis_le_repos(Evenement::PermissionDemandee);
                 }
                 let _ = self.app.emit(EVENEMENT_CARTE, &ui);
                 // Celle de la conversation s'annonce comme une carte de Kobi
@@ -6886,5 +6903,63 @@ mod tests {
             transcript_du_compte_rendu(None, "[00:01 moi] Seul.\n"),
             "[00:01 moi] Seul.\n"
         );
+    }
+
+    /// KOB-386 : une question attend le réseau (Oups). Une carte qui s'ouvre
+    /// fait passer Kobi en proposition ; la réponse arrivée ensuite le montre
+    /// « répond », depuis l'Oups comme depuis le calme.
+    #[test]
+    fn oups_du_reseau_puis_carte_et_reponse() {
+        for reunion in [true, false] {
+            let (app, _dir) = chef_en_essai();
+            avec_chef(&app, |c| {
+                if reunion {
+                    c.commande(Intention::DemarrerReunion);
+                }
+                c.recevoir(Message::Interpelle);
+                c.envoyer("quelle est la prochaine étape ?".into(), None, true);
+                let tour = c.dernier;
+                c.recevoir(Message::Cerveau(Retour::EnAttente { tour, nombre: 1 }));
+                assert_eq!(c.activite(), Some("oups"));
+                c.validation_ouverte("v1".into(), "Ajoute un rappel");
+                assert_eq!(c.activite(), Some("propose"), "réunion : {reunion}");
+                c.recevoir(Message::ValidationFermee {
+                    id: "v1".into(),
+                    reponse: crate::validation::Reponse::Refuse,
+                });
+                c.recevoir(Message::Cerveau(Retour::Fin {
+                    tour,
+                    texte: "La prochaine étape est la démo.".into(),
+                }));
+                assert_eq!(c.activite(), Some("repond"));
+                c.calme_a = c.calme_a.map(|(_, e)| (Instant::now(), e));
+                c.tick();
+                assert_eq!(c.activite(), if reunion { Some("calme") } else { None });
+            });
+            // Sans carte : la réponse arrive pendant l'Oups, ou après son
+            // effacement.
+            for efface in [false, true] {
+                let (app, _dir) = chef_en_essai();
+                avec_chef(&app, |c| {
+                    if reunion {
+                        c.commande(Intention::DemarrerReunion);
+                    }
+                    c.recevoir(Message::Interpelle);
+                    c.envoyer("et le budget ?".into(), None, true);
+                    let tour = c.dernier;
+                    c.recevoir(Message::Cerveau(Retour::EnAttente { tour, nombre: 1 }));
+                    if efface {
+                        c.calme_a = c.calme_a.map(|(_, e)| (Instant::now(), e));
+                        c.tick();
+                        assert_ne!(c.activite(), Some("oups"));
+                    }
+                    c.recevoir(Message::Cerveau(Retour::Texte {
+                        tour,
+                        texte: "Le budget".into(),
+                    }));
+                    assert_eq!(c.activite(), Some("repond"), "effacé : {efface}");
+                });
+            }
+        }
     }
 }
