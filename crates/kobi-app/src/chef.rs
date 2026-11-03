@@ -3292,6 +3292,21 @@ impl<R: Runtime> Chef<R> {
         {
             self.transition(&[Evenement::TacheLongue]);
         }
+        // Une carte de Kobi ou de la conversation attend encore et Kobi est
+        // libre (réponse à une autre question finie) : il y repropose
+        // (KOB-384). Une carte des notes venue d'ailleurs n'y ramène pas
+        // (KOB-338) ; un résultat à livrer passe d'abord.
+        if (!self.validations.est_vide() || self.carte_mcp_de_la_conversation())
+            && self.calme_a.is_none()
+            && self.a_livrer.is_empty()
+            && matches!(self.activite(), Some("calme" | "occupe") | None)
+            && matches!(etat(&self.app).etat, "veille" | "assistant" | "reunion")
+        {
+            if self.activite() != Some("occupe") {
+                self.transition(&[Evenement::TacheLongue]);
+            }
+            self.transition(&[Evenement::PermissionDemandee]);
+        }
         // Longtemps en veille : la prochaine question ouvre une autre conversation.
         if self
             .conversation
@@ -4982,6 +4997,69 @@ mod tests {
                 assert_eq!(c.activite(), Some("repond"));
             });
         }
+    }
+
+    /// KOB-384 : une carte de Kobi attend, l'utilisateur pose une autre
+    /// question ; une fois sa réponse lue, Kobi repropose la carte au lieu de
+    /// rester au calme ou « au travail ».
+    #[test]
+    fn carte_reproposee_apres_une_autre_question() {
+        for reunion in [true, false] {
+            let (app, _dir) = chef_en_essai();
+            avec_chef(&app, |c| {
+                if reunion {
+                    c.commande(Intention::DemarrerReunion);
+                }
+                c.recevoir(Message::Interpelle);
+                c.envoyer("ajoute un rappel".into(), None, true);
+                let tour = c.dernier;
+                c.recevoir(Message::Cerveau(Retour::Detache {
+                    tour,
+                    annonce: true,
+                }));
+                c.validation_ouverte("v1".into(), "Ajoute un rappel");
+                assert_eq!(c.activite(), Some("propose"));
+                // Une autre question, sa réponse, puis la fin de la lecture.
+                c.recevoir(Message::Interpelle);
+                c.envoyer("Quelle est la date de la démo ?".into(), None, true);
+                let autre = c.dernier;
+                c.recevoir(Message::Cerveau(Retour::Fin {
+                    tour: autre,
+                    texte: "La démo est jeudi.".into(),
+                }));
+                assert_eq!(c.activite(), Some("repond"));
+                c.calme_a = c.calme_a.map(|(_, e)| (Instant::now(), e));
+                c.tick();
+                assert_eq!(c.activite(), Some("propose"), "réunion : {reunion}");
+                // La carte acceptée : Kobi repart sur le tour.
+                c.recevoir(Message::ValidationFermee {
+                    id: "v1".into(),
+                    reponse: crate::validation::Reponse::Accepte,
+                });
+                assert_eq!(c.activite(), Some("reflechit"));
+            });
+        }
+        // Une carte des notes venue pendant une réponse n'y ramène pas.
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            c.recevoir(Message::Interpelle);
+            c.envoyer("Quelle est la date de la démo ?".into(), None, true);
+            c.recevoir(Message::Cerveau(Retour::Carte {
+                tour: 0,
+                carte: 3,
+                outil: "mcp__linear__save_issue".into(),
+                entree: serde_json::json!({"title": "Corriger la connexion"}),
+            }));
+            let tour = c.dernier;
+            c.recevoir(Message::Cerveau(Retour::Fin {
+                tour,
+                texte: "La démo est jeudi.".into(),
+            }));
+            c.calme_a = c.calme_a.map(|(_, e)| (Instant::now(), e));
+            c.tick();
+            assert_eq!(c.activite(), Some("calme"));
+        });
     }
 
     /// KOB-379 : « Kobi, oui » sur une carte quand une autre attend : Kobi

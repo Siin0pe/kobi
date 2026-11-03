@@ -760,10 +760,13 @@ impl Ecouteur {
                 self.attente = Attente::Nom;
                 vec![Action::Abandonner]
             }
+            // Une carte attend encore sa réponse : « oui » ou « non » sans le
+            // nom valent jusqu'à son échéance, même après la réponse à une
+            // autre question (KOB-384).
             Attente::Conversation {
                 depuis,
                 parle: None,
-            } if t - depuis > CONVERSATION => {
+            } if t - depuis > CONVERSATION && !self.carte_ouverte(t) => {
                 self.attente = Attente::Nom;
                 Vec::new()
             }
@@ -1762,6 +1765,36 @@ mod tests {
             envois(&e.segment("Tu en penses quoi, Kobi ?", true, 1.0)),
             ["Tu en penses quoi ?"]
         );
+    }
+
+    /// KOB-384 : une carte attend, une autre question passe et reçoit sa
+    /// réponse : « C'est ok » sans le nom répond encore à la carte jusqu'à
+    /// son échéance ; ensuite, il faut le nom.
+    #[test]
+    fn carte_attend_apres_une_autre_question() {
+        let mut e = Ecouteur::default();
+        e.reponse_attendue(0.0, 60.0);
+        let actions = e.segment("Quelle est la date de la démo ?", true, 5.0);
+        assert!(actions.contains(&Envoyer("Quelle est la date de la démo ?".into())));
+        // Réponse dite : la conversation repart de là.
+        e.suite(8.0);
+        assert!(e.tick(35.0).is_empty());
+        assert!(e.attend_carte(35.0));
+        let actions = e.segment("C'est ok", true, 35.0);
+        assert!(actions.contains(&Envoyer("C'est ok".into())), "{actions:?}");
+        // Après l'échéance de la carte, la fenêtre habituelle reprend.
+        let mut e = Ecouteur::default();
+        e.reponse_attendue(0.0, 60.0);
+        e.segment("Quelle est la date de la démo ?", true, 5.0);
+        e.suite(8.0);
+        e.tick(61.0);
+        assert!(!e.attend_reponse());
+        assert!(e.segment("C'est ok", true, 62.0).is_empty());
+        // Sans carte, la fenêtre de conversation reste de 20 s.
+        let mut e = Ecouteur::default();
+        e.suite(8.0);
+        e.tick(29.0);
+        assert!(!e.attend_reponse());
     }
 
     /// Graphies de Nemotron relevées sur le corpus de KOB-179 : retrouvées en
