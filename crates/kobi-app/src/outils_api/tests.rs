@@ -305,27 +305,39 @@ fn lien_vers_un_chemin_reseau_refuse_sous_windows() {
         let e = l.lire(&json!({ "file_path": chemin })).unwrap_err();
         assert!(e.contains("chemin réseau"), "{chemin} : {e}");
     }
-    // KOB-367 : la cible absolue d'un lien est lue en `\\?\C:\…` ; la suite
-    // du chemin donné (non verbatim, que Win32 traduit) est encore jugée.
-    // Donné verbatim, Win32 ne traduit rien : permis.
+    // KOB-367 : après un lien à cible absolue, la suite du chemin donné (non
+    // verbatim, que Win32 traduit) est encore jugée, quelle que soit la
+    // forme rendue par `read_link`. Selon le poste, une cible donnée en
+    // `C:\…` est rendue telle quelle ou en `\\?\C:\…` : les deux formes sont
+    // créées ici (`lib`, puis `lib2` en verbatim explicite, le cas de
+    // KOB-367). Donné verbatim, Win32 ne traduit rien : permis (KOB-398).
     fs::create_dir_all(racine.join("vendor")).unwrap();
-    symlink_dir(racine.join("vendor"), racine.join("lib")).unwrap();
+    let vendor = racine.join("vendor");
+    symlink_dir(&vendor, racine.join("lib")).unwrap();
+    symlink_dir(
+        PathBuf::from(format!(r"\\?\{}", vendor.display())),
+        racine.join("lib2"),
+    )
+    .unwrap();
     assert!(
-        std::fs::read_link(racine.join("lib"))
+        std::fs::read_link(racine.join("lib2"))
             .unwrap()
             .to_string_lossy()
             .starts_with(r"\\?\"),
-        "cible lue sans le préfixe verbatim : le cas de KOB-367 n'est pas reproduit"
+        "cible verbatim relue sans son préfixe"
     );
-    for nom in [r"lib\COM1", r"lib\CON.txt", r"lib\nul"] {
-        assert!(lien_vers_le_reseau(&racine.join(nom), true), "{nom}");
+    for lien in ["lib", "lib2"] {
+        for nom in ["COM1", "CON.txt", "nul"] {
+            let chemin = racine.join(lien).join(nom);
+            assert!(lien_vers_le_reseau(&chemin, true), "{}", chemin.display());
+        }
+        let verbatim = PathBuf::from(format!(r"\\?\{}", racine.join(lien).join("COM1").display()));
+        assert!(
+            !lien_vers_le_reseau(&verbatim, true),
+            "{}",
+            verbatim.display()
+        );
     }
-    let verbatim = PathBuf::from(format!(r"\\?\{}", racine.join(r"lib\COM1").display()));
-    assert!(
-        !lien_vers_le_reseau(&verbatim, true),
-        "{}",
-        verbatim.display()
-    );
 }
 
 /// Rien ne se lit hors des dossiers permis : chemin absolu, `..`, lien
