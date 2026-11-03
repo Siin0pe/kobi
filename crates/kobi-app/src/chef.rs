@@ -2543,7 +2543,6 @@ impl<R: Runtime> Chef<R> {
                     // celle-ci y ramène aussi.
                     let deja = self.activite() == Some("propose")
                         && self.cartes_des_notes.values().any(|&calme| calme)
-                        && self.validations.est_vide()
                         && self
                             .cartes
                             .keys()
@@ -4522,6 +4521,28 @@ mod tests {
                 carte: 3,
                 accepte: Some(false),
             }));
+            assert_eq!(c.activite(), Some("calme"));
+        });
+        // Une seconde carte des notes arrive pendant que la carte de Kobi
+        // attend : la carte de Kobi refusée, puis la première des notes, la
+        // dernière fermée ramène au calme.
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            ouvrir(c);
+            c.recevoir(Message::Cerveau(Retour::Carte {
+                tour: 0,
+                carte: 4,
+                outil: "mcp__linear__save_issue".into(),
+                entree: serde_json::json!({"title": "Relancer le client"}),
+            }));
+            c.recevoir(fermee(crate::validation::Reponse::Refuse));
+            for carte in [3, 4] {
+                assert_eq!(c.activite(), Some("propose"));
+                c.recevoir(Message::Cerveau(Retour::CarteFermee {
+                    carte,
+                    accepte: Some(false),
+                }));
+            }
             assert_eq!(c.activite(), Some("calme"));
         });
     }
