@@ -108,16 +108,25 @@ export class Scrambler {
     return this.unsub !== null;
   }
 
-  /** Ferme ou rouvre les yeux (sans effet pendant le brouillage). */
+  /**
+   * Yeux posés : hors brouillage, ou quand seul le mot se pose encore (après
+   * les 5 pas des yeux). Un clignement ou une expression s'y peint tout de
+   * suite, sans attendre le pas suivant (KOB-401).
+   */
+  private get eyesSettled(): boolean {
+    return !this.scrambling || this.lastStep >= EYE_STEPS;
+  }
+
+  /** Ferme ou rouvre les yeux (sans effet pendant le brouillage des yeux). */
   blink(closed: boolean): void {
     this.blinking = closed;
-    if (!this.scrambling) this.paintEyes();
+    if (this.eyesSettled) this.paintEyes();
   }
 
   /** Expression passagère des deux yeux, `null` pour revenir à celle de l'état. */
   express(eyes: Eyes | null): void {
     this.expression = eyes;
-    if (!this.scrambling) this.paintEyes();
+    if (this.eyesSettled) this.paintEyes();
   }
 
   /** Brouille une seule lettre du mot quelques pas, puis la repose (veille). */
