@@ -135,6 +135,27 @@ test('300 mots : hauteur maximale, puis défilement doux qui suit le flux ; on r
   await expectNoErrors(errors);
 });
 
+test('à 15 images/s, le suivi rattrape le bas aussi vite qu’à 60 (temps écoulé, pas nombre d’images)', async ({ page }) => {
+  await page.clock.install();
+  const errors = await openUi(page, '');
+  await page.evaluate(() => window.kobiAnimations.poser({ fps: 15 }));
+  await answer(page, mots(300));
+  await page.clock.runFor(30_000);
+  const ecart = () => zone(page).evaluate((n) => n.scrollHeight - n.clientHeight - n.scrollTop);
+  await expect.poll(ecart).toBeLessThanOrEqual(6);
+  // Un bloc de 300 px arrive d'un coup sous le texte.
+  await zone(page).evaluate((n) => {
+    const bloc = document.createElement('div');
+    bloc.style.height = '300px';
+    n.querySelector('.text')!.append(bloc);
+  });
+  await page.clock.runFor(300);
+  // 18 % par 1/60 s : en 300 ms, plus de 95 % de l'écart est rattrapé. Avant
+  // KOB-405, 18 % par image : à 15 images/s, 4 ou 5 pas, 40 % restaient.
+  expect(await ecart()).toBeLessThan(30);
+  await expectNoErrors(errors);
+});
+
 test('1 500 mots : début lisible, défilement, et « Lire en grand » qui ouvre la vue agrandie', async ({ page }) => {
   const errors = await openUi(page, '');
   await answer(page, mots(1500));
