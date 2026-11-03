@@ -137,6 +137,26 @@ test('Kobi cligne des yeux en écoute, jamais en réflexion', async ({ page }) =
   await expectNoErrors(errors);
 });
 
+test('les yeux posés, un clignement ou une expression se peint tout de suite, même si le mot se pose encore', async ({ page }) => {
+  await page.clock.install();
+  const errors = await openUi(page, '');
+  await page.evaluate(() => window.kobi.setState('listen', window.kobi.demoData('listen')));
+  // 400 ms : les yeux sont posés (5 pas de 60 ms), le mot d'écoute pas encore.
+  await page.clock.runFor(400);
+  const vu = await page.evaluate(() => {
+    const kobi = window.kobi.stage.kobi as unknown as { scrambler: { scrambling: boolean }; pinch(): void };
+    const oeil = () => document.querySelector('.kobi .g')!.textContent;
+    const avant = { oeil: oeil(), brouille: kobi.scrambler.scrambling };
+    kobi.pinch();
+    return { ...avant, pince: oeil() };
+  });
+  expect(vu.brouille, 'le mot se pose encore').toBe(true);
+  expect(vu.oeil).toBe('O');
+  // Avant KOB-401, l'expression attendait le pas suivant du brouillage du mot.
+  expect(vu.pince).toBe('>');
+  await expectNoErrors(errors);
+});
+
 test('réduire les animations : ni brouillage ni clignement', async ({ page }) => {
   const errors = await openUi(page, 'reduced=1');
   await page.evaluate(() => window.kobi.setState('answer', window.kobi.demoData('answer')));
