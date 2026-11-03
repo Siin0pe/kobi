@@ -1041,11 +1041,26 @@ fn lien_vers_le_reseau(chemin: &Path, peripheriques: bool) -> bool {
             // (dossier du lien + cible), pas après un lien intermédiaire de
             // la cible : `x\..\y` mène au `y` voisin du lien, même si `x` est
             // un lien vers ailleurs (KOB-411). Le reste du chemin suit.
+            // Une cible absolue avec `.` ou `..` ne vient que de données
+            // de reparse forgées, où la réduction de NT n'est pas prouvée ;
+            // un `..` qui remonterait au-dessus de la racine non plus :
+            // refusés plutôt que devinés.
             let substitue = if cible.is_absolute() {
+                if cible.components().any(|c| {
+                    matches!(
+                        c,
+                        std::path::Component::CurDir | std::path::Component::ParentDir
+                    )
+                }) {
+                    return true;
+                }
                 cible.clone()
             } else {
                 resolu.join(&cible)
             };
+            if remonte_au_dessus_de_la_racine(&substitue) {
+                return true;
+            }
             let reste: Vec<PathBuf> = a_lire.drain(..).collect();
             resolu = PathBuf::new();
             a_lire.extend(
@@ -1061,6 +1076,22 @@ fn lien_vers_le_reseau(chemin: &Path, peripheriques: bool) -> bool {
         }
         for composant in cible.components().rev() {
             a_lire.push_front(PathBuf::from(composant.as_os_str()));
+        }
+    }
+    false
+}
+
+/// Un `..` du chemin remonterait-il au-dessus de sa racine (ou de son
+/// préfixe) ? `reduire_sur_le_texte` l'ignorerait sans rien dire (KOB-411).
+fn remonte_au_dessus_de_la_racine(chemin: &Path) -> bool {
+    use std::path::Component;
+    let mut profondeur = 0usize;
+    for composant in chemin.components() {
+        match composant {
+            Component::Normal(_) => profondeur += 1,
+            Component::ParentDir if profondeur == 0 => return true,
+            Component::ParentDir => profondeur -= 1,
+            _ => {}
         }
     }
     false

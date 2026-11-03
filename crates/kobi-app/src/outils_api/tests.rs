@@ -457,6 +457,14 @@ fn point_point_d_une_cible_reduit_sur_le_texte() {
         let e = l.lire(&json!({ "file_path": chemin })).unwrap_err();
         assert!(e.contains("chemin réseau"), "{chemin} : {e}");
     }
+    // Un `..` de cible qui remonterait au-dessus de la racine : refusé.
+    let profondeur = racine.components().count() + 2;
+    let trop_haut = format!(r"{}UNC\attaquant\p", r"..\".repeat(profondeur));
+    symlink_file(&trop_haut, racine.join("haut")).unwrap();
+    assert!(
+        lien_vers_le_reseau(&racine.join("haut"), true),
+        "{trop_haut}"
+    );
     // Sans lien réseau au bout, la même forme se lit : `u` vise `x\..\z`,
     // et `z`, voisin du lien, est ordinaire.
     fs::write(racine.join("z"), "ordinaire").unwrap();
