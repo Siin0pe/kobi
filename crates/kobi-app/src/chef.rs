@@ -3431,6 +3431,19 @@ impl<R: Runtime> Chef<R> {
             }
             self.transition(&[Evenement::PermissionDemandee]);
         }
+        // Kobi réfléchit sans rien qui puisse répondre : ni question en
+        // cours, ni tâche, ni résultat à livrer (carte sans tour acceptée,
+        // tâche finie en erreur) ; il revient au calme au lieu de rester figé
+        // (KOB-391).
+        if self.activite() == Some("reflechit")
+            && !self.question_en_cours()
+            && self.taches.is_empty()
+            && self.a_livrer.is_empty()
+            && self.calme_a.is_none()
+        {
+            tracing::info!("réflexion sans question ni tâche : retour au calme");
+            self.transition(&[Evenement::ReponseTerminee]);
+        }
         // Longtemps en veille : la prochaine question ouvre une autre conversation.
         if self
             .conversation
@@ -7026,6 +7039,42 @@ mod tests {
                 entree: serde_json::json!({"title": "Corriger la connexion"}),
             }));
             assert_eq!(c.activite(), Some("oups"));
+        });
+    }
+
+    /// KOB-391 : une carte de Kobi sans question derrière elle (hook des
+    /// notes, `kobi validation ask`), reproposée au tick puis acceptée : Kobi
+    /// ne reste pas figé en réflexion, il revient au calme.
+    #[test]
+    fn carte_sans_question_acceptee_ne_fige_pas() {
+        for reunion in [true, false] {
+            let (app, _dir) = chef_en_essai();
+            avec_chef(&app, |c| {
+                if reunion {
+                    c.commande(Intention::DemarrerReunion);
+                }
+                c.validation_ouverte("v1".into(), "Ajoute un rappel");
+                c.tick();
+                assert_eq!(c.activite(), Some("propose"));
+                c.recevoir(Message::ValidationFermee {
+                    id: "v1".into(),
+                    reponse: crate::validation::Reponse::Accepte,
+                });
+                c.tick();
+                assert_eq!(
+                    c.activite(),
+                    if reunion { Some("calme") } else { None },
+                    "réunion : {reunion}"
+                );
+            });
+        }
+        // Une question en cours : la réflexion attend sa réponse.
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.recevoir(Message::Interpelle);
+            c.envoyer("Crée le ticket".into(), None, true);
+            c.tick();
+            assert_eq!(c.activite(), Some("reflechit"));
         });
     }
 }
