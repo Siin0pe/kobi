@@ -56,35 +56,43 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # --no-fail-fast (KOB-412) : tous les binaires de test tournent, même
+      # après un rouge ; le job reste rouge, mais un run montre tous les
+      # échecs de l'OS, pas seulement le premier.
       - name: Tests
-        run: cargo test --workspace
+        run: cargo test --workspace --no-fail-fast
 
       # Moteurs optionnels : bibliothèques natives téléchargées au build, sans
-      # modèle (les tests qui en demandent un sont ignorés).
+      # modèle (les tests qui en demandent un sont ignorés). Ils tournent même
+      # si l'étape Tests est rouge (`!cancelled()`, le job reste rouge) : un
+      # run montre tous les échecs (KOB-412).
       - name: Moteur Nemotron (sherpa-onnx)
+        if: ${{ !cancelled() }}
         run: |
           cargo clippy -p kobi-stt -p kobi-bench --features kobi-stt/nemotron,kobi-bench/nemotron --all-targets -- -D warnings
-          cargo test -p kobi-stt -p kobi-bench --features kobi-stt/nemotron,kobi-bench/nemotron
+          cargo test --no-fail-fast -p kobi-stt -p kobi-bench --features kobi-stt/nemotron,kobi-bench/nemotron
 
       # Mot-clé avec ONNX Runtime lié statiquement (binaires précompilés
       # d'ort ; le défaut, ort-dynamic, est couvert par le workspace).
       - name: Mot-clé, ONNX Runtime statique
+        if: ${{ !cancelled() }}
         run: |
           cargo clippy -p kobi-wake --no-default-features --features ort-static --all-targets -- -D warnings
-          cargo test -p kobi-wake --no-default-features --features ort-static
+          cargo test --no-fail-fast -p kobi-wake --no-default-features --features ort-static
 
       - name: Place disque avant Kyutai (Linux)
-        if: runner.os == 'Linux'
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
         run: df -h /
 
       # Kyutai STT : candle, Rust pur, rien de natif à télécharger.
       - name: Moteur Kyutai (moshi, candle)
+        if: ${{ !cancelled() }}
         run: |
           cargo clippy -p kobi-stt -p kobi-bench --features kobi-stt/kyutai,kobi-bench/kyutai --all-targets -- -D warnings
-          cargo test -p kobi-stt -p kobi-bench --features kobi-stt/kyutai,kobi-bench/kyutai
+          cargo test --no-fail-fast -p kobi-stt -p kobi-bench --features kobi-stt/kyutai,kobi-bench/kyutai
 
       - name: Place disque à la fin (Linux)
-        if: runner.os == 'Linux'
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
         run: df -h /
 
   ui:
