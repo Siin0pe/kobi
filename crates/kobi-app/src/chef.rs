@@ -3112,10 +3112,18 @@ impl<R: Runtime> Chef<R> {
     /// attend la suite sans qu'on redise « Kobi » (KOB-133).
     fn lire(&mut self, texte: &str) {
         let lecture = LECTURE_MIN + Duration::from_millis(60 * texte.chars().count() as u64);
-        self.calme_a = Some((
-            Instant::now() + lecture.min(Duration::from_secs(25)),
-            Evenement::ReponseTerminee,
-        ));
+        // Un Oups affiché pendant la réponse garde son acquittement : le
+        // retour au calme de la lecture n'est pas accepté depuis « oups », et
+        // Kobi y restait pour de bon (KOB-392).
+        if !self
+            .calme_a
+            .is_some_and(|(_, e)| matches!(e, Evenement::Acquitter))
+        {
+            self.calme_a = Some((
+                Instant::now() + lecture.min(Duration::from_secs(25)),
+                Evenement::ReponseTerminee,
+            ));
+        }
         let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::Suite);
         self.suite_apres_voix = true;
     }
@@ -3387,7 +3395,11 @@ impl<R: Runtime> Chef<R> {
             // Le retour au calme attend que Kobi ait fini de parler.
             if Instant::now() >= quand && !parle {
                 self.calme_a = None;
-                self.transition(&[evenement]);
+                // Filet : un retour au calme refusé depuis un Oups l'acquitte,
+                // plutôt que de l'y laisser pour de bon (KOB-392).
+                if !self.transition(&[evenement]) && self.activite() == Some("oups") {
+                    self.transition(&[Evenement::Acquitter]);
+                }
             }
         }
         // Résultats de tâches en attente : le suivant, s'il peut passer.
@@ -4368,6 +4380,38 @@ mod tests {
             assert!(c.patience_reportee.is_some());
             c.validation_fermee("v4", crate::validation::Reponse::Refuse);
             assert!(c.patience_reportee.is_none());
+        });
+    }
+
+    /// KOB-392 : une erreur pendant une réponse en cours, puis la fin de la
+    /// réponse : l'Oups garde son acquittement et Kobi revient au calme.
+    #[test]
+    fn oups_pendant_une_reponse_acquitte() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            c.recevoir(Message::Interpelle);
+            c.question("résume le projet Hermès".into(), true);
+            let tour = c.tour;
+            c.recevoir(Message::Cerveau(Retour::Texte {
+                tour,
+                texte: "Le projet avance. ".into(),
+            }));
+            assert_eq!(c.activite(), Some("repond"));
+            c.erreur("Notes", "Les notes n'ont pas pu être écrites.");
+            assert_eq!(c.activite(), Some("oups"));
+            c.recevoir(Message::Cerveau(Retour::Fin {
+                tour,
+                texte: "Le projet avance. La revue est vendredi.".into(),
+            }));
+            assert!(
+                matches!(c.calme_a, Some((_, Evenement::Acquitter))),
+                "l'acquittement de l'Oups reste armé"
+            );
+            // Délai de l'Oups passé : retour au calme.
+            c.calme_a = Some((Instant::now(), Evenement::Acquitter));
+            c.tick();
+            assert_eq!(c.activite(), Some("calme"));
         });
     }
 
