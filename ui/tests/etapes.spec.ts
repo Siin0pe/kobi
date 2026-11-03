@@ -27,6 +27,25 @@ async function ouvrir(page: Page): Promise<string[]> {
     localStorage.setItem('kobi.affichage', JSON.stringify({ v: 2, auto: 'jamais', delai: 0 }));
     const w = window as unknown as { __TAURI__: { window: unknown }; __deplacements: number };
     w.__deplacements = 0;
+    const sonde: unknown[] = [];
+    (w as unknown as { __sonde: unknown[] }).__sonde = sonde;
+    const desc = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollTop')!;
+    Object.defineProperty(Element.prototype, 'scrollTop', {
+      get() { return desc.get!.call(this); },
+      set(v: number) {
+        if ((this as Element).classList?.contains('lecture-corps')) sonde.push({ t: Math.round(performance.now()), ecrit: Math.round(v), avant: Math.round(desc.get!.call(this)) });
+        desc.set!.call(this, v);
+      },
+      configurable: true,
+    });
+    for (const type of ['pointerdown', 'pointerup', 'click', 'toggle']) {
+      window.addEventListener(type, (e) => {
+        const cible = e.target as Element;
+        const corps = document.querySelector('.lecture-corps');
+        const box = document.querySelectorAll('.vex-etapes')[3]?.querySelector('summary')?.getBoundingClientRect();
+        sonde.push({ t: Math.round(performance.now()), type, cible: `${cible.tagName}.${cible.className}`, x: (e as MouseEvent).clientX, y: (e as MouseEvent).clientY, st: corps && Math.round(desc.get!.call(corps)), sh: corps?.scrollHeight, ch: corps?.clientHeight, box3: box && [Math.round(box.top), Math.round(box.bottom)], depl: w.__deplacements, dp: e.defaultPrevented });
+      }, true);
+    }
     let pris = false;
     // Comme la vraie fenêtre : une fois le déplacement lancé, la coque a la
     // souris et le relâchement n'arrive pas à la page, donc pas de clic.
@@ -87,8 +106,15 @@ async function cliquer(page: Page, cible: Locator): Promise<void> {
 
 async function deplier(page: Page, box: Locator): Promise<void> {
   await expect(box).not.toHaveAttribute('open');
+  await page.evaluate(() => ((window as unknown as { __sonde: unknown[] }).__sonde.length = 0));
+  const avant = await box.locator('summary').boundingBox();
   await cliquer(page, box.locator('summary'));
-  await expect(box).toHaveAttribute('open', '');
+  try {
+    await expect(box).toHaveAttribute('open', '', { timeout: 3000 });
+  } catch (e) {
+    const sonde = await page.evaluate(() => (window as unknown as { __sonde: unknown[] }).__sonde);
+    throw new Error(`SONDE summary avant ${JSON.stringify(avant)}\n${sonde.map((x) => JSON.stringify(x)).join('\n')}\n${e}`);
+  }
   // Replié de nouveau pour le clic suivant (clic simple, sans glisser).
   await box.locator('summary').click();
   await expect(box).not.toHaveAttribute('open');
