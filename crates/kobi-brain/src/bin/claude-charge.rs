@@ -689,19 +689,18 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let chemin = dir.join(".bench.lock");
-        // `flock -n` d'un autre processus : 0 si libre, 1 si tenu.
-        let libre = || {
-            Command::new("flock")
-                .arg("-n")
-                .arg(&chemin)
-                .arg("true")
-                .status()
-                .unwrap()
-                .success()
+        // Sonde `flock -n` sans le binaire `flock(1)` de util-linux, absent
+        // de macOS (KOB-399) : `File::try_lock` est un `flock(2)` sur une
+        // nouvelle description de fichier, en conflit avec celle du verrou
+        // même dans ce processus, comme `flock -n` depuis un autre.
+        let libre = || match File::open(&chemin).unwrap().try_lock() {
+            Ok(()) => true,
+            Err(std::fs::TryLockError::WouldBlock) => false,
+            Err(std::fs::TryLockError::Error(e)) => panic!("sonde flock : {e}"),
         };
         let verrou = BenchLock::acquire(chemin.clone()).unwrap();
         assert!(chemin.is_file());
-        assert!(!libre(), "verrou tenu, flock(1) doit attendre");
+        assert!(!libre(), "verrou tenu, un autre flock doit attendre");
         drop(verrou);
         assert!(chemin.is_file(), "le fichier verrou n'est jamais supprimé");
         assert!(libre(), "verrou relâché");
