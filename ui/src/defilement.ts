@@ -23,6 +23,9 @@ export class Defilement {
   private readonly observer: ResizeObserver;
   private readonly mutations: MutationObserver;
   private instant = false;
+  /** Bouton enfoncé dans la zone depuis (ms) : le suivi ne glisse pas sous le doigt (KOB-376). */
+  private appui: number | null = null;
+  private lacher: AbortController | null = null;
 
   constructor(
     private readonly zone: HTMLElement,
@@ -40,6 +43,7 @@ export class Defilement {
     }, { passive: true });
     zone.addEventListener('pointerdown', (e) => {
       this.glisse = false;
+      if (e.button === 0) this.retenir();
       if (e.button !== 0 || zone.scrollHeight <= zone.clientHeight) return;
       // Bulle du mode simple : elle ne défile pas, rien à glisser (KOB-246).
       if (getComputedStyle(zone).overflowY === 'hidden') return;
@@ -102,8 +106,34 @@ export class Defilement {
   destroy(): void {
     this.observer.disconnect();
     this.mutations.disconnect();
+    this.lacher?.abort();
     this.stopTick?.();
     this.stopTick = null;
+  }
+
+  /**
+   * Un clic sur « N étapes » pendant que le suivi glisse vers le bas : la
+   * ligne montait sous le doigt entre l'appui et le relâchement, qui tombait
+   * à côté, et rien ne s'ouvrait (KOB-376). Le suivi attend le relâchement,
+   * n'importe où dans la page.
+   */
+  private retenir(): void {
+    this.lacher?.abort();
+    const lacher = new AbortController();
+    this.lacher = lacher;
+    this.appui = performance.now();
+    const fin = (): void => {
+      lacher.abort();
+      this.appui = null;
+      this.poke();
+    };
+    window.addEventListener('pointerup', fin, { signal: lacher.signal });
+    window.addEventListener('pointercancel', fin, { signal: lacher.signal });
+  }
+
+  /** Appui en cours ? Un relâchement perdu (fenêtre déplacée par la coque) ne bloque pas le suivi plus de 2 s. */
+  private retenu(): boolean {
+    return this.appui !== null && performance.now() - this.appui < 2000;
   }
 
   /** Le contenu a changé de taille : on glisse vers le bas si on suit. */
@@ -115,7 +145,7 @@ export class Defilement {
       this.zone.scrollTop = 0;
       return;
     }
-    if (!this.follow || this.stopTick) return;
+    if (!this.follow || this.stopTick || this.retenu()) return;
     if (this.instant) {
       this.zone.scrollTop = this.zone.scrollHeight;
       return;
@@ -127,7 +157,7 @@ export class Defilement {
     const z = this.zone;
     const target = z.scrollHeight - z.clientHeight;
     const gap = target - z.scrollTop;
-    if (!this.follow || gap <= 1) {
+    if (!this.follow || gap <= 1 || this.retenu()) {
       this.stopTick = null;
       return false;
     }

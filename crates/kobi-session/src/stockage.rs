@@ -1352,14 +1352,11 @@ mod tests {
     fn ancien_nom_note_meme_si_le_titre_n_est_pas_ecrit() {
         let (_d, st) = stockage();
         let mut r = st.nouvelle_reunion(T0, None).unwrap();
-        // Une fois le dossier déplacé, `reunion.json` est un dossier : son
-        // écriture atomique échoue.
-        let cible = st.dossier_reunions().join("2026-10-18-retro-du-sprint");
-        let ancien = r.dossier().to_path_buf();
-        fs::rename(&ancien, &cible).unwrap();
-        fs::remove_file(cible.join(META)).ok();
-        fs::create_dir_all(cible.join(META)).unwrap();
-        fs::rename(&cible, &ancien).unwrap();
+        // `reunion.json` est un dossier, qui suit le déplacement : son
+        // écriture atomique échoue. Le dossier de la réunion ne bouge pas
+        // ici : sous Windows, la transcription ouverte l'en empêche (KOB-376).
+        fs::remove_file(r.dossier().join(META)).ok();
+        fs::create_dir_all(r.dossier().join(META)).unwrap();
         assert!(r.nommer("Rétro du sprint", Origine::Manuel).is_err());
         assert_eq!(r.nom(), "2026-10-18-retro-du-sprint", "le dossier a bougé");
         assert_eq!(
@@ -1394,6 +1391,10 @@ mod tests {
         let titre = r.meta().titre.clone().unwrap();
         assert!(titre.starts_with("Réunion du 18/10 à "), "{titre}");
         assert_eq!(r.nom(), "2026-10-18-reunion");
+        // Comme dans l'app, le stockage ne renomme qu'une réunion fermée (la
+        // réunion en cours passe par `nommer`) : sous Windows, la
+        // transcription ouverte bloquerait le dossier (KOB-376).
+        drop(r);
         let nouveau = st
             .renommer_reunion("2026-10-18-reunion", "Rétro du sprint")
             .unwrap();
