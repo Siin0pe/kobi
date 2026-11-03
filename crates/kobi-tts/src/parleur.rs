@@ -442,6 +442,31 @@ mod tests {
         assert_eq!(p.texte_en_cours(), "une deux trois quatre cinq ");
     }
 
+    /// DIAGNOSTIC KOB-407, à retirer : chiffres réels du runner.
+    #[test]
+    fn diag_kob407_mesures() {
+        let t = Instant::now();
+        for _ in 0..50 {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let cinquante = t.elapsed();
+        let (p, joue, rx) = parleur();
+        let e = p.nouvel_enonce();
+        p.dire(e, "une deux trois");
+        p.dire(e, "quatre cinq");
+        p.finir(e);
+        let t = Instant::now();
+        let debut = rx.recv_timeout(Duration::from_secs(10));
+        let a_debut = t.elapsed();
+        let fin = rx.recv_timeout(Duration::from_secs(10));
+        let debut_fin = t.elapsed() - a_debut;
+        panic!(
+            "DIAG KOB-407 : 50 x sleep(10 ms) = {cinquante:?} ; debut {debut:?} après {a_debut:?} ; \
+             fin {fin:?} {debut_fin:?} après le début ; joué {:?}",
+            joue.lock().unwrap()
+        );
+    }
+
     #[test]
     fn interrompre_coupe_net_et_oublie_la_suite() {
         let (p, joue, rx) = parleur();
