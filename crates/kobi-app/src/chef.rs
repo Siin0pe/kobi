@@ -1043,6 +1043,7 @@ impl<R: Runtime> Chef<R> {
             if let Some(accepte) = crate::intentions::reponse_validation(&texte) {
                 tracing::info!(%id, accepte, "réponse à la carte, à la voix ou au clavier");
                 crate::validation::decider(&self.app, &id, accepte);
+                self.reproposer_si_une_autre_attend(Some(&id), None);
                 self.reponse_a_la_carte(texte, voix, accepte);
                 return;
             }
@@ -1080,6 +1081,8 @@ impl<R: Runtime> Chef<R> {
                         }
                         let _ = self.app.emit(EVENEMENT_CARTE, &ui);
                     }
+                } else {
+                    self.reproposer_si_une_autre_attend(None, Some(carte));
                 }
                 self.reponse_a_la_carte(texte, voix, accepte);
                 return;
@@ -2170,6 +2173,23 @@ impl<R: Runtime> Chef<R> {
             clavier: !voix,
             etapes: Vec::new(),
         });
+    }
+
+    /// « Kobi, oui » vient de trancher une carte (la validation `validation`
+    /// ou la carte MCP `carte`) : si une autre attend encore, l'écoute ouverte
+    /// par le nom se referme et Kobi y repropose, au lieu de rester figé en
+    /// écoute jusqu'à sa décision (KOB-379). Seule, la carte tranchée fait
+    /// passer de l'écoute à la réflexion à sa fermeture (KOB-336).
+    fn reproposer_si_une_autre_attend(&mut self, validation: Option<&str>, carte: Option<u64>) {
+        if self.activite() != Some("ecoute") {
+            return;
+        }
+        let autre_validation = validation.map_or(!self.validations.est_vide(), |id| {
+            self.validations.autre_que(id)
+        });
+        if autre_validation || self.carte_affichee_sauf(carte).is_some() {
+            self.transition(&[Evenement::QuestionEnvoyee, Evenement::PermissionDemandee]);
+        }
     }
 
     /// Plus aucune carte, ni de Kobi ni MCP, n'attend : la fenêtre de la
@@ -4166,6 +4186,73 @@ mod tests {
             c.tick();
             assert_eq!(c.activite(), Some("calme"));
             assert!(c.cartes.is_empty() && c.cartes_ouvertes.is_empty());
+        });
+    }
+
+    /// KOB-379 : « Kobi, oui » sur une carte quand une autre attend : Kobi
+    /// revient en proposition, pas figé en écoute ; la dernière tranchée, il
+    /// repart sur le tour.
+    #[test]
+    fn kobi_oui_quand_une_autre_carte_attend() {
+        let (app, _dir) = chef_en_essai();
+        let dite = |texte: &str| Message::Question {
+            texte: texte.into(),
+            voix: true,
+            dit_a: None,
+        };
+        // Deux cartes de Kobi.
+        avec_chef(&app, |c| {
+            c.recevoir(Message::Interpelle);
+            c.transition(&[Evenement::QuestionEnvoyee]);
+            c.validation_ouverte("v1".into(), "Ajoute un rappel");
+            c.validation_ouverte("v2".into(), "Ajoute un autre rappel");
+            c.recevoir(Message::Interpelle);
+            assert_eq!(c.activite(), Some("ecoute"));
+            c.recevoir(dite("oui"));
+            assert_eq!(c.activite(), Some("propose"));
+            c.recevoir(Message::ValidationFermee {
+                id: "v1".into(),
+                reponse: crate::validation::Reponse::Accepte,
+            });
+            assert_eq!(c.activite(), Some("propose"), "v2 attend");
+            c.recevoir(Message::Interpelle);
+            c.recevoir(dite("non"));
+            assert_eq!(
+                c.activite(),
+                Some("ecoute"),
+                "dernière carte : sa fermeture décide"
+            );
+            c.recevoir(Message::ValidationFermee {
+                id: "v2".into(),
+                reponse: crate::validation::Reponse::Refuse,
+            });
+            assert_eq!(c.activite(), None, "hors réunion : retour en veille");
+        });
+        // Deux cartes MCP de la conversation.
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            let carte = |carte| {
+                Message::Cerveau(Retour::Carte {
+                    tour: 5,
+                    carte,
+                    outil: "mcp__linear__save_issue".into(),
+                    entree: serde_json::json!({"title": "Corriger la connexion"}),
+                })
+            };
+            c.recevoir(Message::Interpelle);
+            c.transition(&[Evenement::QuestionEnvoyee]);
+            c.recevoir(carte(1));
+            std::thread::sleep(Duration::from_millis(2));
+            c.recevoir(carte(2));
+            c.recevoir(Message::Interpelle);
+            c.recevoir(dite("oui"));
+            assert_eq!(c.activite(), Some("propose"));
+            c.recevoir(Message::Cerveau(Retour::CarteFermee {
+                carte: 2,
+                accepte: Some(true),
+            }));
+            assert_eq!(c.activite(), Some("propose"), "la carte 1 attend");
+            assert_eq!(c.carte_affichee(), Some(1));
         });
     }
 
