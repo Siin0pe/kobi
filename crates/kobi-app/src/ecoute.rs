@@ -1009,6 +1009,8 @@ impl<R: Runtime> Fil<R> {
     }
 
     fn ouvrir_micro(&mut self) -> bool {
+        // Flux neuf : rien de l'ancien ne s'y colle (KOB-248).
+        self.echo.reinitialiser();
         // Hors du fil d'écoute et avec une limite de temps : une ouverture
         // bloquée (serveur audio mort ou figé) ne fige plus l'écoute ; elle
         // est reprise au tour suivant, puis relancée (KOB-285).
@@ -1119,7 +1121,17 @@ impl<R: Runtime> Fil<R> {
             // En réunion, ce qui a été dit avant la pause est transcrit
             // (KOB-261) ; hors réunion, rien n'attend cet audio.
             if self.en_reunion {
-                self.file.extend(reste);
+                // La traîne du micro passe aussi par l'annulation d'écho : la
+                // voix de Kobi n'entre pas dans la vidange (KOB-248).
+                for mut frame in reste {
+                    let capte = self.origine + Duration::from_secs_f64(self.decalage) + frame.t;
+                    frame.samples =
+                        self.echo
+                            .traiter(&frame.samples, capte, annulation_echo_reglee);
+                    if !frame.samples.is_empty() {
+                        self.file.push_back(frame);
+                    }
+                }
                 // Sous charge, le micro se ferme après la pause : ce qui a
                 // été dit depuis n'est pas transcrit (KOB-277).
                 if let Some(pause) = self.pause_reunion.take() {
@@ -1133,6 +1145,9 @@ impl<R: Runtime> Fil<R> {
                 }
                 self.vider(commandes);
             }
+            // Ce qui attendait un bloc entier n'a plus de suite (moins de
+            // 10 ms) : rien ne se colle au flux de la réouverture (KOB-248).
+            self.echo.reinitialiser();
         }
         crate::chef::avancer(&self.app, kobi_stt::Source::Moi, None);
         self.signaler_retard(0.0);
@@ -1220,6 +1235,7 @@ impl<R: Runtime> Fil<R> {
         tracing::warn!(%cause, "écoute continue : le micro s'est arrêté");
         self.note(&format!("le micro s'est arrêté : {cause}"));
         self.entree = None;
+        self.echo.reinitialiser();
         // L'audio en retard n'est pas transcrit ici, à la différence de la
         // pause (KOB-261) : le micro par défaut se rouvre tout de suite.
         if !self.file.is_empty() {
@@ -1391,6 +1407,13 @@ impl<R: Runtime> Fil<R> {
             frame.samples = self
                 .echo
                 .traiter(&frame.samples, capte, annulation_echo_reglee);
+            // Pendant la voix de Kobi, l'annulation travaille par blocs de
+            // 10 ms : une trame plus courte peut rester en attente. Une trame
+            // vide n'est ni veillée ni transcrite (la porte y verrait un
+            // silence absolu).
+            if frame.samples.is_empty() {
+                continue;
+            }
             self.veiller(&frame);
             self.file.push_back(frame);
         }

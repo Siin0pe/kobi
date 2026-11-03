@@ -6,9 +6,10 @@
 //! référence ce que joue le haut-parleur ([`kobi_tts::reference`]) ; il estime
 //! lui-même le retard entre les deux.
 //!
-//! Il ne tourne que pendant la voix de Kobi et sa traîne : au repos, le micro
-//! passe tel quel, sans calcul. Le réglage `audio.annulation_echo` est relu à
-//! chaque nouvelle voix.
+//! Il ne tourne que pendant la voix de Kobi et sa traîne : au repos, ou
+//! réglage coupé, le micro passe tel quel, trame pour trame, sans recoupe ni
+//! calcul. Le réglage `audio.annulation_echo` est relu toutes les
+//! [`RELECTURE`].
 
 use std::time::{Duration, Instant};
 
@@ -22,6 +23,8 @@ const BLOC: usize = (FREQUENCE / 100) as usize;
 const TRAINE: Duration = Duration::from_secs(2);
 /// Amplitude au-dessus de laquelle la référence porte la voix de Kobi.
 const SEUIL: f32 = 1e-4;
+/// Le réglage est lu sur le disque : au plus une fois par intervalle.
+const RELECTURE: Duration = Duration::from_secs(2);
 
 pub struct AnnulationEcho {
     aec: Option<LinearPipeline>,
@@ -29,8 +32,9 @@ pub struct AnnulationEcho {
     reste: Vec<f32>,
     /// Dernier bloc de référence où Kobi parlait.
     voix: Option<Instant>,
-    /// Réglage lu au début de la voix en cours.
+    /// Réglage, et quand il a été lu.
     active: bool,
+    lu: Option<Instant>,
     /// AEC3 impossible à construire : le micro passe tel quel.
     hors_service: bool,
     /// Temps passé dans l'AEC3, pour le bilan de charge.
@@ -60,6 +64,7 @@ impl Default for AnnulationEcho {
             reste: Vec::new(),
             voix: None,
             active: false,
+            lu: None,
             hors_service: false,
             calcul: Duration::ZERO,
             brut: ouvrir_brut(),
@@ -68,9 +73,12 @@ impl Default for AnnulationEcho {
 }
 
 impl AnnulationEcho {
-    /// Micro 16 kHz mono capté à partir de `capte` : le même nombre
-    /// d'échantillons, sans la voix de Kobi (au plus un bloc de 10 ms passe à
-    /// la trame suivante). `reglage` n'est lu qu'au début d'une voix.
+    /// Micro 16 kHz mono capté à partir de `capte`, sans la voix de Kobi.
+    /// Réglage coupé, ou au repos (référence muette, hors traîne) : la trame
+    /// telle quelle, jamais recoupée ni vide. Pendant la voix : par blocs de
+    /// 10 ms, le reste (moins d'un bloc) passe à la trame suivante, la
+    /// sortie peut alors être vide. `reglage` est relu au plus toutes les
+    /// [`RELECTURE`].
     pub fn traiter(
         &mut self,
         micro: &[f32],
@@ -78,37 +86,51 @@ impl AnnulationEcho {
         reglage: impl Fn() -> bool,
     ) -> Vec<f32> {
         let maintenant = Instant::now();
+        if self
+            .lu
+            .is_none_or(|lu| maintenant.duration_since(lu) >= RELECTURE)
+        {
+            self.active = reglage();
+            self.lu = Some(maintenant);
+        }
+        if !self.active || self.hors_service {
+            // Un reste d'avant la coupure passe devant, rien ne se perd.
+            self.voix = None;
+            let mut sortie = std::mem::take(&mut self.reste);
+            sortie.extend_from_slice(micro);
+            return sortie;
+        }
         // Le reste de la trame précédente a été capté juste avant celle-ci.
         let debut = capte
             .checked_sub(Duration::from_secs_f64(
                 self.reste.len() as f64 / FREQUENCE as f64,
             ))
             .unwrap_or(capte);
+        let blocs = (self.reste.len() + micro.len()) / BLOC;
+        // La référence ne se reprend qu'une fois (`prendre` oublie ce qu'il
+        // rend) : celle de la trame au repos, celle des blocs pendant la voix.
+        let au_repos = self.reste.is_empty() && !self.en_voix(maintenant);
+        let n = if au_repos { micro.len() } else { blocs * BLOC };
+        let reference = kobi_tts::reference::prendre(debut, n, FREQUENCE);
+        if au_repos && reference.iter().all(|x| x.abs() <= SEUIL) {
+            self.voix = None;
+            return micro.to_vec();
+        }
         let mut reste = std::mem::take(&mut self.reste);
         reste.extend_from_slice(micro);
-        let blocs = reste.len() / BLOC;
         let mut sortie = Vec::with_capacity(blocs * BLOC);
         for i in 0..blocs {
             let bloc = &reste[i * BLOC..(i + 1) * BLOC];
-            // Ce que le haut-parleur jouait quand ce bloc a été capté ; repris
-            // même au repos, le tampon ne garde que le récent.
-            let instant = debut + Duration::from_millis(10 * i as u64);
-            let reference = kobi_tts::reference::prendre(instant, BLOC, FREQUENCE);
+            let reference = &reference[i * BLOC..(i + 1) * BLOC];
             if reference.iter().any(|x| x.abs() > SEUIL) {
-                if self.voix.is_none() {
-                    self.active = reglage();
-                }
                 self.voix = Some(maintenant);
             }
-            let en_voix = self
-                .voix
-                .is_some_and(|v| maintenant.duration_since(v) < TRAINE);
-            if !en_voix {
+            if !self.en_voix(maintenant) {
                 self.voix = None;
             }
-            let propre = if en_voix && self.active && !self.hors_service {
+            let propre = if self.voix.is_some() {
                 let chrono = Instant::now();
-                let propre = self.annuler(&reference, bloc);
+                let propre = self.annuler(reference, bloc);
                 self.calcul += chrono.elapsed();
                 propre
             } else {
@@ -117,7 +139,7 @@ impl AnnulationEcho {
             let sorti = propre.as_deref().unwrap_or(bloc);
             if let Some(f) = &mut self.brut {
                 use std::io::Write;
-                for (f, x) in f.iter_mut().zip([&reference[..], bloc, sorti]) {
+                for (f, x) in f.iter_mut().zip([reference, bloc, sorti]) {
                     let octets: Vec<u8> = x.iter().flat_map(|v| v.to_le_bytes()).collect();
                     let _ = f.write_all(&octets);
                 }
@@ -127,6 +149,18 @@ impl AnnulationEcho {
         reste.drain(..blocs * BLOC);
         self.reste = reste;
         sortie
+    }
+
+    fn en_voix(&self, maintenant: Instant) -> bool {
+        self.voix
+            .is_some_and(|v| maintenant.duration_since(v) < TRAINE)
+    }
+
+    /// Micro ouvert, fermé ou perdu : le reste en attente et la voix en cours
+    /// ne valent plus pour le flux suivant (KOB-248).
+    pub fn reinitialiser(&mut self) {
+        self.reste.clear();
+        self.voix = None;
     }
 
     fn annuler(&mut self, reference: &[f32], micro: &[f32]) -> Option<Vec<f32>> {
@@ -168,29 +202,33 @@ impl AnnulationEcho {
 mod tests {
     use super::*;
 
-    /// Sans voix de Kobi (référence muette), le micro passe tel quel, par
-    /// blocs entiers ; le reste attend la trame suivante.
+    /// Réglage coupé, ou au repos (référence muette) : chaque trame passe
+    /// telle quelle, même de moins de 10 ms, jamais vide ni recoupée ; le
+    /// réglage est relu au plus toutes les 2 s.
     #[test]
-    fn au_repos_le_micro_passe_tel_quel() {
-        let mut e = AnnulationEcho::default();
-        let micro: Vec<f32> = (0..250).map(|i| (i as f32 * 0.01).sin()).collect();
-        let lu = std::cell::Cell::new(0);
-        let reglage = || {
-            lu.set(lu.get() + 1);
-            true
-        };
-        // Une heure plus tôt : avant tout ce que l'autre test joue en même
-        // temps dans la référence globale, qui reste donc muette ici.
-        let avant = Instant::now()
-            .checked_sub(Duration::from_secs(3600))
-            .unwrap_or_else(Instant::now);
-        let a = e.traiter(&micro, avant, reglage);
-        assert_eq!(a, micro[..160]);
-        let b = e.traiter(&micro[..70], avant + Duration::from_millis(16), reglage);
-        assert_eq!(b[..90], micro[160..]);
-        assert_eq!(b[90..], micro[..70]);
-        assert!(e.aec.is_none(), "aucun calcul au repos");
-        assert_eq!(lu.get(), 0, "réglage lu seulement quand Kobi parle");
+    fn coupe_ou_au_repos_le_micro_passe_tel_quel() {
+        // Une heure plus tard : rien n'y a été joué, la référence globale y
+        // est muette, quoi que joue l'autre test en même temps.
+        let plus_tard = Instant::now() + Duration::from_secs(3600);
+        for active in [false, true] {
+            let mut e = AnnulationEcho::default();
+            let lu = std::cell::Cell::new(0);
+            let reglage = || {
+                lu.set(lu.get() + 1);
+                active
+            };
+            for (k, n) in [85usize, 85, 250, 70].into_iter().enumerate() {
+                let micro: Vec<f32> = (0..n).map(|i| ((i + k) as f32 * 0.01).sin()).collect();
+                let sorti = e.traiter(
+                    &micro,
+                    plus_tard + Duration::from_millis(20 * k as u64),
+                    reglage,
+                );
+                assert_eq!(sorti, micro, "réglage {active}, trame {k}");
+            }
+            assert!(e.aec.is_none(), "aucun calcul");
+            assert_eq!(lu.get(), 1, "réglage relu au plus toutes les 2 s");
+        }
     }
 
     /// Bruit pseudo-aléatoire, de spectre large comme une voix.

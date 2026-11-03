@@ -11,8 +11,10 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-/// Gardé au plus : le micro arrive avec quelques centaines de ms de retard.
-const MAX_S: f64 = 1.0;
+/// Gardé au plus : le micro arrive avec du retard, jusqu'à plusieurs
+/// secondes quand l'écoute est prise par la transcription (veille d'une
+/// réunion en retard, KOB-248). Borné : 10 s à 48 kHz, moins de 2 Mo.
+const MAX_S: f64 = 10.0;
 /// Écart à la chronologie attendue au-delà duquel le flux repart de zéro
 /// (flux rouvert, fil audio suspendu) : en deçà, c'est la gigue des rappels.
 const RECALAGE: Duration = Duration::from_millis(100);
