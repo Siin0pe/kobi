@@ -2132,8 +2132,13 @@ impl<R: Runtime> Chef<R> {
     fn validation_fermee(&mut self, id: &str, reponse: crate::validation::Reponse) {
         let suivante = self.validations.fermer(id);
         // Une carte MCP de la conversation attend encore : c'est elle qui
-        // décidera, Kobi reste en proposition (KOB-380).
-        if self.validations.est_vide() && !self.carte_mcp_de_la_conversation() {
+        // décidera, Kobi reste en proposition ; refusée, une carte des notes
+        // venue du calme l'y garde aussi (KOB-338, KOB-380).
+        let notes_du_calme = self.cartes_des_notes.values().any(|&calme| calme);
+        if self.validations.est_vide()
+            && !self.carte_mcp_de_la_conversation()
+            && (reponse.acceptee() || !notes_du_calme)
+        {
             self.transition(&[if reponse.acceptee() {
                 Evenement::PermissionAccordee
             } else {
@@ -2538,6 +2543,7 @@ impl<R: Runtime> Chef<R> {
                     // celle-ci y ramène aussi.
                     let deja = self.activite() == Some("propose")
                         && self.cartes_des_notes.values().any(|&calme| calme)
+                        && self.validations.est_vide()
                         && self
                             .cartes
                             .keys()
@@ -2610,7 +2616,10 @@ impl<R: Runtime> Chef<R> {
                     // question entre-temps) ; venue d'ailleurs, elle n'a rien
                     // changé (KOB-338).
                     Some(depuis_calme) => {
+                        // Une carte de Kobi qui attend tient aussi la
+                        // proposition (KOB-380).
                         if self.cartes.is_empty()
+                            && self.validations.est_vide()
                             && depuis_calme
                             && self.activite() == Some("propose")
                         {
@@ -4461,6 +4470,58 @@ mod tests {
             }));
             assert_eq!(c.activite(), Some("propose"), "la carte de Kobi attend");
             c.recevoir(fermee("v1", crate::validation::Reponse::Refuse));
+            assert_eq!(c.activite(), Some("calme"));
+        });
+    }
+
+    /// KOB-380 : une carte des notes venue du calme et une carte de Kobi
+    /// attendent ensemble : la première fermée ne fait pas quitter la
+    /// proposition ; la carte de Kobi acceptée fait repartir le tour.
+    #[test]
+    fn carte_des_notes_et_carte_de_kobi_ensemble() {
+        let notes = Message::Cerveau(Retour::Carte {
+            tour: 0,
+            carte: 3,
+            outil: "mcp__linear__save_issue".into(),
+            entree: serde_json::json!({"title": "Corriger la connexion"}),
+        });
+        let ouvrir = |c: &mut Chef<_>| {
+            c.commande(Intention::DemarrerReunion);
+            c.recevoir(notes.clone());
+            assert_eq!(c.activite(), Some("propose"));
+            c.recevoir(Message::Interpelle);
+            c.transition(&[Evenement::QuestionEnvoyee]);
+            c.validation_ouverte("v1".into(), "Ajoute un rappel");
+            assert_eq!(c.activite(), Some("propose"));
+        };
+        let fermee = |reponse| Message::ValidationFermee {
+            id: "v1".into(),
+            reponse,
+        };
+        // La carte des notes fermée d'abord : la carte de Kobi reste
+        // proposée, puis son « oui » fait repartir le tour.
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            ouvrir(c);
+            c.recevoir(Message::Cerveau(Retour::CarteFermee {
+                carte: 3,
+                accepte: Some(false),
+            }));
+            assert_eq!(c.activite(), Some("propose"), "la carte de Kobi attend");
+            c.recevoir(fermee(crate::validation::Reponse::Accepte));
+            assert_eq!(c.activite(), Some("reflechit"));
+        });
+        // La carte de Kobi refusée d'abord : la carte des notes reste
+        // proposée, puis sa fermeture ramène au calme.
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            ouvrir(c);
+            c.recevoir(fermee(crate::validation::Reponse::Refuse));
+            assert_eq!(c.activite(), Some("propose"), "la carte des notes attend");
+            c.recevoir(Message::Cerveau(Retour::CarteFermee {
+                carte: 3,
+                accepte: Some(false),
+            }));
             assert_eq!(c.activite(), Some("calme"));
         });
     }
