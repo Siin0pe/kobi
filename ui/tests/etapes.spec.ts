@@ -57,6 +57,25 @@ async function ouvrir(page: Page): Promise<string[]> {
 /** Clic de la main : appui, petit glissement de 6 px, relâchement. */
 async function cliquer(page: Page, cible: Locator): Promise<void> {
   await cible.scrollIntoViewIfNeeded();
+  // On vise une ligne posée, comme la main et comme `locator.click()` : après
+  // une mise à jour de la conversation, le suivi glisse encore vers le bas, et
+  // un appui mesuré avant tombait à côté sur un PC lent (Windows, KOB-376).
+  // Le suivi retenu pendant l'appui, lui, reste vérifié par le clic.
+  await cible.evaluate(
+    (n) =>
+      new Promise<void>((ok) => {
+        let avant = Number.NaN;
+        let stables = 0;
+        const pas = (): void => {
+          const y = n.getBoundingClientRect().top;
+          stables = y === avant ? stables + 1 : 0;
+          avant = y;
+          if (stables >= 3) ok();
+          else requestAnimationFrame(pas);
+        };
+        requestAnimationFrame(pas);
+      }),
+  );
   const b = (await cible.boundingBox())!;
   const x = b.x + Math.min(40, b.width / 2);
   const y = b.y + b.height / 2;
