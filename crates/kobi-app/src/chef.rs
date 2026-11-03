@@ -2999,13 +2999,19 @@ impl<R: Runtime> Chef<R> {
         }
         let activite = self.activite();
         // Kobi réfléchit à la question en cours, dont le tour, détaché par
-        // une carte acceptée, livre sa réponse ici : elle passe tout de suite
-        // (KOB-387). Le résultat d'une autre question attend.
+        // une carte acceptée, livre sa réponse ici : elle passe tout de suite,
+        // devant les résultats plus anciens, qui suivent ensuite (KOB-387).
+        let dernier = self.dernier;
         let la_sienne = activite == Some("reflechit")
-            && self
-                .a_livrer
-                .front()
-                .is_some_and(|(tour, ..)| *tour == self.dernier);
+            && match self.a_livrer.iter().position(|(tour, ..)| *tour == dernier) {
+                Some(i) => {
+                    if let Some(sienne) = self.a_livrer.remove(i) {
+                        self.a_livrer.push_front(sienne);
+                    }
+                    true
+                }
+                None => false,
+            };
         let lit_encore = self
             .calme_a
             .is_some_and(|(_, e)| matches!(e, Evenement::ReponseTerminee));
@@ -4558,8 +4564,8 @@ mod tests {
 
     /// KOB-387 : la question en cours demande une carte (son tour est
     /// détaché) ; acceptée, Kobi réfléchit, et la réponse du tour, livrée par
-    /// `Resultat`, passe tout de suite au lieu d'attendre pour toujours.
-    /// Celle d'une autre question attend que Kobi ait fini.
+    /// `Resultat`, passe tout de suite au lieu d'attendre pour toujours, même
+    /// derrière le résultat d'une question plus ancienne, qui suit ensuite.
     #[test]
     fn reponse_livree_apres_une_carte_acceptee() {
         for reunion in [true, false] {
@@ -4593,13 +4599,14 @@ mod tests {
                 }));
                 assert_eq!(c.a_livrer.len(), 1, "pas pendant la réflexion");
                 assert_eq!(c.activite(), Some("reflechit"));
-                c.a_livrer.clear();
+                // La sienne passe devant ; l'ancienne suit ensuite.
                 c.recevoir(Message::Cerveau(Retour::Resultat {
                     tour,
                     texte: "C'est fait : le ticket est créé.".into(),
                 }));
-                assert!(c.a_livrer.is_empty(), "réunion : {reunion}");
-                assert_eq!(c.activite(), Some("repond"));
+                assert_eq!(c.activite(), Some("repond"), "réunion : {reunion}");
+                assert_eq!(c.a_livrer.len(), 1);
+                assert_eq!(c.a_livrer[0].0, tour + 100);
             });
         }
     }
