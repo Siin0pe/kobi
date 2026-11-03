@@ -593,6 +593,11 @@ export class Kobi {
       // terminent tout de suite (les boucles, elles, sont figées par la scène).
       for (const anim of this.root.getAnimations({ subtree: true }))
         if (!(anim instanceof CSSAnimation) && !(anim instanceof CSSTransition) && anim.effect?.getTiming().iterations !== Infinity) anim.finish();
+      // Leur `onfinish` (retrait des symboles envolés, fin de l'anneau REC)
+      // n'arrive qu'à l'image suivante, et jamais tant que la fenêtre reste
+      // masquée : ce qu'il défait l'est ici, tout de suite (KOB-403).
+      this.burst.replaceChildren();
+      this.root.classList.remove('rec-ending');
       this.gestures.cancel();
       this.inertia.cancel();
       this.sway.cancel();
