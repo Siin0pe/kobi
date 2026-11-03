@@ -1036,6 +1036,26 @@ fn lien_vers_le_reseau(chemin: &Path, peripheriques: bool) -> bool {
         }
         // La cible prend la place du lien : absolue, elle repart de sa
         // racine ; relative, du dossier où est le lien.
+        if peripheriques {
+            // Sous Windows, NT réduit `..` sur le texte du nom substitué
+            // (dossier du lien + cible), pas après un lien intermédiaire de
+            // la cible : `x\..\y` mène au `y` voisin du lien, même si `x` est
+            // un lien vers ailleurs (KOB-411). Le reste du chemin suit.
+            let substitue = if cible.is_absolute() {
+                cible.clone()
+            } else {
+                resolu.join(&cible)
+            };
+            let reste: Vec<PathBuf> = a_lire.drain(..).collect();
+            resolu = PathBuf::new();
+            a_lire.extend(
+                reduire_sur_le_texte(&substitue)
+                    .components()
+                    .map(|c| PathBuf::from(c.as_os_str())),
+            );
+            a_lire.extend(reste);
+            continue;
+        }
         if cible.is_absolute() {
             resolu = PathBuf::new();
         }
@@ -1048,7 +1068,6 @@ fn lien_vers_le_reseau(chemin: &Path, peripheriques: bool) -> bool {
 
 /// `.` et `..` retirés sur le texte, sans remonter au-dessus de la racine ni
 /// du préfixe, sans rien lire sur le disque (KOB-352, Windows).
-#[cfg_attr(not(windows), allow(dead_code))]
 fn reduire_sur_le_texte(chemin: &Path) -> PathBuf {
     use std::path::Component;
     let mut reduit = PathBuf::new();
