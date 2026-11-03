@@ -355,16 +355,23 @@ mod tests {
     }
 
     /// Sortie factice : joue en temps réel par pas de 10 ms, note ce qui est joué.
+    /// Elle suit l'horloge des échantillons, comme une carte son : chaque bloc
+    /// a son échéance depuis le début de la phrase, et le retard d'un réveil
+    /// ne s'ajoute pas au suivant. Avec un `sleep(10 ms)` par bloc, les retards
+    /// s'additionnaient : sur le runner macOS, 50 sommeils de 10 ms prenaient
+    /// 2,8 s, et une phrase de 0,5 s finissait après 2,6 s (KOB-407).
     struct Ecoute(Arc<Mutex<Vec<usize>>>);
     impl Sortie for Ecoute {
         fn jouer(&mut self, e: &[f32], f: u32, arret: &Arret) -> Resultat<()> {
+            let debut = Instant::now();
             let mut joue = 0;
             for bloc in e.chunks((f / 100) as usize) {
                 if arret.arrete() {
                     break;
                 }
-                std::thread::sleep(Duration::from_millis(10));
                 joue += bloc.len();
+                let echeance = debut + Duration::from_secs_f64(joue as f64 / f64::from(f));
+                std::thread::sleep(echeance.saturating_duration_since(Instant::now()));
             }
             self.0.lock().unwrap().push(joue);
             Ok(())
