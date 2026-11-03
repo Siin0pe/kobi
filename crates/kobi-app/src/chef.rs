@@ -3393,6 +3393,13 @@ impl<R: Runtime> Chef<R> {
         self.cartes_expirees();
         self.poser_questions_differees();
         let parle = crate::voix::parle(&self.app);
+        // Un Oups sans acquittement armé (une carte ouverte ou un tour
+        // détaché pendant qu'il s'affichait vident `calme_a`) s'efface quand
+        // même au bout de son délai ; la carte ou la tâche reprend ensuite la
+        // main (KOB-394).
+        if self.calme_a.is_none() && self.activite() == Some("oups") {
+            self.calme_a = Some((Instant::now() + ERREUR_AFFICHEE, Evenement::Acquitter));
+        }
         if let Some((quand, evenement)) = self.calme_a {
             // Le retour au calme attend que Kobi ait fini de parler.
             if Instant::now() >= quand && !parle {
@@ -4453,6 +4460,75 @@ mod tests {
             c.calme_a = Some((Instant::now(), Evenement::ReponseTerminee));
             c.tick();
             assert_eq!(c.activite(), Some("calme"));
+        });
+    }
+
+    /// KOB-394 : un Oups d'une autre erreur que le réseau s'efface au bout de
+    /// son délai même si une carte s'ouvre ou un tour se détache pendant
+    /// qu'il est affiché ; la carte ou la tâche reprend ensuite la main.
+    #[test]
+    fn oups_d_une_autre_erreur_toujours_acquitte() {
+        // Délai de l'Oups passé (armé au tic au besoin) : son acquittement
+        // tombe au tic suivant.
+        let echu = |c: &mut Chef<tauri::test::MockRuntime>| {
+            c.tick();
+            assert_eq!(c.activite(), Some("oups"), "l'Oups reste son délai");
+            if let Some((_, e)) = c.calme_a {
+                c.calme_a = Some((Instant::now(), e));
+            }
+            c.tick();
+        };
+        // Carte de Kobi ouverte pendant l'Oups.
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.recevoir(Message::Interpelle);
+            c.question("résume le projet".into(), true);
+            c.erreur("Disque", "plein");
+            assert_eq!(c.activite(), Some("oups"));
+            c.validation_ouverte("v1".into(), "Écrire la note");
+            c.tick();
+            assert_eq!(c.activite(), Some("oups"), "l'Oups reste son délai");
+            assert!(
+                matches!(c.calme_a, Some((_, Evenement::Acquitter))),
+                "l'acquittement de l'Oups reste armé"
+            );
+            echu(c);
+            c.tick();
+            assert_eq!(c.activite(), Some("propose"), "la carte reprend la main");
+        });
+        // Carte MCP de la conversation ouverte pendant l'Oups.
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.recevoir(Message::Interpelle);
+            c.question("crée le ticket".into(), true);
+            let tour = c.tour;
+            c.erreur("Disque", "plein");
+            c.recevoir(Message::Cerveau(Retour::Carte {
+                tour,
+                carte: 1,
+                outil: "mcp__linear__save_issue".into(),
+                entree: serde_json::json!({ "title": "Corriger la connexion" }),
+            }));
+            assert_eq!(c.activite(), Some("oups"));
+            echu(c);
+            c.tick();
+            assert_eq!(c.activite(), Some("propose"));
+        });
+        // Tour détaché pendant l'Oups.
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.recevoir(Message::Interpelle);
+            c.question("résume le projet".into(), true);
+            let tour = c.tour;
+            c.erreur("Disque", "plein");
+            c.recevoir(Message::Cerveau(Retour::Detache {
+                tour,
+                annonce: true,
+            }));
+            assert_eq!(c.activite(), Some("oups"));
+            echu(c);
+            c.tick();
+            assert_eq!(c.activite(), Some("occupe"), "la tâche reprend la main");
         });
     }
 
