@@ -4,7 +4,7 @@
 // comme WebView2.
 import { expect, test, type Page } from '@playwright/test';
 import { fakeTauri } from './app-fausse-coque';
-import { expectNoErrors } from './helpers';
+import { expectNoErrors, sansAnimation } from './helpers';
 
 test.use({ launchOptions: { ignoreDefaultArgs: ['--hide-scrollbars'] } });
 
@@ -22,6 +22,9 @@ test('Réglages : la liste des panneaux défile seule dans une petite fenêtre, 
   const errors = await ouvrirApp(page, '#reglages');
   const cote = page.locator('.vue-reglages .cote');
   await expect(cote).toBeVisible();
+  // La vue arrive en glissant de 8 px, avec un ressort qui dépasse : mesurée
+  // en route, la colonne déborde d'une fraction de pixel (KOB-404).
+  await sansAnimation(page.locator('.vue-reglages'));
   const mesure = () => cote.evaluate((c) => ({ haut: c.scrollTop, plein: c.scrollHeight, vu: c.clientHeight, bas: c.getBoundingClientRect().bottom }));
   const avant = await mesure();
   expect(avant.plein, 'la liste dépasse la fenêtre').toBeGreaterThan(avant.vu);
