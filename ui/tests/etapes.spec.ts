@@ -27,6 +27,27 @@ async function ouvrir(page: Page): Promise<string[]> {
     localStorage.setItem('kobi.affichage', JSON.stringify({ v: 2, auto: 'jamais', delai: 0 }));
     const w = window as unknown as { __TAURI__: { window: unknown }; __deplacements: number };
     w.__deplacements = 0;
+    // SONDE (ne pas merger) : écritures de scrollTop et cibles de l'appui.
+    const sonde: unknown[] = [];
+    (w as unknown as { __sonde: unknown[] }).__sonde = sonde;
+    const desc = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollTop')!;
+    Object.defineProperty(Element.prototype, 'scrollTop', {
+      get() { return desc.get!.call(this); },
+      set(v: number) {
+        if ((this as Element).classList?.contains('lecture-corps')) {
+          sonde.push({ t: Math.round(performance.now()), ecrit: Math.round(v), avant: Math.round(desc.get!.call(this)), pile: (new Error().stack ?? '').split('\n').slice(2, 4).map((l) => l.trim()).join(' < ') });
+        }
+        desc.set!.call(this, v);
+      },
+      configurable: true,
+    });
+    for (const type of ['pointerdown', 'pointerup', 'click']) {
+      window.addEventListener(type, (e) => {
+        const cible = e.target as Element;
+        const corps = document.querySelector('.lecture-corps');
+        sonde.push({ t: Math.round(performance.now()), type, cible: `${cible.tagName}.${cible.className}`, y: (e as MouseEvent).clientY, st: corps && Math.round(desc.get!.call(corps)), sh: corps?.scrollHeight, ch: corps?.clientHeight, cw: corps?.clientWidth, depl: w.__deplacements });
+      }, true);
+    }
     let pris = false;
     // Comme la vraie fenêtre : une fois le déplacement lancé, la coque a la
     // souris et le relâchement n'arrive pas à la page, donc pas de clic.
@@ -64,6 +85,8 @@ async function cliquer(page: Page, cible: Locator): Promise<void> {
   await page.mouse.down();
   await page.mouse.move(x + 4, y + 3, { steps: 3 });
   await page.mouse.up();
+  const apres = await cible.boundingBox();
+  await page.evaluate(([avant, apres]) => (window as unknown as { __sonde: unknown[] }).__sonde.push({ boite_avant: avant, boite_apres: apres }), [b, apres] as const);
 }
 
 async function deplier(page: Page, box: Locator): Promise<void> {
@@ -98,7 +121,13 @@ test('50 clics sur « N étapes », dans toutes les situations : 50 dépliages, 
   const corps = vue(page).locator('.lecture-corps');
   for (let i = 0; i < 18; i++, clics++) {
     await corps.evaluate((c, haut) => (c.scrollTop = haut ? 0 : c.scrollHeight), i % 2 === 0);
-    await deplier(page, boxes.nth(i % 2 === 0 ? 0 : 3));
+    await page.evaluate(() => ((window as unknown as { __sonde: unknown[] }).__sonde.length = 0));
+    try {
+      await deplier(page, boxes.nth(i % 2 === 0 ? 0 : 3));
+    } catch (e) {
+      const sonde = await page.evaluate(() => (window as unknown as { __sonde: unknown[] }).__sonde);
+      throw new Error(`SONDE partie 4, i=${i}\n${sonde.map((x) => JSON.stringify(x)).join('\n')}\n${e}`);
+    }
   }
   expect(clics).toBe(50);
   expect(await page.evaluate(() => (window as unknown as { __deplacements: number }).__deplacements)).toBe(0);
