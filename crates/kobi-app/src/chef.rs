@@ -1141,14 +1141,21 @@ impl<R: Runtime> Chef<R> {
                     self.transition(&[Evenement::PasDeQuestion]);
                     if let Some(ui) = self
                         .carte_affichee_sauf(Some(carte))
-                        .and_then(|k| self.cartes.get(&k))
+                        .and_then(|k| self.cartes.get(&k).cloned())
                     {
-                        let ui = ui.clone();
                         if self.activite() == Some("calme") {
                             self.transition(&[
                                 Evenement::NotesCommencent,
                                 Evenement::PermissionDemandee,
                             ]);
+                            // Reproposées depuis le calme : la fermeture de la
+                            // dernière y ramène Kobi, même venues d'ailleurs et
+                            // dans n'importe quel ordre (KOB-419).
+                            for (k, depuis_calme) in self.cartes_des_notes.iter_mut() {
+                                if *k != carte && self.cartes.contains_key(k) {
+                                    *depuis_calme = true;
+                                }
+                            }
                         }
                         let _ = self.app.emit(EVENEMENT_CARTE, &ui);
                     }
@@ -4880,6 +4887,76 @@ mod tests {
             assert!(c.a_livrer.is_empty(), "le résultat est livré ensuite");
             assert_eq!(c.dernier, tache);
             assert_eq!(etat(&c.app).etat, "reunion");
+        });
+    }
+
+    /// KOB-419 (KOB-395 C) : en réunion, deux cartes des notes arrivent
+    /// pendant un Oups ; « Kobi, c'est ok » accepte l'une, Kobi repropose
+    /// l'autre depuis le calme. À sa fermeture, il revient au calme au lieu
+    /// de rester figé en « propose ».
+    #[test]
+    fn carte_des_notes_reproposee_ramene_au_calme() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            c.erreur("Disque", "plein");
+            assert_eq!(c.activite(), Some("oups"));
+            let notes = |carte| {
+                Message::Cerveau(Retour::Carte {
+                    tour: 0,
+                    carte,
+                    outil: "mcp__linear__save_issue".into(),
+                    entree: serde_json::json!({"title": "Corriger la connexion"}),
+                })
+            };
+            c.recevoir(notes(1));
+            std::thread::sleep(Duration::from_millis(2));
+            c.recevoir(notes(2));
+            c.recevoir(Message::Interpelle);
+            c.recevoir(Message::Question {
+                texte: "c'est ok".into(),
+                voix: true,
+                dit_a: None,
+            });
+            c.recevoir(Message::Cerveau(Retour::CarteFermee {
+                carte: 2,
+                accepte: Some(true),
+            }));
+            assert_eq!(c.activite(), Some("propose"), "la carte 1 est reproposée");
+            c.recevoir(Message::Cerveau(Retour::CarteFermee {
+                carte: 1,
+                accepte: None,
+            }));
+            assert_eq!(c.activite(), Some("calme"));
+        });
+        // Trois cartes : la reproposée se ferme avant la dernière (relecture
+        // de kobi-a), l'ordre de fermeture ne compte pas.
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            c.erreur("Disque", "plein");
+            let notes = |carte| {
+                Message::Cerveau(Retour::Carte {
+                    tour: 0,
+                    carte,
+                    outil: "mcp__linear__save_issue".into(),
+                    entree: serde_json::json!({"title": "Corriger la connexion"}),
+                })
+            };
+            for carte in [1, 2, 3] {
+                c.recevoir(notes(carte));
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            c.recevoir(Message::Interpelle);
+            c.recevoir(Message::Question {
+                texte: "c'est ok".into(),
+                voix: true,
+                dit_a: None,
+            });
+            for (carte, accepte) in [(3, Some(true)), (2, None), (1, None)] {
+                c.recevoir(Message::Cerveau(Retour::CarteFermee { carte, accepte }));
+            }
+            assert_eq!(c.activite(), Some("calme"));
         });
     }
 
