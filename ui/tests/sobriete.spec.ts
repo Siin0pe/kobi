@@ -61,9 +61,6 @@ for (const state of ['idle', 'think', 'answer', 'listen'] as const) {
 
     await setHidden(page, true);
     expect(await running(page)).toBe(0);
-    // Les symboles envolés (étincelles de la transition) sont retirés dès la
-    // pause, pas à l'image suivante qu'une fenêtre masquée n'a pas (KOB-403).
-    expect(await page.locator('.kobi .burst span').count()).toBe(0);
     // Aucune minuterie ne modifie plus le dessin (bouche, clignements, brouillage).
     const before = await page.locator('.kobi').innerHTML();
     await page.evaluate(() => {
@@ -188,5 +185,25 @@ test('économie d’énergie : au repos, un geste (animation Web) suit le métro
   // Il se termine normalement (onfinish).
   await page.clock.runFor(800);
   await expect.poll(() => page.evaluate(() => (window as unknown as { done: boolean }).done)).toBe(true);
+  await expectNoErrors(errors);
+});
+
+test('fenêtre masquée en pleine gerbe : les symboles envolés sont retirés tout de suite', async ({ page }) => {
+  const errors = await openUi(page, '');
+  await page.evaluate(() => window.kobi.setState('think', window.kobi.demoData('think')));
+  await expect(page.locator('.kobi')).toHaveClass(/m-think/);
+  const vu = await page.evaluate(() => {
+    // Passage en Répond : 7 étincelles jaillissent, puis la fenêtre est masquée.
+    window.kobi.setState('answer', window.kobi.demoData('answer'));
+    const gerbe = document.querySelectorAll('.kobi .burst span').length;
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+    document.dispatchEvent(new Event('visibilitychange'));
+    return { gerbe, apres: document.querySelectorAll('.kobi .burst span').length };
+  });
+  expect(vu.gerbe).toBeGreaterThan(0);
+  // Avant KOB-403, leur `onfinish` ne les retirait qu'à l'image suivante, que
+  // la fenêtre masquée n'a pas : le dessin changeait encore après la pause.
+  expect(vu.apres).toBe(0);
   await expectNoErrors(errors);
 });
