@@ -65,6 +65,17 @@ export class Defilement {
       this.drag = { y: e.clientY, top: zone.scrollTop };
       zone.setPointerCapture(e.pointerId);
     });
+    // « N étapes » au bord de la zone : sous Windows, l'appui y commence une
+    // sélection, et la main qui bouge de quelques pixels fait défiler la zone
+    // (défilement de la sélection) ; la ligne part sous le doigt, le
+    // relâchement tombe à côté, rien ne s'ouvre (KOB-376). Pas de sélection
+    // depuis la ligne : elle prend le focus (Entrée, Espace) sans défiler.
+    zone.addEventListener('mousedown', (e) => {
+      const ligne = (e.target as Element | null)?.closest('summary');
+      if (e.button !== 0 || !(ligne instanceof HTMLElement) || !zone.contains(ligne)) return;
+      e.preventDefault();
+      ligne.focus({ preventScroll: true });
+    });
     zone.addEventListener('pointermove', (e) => {
       if (!this.drag) return;
       const scale = zone.getBoundingClientRect().height / Math.max(1, zone.offsetHeight);
