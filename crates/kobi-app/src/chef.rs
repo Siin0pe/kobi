@@ -2539,6 +2539,13 @@ impl<R: Runtime> Chef<R> {
                     b.statut = "fini";
                 }
                 let reportee = self.voix_reportee.is_some_and(|(t, _)| t == tour);
+                // L'état d'abord : un Oups du réseau s'acquitte ici, et la
+                // lecture armée par la reprise de la voix part de « répond ».
+                // Avant, elle partait de l'Oups et gardait son acquittement,
+                // refusé ensuite depuis « répond » (KOB-416).
+                if tour == self.dernier {
+                    self.depuis_le_repos(Evenement::ReponseCommence, true);
+                }
                 self.reprendre_voix();
                 if let Some((t, mut r)) = self.voix.take() {
                     if t == tour {
@@ -2548,7 +2555,6 @@ impl<R: Runtime> Chef<R> {
                     }
                 }
                 if tour == self.dernier {
-                    self.depuis_le_repos(Evenement::ReponseCommence, true);
                     let _ = self.app.emit(EVENEMENT_REPONSE, &texte);
                     // Réponse reportée (KOB-377) : la lecture commence quand
                     // elle est dite, ou abandonnée (`reprendre_voix`).
@@ -4612,6 +4618,40 @@ mod tests {
                 );
             });
         }
+    }
+
+    /// KOB-416 (KOB-395 B) : une question attend le réseau (Oups, voix
+    /// reportée), puis sa réponse arrive d'un coup (`Fin` sans `Texte`) :
+    /// Kobi revient au calme au lieu de rester figé en « répond ».
+    #[test]
+    fn reponse_d_un_coup_apres_l_attente_du_reseau() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.recevoir(Message::Interpelle);
+            c.question("quelle est la prochaine étape ?".into(), true);
+            let tour = c.tour;
+            c.recevoir(Message::Cerveau(Retour::EnAttente { tour, nombre: 1 }));
+            assert_eq!(c.activite(), Some("oups"));
+            c.recevoir(Message::Cerveau(Retour::Fin {
+                tour,
+                texte: "La revue est vendredi.".into(),
+            }));
+            assert!(
+                matches!(c.calme_a, Some((_, Evenement::ReponseTerminee))),
+                "la lecture est armée, pas l'ancien acquittement"
+            );
+            for _ in 0..3 {
+                if let Some((_, e)) = c.calme_a {
+                    c.calme_a = Some((Instant::now(), e));
+                }
+                c.tick();
+            }
+            assert!(
+                matches!(c.activite(), Some("calme") | None),
+                "{:?}",
+                c.activite()
+            );
+        });
     }
 
     /// KOB-377 : une carte ouverte pendant qu'une question attend le réseau
