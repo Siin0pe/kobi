@@ -474,6 +474,10 @@ pub struct Chef<R: Runtime> {
     /// celle qui attend sa réponse ou si l'utilisateur a coupé la voix
     /// depuis (coupures de la voix au moment de l'ouverture).
     validation_a_dire: Option<(String, u64)>,
+    /// Dernière question posée quand une carte de Kobi ou de la conversation
+    /// s'est ouverte : une question posée depuis passe avant de reproposer
+    /// la carte (KOB-384).
+    question_a_la_carte: u64,
     /// Tour d'une carte de la conversation acceptée pendant que d'autres
     /// attendaient : s'il est encore en cours, la dernière carte tranchée,
     /// même refusée, fait repartir Kobi sur lui (KOB-381).
@@ -877,6 +881,7 @@ impl<R: Runtime> Chef<R> {
             suite_apres_voix: false,
             annonces: Default::default(),
             validation_a_dire: None,
+            question_a_la_carte: 0,
             acceptee_en_attente: None,
             tours_des_cartes: HashMap::new(),
             carte_a_dire: None,
@@ -2141,6 +2146,7 @@ impl<R: Runtime> Chef<R> {
     /// (KOB-218).
     fn validation_ouverte(&mut self, id: String, resume: &str) {
         let annonce = self.validations.ouvrir(id, resume);
+        self.question_a_la_carte = self.dernier;
         self.calme_a = None;
         self.transition(&[Evenement::PermissionDemandee]);
         if annonce.is_some() {
@@ -2680,6 +2686,7 @@ impl<R: Runtime> Chef<R> {
                         ]);
                     }
                 } else {
+                    self.question_a_la_carte = self.dernier;
                     self.calme_a = None;
                     self.transition(&[Evenement::PermissionDemandee]);
                 }
@@ -3310,7 +3317,8 @@ impl<R: Runtime> Chef<R> {
         // (KOB-384). Une carte des notes venue d'ailleurs n'y ramène pas
         // (KOB-338), ni une carte MCP déjà refusée à l'échéance ; un
         // résultat à livrer passe d'abord, et la question en cours, partie en
-        // tâche, livrera le sien sans attendre la carte.
+        // tâche, livrera le sien sans attendre la carte (pas celle de la
+        // carte elle-même, partie en tâche pour la demander).
         let carte_mcp = self.cartes.keys().any(|k| {
             !self.cartes_des_notes.contains_key(k)
                 && self
@@ -3319,7 +3327,7 @@ impl<R: Runtime> Chef<R> {
                     .is_some_and(|o| o.elapsed() < kobi_perms::DEFAULT_TIMEOUT)
         });
         if (!self.validations.est_vide() || carte_mcp)
-            && !self.question_en_cours()
+            && !(self.question_en_cours() && self.dernier != self.question_a_la_carte)
             && self.calme_a.is_none()
             && self.a_livrer.is_empty()
             && matches!(self.activite(), Some("calme" | "occupe") | None)
@@ -5100,6 +5108,25 @@ mod tests {
             }));
             assert!(c.a_livrer.is_empty());
             assert_eq!(c.activite(), Some("repond"));
+        });
+        // Sans autre question : un faux appel (« Kobi » puis rien) ramène au
+        // calme puis « au travail » ; la carte, demandée par la question en
+        // cours partie en tâche, est reproposée.
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            c.recevoir(Message::Interpelle);
+            c.envoyer("ajoute un rappel".into(), None, true);
+            let tour = c.dernier;
+            c.recevoir(Message::Cerveau(Retour::Detache {
+                tour,
+                annonce: true,
+            }));
+            c.validation_ouverte("v1".into(), "Ajoute un rappel");
+            c.recevoir(Message::Interpelle);
+            c.recevoir(Message::SansQuestion);
+            c.tick();
+            assert_eq!(c.activite(), Some("propose"));
         });
         // Une carte MCP déjà refusée à l'échéance n'est pas reproposée.
         let (app, _dir) = chef_en_essai();
