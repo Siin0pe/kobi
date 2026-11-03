@@ -3456,6 +3456,17 @@ impl<R: Runtime> Chef<R> {
             self.suite_apres_voix = false;
             let _ = crate::ecoute::commander(&self.app, crate::ecoute::Commande::Suite);
         }
+        // « Au travail » sans tâche, sans résultat à livrer ni question en
+        // cours (la tâche d'une question plus ancienne a fini en erreur) :
+        // rien ne l'en sortirait, retour au calme (KOB-417).
+        if self.activite() == Some("occupe")
+            && self.taches.is_empty()
+            && self.a_livrer.is_empty()
+            && !self.question_en_cours()
+            && self.calme_a.is_none()
+        {
+            self.transition(&[Evenement::ReponseTerminee]);
+        }
         // Revenu au calme alors qu'une tâche tourne encore : Kobi s'en occupe.
         if !self.taches.is_empty()
             && self.calme_a.is_none()
@@ -4645,6 +4656,52 @@ mod tests {
                     c.calme_a = Some((Instant::now(), e));
                 }
                 c.tick();
+            }
+            assert!(
+                matches!(c.activite(), Some("calme") | None),
+                "{:?}",
+                c.activite()
+            );
+        });
+    }
+
+    /// KOB-417 (KOB-395 D) : la tâche d'une question plus ancienne finit en
+    /// erreur pendant que Kobi est « au travail » pour elle : il revient au
+    /// calme au lieu d'y rester.
+    #[test]
+    fn tache_d_une_ancienne_question_en_erreur() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.recevoir(Message::Interpelle);
+            c.question("résume le projet".into(), true);
+            let tache = c.tour;
+            c.recevoir(Message::Cerveau(Retour::Detache {
+                tour: tache,
+                annonce: true,
+            }));
+            // Une autre question, répondue : la tâche n'est plus la dernière.
+            c.recevoir(Message::Interpelle);
+            c.question("et la revue ?".into(), true);
+            let autre = c.tour;
+            c.recevoir(Message::Cerveau(Retour::Fin {
+                tour: autre,
+                texte: "Vendredi.".into(),
+            }));
+            let avancer = |c: &mut Chef<tauri::test::MockRuntime>| {
+                if let Some((_, e)) = c.calme_a {
+                    c.calme_a = Some((Instant::now(), e));
+                }
+                c.tick();
+            };
+            avancer(c);
+            avancer(c);
+            assert_eq!(c.activite(), Some("occupe"), "la tâche tourne encore");
+            c.recevoir(Message::Cerveau(Retour::Erreur {
+                tour: tache,
+                message: "erreur d'essai".into(),
+            }));
+            for _ in 0..3 {
+                avancer(c);
             }
             assert!(
                 matches!(c.activite(), Some("calme") | None),
