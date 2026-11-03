@@ -529,6 +529,83 @@ fn nom_a_barre_seulement_en_verbatim() {
     assert!(nom_a_barre(Path::new(r"\\?\C:\x\../y")));
 }
 
+/// KOB-413 : chaque composant garde la nature qu'il avait au découpage.
+#[test]
+fn decoupage_garde_la_nature_des_composants() {
+    use std::ffi::OsString;
+    let nom = |n: &str| Morceau::Nom(OsString::from(n));
+    assert_eq!(
+        decouper(Path::new("/base/a/../b")).collect::<Vec<_>>(),
+        vec![
+            Morceau::Debut(OsString::from("/")),
+            nom("base"),
+            nom("a"),
+            Morceau::Parent,
+            nom("b"),
+        ]
+    );
+    // `.` ne reste qu'en tête (les autres, `components` les retire).
+    assert_eq!(
+        decouper(Path::new("./a")).collect::<Vec<_>>(),
+        vec![Morceau::Courant, nom("a")]
+    );
+    // Sous Windows, dans un chemin verbatim, `/` n'est pas un séparateur :
+    // `../y` reste un nom, que NT ouvre comme tel (nom invalide). Relu seul,
+    // il passait pour `..` puis `y`.
+    #[cfg(windows)]
+    assert_eq!(
+        decouper(Path::new(r"\\?\C:\x\../y")).collect::<Vec<_>>(),
+        vec![
+            Morceau::Debut(OsString::from(r"\\?\C:")),
+            Morceau::Debut(OsString::from(r"\")),
+            nom("x"),
+            nom("../y"),
+        ]
+    );
+}
+
+/// KOB-413, sous Windows : cas de la revue de sécurité (sondes #365 et #366)
+/// gardés en non-régression du parcours refondu.
+/// * Cible relative qui monte au-dessus du lecteur, vers
+///   `GLOBALROOT\Device\Mup\…` ou `UNC\…` : refusée (NT la rejette, 4392).
+/// * Lien de dossier qui monte, puis la suite du chemin : refusé.
+/// * Chemin verbatim qui monte (`\\?\C:\…\..\..\…`) : refusé à la lecture.
+///
+/// La cible fabriquée `…\x\../y` est couverte par
+/// `nom_a_barre_d_une_cible_verbatim_refuse` (KOB-425).
+#[cfg(windows)]
+#[test]
+fn parcours_refondu_garde_les_cas_de_la_revue() {
+    use std::os::windows::fs::{symlink_dir, symlink_file};
+    let dir = codebase();
+    let racine = dir.path().to_path_buf();
+    let profondeur = racine.components().count() + 2;
+    let monte = r"..\".repeat(profondeur);
+    if symlink_file(
+        format!(r"{monte}GLOBALROOT\Device\Mup\attaquant\p"),
+        racine.join("haut"),
+    )
+    .is_err()
+    {
+        assert!(std::env::var_os("CI").is_none(), "liens impossibles en CI");
+        return;
+    }
+    symlink_file(format!(r"{monte}??\UNC\attaquant\p"), racine.join("haut2")).unwrap();
+    symlink_dir(&monte, racine.join("monte")).unwrap();
+    for nom in ["haut", "haut2", r"monte\GLOBALROOT\Device\Mup\attaquant\p"] {
+        assert!(lien_vers_le_reseau(&racine.join(nom), true), "{nom}");
+    }
+    fs::write(racine.join("y"), "ordinaire").unwrap();
+    let l = lecteur(&dir);
+    let verbatim = format!(r"\\?\{}\..\..\{}", racine.display(), "y");
+    assert!(
+        l.lire(&json!({ "file_path": verbatim })).is_err(),
+        "{verbatim}"
+    );
+    // Un fichier ordinaire se lit toujours.
+    assert!(!lien_vers_le_reseau(&racine.join("y"), true));
+}
+
 /// Rien ne se lit hors des dossiers permis : chemin absolu, `..`, lien
 /// symbolique qui sort.
 #[test]
