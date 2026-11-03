@@ -342,29 +342,41 @@ mod tests {
     use super::*;
     use crate::Erreur;
 
-    /// Voix factice : 100 ms de son par mot, synthèse en 30 ms.
-    struct Factice;
+    /// Voix factice : 100 ms de son par mot, synthèse en 30 ms. Elle note la
+    /// durée réelle de chaque synthèse : sur le runner macOS, ce `sleep(30 ms)`
+    /// a duré de 37 à 177 ms (KOB-407), et cette durée n'est pas celle du parleur.
+    #[derive(Default)]
+    struct Factice(Arc<Mutex<Vec<Duration>>>);
     impl Synthese for Factice {
         fn frequence(&self) -> u32 {
             1_000
         }
         fn synthetiser(&mut self, phrase: &str) -> Resultat<Vec<f32>> {
+            let t = Instant::now();
             std::thread::sleep(Duration::from_millis(30));
+            self.0.lock().unwrap().push(t.elapsed());
             Ok(vec![0.1; 100 * phrase.split_whitespace().count()])
         }
     }
 
     /// Sortie factice : joue en temps réel par pas de 10 ms, note ce qui est joué.
+    /// Elle suit l'horloge des échantillons, comme une carte son : chaque bloc
+    /// a son échéance depuis le début de la phrase, et le retard d'un réveil
+    /// ne s'ajoute pas au suivant. Avec un `sleep(10 ms)` par bloc, les retards
+    /// s'additionnaient : sur le runner macOS, 50 sommeils de 10 ms prenaient
+    /// 2,8 s, et une phrase de 0,5 s finissait après 2,6 s (KOB-407).
     struct Ecoute(Arc<Mutex<Vec<usize>>>);
     impl Sortie for Ecoute {
         fn jouer(&mut self, e: &[f32], f: u32, arret: &Arret) -> Resultat<()> {
+            let debut = Instant::now();
             let mut joue = 0;
             for bloc in e.chunks((f / 100) as usize) {
                 if arret.arrete() {
                     break;
                 }
-                std::thread::sleep(Duration::from_millis(10));
                 joue += bloc.len();
+                let echeance = debut + Duration::from_secs_f64(joue as f64 / f64::from(f));
+                std::thread::sleep(echeance.saturating_duration_since(Instant::now()));
             }
             self.0.lock().unwrap().push(joue);
             Ok(())
@@ -372,23 +384,37 @@ mod tests {
     }
 
     fn parleur() -> (Parleur, Arc<Mutex<Vec<usize>>>, Receiver<Evenement>) {
+        let (p, joue, rx, _) = parleur_mesure();
+        (p, joue, rx)
+    }
+
+    /// Comme [`parleur`], avec les durées réelles des synthèses de la voix.
+    #[allow(clippy::type_complexity)]
+    fn parleur_mesure() -> (
+        Parleur,
+        Arc<Mutex<Vec<usize>>>,
+        Receiver<Evenement>,
+        Arc<Mutex<Vec<Duration>>>,
+    ) {
         let joue = Arc::new(Mutex::new(Vec::new()));
         let j = Arc::clone(&joue);
+        let syntheses = Arc::new(Mutex::new(Vec::new()));
+        let voix = Factice(Arc::clone(&syntheses));
         let (tx, rx) = mpsc::channel();
         let tx = Mutex::new(tx);
         let p = Parleur::new(
-            Box::new(|| Ok(Box::new(Factice) as Box<dyn Synthese>)),
+            Box::new(move || Ok(Box::new(voix) as Box<dyn Synthese>)),
             Box::new(move || Ok(Box::new(Ecoute(j)) as Box<dyn Sortie>)),
             move |e| {
                 let _ = tx.lock().unwrap().send(e);
             },
         );
-        (p, joue, rx)
+        (p, joue, rx, syntheses)
     }
 
     #[test]
     fn un_enonce_se_dit_en_entier() {
-        let (p, joue, rx) = parleur();
+        let (p, joue, rx, syntheses) = parleur_mesure();
         let e = p.nouvel_enonce();
         p.dire(e, "une deux trois");
         p.dire(e, "quatre cinq");
@@ -397,7 +423,15 @@ mod tests {
         let Evenement::Debut { premier_son } = debut else {
             panic!("{debut:?}")
         };
-        assert!(premier_son < Duration::from_millis(200), "{premier_son:?}");
+        // Le premier son suit la synthèse de la première phrase. On borne la
+        // part du parleur seule : la durée de la synthèse factice dépend de
+        // l'ordonnanceur du runner (KOB-407).
+        let synthese = syntheses.lock().unwrap()[0];
+        assert!(premier_son >= synthese, "{premier_son:?} < {synthese:?}");
+        assert!(
+            premier_son - synthese < Duration::from_millis(200),
+            "{premier_son:?} dont synthèse {synthese:?}"
+        );
         assert!(p.parle());
         assert_eq!(
             rx.recv_timeout(Duration::from_secs(2)).unwrap(),
@@ -506,7 +540,7 @@ mod tests {
         let (go_tx, go_rx) = mpsc::channel::<()>();
         let (tx, go_rx) = (Mutex::new(tx), Mutex::new(go_rx));
         let p = Parleur::new(
-            Box::new(|| Ok(Box::new(Factice) as Box<dyn Synthese>)),
+            Box::new(|| Ok(Box::new(Factice::default()) as Box<dyn Synthese>)),
             Box::new(move || Ok(Box::new(Ecoute(j)) as Box<dyn Sortie>)),
             move |e| {
                 let debut = matches!(e, Evenement::Debut { .. });
