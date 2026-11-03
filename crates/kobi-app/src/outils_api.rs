@@ -985,12 +985,22 @@ fn lien_vers_le_reseau(chemin: &Path, peripheriques: bool) -> bool {
             }
             Some(Component::Normal(_)) => {}
         }
-        if peripheriques && !verbatim && nom_de_peripherique(morceau.as_os_str()) {
+        // Un nom que Win32 changerait (point ou espace final, KOB-398) est
+        // refusé comme un nom de périphérique : le chemin ouvert ne serait
+        // pas celui qui est jugé ici. Un flux NTFS (`x::$DATA`) l'est même
+        // en verbatim : NT l'interprète aussi.
+        if peripheriques
+            && ((!verbatim
+                && (nom_de_peripherique(morceau.as_os_str()) || fin_ambigue(morceau.as_os_str())))
+                || morceau.to_string_lossy().contains(':'))
+        {
             return true;
         }
         let candidat = resolu.join(&morceau);
+        // Sondé tel que NT l'ouvrira, sans traduction Win32 (KOB-398).
+        let sonde = pour_nt(&candidat);
         let est_un_lien =
-            std::fs::symlink_metadata(&candidat).is_ok_and(|m| m.file_type().is_symlink());
+            std::fs::symlink_metadata(&sonde).is_ok_and(|m| m.file_type().is_symlink());
         if !est_un_lien {
             resolu = candidat;
             continue;
@@ -999,7 +1009,7 @@ fn lien_vers_le_reseau(chemin: &Path, peripheriques: bool) -> bool {
         if liens > LIENS_MAX {
             return true;
         }
-        let Ok(cible) = std::fs::read_link(&candidat) else {
+        let Ok(cible) = std::fs::read_link(&sonde) else {
             return true;
         };
         if chemin_reseau(&cible.to_string_lossy())
@@ -1053,6 +1063,28 @@ fn racine_sans_disque(cible: &Path) -> bool {
             cible.components().next(),
             Some(std::path::Component::Prefix(_))
         )
+}
+
+/// Chemin sondé sur le disque tel que NT l'ouvrira : sous Windows, un
+/// chemin à disque (`C:\…`) l'est en `\\?\C:\…`, que Win32 ne traduit pas.
+/// Une étape du parcours (cible de lien rendue en `C:\…`, suite du chemin)
+/// n'est ainsi jamais vue sous un autre nom que celui que NT suivra : un
+/// `x.` resterait sinon `x` à la sonde, et son lien passerait (KOB-398).
+fn pour_nt(chemin: &Path) -> PathBuf {
+    #[cfg(windows)]
+    if let Some(std::path::Component::Prefix(p)) = chemin.components().next() {
+        if matches!(p.kind(), std::path::Prefix::Disk(_)) {
+            return PathBuf::from(format!(r"\\?\{}", chemin.display()));
+        }
+    }
+    chemin.to_path_buf()
+}
+
+/// Un nom à point ou espace final (`x.`, `d `) : Win32 les retire d'un
+/// chemin non verbatim, qui n'ouvre donc pas le nom jugé (KOB-398).
+fn fin_ambigue(nom: &std::ffi::OsStr) -> bool {
+    let nom = nom.to_string_lossy();
+    nom.ends_with('.') || nom.ends_with(' ')
 }
 
 /// `\\?\…` : Win32 n'y change rien, ni `..` ni nom de périphérique.

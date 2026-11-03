@@ -340,66 +340,80 @@ fn lien_vers_un_chemin_reseau_refuse_sous_windows() {
     }
 }
 
-/// KOB-398, sonde (temporaire) : formes rendues par `read_link` et
-/// contrôle des chemins à point final sur le runner, pour juger deux
-/// contournements possibles signalés à la relecture. Échoue exprès pour
-/// que la CI montre son rapport.
+/// KOB-398, correctif de sécurité du confinement Windows : le chemin jugé
+/// est celui que NT ouvrira.
+/// * A : chemin donné verbatim `\\?\…\lib\x.`, où `lib` vise `C:\…\vendor`
+///   (cible rendue sans `\\?\`) et `vendor\x.` est un lien vers le réseau.
+///   La sonde voyait `vendor\x` (Win32 retire le point) : lien manqué.
+/// * B : chemin donné `C:\…\lib3\x.`, où `lib3` vise `\\?\…\d.` et `d.\x`
+///   est un lien vers le réseau. Win32 ouvre `lib3\x`, la sonde voyait
+///   `d.\x.` : lien manqué.
+///
+/// Variantes : espace final, flux NTFS (`::$DATA`), casse, nom court 8.3.
 #[cfg(windows)]
 #[test]
-fn sonde_kob398_points_finaux() {
-    use std::fmt::Write as _;
+fn chemins_que_win32_traduit_juges_tels_que_nt_les_ouvre() {
     use std::os::windows::fs::{symlink_dir, symlink_file};
-    let mut rapport = String::new();
     let dir = codebase();
     let racine = dir.path().to_path_buf();
     let v = |p: &Path| PathBuf::from(format!(r"\\?\{}", p.display()));
     let vendor = racine.join("vendor");
     fs::create_dir_all(&vendor).unwrap();
     if symlink_dir(&vendor, racine.join("lib")).is_err() {
-        let _ = writeln!(rapport, "SONDE liens impossibles");
+        assert!(std::env::var_os("CI").is_none(), "liens impossibles en CI");
         return;
     }
-    let _ = writeln!(
-        rapport,
-        "SONDE read_link(lib) = {:?}",
-        fs::read_link(racine.join("lib"))
-    );
-    // A : chemin donné verbatim, lien `vendor\x.` vers le réseau.
-    let r = symlink_file(r"\\attaquant\p", v(&vendor.join("x.")));
-    let _ = writeln!(rapport, "SONDE A création vendor\\x. : {r:?}");
+    // A
+    symlink_file(r"\\attaquant\p", v(&vendor.join("x."))).unwrap();
     let a = v(&racine.join(r"lib\x."));
-    let _ = writeln!(
-        rapport,
-        "SONDE A lien_vers_le_reseau({}) = {}",
-        a.display(),
-        lien_vers_le_reseau(&a, true)
-    );
-    // B : chemin non verbatim, lien vers `\\?\…\d.`, et `d.\x` vers le réseau.
+    assert!(lien_vers_le_reseau(&a, true), "A : {}", a.display());
+    // B
     let d = PathBuf::from(format!("{}.", racine.join("d").display()));
-    let r1 = fs::create_dir_all(v(&d));
-    let r2 = symlink_file(r"\\attaquant\q", v(&d.join("x")));
-    let r3 = symlink_dir(v(&d), racine.join("lib3"));
-    let _ = writeln!(rapport, "SONDE B créations {r1:?} {r2:?} {r3:?}");
-    let _ = writeln!(
-        rapport,
-        "SONDE read_link(lib3) = {:?}",
-        fs::read_link(racine.join("lib3"))
-    );
-    let b = racine.join(r"lib3\x.");
-    let _ = writeln!(
-        rapport,
-        "SONDE B lien_vers_le_reseau({}) = {}",
-        b.display(),
-        lien_vers_le_reseau(&b, true)
-    );
-    let b2 = racine.join(r"lib3\x");
-    let _ = writeln!(
-        rapport,
-        "SONDE B2 lien_vers_le_reseau({}) = {}",
-        b2.display(),
-        lien_vers_le_reseau(&b2, true)
-    );
-    panic!("rapport de la sonde KOB-398 :\n{rapport}");
+    fs::create_dir_all(v(&d)).unwrap();
+    symlink_file(r"\\attaquant\q", v(&d.join("x"))).unwrap();
+    symlink_dir(v(&d), racine.join("lib3")).unwrap();
+    for nom in [r"lib3\x.", r"lib3\x", r"lib3\x ", r"lib3\x. .", r"LIB3\X."] {
+        let chemin = racine.join(nom);
+        assert!(
+            lien_vers_le_reseau(&chemin, true),
+            "B : {}",
+            chemin.display()
+        );
+    }
+    let l = lecteur(&dir);
+    for chemin in [r"lib3\x.", r"lib3\x ", r"lib\x."] {
+        let e = l.lire(&json!({ "file_path": chemin })).unwrap_err();
+        assert!(e.contains("chemin réseau"), "{chemin} : {e}");
+    }
+    // Flux NTFS : `y::$DATA` ouvre `y`, un lien vers le réseau.
+    symlink_file(r"\\attaquant\r", vendor.join("y")).unwrap();
+    for nom in [r"lib\y::$DATA", r"lib\y:flux"] {
+        assert!(lien_vers_le_reseau(&racine.join(nom), true), "{nom}");
+        let verbatim = v(&racine.join(nom));
+        assert!(
+            lien_vers_le_reseau(&verbatim, true),
+            "{}",
+            verbatim.display()
+        );
+    }
+    // Nom court 8.3 d'un dossier qui mène au lien : même objet pour NT.
+    let long = racine.join("dossier-au-nom-long");
+    fs::create_dir_all(&long).unwrap();
+    symlink_file(r"\\attaquant\s", long.join("z")).unwrap();
+    let court = racine.join(r"DOSSIE~1\z");
+    if fs::symlink_metadata(&court).is_ok() {
+        assert!(lien_vers_le_reseau(&court, true), "{}", court.display());
+    }
+    // Un fichier ordinaire, dans les mêmes dossiers, se lit toujours.
+    fs::write(vendor.join("ordinaire.txt"), "ok").unwrap();
+    assert!(!lien_vers_le_reseau(
+        &racine.join(r"lib\ordinaire.txt"),
+        true
+    ));
+    assert!(!lien_vers_le_reseau(
+        &v(&racine.join(r"lib\ordinaire.txt")),
+        true
+    ));
 }
 
 /// Rien ne se lit hors des dossiers permis : chemin absolu, `..`, lien
