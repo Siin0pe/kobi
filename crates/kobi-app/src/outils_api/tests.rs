@@ -305,27 +305,126 @@ fn lien_vers_un_chemin_reseau_refuse_sous_windows() {
         let e = l.lire(&json!({ "file_path": chemin })).unwrap_err();
         assert!(e.contains("chemin réseau"), "{chemin} : {e}");
     }
-    // KOB-367 : la cible absolue d'un lien est lue en `\\?\C:\…` ; la suite
-    // du chemin donné (non verbatim, que Win32 traduit) est encore jugée.
-    // Donné verbatim, Win32 ne traduit rien : permis.
+    // KOB-367 : après un lien à cible absolue, la suite du chemin donné (non
+    // verbatim, que Win32 traduit) est encore jugée, quelle que soit la
+    // forme rendue par `read_link`. Selon le poste, une cible donnée en
+    // `C:\…` est rendue telle quelle ou en `\\?\C:\…` : les deux formes sont
+    // créées ici (`lib`, puis `lib2` en verbatim explicite, le cas de
+    // KOB-367). Donné verbatim, Win32 ne traduit rien : permis (KOB-398).
     fs::create_dir_all(racine.join("vendor")).unwrap();
-    symlink_dir(racine.join("vendor"), racine.join("lib")).unwrap();
+    let vendor = racine.join("vendor");
+    symlink_dir(&vendor, racine.join("lib")).unwrap();
+    // Une cible de plus de 260 caractères ne peut pas être rendue sans le
+    // préfixe : `lib2` reproduit KOB-367, sans nom ambigu dans la cible.
+    let long = vendor.join("a".repeat(120)).join("b".repeat(120));
+    let long = PathBuf::from(format!(r"\\?\{}", long.display()));
+    fs::create_dir_all(&long).unwrap();
+    symlink_dir(&long, racine.join("lib2")).unwrap();
     assert!(
-        std::fs::read_link(racine.join("lib"))
+        std::fs::read_link(racine.join("lib2"))
             .unwrap()
             .to_string_lossy()
             .starts_with(r"\\?\"),
-        "cible lue sans le préfixe verbatim : le cas de KOB-367 n'est pas reproduit"
+        "cible verbatim relue sans son préfixe"
     );
-    for nom in [r"lib\COM1", r"lib\CON.txt", r"lib\nul"] {
-        assert!(lien_vers_le_reseau(&racine.join(nom), true), "{nom}");
+    for lien in ["lib", "lib2"] {
+        for nom in ["COM1", "CON.txt", "nul"] {
+            let chemin = racine.join(lien).join(nom);
+            assert!(lien_vers_le_reseau(&chemin, true), "{}", chemin.display());
+        }
+        let verbatim = PathBuf::from(format!(r"\\?\{}", racine.join(lien).join("COM1").display()));
+        assert!(
+            !lien_vers_le_reseau(&verbatim, true),
+            "{}",
+            verbatim.display()
+        );
     }
-    let verbatim = PathBuf::from(format!(r"\\?\{}", racine.join(r"lib\COM1").display()));
-    assert!(
-        !lien_vers_le_reseau(&verbatim, true),
-        "{}",
-        verbatim.display()
-    );
+}
+
+/// KOB-398, correctif de sécurité du confinement Windows : le chemin jugé
+/// est celui que NT ouvrira.
+/// * A : chemin donné verbatim `\\?\…\lib\x.`, où `lib` vise `C:\…\vendor`
+///   (cible rendue sans `\\?\`) et `vendor\x.` est un lien vers le réseau.
+///   La sonde voyait `vendor\x` (Win32 retire le point) : lien manqué.
+/// * B : chemin donné `C:\…\lib3\x.`, où `lib3` vise `\\?\…\d.` et `d.\x`
+///   est un lien vers le réseau. Win32 ouvre `lib3\x`, la sonde voyait
+///   `d.\x.` : lien manqué.
+///
+/// Variantes : espace final, flux NTFS (`::$DATA`), casse, nom court 8.3.
+#[cfg(windows)]
+#[test]
+fn chemins_que_win32_traduit_juges_tels_que_nt_les_ouvre() {
+    use std::os::windows::fs::{symlink_dir, symlink_file};
+    let dir = codebase();
+    let racine = dir.path().to_path_buf();
+    let v = |p: &Path| PathBuf::from(format!(r"\\?\{}", p.display()));
+    let vendor = racine.join("vendor");
+    fs::create_dir_all(&vendor).unwrap();
+    if symlink_dir(&vendor, racine.join("lib")).is_err() {
+        assert!(std::env::var_os("CI").is_none(), "liens impossibles en CI");
+        return;
+    }
+    // A
+    symlink_file(r"\\attaquant\p", v(&vendor.join("x."))).unwrap();
+    let a = v(&racine.join(r"lib\x."));
+    assert!(lien_vers_le_reseau(&a, true), "A : {}", a.display());
+    // B
+    let d = PathBuf::from(format!("{}.", racine.join("d").display()));
+    fs::create_dir_all(v(&d)).unwrap();
+    symlink_file(r"\\attaquant\q", v(&d.join("x"))).unwrap();
+    symlink_dir(v(&d), racine.join("lib3")).unwrap();
+    for nom in [r"lib3\x.", r"lib3\x", r"lib3\x ", r"lib3\x. .", r"LIB3\X."] {
+        let chemin = racine.join(nom);
+        assert!(
+            lien_vers_le_reseau(&chemin, true),
+            "B : {}",
+            chemin.display()
+        );
+    }
+    // Par la lecture : B en absolu non verbatim (relatif, il est joint à la
+    // base verbatim et NT ouvre `x.` tel quel, absent) ; A en relatif. Un
+    // lecteur sans racine (`C:evil`) est refusé avant toute sonde.
+    let l = lecteur(&dir);
+    let b_absolu = |nom: &str| racine.join(nom).display().to_string();
+    for chemin in [
+        b_absolu(r"lib3\x."),
+        b_absolu(r"lib3\x "),
+        r"lib\x.".to_string(),
+        "C:evil".to_string(),
+        r"C:lib\x.".to_string(),
+    ] {
+        let e = l.lire(&json!({ "file_path": chemin })).unwrap_err();
+        assert!(e.contains("chemin réseau"), "{chemin} : {e}");
+    }
+    // Flux NTFS : `y::$DATA` ouvre `y`, un lien vers le réseau.
+    symlink_file(r"\\attaquant\r", vendor.join("y")).unwrap();
+    for nom in [r"lib\y::$DATA", r"lib\y:flux"] {
+        assert!(lien_vers_le_reseau(&racine.join(nom), true), "{nom}");
+        let verbatim = v(&racine.join(nom));
+        assert!(
+            lien_vers_le_reseau(&verbatim, true),
+            "{}",
+            verbatim.display()
+        );
+    }
+    // Nom court 8.3 d'un dossier qui mène au lien : même objet pour NT.
+    let long = racine.join("dossier-au-nom-long");
+    fs::create_dir_all(&long).unwrap();
+    symlink_file(r"\\attaquant\s", long.join("z")).unwrap();
+    let court = racine.join(r"DOSSIE~1\z");
+    if fs::symlink_metadata(&court).is_ok() {
+        assert!(lien_vers_le_reseau(&court, true), "{}", court.display());
+    }
+    // Un fichier ordinaire, dans les mêmes dossiers, se lit toujours.
+    fs::write(vendor.join("ordinaire.txt"), "ok").unwrap();
+    assert!(!lien_vers_le_reseau(
+        &racine.join(r"lib\ordinaire.txt"),
+        true
+    ));
+    assert!(!lien_vers_le_reseau(
+        &v(&racine.join(r"lib\ordinaire.txt")),
+        true
+    ));
 }
 
 /// Rien ne se lit hors des dossiers permis : chemin absolu, `..`, lien

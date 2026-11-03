@@ -272,7 +272,12 @@ impl Lecteur {
         let brut = reduire_sur_le_texte(&brut);
         // Sous Windows, le parcours refuse aussi un nom de périphérique DOS,
         // du chemin comme des cibles de liens (KOB-353).
-        if !prefixe_local(&brut) || lien_vers_le_reseau(&brut, cfg!(windows)) {
+        // Un lecteur sans racine (`C:evil`) se résout depuis le dossier
+        // courant de ce lecteur, que le parcours ne connaît pas (KOB-398).
+        if !prefixe_local(&brut)
+            || lecteur_sans_racine(&brut)
+            || lien_vers_le_reseau(&brut, cfg!(windows))
+        {
             return Err(refus());
         }
         let resolu = brut.canonicalize().map_err(|e| format!("{chemin} : {e}"))?;
@@ -965,6 +970,13 @@ fn chemin_reseau(chemin: &str) -> bool {
 fn lien_vers_le_reseau(chemin: &Path, peripheriques: bool) -> bool {
     use std::collections::VecDeque;
     use std::path::Component;
+    // Un `:` dans un nom (flux NTFS, `y::$DATA`) est refusé d'emblée : relu
+    // seul, ce nom passerait pour un lecteur (`Y:`) et le parcours ne
+    // jugerait plus rien, alors que NT ouvre le flux de `y` en suivant son
+    // lien (KOB-398). Pareil dans chaque cible de lien, plus bas.
+    if peripheriques && a_deux_points(chemin) {
+        return true;
+    }
     let mut a_lire: VecDeque<PathBuf> = chemin
         .components()
         .map(|c| PathBuf::from(c.as_os_str()))
@@ -985,12 +997,25 @@ fn lien_vers_le_reseau(chemin: &Path, peripheriques: bool) -> bool {
             }
             Some(Component::Normal(_)) => {}
         }
-        if peripheriques && !verbatim && nom_de_peripherique(morceau.as_os_str()) {
+        // Un nom que Win32 changerait (point ou espace final, KOB-398) est
+        // refusé comme un nom de périphérique : le chemin ouvert ne serait
+        // pas celui qui est jugé ici.
+        if peripheriques
+            && !verbatim
+            && (nom_de_peripherique(morceau.as_os_str()) || fin_ambigue(morceau.as_os_str()))
+        {
             return true;
         }
         let candidat = resolu.join(&morceau);
-        let est_un_lien =
-            std::fs::symlink_metadata(&candidat).is_ok_and(|m| m.file_type().is_symlink());
+        // Sondé tel que NT l'ouvrira, sans traduction Win32 (KOB-398).
+        let sonde = pour_nt(&candidat);
+        // Sous Windows, une sonde qui échoue autrement qu'« introuvable »
+        // (accès refusé, nom invalide) ne dit pas ce que NT suivra : refusé.
+        let est_un_lien = match std::fs::symlink_metadata(&sonde) {
+            Ok(m) => m.file_type().is_symlink(),
+            Err(e) if peripheriques && e.kind() != std::io::ErrorKind::NotFound => return true,
+            Err(_) => false,
+        };
         if !est_un_lien {
             resolu = candidat;
             continue;
@@ -999,12 +1024,13 @@ fn lien_vers_le_reseau(chemin: &Path, peripheriques: bool) -> bool {
         if liens > LIENS_MAX {
             return true;
         }
-        let Ok(cible) = std::fs::read_link(&candidat) else {
+        let Ok(cible) = std::fs::read_link(&sonde) else {
             return true;
         };
         if chemin_reseau(&cible.to_string_lossy())
             || !prefixe_local(&cible)
             || racine_sans_disque(&cible)
+            || (peripheriques && (a_deux_points(&cible) || lecteur_sans_racine(&cible)))
         {
             return true;
         }
@@ -1053,6 +1079,48 @@ fn racine_sans_disque(cible: &Path) -> bool {
             cible.components().next(),
             Some(std::path::Component::Prefix(_))
         )
+}
+
+/// Chemin sondé sur le disque tel que NT l'ouvrira : sous Windows, un
+/// chemin à disque (`C:\…`) l'est en `\\?\C:\…`, que Win32 ne traduit pas.
+/// Une étape du parcours (cible de lien rendue en `C:\…`, suite du chemin)
+/// n'est ainsi jamais vue sous un autre nom que celui que NT suivra : un
+/// `x.` resterait sinon `x` à la sonde, et son lien passerait (KOB-398).
+fn pour_nt(chemin: &Path) -> PathBuf {
+    #[cfg(windows)]
+    if let Some(std::path::Component::Prefix(p)) = chemin.components().next() {
+        if matches!(p.kind(), std::path::Prefix::Disk(_)) && chemin.has_root() {
+            // Sans perte : `display` changerait un UTF-16 isolé.
+            let mut verbatim = std::ffi::OsString::from(r"\\?\");
+            verbatim.push(chemin.as_os_str());
+            return PathBuf::from(verbatim);
+        }
+    }
+    chemin.to_path_buf()
+}
+
+/// Un préfixe de lecteur sans racine (`C:evil`) : Win32 le résout depuis le
+/// dossier courant de ce lecteur (KOB-398, Windows).
+fn lecteur_sans_racine(chemin: &Path) -> bool {
+    matches!(
+        chemin.components().next(),
+        Some(std::path::Component::Prefix(_))
+    ) && !chemin.has_root()
+}
+
+/// Un nom du chemin (hors préfixe de lecteur) contient un `:` : flux NTFS
+/// sous Windows (KOB-398).
+fn a_deux_points(chemin: &Path) -> bool {
+    chemin.components().any(
+        |c| matches!(c, std::path::Component::Normal(nom) if nom.to_string_lossy().contains(':')),
+    )
+}
+
+/// Un nom à point ou espace final (`x.`, `d `) : Win32 les retire d'un
+/// chemin non verbatim, qui n'ouvre donc pas le nom jugé (KOB-398).
+fn fin_ambigue(nom: &std::ffi::OsStr) -> bool {
+    let nom = nom.to_string_lossy();
+    nom.ends_with('.') || nom.ends_with(' ')
 }
 
 /// `\\?\…` : Win32 n'y change rien, ni `..` ni nom de périphérique.
