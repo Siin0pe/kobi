@@ -61,6 +61,9 @@ for (const state of ['idle', 'think', 'answer', 'listen'] as const) {
 
     await setHidden(page, true);
     expect(await running(page)).toBe(0);
+    // Les symboles envolés (étincelles de la transition) sont retirés dès la
+    // pause, pas à l'image suivante qu'une fenêtre masquée n'a pas (KOB-403).
+    expect(await page.locator('.kobi .burst span').count()).toBe(0);
     // Aucune minuterie ne modifie plus le dessin (bouche, clignements, brouillage).
     const before = await page.locator('.kobi').innerHTML();
     await page.evaluate(() => {
