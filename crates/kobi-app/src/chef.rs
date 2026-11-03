@@ -2812,6 +2812,18 @@ impl<R: Runtime> Chef<R> {
                     // question entre-temps) ; venue d'ailleurs, elle n'a rien
                     // changé (KOB-338).
                     Some(depuis_calme) => {
+                        // Venue du calme, elle laisse cette origine aux cartes
+                        // des notes qui attendent encore : la dernière fermée
+                        // y ramènera Kobi, quel que soit l'ordre (KOB-420).
+                        // Seulement si Kobi propose encore : venues pendant
+                        // qu'il faisait autre chose, elles n'en héritent pas.
+                        if depuis_calme && self.activite() == Some("propose") {
+                            for (k, calme) in self.cartes_des_notes.iter_mut() {
+                                if self.cartes.contains_key(k) {
+                                    *calme = true;
+                                }
+                            }
+                        }
                         // Une carte de Kobi qui attend tient aussi la
                         // proposition (KOB-380).
                         if self.cartes.is_empty()
@@ -4954,6 +4966,41 @@ mod tests {
                 dit_a: None,
             });
             for (carte, accepte) in [(3, Some(true)), (2, None), (1, None)] {
+                c.recevoir(Message::Cerveau(Retour::CarteFermee { carte, accepte }));
+            }
+            assert_eq!(c.activite(), Some("calme"));
+        });
+    }
+
+    /// KOB-420 (KOB-395 F) : en réunion, deux cartes des notes, l'une venue
+    /// d'une proposition, l'autre du calme ; celle venue du calme se ferme
+    /// d'abord. À la fermeture de la dernière, Kobi revient au calme.
+    #[test]
+    fn cartes_des_notes_fermees_dans_n_importe_quel_ordre() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            let notes = |carte| {
+                Message::Cerveau(Retour::Carte {
+                    tour: 0,
+                    carte,
+                    outil: "mcp__linear__save_issue".into(),
+                    entree: serde_json::json!({"title": "Corriger la connexion"}),
+                })
+            };
+            // Pendant un Oups : la carte 3 ne vient pas du calme.
+            c.erreur("Disque", "plein");
+            c.recevoir(notes(3));
+            assert_eq!(c.cartes_des_notes.get(&3), Some(&false));
+            // L'Oups s'efface : retour au calme, la carte 3 attend toujours.
+            c.calme_a = Some((Instant::now(), Evenement::Acquitter));
+            c.tick();
+            assert_eq!(c.activite(), Some("calme"));
+            std::thread::sleep(Duration::from_millis(2));
+            c.recevoir(notes(4));
+            assert_eq!(c.activite(), Some("propose"));
+            assert_eq!(c.cartes_des_notes.get(&4), Some(&true));
+            for (carte, accepte) in [(4, None), (3, None)] {
                 c.recevoir(Message::Cerveau(Retour::CarteFermee { carte, accepte }));
             }
             assert_eq!(c.activite(), Some("calme"));
