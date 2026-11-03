@@ -3431,12 +3431,17 @@ impl<R: Runtime> Chef<R> {
             }
             self.transition(&[Evenement::PermissionDemandee]);
         }
-        // Kobi réfléchit sans rien qui puisse répondre : ni question en
-        // cours, ni tâche, ni résultat à livrer (carte sans tour acceptée,
+        // Kobi réfléchit sans rien qui puisse répondre : aucune question qui
+        // tourne encore (ni la dernière, ni une plus ancienne détachée par sa
+        // carte), ni tâche, ni résultat à livrer (carte sans tour acceptée,
         // tâche finie en erreur) ; il revient au calme au lieu de rester figé
         // (KOB-391).
+        let une_question_tourne = self
+            .historique
+            .iter()
+            .any(|b| matches!(b.statut, "attente" | "reponse" | "tache"));
         if self.activite() == Some("reflechit")
-            && !self.question_en_cours()
+            && !une_question_tourne
             && self.taches.is_empty()
             && self.a_livrer.is_empty()
             && self.calme_a.is_none()
@@ -7075,6 +7080,53 @@ mod tests {
             c.envoyer("Crée le ticket".into(), None, true);
             c.tick();
             assert_eq!(c.activite(), Some("reflechit"));
+        });
+        // Une question plus ancienne détachée par sa carte MCP, acceptée
+        // après la réponse à une autre : son tour travaille encore, Kobi
+        // réfléchit jusqu'à son résultat.
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            c.recevoir(Message::Interpelle);
+            c.envoyer("Crée le ticket".into(), None, true);
+            let tour = c.dernier;
+            c.recevoir(Message::Cerveau(Retour::Detache {
+                tour,
+                annonce: false,
+            }));
+            c.recevoir(Message::Cerveau(Retour::Carte {
+                tour,
+                carte: 1,
+                outil: "mcp__linear__save_issue".into(),
+                entree: serde_json::json!({"title": "Corriger la connexion"}),
+            }));
+            c.recevoir(Message::Interpelle);
+            c.envoyer("Quelle est la date de la démo ?".into(), None, true);
+            let autre = c.dernier;
+            c.recevoir(Message::Cerveau(Retour::Fin {
+                tour: autre,
+                texte: "La démo est jeudi.".into(),
+            }));
+            c.calme_a = c.calme_a.map(|(_, e)| (Instant::now(), e));
+            c.tick();
+            assert_eq!(c.activite(), Some("propose"));
+            c.recevoir(Message::Cerveau(Retour::CarteFermee {
+                carte: 1,
+                accepte: Some(true),
+            }));
+            assert_eq!(c.activite(), Some("reflechit"));
+            c.tick();
+            assert_eq!(c.activite(), Some("reflechit"), "son tour travaille");
+            c.recevoir(Message::Cerveau(Retour::Resultat {
+                tour,
+                texte: "Le ticket est créé.".into(),
+            }));
+            for _ in 0..3 {
+                c.livrable_a = None;
+                c.tick();
+            }
+            assert!(c.a_livrer.is_empty());
+            assert_eq!(c.activite(), Some("repond"));
         });
     }
 }
