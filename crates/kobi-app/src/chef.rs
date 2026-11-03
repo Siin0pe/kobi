@@ -7822,4 +7822,438 @@ mod tests {
             assert!(c.patience_reportee.is_none());
         });
     }
+
+    /// KOB-395 : test de propriété « Kobi ne reste jamais figé ». Des suites
+    /// d'événements tirées au hasard (graine fixe, générateur maison) sont
+    /// jouées sur le chef ; trois propriétés sont vérifiées à la fin. Un
+    /// contre-exemple est réduit à sa suite minimale et affiché.
+    mod propriete {
+        use super::*;
+
+        /// Générateur xorshift64* : reproductible, sans dépendance.
+        struct Hasard(u64);
+
+        impl Hasard {
+            fn suivant(&mut self) -> u64 {
+                self.0 ^= self.0 >> 12;
+                self.0 ^= self.0 << 25;
+                self.0 ^= self.0 >> 27;
+                self.0.wrapping_mul(0x2545_f491_4f6c_dd1d)
+            }
+
+            fn sous(&mut self, n: usize) -> usize {
+                (self.suivant() % n as u64) as usize
+            }
+        }
+
+        const TEXTES: [&str; 6] = [
+            "résume le projet",
+            "oui",
+            "non",
+            "c'est ok",
+            "stop",
+            "et la revue ?",
+        ];
+
+        /// Un événement du chef. Les tours et les cartes sont désignés par
+        /// leur rang parmi ceux qui existent (le plus récent d'abord).
+        #[derive(Debug, Clone)]
+        enum Ev {
+            /// Dite (`nom` : l'écoute interpelle Kobi, avec ou sans le nom)
+            /// ou tapée au clavier.
+            Question {
+                nom: bool,
+                texte: usize,
+            },
+            Texte(usize),
+            Fin(usize),
+            Resultat(usize),
+            Detache(usize, bool),
+            ErreurTour(usize),
+            EnAttente(usize),
+            ErreurAutre,
+            CarteKobi,
+            /// Carte de Kobi tranchée : 0 oui, 1 non, 2 échéance.
+            DecisionKobi(usize, u8),
+            /// Carte MCP : du tour, ou des notes (tour 0).
+            CarteMcp(usize, bool),
+            /// Carte MCP tranchée au clic ou échue (`None`).
+            FermeeMcp(usize, Option<bool>),
+            EcheanceMcp,
+            Demarrer,
+            Pause,
+            Reprendre,
+            Tic,
+        }
+
+        fn tirer(h: &mut Hasard) -> Ev {
+            match h.sous(22) {
+                0..=2 => Ev::Question {
+                    nom: h.sous(3) != 0,
+                    texte: h.sous(TEXTES.len()),
+                },
+                3 => Ev::Question {
+                    nom: false,
+                    texte: h.sous(TEXTES.len()),
+                },
+                4 => Ev::Texte(h.sous(3)),
+                5 => Ev::Fin(h.sous(3)),
+                6 => Ev::Resultat(h.sous(3)),
+                7 => Ev::Detache(h.sous(3), h.sous(2) == 0),
+                8 => Ev::ErreurTour(h.sous(3)),
+                9 => Ev::EnAttente(h.sous(3)),
+                10 => Ev::ErreurAutre,
+                11 => Ev::CarteKobi,
+                12 => Ev::DecisionKobi(h.sous(2), h.sous(3) as u8),
+                13 => Ev::CarteMcp(h.sous(3), h.sous(4) == 0),
+                14 => Ev::FermeeMcp(h.sous(2), [Some(true), Some(false), None][h.sous(3)]),
+                15 => Ev::EcheanceMcp,
+                16 => Ev::Demarrer,
+                17 => Ev::Pause,
+                18 => Ev::Reprendre,
+                _ => Ev::Tic,
+            }
+        }
+
+        /// Le temps passe : délais du chef échus, puis un tic.
+        fn avancer(c: &mut Chef<tauri::test::MockRuntime>) {
+            if let Some((_, e)) = c.calme_a {
+                c.calme_a = Some((Instant::now() - Duration::from_millis(1), e));
+            }
+            c.livrable_a = None;
+            if let Some((t, Some(_))) = c.patience_reportee {
+                c.patience_reportee = Some((t, Some(Instant::now() - cerveau::PATIENCE)));
+            }
+            c.tick();
+        }
+
+        /// Tours créés par les questions, le plus récent d'abord.
+        fn tours(c: &Chef<tauri::test::MockRuntime>) -> Vec<u64> {
+            let mut t: Vec<u64> = c
+                .historique
+                .iter()
+                .filter(|b| !b.question.is_empty())
+                .map(|b| b.tour)
+                .collect();
+            t.reverse();
+            t
+        }
+
+        fn rang<T: Clone>(v: &[T], k: usize) -> Option<T> {
+            (!v.is_empty()).then(|| v[k % v.len()].clone())
+        }
+
+        /// Cartes de Kobi ouvertes, dans l'ordre de la file.
+        fn validations(c: &Chef<tauri::test::MockRuntime>) -> Vec<String> {
+            c.validations.ids()
+        }
+
+        fn cartes_mcp(c: &Chef<tauri::test::MockRuntime>) -> Vec<u64> {
+            let mut v: Vec<u64> = c.cartes.keys().copied().collect();
+            v.sort_unstable_by(|a, b| b.cmp(a));
+            v
+        }
+
+        /// Une carte de Kobi ou de la conversation attend (pas une carte
+        /// des notes, qui ne tient pas Kobi, KOB-338).
+        fn carte_attend(c: &Chef<tauri::test::MockRuntime>) -> bool {
+            !c.validations.est_vide()
+                || c.cartes.keys().any(|k| {
+                    !c.cartes_des_notes.contains_key(k)
+                        && c.cartes_ouvertes
+                            .get(k)
+                            .is_some_and(|o| o.elapsed() < kobi_perms::DEFAULT_TIMEOUT)
+                })
+        }
+
+        /// Ce que le jeu retient : numéros de cartes, tours détachés.
+        #[derive(Default)]
+        struct Jeu {
+            n: u64,
+            detaches: HashSet<u64>,
+            /// Dernière question posée par l'utilisateur (tour envoyé).
+            derniere: Option<u64>,
+            /// 4. Réponse montrée : violations relevées en cours de jeu.
+            violations: Vec<String>,
+        }
+
+        fn jouer(c: &mut Chef<tauri::test::MockRuntime>, ev: &Ev, jeu: &mut Jeu) {
+            match *ev {
+                Ev::Question { nom, texte } => {
+                    let texte = TEXTES[texte];
+                    // Comme le cerveau et la validation : « oui » ou « non »
+                    // à une carte reviennent comme sa fermeture.
+                    let cible = c.validations.cible().map(str::to_owned);
+                    let mcp = c.carte_affichee();
+                    // L'écoute interpelle Kobi avant toute phrase qu'elle lui
+                    // passe, avec ou sans le nom (`Interpeller`) ; au clavier,
+                    // `question` le fait elle-même.
+                    if nom {
+                        c.recevoir(Message::Interpelle);
+                        c.recevoir(Message::Question {
+                            texte: texte.into(),
+                            voix: true,
+                            dit_a: None,
+                        });
+                    } else {
+                        c.question(texte.into(), false);
+                    }
+                    if c.bulle(c.tour).is_some_and(|b| b.statut == "attente") {
+                        jeu.derniere = Some(c.tour);
+                    }
+                    let reponse = crate::intentions::reponse_validation(texte);
+                    if let (Some(id), Some(accepte)) = (cible, reponse) {
+                        c.recevoir(Message::ValidationFermee {
+                            id,
+                            reponse: if accepte {
+                                crate::validation::Reponse::Accepte
+                            } else {
+                                crate::validation::Reponse::Refuse
+                            },
+                        });
+                    } else if let (Some(carte), Some(accepte)) =
+                        (mcp, crate::intentions::reponse_carte_mcp(texte))
+                    {
+                        c.recevoir(Message::Cerveau(Retour::CarteFermee {
+                            carte,
+                            accepte: Some(accepte),
+                        }));
+                    }
+                }
+                Ev::Texte(k)
+                | Ev::Fin(k)
+                | Ev::Resultat(k)
+                | Ev::Detache(k, _)
+                | Ev::ErreurTour(k)
+                | Ev::EnAttente(k) => {
+                    let Some(tour) = rang(&tours(c), k) else {
+                        return;
+                    };
+                    // Comme le cerveau : rien après la fin d'un tour ; détaché,
+                    // il ne parle plus et finit par son résultat ; sinon par
+                    // sa fin.
+                    let statut = c.bulle(tour).map(|b| b.statut);
+                    let detache = jeu.detaches.contains(&tour);
+                    if !matches!(statut, Some("attente" | "reponse" | "tache")) {
+                        return;
+                    }
+                    let texte = "Réponse d'essai.".to_string();
+                    let r = match *ev {
+                        Ev::Texte(_) | Ev::Detache(..) | Ev::EnAttente(_) if detache => return,
+                        Ev::Texte(_) => Retour::Texte { tour, texte },
+                        Ev::Fin(_) | Ev::Resultat(_) if detache => Retour::Resultat { tour, texte },
+                        Ev::Fin(_) | Ev::Resultat(_) => Retour::Fin { tour, texte },
+                        Ev::Detache(_, annonce) => {
+                            jeu.detaches.insert(tour);
+                            Retour::Detache { tour, annonce }
+                        }
+                        Ev::ErreurTour(_) => Retour::Erreur {
+                            tour,
+                            message: "erreur d'essai".into(),
+                        },
+                        _ => Retour::EnAttente { tour, nombre: 1 },
+                    };
+                    let montree = matches!(ev, Ev::Fin(_) | Ev::Resultat(_))
+                        && !detache
+                        && jeu.derniere == Some(tour)
+                        && !c.interrompus.contains(&tour)
+                        && !matches!(etat(&c.app).etat, "pause" | "fin");
+                    c.recevoir(Message::Cerveau(r));
+                    // 4. Réponse montrée : la réponse de la dernière question
+                    // posée est celle que Kobi montre.
+                    if montree && c.dernier != tour {
+                        jeu.violations.push(format!(
+                            "réponse du tour {tour} pas montrée (dernier = {})",
+                            c.dernier
+                        ));
+                    }
+                }
+                Ev::ErreurAutre => c.erreur("Disque", "plein"),
+                Ev::CarteKobi => {
+                    jeu.n += 1;
+                    c.validation_ouverte(format!("v{}", jeu.n), "Écrire la note");
+                }
+                Ev::DecisionKobi(k, d) => {
+                    let Some(id) = rang(&validations(c), k) else {
+                        return;
+                    };
+                    let reponse = [
+                        crate::validation::Reponse::Accepte,
+                        crate::validation::Reponse::Refuse,
+                        crate::validation::Reponse::Delai,
+                    ][d as usize];
+                    c.recevoir(Message::ValidationFermee { id, reponse });
+                }
+                Ev::CarteMcp(k, notes) => {
+                    let tour = if notes {
+                        0
+                    } else {
+                        match rang(&tours(c), k) {
+                            Some(t) => t,
+                            None => return,
+                        }
+                    };
+                    jeu.n += 1;
+                    c.recevoir(Message::Cerveau(Retour::Carte {
+                        tour,
+                        carte: jeu.n,
+                        outil: "mcp__carnet__ecrire_note".into(),
+                        entree: serde_json::json!({ "title": "Note d'essai" }),
+                    }));
+                    // Deux ouvertures dans la même milliseconde n'ont pas
+                    // d'ordre à l'écran.
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Ev::FermeeMcp(k, accepte) => {
+                    let Some(carte) = rang(&cartes_mcp(c), k) else {
+                        return;
+                    };
+                    c.recevoir(Message::Cerveau(Retour::CarteFermee { carte, accepte }));
+                }
+                Ev::EcheanceMcp => {
+                    for o in c.cartes_ouvertes.values_mut() {
+                        *o -= kobi_perms::DEFAULT_TIMEOUT + Duration::from_secs(6);
+                    }
+                    c.tick();
+                }
+                Ev::Demarrer => {
+                    c.commande(Intention::DemarrerReunion);
+                }
+                Ev::Pause => {
+                    c.commande(Intention::Pause);
+                }
+                Ev::Reprendre => {
+                    c.commande(Intention::Reprendre);
+                }
+                Ev::Tic => avancer(c),
+            }
+        }
+
+        /// Joue `suite` sur un chef neuf et vérifie les trois propriétés.
+        fn verifier(suite: &[Ev]) -> Result<(), String> {
+            let (app, _dir) = chef_en_essai();
+            avec_chef(&app, |c| {
+                let mut jeu = Jeu::default();
+                for ev in suite {
+                    jouer(c, ev, &mut jeu);
+                }
+                if let Some(v) = jeu.violations.first() {
+                    return Err(v.clone());
+                }
+                for _ in 0..5 {
+                    avancer(c);
+                }
+                // 3. Carte visible : une carte attend, Kobi ne dort pas.
+                if carte_attend(c) && !matches!(etat(&c.app).etat, "pause" | "fin") {
+                    if matches!(c.activite(), Some("calme") | None) {
+                        return Err(format!(
+                            "carte qui attend, mais activité {:?} (état {})",
+                            c.activite(),
+                            etat(&c.app).etat
+                        ));
+                    }
+                }
+                // Tout se termine : cartes tranchées, tours finis.
+                for id in validations(c) {
+                    c.recevoir(Message::ValidationFermee {
+                        id,
+                        reponse: crate::validation::Reponse::Refuse,
+                    });
+                }
+                for carte in cartes_mcp(c) {
+                    c.recevoir(Message::Cerveau(Retour::CarteFermee {
+                        carte,
+                        accepte: None,
+                    }));
+                }
+                // Les tâches aussi, même sorties de l'historique (12 bulles) :
+                // le cerveau finit toujours par livrer leur résultat.
+                let en_cours: std::collections::BTreeSet<u64> = c
+                    .historique
+                    .iter()
+                    .filter(|b| matches!(b.statut, "attente" | "reponse" | "tache"))
+                    .map(|b| b.tour)
+                    .chain(c.taches.keys().copied())
+                    .collect();
+                for tour in en_cours {
+                    let texte = "Fin d'essai.".to_string();
+                    c.recevoir(Message::Cerveau(if jeu.detaches.contains(&tour) {
+                        Retour::Resultat { tour, texte }
+                    } else {
+                        Retour::Fin { tour, texte }
+                    }));
+                }
+                // Un résultat livré par tic ou presque : assez de tics pour
+                // tous, avec leur lecture.
+                for _ in 0..60 {
+                    avancer(c);
+                }
+                // 2. Rien de perdu.
+                if !c.a_livrer.is_empty() {
+                    return Err(format!(
+                        "{} résultat(s) jamais livré(s), activité {:?}",
+                        c.a_livrer.len(),
+                        c.activite()
+                    ));
+                }
+                // 1. Jamais figé.
+                if !matches!(c.activite(), Some("calme") | None) {
+                    return Err(format!(
+                        "figé en {:?} (état {}) sans carte, question ni tâche",
+                        c.activite(),
+                        etat(&c.app).etat
+                    ));
+                }
+                Ok(())
+            })
+        }
+
+        /// Réduit une suite qui échoue : retire un à un les événements dont
+        /// l'échec ne dépend pas.
+        fn reduire(mut suite: Vec<Ev>) -> (Vec<Ev>, String) {
+            let mut raison = verifier(&suite).unwrap_err();
+            let mut i = 0;
+            while i < suite.len() {
+                let mut essai = suite.clone();
+                essai.remove(i);
+                match verifier(&essai) {
+                    Err(r) => {
+                        suite = essai;
+                        raison = r;
+                    }
+                    Ok(()) => i += 1,
+                }
+            }
+            (suite, raison)
+        }
+
+        const GRAINE: u64 = 0x4b4f_4249_0395;
+        const SUITES: usize = 300;
+        const LONGUEUR: usize = 24;
+
+        #[test]
+        fn kobi_ne_reste_jamais_fige() {
+            // Réglables pour explorer : KOBI_GRAINE, KOBI_SUITES, KOBI_LONGUEUR.
+            let graine = std::env::var("KOBI_GRAINE")
+                .ok()
+                .and_then(|g| g.parse().ok())
+                .unwrap_or(GRAINE);
+            let suites = std::env::var("KOBI_SUITES")
+                .ok()
+                .and_then(|g| g.parse().ok())
+                .unwrap_or(SUITES);
+            let longueur = std::env::var("KOBI_LONGUEUR")
+                .ok()
+                .and_then(|g| g.parse().ok())
+                .unwrap_or(LONGUEUR);
+            let mut h = Hasard(graine);
+            for numero in 0..suites {
+                let suite: Vec<Ev> = (0..longueur).map(|_| tirer(&mut h)).collect();
+                if verifier(&suite).is_err() {
+                    let (minimale, raison) = reduire(suite);
+                    panic!("suite n° {numero} : {raison}\nsuite minimale : {minimale:#?}");
+                }
+            }
+        }
+    }
 }
