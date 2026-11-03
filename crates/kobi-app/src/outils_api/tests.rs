@@ -473,6 +473,41 @@ fn point_point_d_une_cible_reduit_sur_le_texte() {
     assert_eq!(l.lire(&json!({ "file_path": "u" })).map(|_| ()), Ok(()));
 }
 
+/// SONDE (ne pas merger) : cible verbatim fabriquée `\\?\…\x\../y`, où `x`
+/// est un lien vers `\\127.0.0.1\p` et `y` un fichier ordinaire.
+#[cfg(windows)]
+#[test]
+fn sonde_barre_dans_une_cible_verbatim() {
+    use std::os::windows::fs::{symlink_dir, symlink_file};
+    let dir = codebase();
+    let racine = dir.path().to_path_buf();
+    if symlink_dir(r"\\127.0.0.1\p", racine.join("x")).is_err() {
+        panic!("SONDE liens impossibles");
+    }
+    fs::write(racine.join("y"), "ordinaire").unwrap();
+    let fabrique = format!(r"\\?\{}\x\../y", racine.display());
+    symlink_file(&fabrique, racine.join("t")).unwrap();
+    let relue = fs::read_link(racine.join("t")).map(|c| c.display().to_string());
+    let juge = lien_vers_le_reseau(&racine.join("t"), true);
+    let reduit = reduire_sur_le_texte(Path::new(&fabrique))
+        .display()
+        .to_string();
+    let t0 = std::time::Instant::now();
+    let nt = fs::metadata(racine.join("t"))
+        .map(|_| "ok".to_string())
+        .unwrap_or_else(|e| format!("{:?} {e}", e.raw_os_error()));
+    let ms = t0.elapsed().as_millis();
+    let temoin = fs::metadata(racine.join("x"))
+        .map(|_| "ok".to_string())
+        .unwrap_or_else(|e| format!("{:?} {e}", e.raw_os_error()));
+    let l = lecteur(&dir);
+    let lu = l
+        .lire(&json!({ "file_path": "t" }))
+        .map(|_| "lu".to_string())
+        .unwrap_or_else(|e| e);
+    panic!("SONDE relue={relue:?} juge={juge} reduit={reduit} nt={nt} ({ms} ms) temoin_x={temoin} lire={lu}");
+}
+
 /// Rien ne se lit hors des dossiers permis : chemin absolu, `..`, lien
 /// symbolique qui sort.
 #[test]
