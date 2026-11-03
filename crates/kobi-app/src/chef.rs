@@ -3467,8 +3467,10 @@ impl<R: Runtime> Chef<R> {
         {
             self.transition(&[Evenement::ReponseTerminee]);
         }
-        // Revenu au calme alors qu'une tâche tourne encore : Kobi s'en occupe.
-        if !self.taches.is_empty()
+        // Revenu au calme alors qu'une tâche, ou la question en cours, tourne
+        // encore (Oups acquitté pendant l'attente du réseau, reprise après la
+        // pause…) : Kobi s'en occupe, au lieu de paraître au repos (KOB-418).
+        if (!self.taches.is_empty() || self.question_en_cours())
             && self.calme_a.is_none()
             && matches!(self.activite(), Some("calme") | None)
             && matches!(etat(&self.app).etat, "veille" | "reunion")
@@ -4708,6 +4710,46 @@ mod tests {
                 "{:?}",
                 c.activite()
             );
+        });
+    }
+
+    /// KOB-418 (KOB-395 A) : la question en cours tourne encore (attente du
+    /// réseau, Oups acquitté) et deux cartes attendent : Kobi ne paraît pas
+    /// au repos, il est « au travail ».
+    #[test]
+    fn question_en_cours_jamais_au_repos() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.validation_ouverte("v1".into(), "Écrire la note");
+            c.validation_ouverte("v2".into(), "Écrire une autre note");
+            c.question("et la revue ?".into(), false);
+            let tour = c.tour;
+            c.recevoir(Message::Cerveau(Retour::EnAttente { tour, nombre: 1 }));
+            for _ in 0..5 {
+                if let Some((_, e)) = c.calme_a {
+                    c.calme_a = Some((Instant::now(), e));
+                }
+                c.tick();
+            }
+            assert!(c.question_en_cours());
+            assert!(
+                !matches!(c.activite(), Some("calme") | None),
+                "{:?} alors que la question tourne et que deux cartes attendent",
+                c.activite()
+            );
+            // La réponse arrive : « répond », puis la carte est reproposée.
+            c.recevoir(Message::Cerveau(Retour::Fin {
+                tour,
+                texte: "Vendredi.".into(),
+            }));
+            assert_eq!(c.activite(), Some("repond"));
+            for _ in 0..3 {
+                if let Some((_, e)) = c.calme_a {
+                    c.calme_a = Some((Instant::now(), e));
+                }
+                c.tick();
+            }
+            assert_eq!(c.activite(), Some("propose"), "les cartes attendent");
         });
     }
 
