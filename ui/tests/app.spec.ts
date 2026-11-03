@@ -62,12 +62,18 @@ function fakeTauri(): void {
             return { etat: 'veille', activite: null, mascotte: 'idle', transcrit: false };
           case 'etat_enregistrement':
             return { actif: false, pause: false, debut_ms: 0, notes: 0, titre: null };
-          case 'journal_activite':
+          case 'journal_activite': {
+            // Hier à midi, pas maintenant moins 24 h : le jour du passage à
+            // l'heure d'hiver dure 25 h (KOB-376).
+            const hier = new Date();
+            hier.setDate(hier.getDate() - 1);
+            hier.setHours(12, 0, 0, 0);
             return [
-              { quand_ms: Date.now() - 86_400_000, genre: 'reunion', texte: 'Réunion terminée', detail: 'Point hebdo · 4 lignes de notes' },
+              { quand_ms: hier.getTime(), genre: 'reunion', texte: 'Réunion terminée', detail: 'Point hebdo · 4 lignes de notes' },
               { quand_ms: Date.now() - 60_000, genre: 'question', texte: 'Quelle heure est-il ?' },
               { quand_ms: Date.now() - 30_000, genre: 'action', texte: 'Proposé : cargo test', detail: 'Commande' },
             ];
+          }
           default:
             // Les étapes de l'accueil ont leurs propres tests (bienvenue.spec.ts).
             throw `Command ${cmd} not found`;

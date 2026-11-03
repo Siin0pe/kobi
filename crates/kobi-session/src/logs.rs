@@ -272,15 +272,28 @@ pub fn installer_crochet_panique(dir: &Path) {
             .unwrap_or("sans nom")
             .to_owned();
         let trace = std::backtrace::Backtrace::force_capture();
-        let fichier = dir.join(format!(
-            "crash-{}.txt",
-            jiff::Zoned::now().strftime("%Y%m%d-%H%M%S")
-        ));
+        let horodatage = jiff::Zoned::now().strftime("%Y%m%d-%H%M%S").to_string();
+        let rapport = rapport_de_panique(&fil, &info.to_string(), &trace);
+        // Deux paniques dans la même seconde (deux fils) : la seconde prend
+        // `-2`, `-3`… au lieu d'écraser le premier rapport (KOB-376).
+        let mut fichier = dir.join(format!("crash-{horodatage}.txt"));
+        for n in 2..100 {
+            match OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&fichier)
+            {
+                Ok(mut f) => {
+                    let _ = f.write_all(rapport.as_bytes());
+                    break;
+                }
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                    fichier = dir.join(format!("crash-{horodatage}-{n}.txt"));
+                }
+                Err(_) => break,
+            }
+        }
         tracing::error!(fil = %fil, panique = %info, fichier = %fichier.display(), "panique");
-        let _ = fs::write(
-            &fichier,
-            rapport_de_panique(&fil, &info.to_string(), &trace),
-        );
         precedent(info);
     }));
 }
@@ -331,15 +344,18 @@ mod tests {
         let log = lire_tout(dir.path());
         assert!(log.contains("panique provoquée exprès"), "{log}");
         assert!(log.contains("essai-panique"), "{log}");
+        // Le crochet est global : la panique d'un autre test lancé en
+        // parallèle peut aussi laisser un rapport ici. Seul compte celui de
+        // ce fil (KOB-376).
         let crash: Vec<_> = fs::read_dir(dir.path())
             .unwrap()
             .flatten()
             .filter(|e| e.file_name().to_string_lossy().starts_with("crash-"))
+            .map(|e| fs::read_to_string(e.path()).unwrap())
+            .filter(|texte| texte.contains("fil : essai-panique"))
             .collect();
         assert_eq!(crash.len(), 1);
-        let texte = fs::read_to_string(crash[0].path()).unwrap();
-        assert!(texte.contains("panique provoquée exprès"));
-        assert!(texte.contains("fil : essai-panique"));
+        assert!(crash[0].contains("panique provoquée exprès"));
     }
 
     #[test]
