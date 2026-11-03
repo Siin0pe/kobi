@@ -1516,3 +1516,126 @@ fn parcours_bornes() {
         lignes[RESULTATS_MAX]
     );
 }
+
+/// SONDE de revue de sécurité (kobi-a, PR brouillon, jamais mergée) : rend
+/// ce que Kobi juge et ce que Windows fait, pour chaque variante.
+#[cfg(windows)]
+#[test]
+fn sonde_revue_confinement() {
+    use std::fmt::Write;
+    use std::os::windows::fs::{symlink_dir, symlink_file};
+    let dir = codebase();
+    let racine = dir.path().to_path_buf();
+    let l = lecteur(&dir);
+    let mut r = String::new();
+    let essai = |r: &mut String, nom: &str, chemin: &Path| {
+        let t = std::time::Instant::now();
+        let m = std::fs::metadata(chemin);
+        let duree = t.elapsed();
+        let os = m.as_ref().err().map(|e| (e.raw_os_error(), e.to_string()));
+        let lu = l
+            .lire(&json!({ "file_path": chemin.display().to_string() }))
+            .map(|_| ())
+            .map_err(|e| e.chars().take(90).collect::<String>());
+        let _ = writeln!(
+            r,
+            "{nom} | kobi_reseau={} | lire={lu:?} | metadata={os:?} en {duree:?}",
+            lien_vers_le_reseau(chemin, true)
+        );
+    };
+    let profond = racine.join(r"a\b\c");
+    fs::create_dir_all(&profond).unwrap();
+    let monte = "..\\".repeat(30);
+    // 1. Lien relatif qui monte au-dessus du lecteur vers GLOBALROOT.
+    let c = format!(r"{monte}GLOBALROOT\Device\Mup\127.0.0.1\partage\f");
+    let _ = writeln!(
+        r,
+        "creation g : {:?}",
+        symlink_file(&c, profond.join("g")).err()
+    );
+    essai(&mut r, "1 g", &profond.join("g"));
+    // 2. Même chose vers ??\UNC.
+    let c = format!(r"{monte}??\UNC\127.0.0.1\partage\f");
+    let _ = writeln!(
+        r,
+        "creation u : {:?}",
+        symlink_file(&c, profond.join("u")).err()
+    );
+    essai(&mut r, "2 u", &profond.join("u"));
+    // 3. Lien de dossier qui monte, puis la suite du chemin.
+    let _ = writeln!(
+        r,
+        "creation haut : {:?}",
+        symlink_dir(&monte, profond.join("haut")).err()
+    );
+    essai(
+        &mut r,
+        "3 haut",
+        &profond.join(r"haut\GLOBALROOT\Device\Mup\127.0.0.1\partage\f"),
+    );
+    essai(&mut r, "3b haut seul", &profond.join("haut"));
+    // 4. Nom court 8.3 d'un lien vers le réseau.
+    let _ = writeln!(
+        r,
+        "creation long : {:?}",
+        symlink_file(r"\\127.0.0.1\partage\f", racine.join("longnomdelien.txt")).err()
+    );
+    let liste = std::process::Command::new("cmd")
+        .args(["/c", "dir", "/x"])
+        .current_dir(&racine)
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    let court = liste
+        .lines()
+        .find(|ligne| ligne.contains("longnomdelien"))
+        .and_then(|ligne| {
+            ligne
+                .split_whitespace()
+                .find(|m| m.contains('~'))
+                .map(str::to_string)
+        });
+    let _ = writeln!(r, "nom court : {court:?}");
+    if let Some(court) = court {
+        essai(&mut r, "4 court", &racine.join(court));
+    }
+    essai(&mut r, "4b long", &racine.join("longnomdelien.txt"));
+    // 5. Jonction vers UNC (mklink /J).
+    let o = std::process::Command::new("cmd")
+        .args(["/c", "mklink", "/J"])
+        .arg(racine.join("jonction"))
+        .arg(r"\\127.0.0.1\partage")
+        .output();
+    let _ = writeln!(
+        r,
+        "mklink /J unc : {:?}",
+        o.map(|o| (
+            o.status.code(),
+            String::from_utf8_lossy(&o.stdout).trim().to_string(),
+            String::from_utf8_lossy(&o.stderr).trim().to_string()
+        ))
+    );
+    essai(&mut r, "5 jonction", &racine.join(r"jonction\f"));
+    let _ = writeln!(
+        r,
+        "read_link jonction : {:?}",
+        fs::read_link(racine.join("jonction"))
+    );
+    // 6. Jonction vers un dossier local hors de la codebase.
+    let dehors = tempfile::tempdir().unwrap();
+    fs::write(dehors.path().join("secret.txt"), "secret").unwrap();
+    let o = std::process::Command::new("cmd")
+        .args(["/c", "mklink", "/J"])
+        .arg(racine.join("jdehors"))
+        .arg(dehors.path())
+        .output();
+    let _ = writeln!(r, "mklink /J dehors : {:?}", o.map(|o| o.status.code()));
+    essai(&mut r, "6 jdehors", &racine.join(r"jdehors\secret.txt"));
+    // 7. Verbatim qui monte au-dessus du lecteur.
+    let v = format!(
+        r"\\?\{}\{monte}GLOBALROOT\Device\Mup\127.0.0.1\partage\f",
+        racine.display()
+    );
+    essai(&mut r, "7 verbatim monte", Path::new(&v));
+    panic!("SONDE\n{r}");
+}
