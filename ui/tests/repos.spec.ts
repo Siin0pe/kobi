@@ -11,11 +11,24 @@ import { mockTauri, openUi } from './helpers';
 
 const REPOS_MS = 5000;
 /**
- * Images demandées au plus en `REPOS_MS` : les gestes de la vie au repos
- * (lettre qui se brouille) en prennent quelques-unes ; une boucle par image
- * en prendrait 300 à 60 Hz.
+ * Seul geste du repos qui passe par la boucle partagée : le brouillage d'une
+ * lettre (glyphs.ts), 4 pas de 60 ms, soit ~15 images à 60 Hz (sonde KOB-409).
  */
-const IMAGES_MAX = 30;
+const BROUILLAGE_MS = 240;
+/**
+ * Brouillages au plus en `REPOS_MS` : 3 de la vie des lettres (une toutes les
+ * 2,2 s au moins) et 1 d'une scène de veille. Le hasard en met de 0 à 4 :
+ * l'ancienne limite fixe (30 images, 2 brouillages) cassait au 3e (KOB-409).
+ */
+const BROUILLAGES_MAX = 4;
+/**
+ * Images demandées au plus : ces brouillages, à la cadence servie (l'écran
+ * sans fenêtre donne 60 Hz). Une boucle par image en prendrait 4 fois plus au
+ * moins : 300 à 60 Hz, 75 à 15 images/s.
+ */
+function imagesMax(fps?: number): number {
+  return BROUILLAGES_MAX * Math.ceil((BROUILLAGE_MS / 1000) * Math.min(60, fps ?? 60) + 1);
+}
 
 /** Boucle rAF et recalculs de style pendant `REPOS_MS` de repos. */
 async function activite(page: Page, hz: number): Promise<{ images: number; styles: number }> {
@@ -66,7 +79,7 @@ for (const { hz, fps } of CAS) {
     await openUi(page, '');
     const { images, styles } = await activite(page, hz);
     // Avant le correctif, à 144 Hz : ~180 à 310 images et ~4 700 recalculs en 5 s.
-    expect(images, `${images} images demandées en ${REPOS_MS} ms`).toBeLessThanOrEqual(IMAGES_MAX);
+    expect(images, `${images} images demandées en ${REPOS_MS} ms`).toBeLessThanOrEqual(imagesMax(fps));
     expect(styles, `${styles} recalculs de style en ${REPOS_MS} ms`).toBeLessThanOrEqual(300);
   });
 
@@ -77,7 +90,7 @@ for (const { hz, fps } of CAS) {
     await page.waitForLoadState('networkidle');
     const { images, styles } = await activite(page, hz);
     // Avant le correctif, à 144 Hz : ~300 images et ~950 recalculs en 5 s.
-    expect(images, `${images} images demandées en ${REPOS_MS} ms`).toBeLessThanOrEqual(IMAGES_MAX);
+    expect(images, `${images} images demandées en ${REPOS_MS} ms`).toBeLessThanOrEqual(imagesMax(fps));
     expect(styles, `${styles} recalculs de style en ${REPOS_MS} ms`).toBeLessThanOrEqual(200);
   });
 }
