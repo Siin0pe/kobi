@@ -23,11 +23,14 @@ const BROUILLAGE_MS = 240;
 const BROUILLAGES_MAX = 4;
 /**
  * Images demandées au plus : ces brouillages, à la cadence servie (l'écran
- * sans fenêtre donne 60 Hz). Une boucle par image en prendrait 4 fois plus au
- * moins : 300 à 60 Hz, 75 à 15 images/s.
+ * sans fenêtre donne 60 Hz), plus une image de bord de chaque côté (sous la
+ * cadence réglée, le ticker redemande l'image que l'écran donne trop tôt).
+ * Mesuré : 15-16 images par brouillage à 60 Hz, 9 à 30 images/s, 5 à 15.
+ * Une boucle par image en prendrait 3 fois plus au moins : 300 à 60 Hz, 75 à
+ * 15 images/s (limites : 68, 40 et 24).
  */
 function imagesMax(fps?: number): number {
-  return BROUILLAGES_MAX * Math.ceil((BROUILLAGE_MS / 1000) * Math.min(60, fps ?? 60) + 1);
+  return BROUILLAGES_MAX * Math.ceil((BROUILLAGE_MS / 1000) * Math.min(60, fps ?? 60) + 2);
 }
 
 /** Boucle rAF et recalculs de style pendant `REPOS_MS` de repos. */
