@@ -131,6 +131,33 @@ test('clic pendant que la réponse en flux s’allonge en bas de la vue : la lig
   await expectNoErrors(errors);
 });
 
+test('appui qui bouge sur « N étapes » au bord bas de la vue : la vue ne défile pas, la boîte s’ouvre (KOB-376)', async ({ page }) => {
+  const errors = await ouvrir(page);
+  const corps = vue(page).locator('.lecture-corps');
+  const box = vue(page).locator('.vex-etapes').nth(2);
+  const s = box.locator('summary');
+  // La ligne posée tout en bas de la zone qui défile, là où la sélection
+  // faisait défiler la vue sous Windows.
+  await corps.evaluate((c) => (c.scrollTop = 0));
+  const bas = await corps.evaluate((c) => c.getBoundingClientRect().top + c.clientTop + c.clientHeight);
+  const r0 = (await s.boundingBox())!;
+  await corps.evaluate((c, d) => (c.scrollTop = d), r0.y + r0.height - bas);
+  const b = (await s.boundingBox())!;
+  const top = await corps.evaluate((c) => c.scrollTop);
+  expect(top).toBeLessThan(await corps.evaluate((c) => c.scrollHeight - c.clientHeight - 10));
+  await page.mouse.move(b.x + 40, b.y + b.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(b.x + 44, b.y + b.height / 2 + 3, { steps: 3 });
+  await page.waitForTimeout(200);
+  expect(await corps.evaluate((c) => c.scrollTop)).toBe(top);
+  await page.mouse.up();
+  await expect(box).toHaveAttribute('open', '');
+  // La ligne a le focus : le clavier la replie.
+  await page.keyboard.press('Enter');
+  await expect(box).not.toHaveAttribute('open');
+  await expectNoErrors(errors);
+});
+
 test('l’état déplié est gardé par réponse quand l’historique se redessine (nouvelles étapes, nouvelle réponse)', async ({ page }) => {
   const errors = await ouvrir(page);
   const boxes = vue(page).locator('.vex-etapes');
