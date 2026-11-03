@@ -3273,7 +3273,7 @@ impl<R: Runtime> Chef<R> {
         // devant les résultats plus anciens, qui suivent ensuite (KOB-387).
         // Pareil s'il répondait déjà : le tour s'est détaché en cours de
         // réponse (permission refusée sans carte), rien d'autre ne le ferait
-        // sortir de « répond » (KOB-415). La voix en cours n'est pas coupée.
+        // sortir de « répond » (KOB-415).
         let dernier = self.dernier;
         let la_sienne = matches!(activite, Some("reflechit" | "repond"))
             && match self.a_livrer.iter().position(|(tour, ..)| *tour == dernier) {
@@ -3295,6 +3295,9 @@ impl<R: Runtime> Chef<R> {
             && !sans_question)
             || lit_encore
             || crate::voix::parle(&self.app)
+            // Depuis « répond », le début déjà confié à la voix se dit
+            // jusqu'au bout, synthèse comprise (KOB-415).
+            || (activite == Some("repond") && crate::voix::occupee(&self.app))
             || self.livrable_a.is_some_and(|t| Instant::now() < t)
         {
             return;
@@ -4569,12 +4572,12 @@ mod tests {
         for reunion in [false, true] {
             let (app, _dir) = chef_en_essai();
             avec_chef(&app, |c| {
-                c.recevoir(Message::Interpelle);
-                c.question("résume le projet".into(), true);
-                let tour = c.tour;
                 if reunion {
                     c.commande(Intention::DemarrerReunion);
                 }
+                c.recevoir(Message::Interpelle);
+                c.question("résume le projet".into(), true);
+                let tour = c.tour;
                 c.recevoir(Message::Cerveau(Retour::Texte {
                     tour,
                     texte: "Je regarde. ".into(),
@@ -4599,6 +4602,9 @@ mod tests {
                     c.a_livrer.is_empty(),
                     "résultat livré (réunion : {reunion})"
                 );
+                if reunion {
+                    assert_eq!(etat(&c.app).etat, "reunion");
+                }
                 assert!(
                     matches!(c.activite(), Some("calme") | None),
                     "{:?} (réunion : {reunion})",
