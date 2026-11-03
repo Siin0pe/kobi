@@ -427,6 +427,60 @@ fn chemins_que_win32_traduit_juges_tels_que_nt_les_ouvre() {
     ));
 }
 
+/// KOB-411, sonde (temporaire) : NT réduit-il le `..` d'une cible de lien
+/// sur le texte, ou après le lien intermédiaire ? Échoue exprès pour que la
+/// CI montre son rapport.
+#[cfg(windows)]
+#[test]
+fn sonde_kob411_point_point_dans_une_cible() {
+    use std::fmt::Write as _;
+    use std::os::windows::fs::{symlink_dir, symlink_file};
+    let mut rapport = String::new();
+    let dir = codebase();
+    let racine = dir.path().to_path_buf();
+    let autre = racine.join(r"loin\autre");
+    fs::create_dir_all(&autre).unwrap();
+    fs::write(racine.join(r"loin\y"), "ordinaire").unwrap();
+    if symlink_dir(&autre, racine.join("x")).is_err() {
+        panic!("liens impossibles");
+    }
+    // `racine\y` mène au réseau ; `loin\y` est ordinaire.
+    symlink_file(r"\\attaquant\p", racine.join("y")).unwrap();
+    // `t` : cible relative `x\..\y` ; `t2` : la même, absolue.
+    symlink_file(r"x\..\y", racine.join("t")).unwrap();
+    symlink_file(racine.join(r"x\..\y"), racine.join("t2")).unwrap();
+    // `d` : dossier lien, cible relative `x\..` ; on lit `d\y`.
+    symlink_dir(r"x\..", racine.join("d")).unwrap();
+    for nom in ["t", "t2", r"d\y"] {
+        let chemin = racine.join(nom);
+        let _ = writeln!(
+            rapport,
+            "SONDE {nom} : read_link = {:?}",
+            fs::read_link(&chemin)
+        );
+        let _ = writeln!(
+            rapport,
+            "SONDE {nom} : lien_vers_le_reseau = {}",
+            lien_vers_le_reseau(&chemin, true)
+        );
+        let debut = std::time::Instant::now();
+        let _ = writeln!(
+            rapport,
+            "SONDE {nom} : canonicalize = {:?} ({} ms)",
+            fs::canonicalize(&chemin),
+            debut.elapsed().as_millis()
+        );
+        let debut = std::time::Instant::now();
+        let _ = writeln!(
+            rapport,
+            "SONDE {nom} : lecture = {:?} ({} ms)",
+            fs::read_to_string(&chemin),
+            debut.elapsed().as_millis()
+        );
+    }
+    panic!("rapport de la sonde KOB-411 :\n{rapport}");
+}
+
 /// Rien ne se lit hors des dossiers permis : chemin absolu, `..`, lien
 /// symbolique qui sort.
 #[test]
