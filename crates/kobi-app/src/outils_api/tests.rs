@@ -314,11 +314,11 @@ fn lien_vers_un_chemin_reseau_refuse_sous_windows() {
     fs::create_dir_all(racine.join("vendor")).unwrap();
     let vendor = racine.join("vendor");
     symlink_dir(&vendor, racine.join("lib")).unwrap();
-    symlink_dir(
-        PathBuf::from(format!(r"\\?\{}", vendor.display())),
-        racine.join("lib2"),
-    )
-    .unwrap();
+    // Un dossier à point final ne s'écrit qu'en verbatim, et sa cible ne
+    // peut pas être rendue sans le préfixe : `lib2` reproduit KOB-367.
+    let vendor_point = PathBuf::from(format!(r"\\?\{}.", vendor.display()));
+    fs::create_dir_all(&vendor_point).unwrap();
+    symlink_dir(&vendor_point, racine.join("lib2")).unwrap();
     assert!(
         std::fs::read_link(racine.join("lib2"))
             .unwrap()
@@ -338,6 +338,68 @@ fn lien_vers_un_chemin_reseau_refuse_sous_windows() {
             verbatim.display()
         );
     }
+}
+
+/// KOB-398, sonde (temporaire) : formes rendues par `read_link` et
+/// contrôle des chemins à point final sur le runner, pour juger deux
+/// contournements possibles signalés à la relecture. Échoue exprès pour
+/// que la CI montre son rapport.
+#[cfg(windows)]
+#[test]
+fn sonde_kob398_points_finaux() {
+    use std::fmt::Write as _;
+    use std::os::windows::fs::{symlink_dir, symlink_file};
+    let mut rapport = String::new();
+    let dir = codebase();
+    let racine = dir.path().to_path_buf();
+    let v = |p: &Path| PathBuf::from(format!(r"\\?\{}", p.display()));
+    let vendor = racine.join("vendor");
+    fs::create_dir_all(&vendor).unwrap();
+    if symlink_dir(&vendor, racine.join("lib")).is_err() {
+        let _ = writeln!(rapport, "SONDE liens impossibles");
+        return;
+    }
+    let _ = writeln!(
+        rapport,
+        "SONDE read_link(lib) = {:?}",
+        fs::read_link(racine.join("lib"))
+    );
+    // A : chemin donné verbatim, lien `vendor\x.` vers le réseau.
+    let r = symlink_file(r"\\attaquant\p", v(&vendor.join("x.")));
+    let _ = writeln!(rapport, "SONDE A création vendor\\x. : {r:?}");
+    let a = v(&racine.join(r"lib\x."));
+    let _ = writeln!(
+        rapport,
+        "SONDE A lien_vers_le_reseau({}) = {}",
+        a.display(),
+        lien_vers_le_reseau(&a, true)
+    );
+    // B : chemin non verbatim, lien vers `\\?\…\d.`, et `d.\x` vers le réseau.
+    let d = PathBuf::from(format!("{}.", racine.join("d").display()));
+    let r1 = fs::create_dir_all(v(&d));
+    let r2 = symlink_file(r"\\attaquant\q", v(&d.join("x")));
+    let r3 = symlink_dir(v(&d), racine.join("lib3"));
+    let _ = writeln!(rapport, "SONDE B créations {r1:?} {r2:?} {r3:?}");
+    let _ = writeln!(
+        rapport,
+        "SONDE read_link(lib3) = {:?}",
+        fs::read_link(racine.join("lib3"))
+    );
+    let b = racine.join(r"lib3\x.");
+    let _ = writeln!(
+        rapport,
+        "SONDE B lien_vers_le_reseau({}) = {}",
+        b.display(),
+        lien_vers_le_reseau(&b, true)
+    );
+    let b2 = racine.join(r"lib3\x");
+    let _ = writeln!(
+        rapport,
+        "SONDE B2 lien_vers_le_reseau({}) = {}",
+        b2.display(),
+        lien_vers_le_reseau(&b2, true)
+    );
+    panic!("rapport de la sonde KOB-398 :\n{rapport}");
 }
 
 /// Rien ne se lit hors des dossiers permis : chemin absolu, `..`, lien
