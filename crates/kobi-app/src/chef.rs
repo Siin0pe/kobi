@@ -3271,8 +3271,11 @@ impl<R: Runtime> Chef<R> {
         // Kobi réfléchit à la question en cours, dont le tour, détaché par
         // une carte acceptée, livre sa réponse ici : elle passe tout de suite,
         // devant les résultats plus anciens, qui suivent ensuite (KOB-387).
+        // Pareil s'il répondait déjà : le tour s'est détaché en cours de
+        // réponse (permission refusée sans carte), rien d'autre ne le ferait
+        // sortir de « répond » (KOB-415). La voix en cours n'est pas coupée.
         let dernier = self.dernier;
-        let la_sienne = activite == Some("reflechit")
+        let la_sienne = matches!(activite, Some("reflechit" | "repond"))
             && match self.a_livrer.iter().position(|(tour, ..)| *tour == dernier) {
                 Some(i) => {
                     if let Some(sienne) = self.a_livrer.remove(i) {
@@ -4556,6 +4559,53 @@ mod tests {
             c.tick();
             assert_eq!(c.activite(), Some("occupe"), "la tâche reprend la main");
         });
+    }
+
+    /// KOB-415 (KOB-395 E) : le tour a commencé à répondre (« répond »), puis
+    /// se détache sans annonce (permission refusée sans carte) ; son
+    /// résultat arrive à part : il est livré, et Kobi revient au calme.
+    #[test]
+    fn resultat_d_un_tour_detache_apres_un_debut_de_reponse() {
+        for reunion in [false, true] {
+            let (app, _dir) = chef_en_essai();
+            avec_chef(&app, |c| {
+                c.recevoir(Message::Interpelle);
+                c.question("résume le projet".into(), true);
+                let tour = c.tour;
+                if reunion {
+                    c.commande(Intention::DemarrerReunion);
+                }
+                c.recevoir(Message::Cerveau(Retour::Texte {
+                    tour,
+                    texte: "Je regarde. ".into(),
+                }));
+                assert_eq!(c.activite(), Some("repond"), "réunion : {reunion}");
+                c.recevoir(Message::Cerveau(Retour::Detache {
+                    tour,
+                    annonce: false,
+                }));
+                c.recevoir(Message::Cerveau(Retour::Resultat {
+                    tour,
+                    texte: "Le projet avance.".into(),
+                }));
+                for _ in 0..5 {
+                    if let Some((_, e)) = c.calme_a {
+                        c.calme_a = Some((Instant::now(), e));
+                    }
+                    c.livrable_a = None;
+                    c.tick();
+                }
+                assert!(
+                    c.a_livrer.is_empty(),
+                    "résultat livré (réunion : {reunion})"
+                );
+                assert!(
+                    matches!(c.activite(), Some("calme") | None),
+                    "{:?} (réunion : {reunion})",
+                    c.activite()
+                );
+            });
+        }
     }
 
     /// KOB-377 : une carte ouverte pendant qu'une question attend le réseau
