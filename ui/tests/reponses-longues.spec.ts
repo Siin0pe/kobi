@@ -98,13 +98,13 @@ test('300 mots : hauteur maximale, puis défilement doux qui suit le flux ; on r
     await page.waitForTimeout(250);
   }
   await typed(page);
-  await page.waitForTimeout(600);
   await lisible(page, 18);
+  // Le suivi l'amène en bas : on attend qu'il y soit, pas une durée (KOB-405).
+  const ecart = () => zone(page).evaluate((n) => n.scrollTop + n.clientHeight - n.scrollHeight);
+  await expect.poll(ecart).toBeGreaterThanOrEqual(-6);
   // La bulle a atteint sa hauteur maximale : le texte défile, il ne déborde pas.
   const z = await zone(page).evaluate((n) => ({ s: n.scrollHeight, c: n.clientHeight, t: n.scrollTop }));
   expect(z.s).toBeGreaterThan(z.c + 50);
-  // Le suivi l'a amenée en bas.
-  expect(z.t + z.c).toBeGreaterThanOrEqual(z.s - 6);
   await expect(zone(page)).toHaveClass(/peut-monter/);
   await page.screenshot({ path: test.info().outputPath('300-mots-bas.png') });
   // On remonte à la molette : le suivi s'arrête, l'historique ne s'ouvre pas.
@@ -125,13 +125,13 @@ test('300 mots : hauteur maximale, puis défilement doux qui suit le flux ; on r
   await page.mouse.wheel(0, 4000);
   await page.waitForTimeout(500);
   await page.evaluate((t) => window.kobi.update({ answer: t }), `${full}\n\nEt une dernière phrase qui arrive après coup. Puis encore une autre, pour voir si on suit bien le flux jusqu’au bout.`);
-  // Pendant la frappe, la bulle suit…
-  await page.waitForTimeout(1_500);
-  expect(await zone(page).evaluate((n) => n.scrollTop + n.clientHeight - n.scrollHeight)).toBeGreaterThanOrEqual(-40);
+  // Pendant la frappe, la bulle suit : le suivi a repris et rattrape le bas.
+  // Un relevé à un instant fixe tombait parfois juste après l'arrivée d'une
+  // ligne, avant le rattrapage (KOB-405) : on attend l'état, pas une durée.
+  await expect.poll(ecart).toBeGreaterThanOrEqual(-40);
+  // La frappe finie, le suivi rejoint le bas.
   await typed(page);
-  await page.waitForTimeout(600);
-  const end = await zone(page).evaluate((n) => n.scrollTop + n.clientHeight - n.scrollHeight);
-  expect(end).toBeGreaterThanOrEqual(-6);
+  await expect.poll(ecart).toBeGreaterThanOrEqual(-6);
   await expectNoErrors(errors);
 });
 
