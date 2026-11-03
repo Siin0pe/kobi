@@ -1385,7 +1385,9 @@ impl<R: Runtime> Fil<R> {
         for mut frame in arrivees {
             // À l'arrivée, en temps réel : la référence du haut-parleur est
             // alignée sur le micro, même quand la transcription a du retard.
-            let capte = self.origine + frame.t;
+            // Instant réel de la capture : un micro rouvert après une panne
+            // repart de 0, d'où le décalage de la session (KOB-278).
+            let capte = self.origine + Duration::from_secs_f64(self.decalage) + frame.t;
             frame.samples = self
                 .echo
                 .traiter(&frame.samples, capte, annulation_echo_reglee);
