@@ -474,10 +474,12 @@ pub struct Chef<R: Runtime> {
     /// celle qui attend sa réponse ou si l'utilisateur a coupé la voix
     /// depuis (coupures de la voix au moment de l'ouverture).
     validation_a_dire: Option<(String, u64)>,
-    /// Une carte de Kobi ou de la conversation a été acceptée pendant que
-    /// d'autres attendaient : son tour continue, la dernière carte tranchée,
+    /// Tour d'une carte de la conversation acceptée pendant que d'autres
+    /// attendaient : s'il est encore en cours, la dernière carte tranchée,
     /// même refusée, fait repartir Kobi sur lui (KOB-381).
-    acceptee_en_attente: bool,
+    acceptee_en_attente: Option<u64>,
+    /// Tour de chaque carte MCP de la conversation ouverte (KOB-381).
+    tours_des_cartes: HashMap<u64, u64>,
     /// Question en attente du réseau (KOB-377) : son énoncé, muet, est lâché
     /// pour que la voix reste libre (« Je le fais ? », annonces) ; sa réponse
     /// repart sur un énoncé neuf quand elle arrive et que la voix est libre,
@@ -860,7 +862,8 @@ impl<R: Runtime> Chef<R> {
             suite_apres_voix: false,
             annonces: Default::default(),
             validation_a_dire: None,
-            acceptee_en_attente: false,
+            acceptee_en_attente: None,
+            tours_des_cartes: HashMap::new(),
             voix_reportee: None,
             derniere: None,
             taches: BTreeMap::new(),
@@ -2140,7 +2143,10 @@ impl<R: Runtime> Chef<R> {
         // décidera, Kobi reste en proposition ; refusée, une carte des notes
         // venue du calme l'y garde aussi (KOB-338, KOB-380).
         let derniere = self.validations.est_vide() && !self.carte_mcp_de_la_conversation();
-        self.decider_la_proposition(derniere, reponse.acceptee());
+        // Le tour d'une carte de Kobi n'est pas connu : acceptée, elle n'est
+        // pas retenue pour la suite.
+        let explicite = reponse != crate::validation::Reponse::Delai;
+        self.decider_la_proposition(derniere, reponse.acceptee(), None, explicite);
         // Plus de carte : la fenêtre de suite reprend sa durée habituelle
         // (KOB-197), et celle de la carte se ferme (KOB-273).
         self.si_plus_aucune_carte();
@@ -2204,20 +2210,37 @@ impl<R: Runtime> Chef<R> {
         }
     }
 
-    /// Une carte de Kobi ou de la conversation vient d'être tranchée. Si
-    /// d'autres attendent, Kobi reste en proposition ; acceptée, elle est
-    /// retenue (son tour continue). La dernière décide : acceptée, ou une
-    /// autre l'a été avant, Kobi repart sur le tour (KOB-381) ; refusée, il
-    /// revient au calme, sauf si une carte des notes venue du calme attend
-    /// encore (KOB-338, KOB-380).
-    fn decider_la_proposition(&mut self, derniere: bool, acceptee: bool) {
+    /// Une carte de Kobi ou de la conversation vient d'être tranchée
+    /// (`explicite` : par l'utilisateur, pas à l'échéance). Si d'autres
+    /// attendent, Kobi reste en proposition ; acceptée, la carte du tour
+    /// `tour` est retenue. La dernière décide : acceptée, Kobi repart sur le
+    /// tour ; refusée aussi si une carte retenue appartient à la question en
+    /// cours, toujours en cours (KOB-381) ; sinon il revient au calme, sauf si
+    /// une carte des notes venue du calme attend encore (KOB-338, KOB-380).
+    fn decider_la_proposition(
+        &mut self,
+        derniere: bool,
+        acceptee: bool,
+        tour: Option<u64>,
+        explicite: bool,
+    ) {
         if !derniere {
-            self.acceptee_en_attente |= acceptee;
+            if acceptee {
+                self.acceptee_en_attente = tour.or(self.acceptee_en_attente);
+            }
             return;
         }
         let notes_du_calme = self.cartes_des_notes.values().any(|&calme| calme);
-        let acceptee = std::mem::take(&mut self.acceptee_en_attente) || acceptee;
-        if acceptee {
+        // Pendant l'écoute ouverte par le nom, seule une réponse fait
+        // repartir le tour : une carte échue laisse venir la question.
+        let tour_continue = self.acceptee_en_attente.take().is_some_and(|t| {
+            t == self.dernier
+                && self
+                    .historique
+                    .iter()
+                    .any(|b| b.tour == t && matches!(b.statut, "attente" | "reponse" | "tache"))
+        }) && (explicite || self.activite() == Some("propose"));
+        if acceptee || tour_continue {
             self.transition(&[Evenement::PermissionAccordee]);
         } else if !notes_du_calme {
             self.transition(&[Evenement::PermissionRefusee]);
@@ -2550,6 +2573,9 @@ impl<R: Runtime> Chef<R> {
                 }
                 self.cartes.insert(carte, ui.clone());
                 self.cartes_ouvertes.insert(carte, Instant::now());
+                if tour != 0 {
+                    self.tours_des_cartes.insert(carte, tour);
+                }
                 if tour == 0 {
                     // Proposée par les notes en continu (KOB-72) : depuis le
                     // calme, Kobi passe des notes à la proposition. Occupé
@@ -2592,6 +2618,7 @@ impl<R: Runtime> Chef<R> {
                 let Some(mut ui) = self.cartes.remove(&carte) else {
                     self.cartes_ouvertes.remove(&carte);
                     self.cartes_des_notes.remove(&carte);
+                    self.tours_des_cartes.remove(&carte);
                     self.notes_acceptees.remove(&carte);
                     return;
                 };
@@ -2605,6 +2632,7 @@ impl<R: Runtime> Chef<R> {
                 self.cartes_ouvertes.remove(&carte);
                 self.si_plus_aucune_carte();
                 let des_notes = self.cartes_des_notes.remove(&carte);
+                let tour = self.tours_des_cartes.remove(&carte);
                 self.notes_acceptees.remove(&carte);
                 // Une action des notes acceptée laisse sa trace dans les notes
                 // à venir et le compte rendu : Claude ne la repropose pas, même
@@ -2633,14 +2661,11 @@ impl<R: Runtime> Chef<R> {
                     Some(depuis_calme) => {
                         // Une carte de Kobi qui attend tient aussi la
                         // proposition (KOB-380).
-                        let derniere = self.cartes.is_empty() && self.validations.est_vide();
-                        // Une carte de la conversation acceptée plus tôt : son
-                        // tour continue, Kobi repart sur lui (KOB-381).
-                        let tour_continue =
-                            derniere && std::mem::take(&mut self.acceptee_en_attente);
-                        if tour_continue {
-                            self.transition(&[Evenement::PermissionAccordee]);
-                        } else if derniere && depuis_calme && self.activite() == Some("propose") {
+                        if self.cartes.is_empty()
+                            && self.validations.est_vide()
+                            && depuis_calme
+                            && self.activite() == Some("propose")
+                        {
                             self.transition(&[if accepte == Some(true) {
                                 Evenement::PermissionAccordee
                             } else {
@@ -2659,7 +2684,12 @@ impl<R: Runtime> Chef<R> {
                         // en proposition (KOB-380).
                         let derniere =
                             !self.carte_mcp_de_la_conversation() && self.validations.est_vide();
-                        self.decider_la_proposition(derniere, accepte == Some(true));
+                        self.decider_la_proposition(
+                            derniere,
+                            accepte == Some(true),
+                            tour,
+                            accepte.is_some(),
+                        );
                     }
                 }
             }
@@ -4623,53 +4653,76 @@ mod tests {
         }
     }
 
-    /// KOB-381 : deux cartes du même tour, l'une acceptée, la dernière
-    /// refusée : le tour continue avec l'action acceptée, Kobi réfléchit au
-    /// lieu de retomber au calme.
+    /// KOB-381 : deux cartes de la question en cours, l'une acceptée, la
+    /// dernière refusée : le tour continue avec l'action acceptée, Kobi
+    /// réfléchit au lieu de retomber au calme. Mais pas si ce tour a fini
+    /// entre-temps, ni sur une carte échue pendant l'écoute.
     #[test]
     fn une_carte_acceptee_puis_la_derniere_refusee() {
-        let carte = |carte| {
+        let carte = |tour, carte| {
             Message::Cerveau(Retour::Carte {
-                tour: 5,
+                tour,
                 carte,
                 outil: "mcp__linear__save_issue".into(),
                 entree: serde_json::json!({"title": "Corriger la connexion"}),
             })
         };
-        let (app, _dir) = chef_en_essai();
-        avec_chef(&app, |c| {
+        let fermee = |carte, accepte| Message::Cerveau(Retour::CarteFermee { carte, accepte });
+        // La question 5 est en cours, ses deux cartes s'ouvrent.
+        let ouvrir = |c: &mut Chef<_>| {
             c.commande(Intention::DemarrerReunion);
             c.recevoir(Message::Interpelle);
             c.transition(&[Evenement::QuestionEnvoyee]);
-            c.recevoir(carte(1));
+            c.dernier = 5;
+            c.ajouter(Bulle {
+                tour: 5,
+                question: "Crée les deux tickets".into(),
+                reponse: String::new(),
+                statut: "reponse",
+                clavier: false,
+                etapes: Vec::new(),
+            });
+            c.recevoir(carte(5, 1));
             std::thread::sleep(Duration::from_millis(2));
-            c.recevoir(carte(2));
-            c.recevoir(Message::Cerveau(Retour::CarteFermee {
-                carte: 2,
-                accepte: Some(true),
-            }));
+            c.recevoir(carte(5, 2));
+        };
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            ouvrir(c);
+            c.recevoir(fermee(2, Some(true)));
             assert_eq!(c.activite(), Some("propose"));
-            c.recevoir(Message::Cerveau(Retour::CarteFermee {
-                carte: 1,
-                accepte: Some(false),
-            }));
+            c.recevoir(fermee(1, Some(false)));
             assert_eq!(c.activite(), Some("reflechit"), "la carte 2 a été acceptée");
         });
         // Tout refusé : retour au calme, comme avant.
         let (app, _dir) = chef_en_essai();
         avec_chef(&app, |c| {
-            c.commande(Intention::DemarrerReunion);
-            c.recevoir(Message::Interpelle);
-            c.transition(&[Evenement::QuestionEnvoyee]);
-            c.recevoir(carte(1));
-            c.recevoir(carte(2));
-            for carte in [2, 1] {
-                c.recevoir(Message::Cerveau(Retour::CarteFermee {
-                    carte,
-                    accepte: Some(false),
-                }));
-            }
+            ouvrir(c);
+            c.recevoir(fermee(2, Some(false)));
+            c.recevoir(fermee(1, Some(false)));
             assert_eq!(c.activite(), Some("calme"));
+        });
+        // La carte acceptée était celle d'une question finie depuis : rien
+        // ne continue, la dernière refusée ramène au calme.
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            ouvrir(c);
+            c.recevoir(fermee(2, Some(true)));
+            c.recevoir(Message::Cerveau(Retour::Fin {
+                tour: 5,
+                texte: "Le second ticket est créé.".into(),
+            }));
+            c.recevoir(fermee(1, None));
+            assert_eq!(c.activite(), Some("calme"), "pas figé en réflexion");
+        });
+        // Une carte échue pendant l'écoute : Kobi attend la question.
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            ouvrir(c);
+            c.recevoir(fermee(2, Some(true)));
+            c.recevoir(Message::Interpelle);
+            c.recevoir(fermee(1, None));
+            assert_ne!(c.activite(), Some("reflechit"));
         });
     }
 
@@ -4710,11 +4763,7 @@ mod tests {
                 id: "v2".into(),
                 reponse: crate::validation::Reponse::Refuse,
             });
-            assert_eq!(
-                c.activite(),
-                Some("reflechit"),
-                "v1 acceptée : son tour continue (KOB-381)"
-            );
+            assert_eq!(c.activite(), None, "hors réunion : retour en veille");
         });
         // Deux cartes MCP de la conversation.
         let (app, _dir) = chef_en_essai();
