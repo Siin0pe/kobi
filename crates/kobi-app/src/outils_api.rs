@@ -970,6 +970,13 @@ fn chemin_reseau(chemin: &str) -> bool {
 fn lien_vers_le_reseau(chemin: &Path, peripheriques: bool) -> bool {
     use std::collections::VecDeque;
     use std::path::Component;
+    // Un `:` dans un nom (flux NTFS, `y::$DATA`) est refusé d'emblée : relu
+    // seul, ce nom passerait pour un lecteur (`Y:`) et le parcours ne
+    // jugerait plus rien, alors que NT ouvre le flux de `y` en suivant son
+    // lien (KOB-398). Pareil dans chaque cible de lien, plus bas.
+    if peripheriques && a_deux_points(chemin) {
+        return true;
+    }
     let mut a_lire: VecDeque<PathBuf> = chemin
         .components()
         .map(|c| PathBuf::from(c.as_os_str()))
@@ -992,12 +999,10 @@ fn lien_vers_le_reseau(chemin: &Path, peripheriques: bool) -> bool {
         }
         // Un nom que Win32 changerait (point ou espace final, KOB-398) est
         // refusé comme un nom de périphérique : le chemin ouvert ne serait
-        // pas celui qui est jugé ici. Un flux NTFS (`x::$DATA`) l'est même
-        // en verbatim : NT l'interprète aussi.
+        // pas celui qui est jugé ici.
         if peripheriques
-            && ((!verbatim
-                && (nom_de_peripherique(morceau.as_os_str()) || fin_ambigue(morceau.as_os_str())))
-                || morceau.to_string_lossy().contains(':'))
+            && !verbatim
+            && (nom_de_peripherique(morceau.as_os_str()) || fin_ambigue(morceau.as_os_str()))
         {
             return true;
         }
@@ -1025,6 +1030,7 @@ fn lien_vers_le_reseau(chemin: &Path, peripheriques: bool) -> bool {
         if chemin_reseau(&cible.to_string_lossy())
             || !prefixe_local(&cible)
             || racine_sans_disque(&cible)
+            || (peripheriques && a_deux_points(&cible))
         {
             return true;
         }
@@ -1100,6 +1106,14 @@ fn lecteur_sans_racine(chemin: &Path) -> bool {
         chemin.components().next(),
         Some(std::path::Component::Prefix(_))
     ) && !chemin.has_root()
+}
+
+/// Un nom du chemin (hors préfixe de lecteur) contient un `:` : flux NTFS
+/// sous Windows (KOB-398).
+fn a_deux_points(chemin: &Path) -> bool {
+    chemin.components().any(
+        |c| matches!(c, std::path::Component::Normal(nom) if nom.to_string_lossy().contains(':')),
+    )
 }
 
 /// Un nom à point ou espace final (`x.`, `d `) : Win32 les retire d'un
