@@ -49,15 +49,41 @@ test('clic sur Kobi : il se fait pincer (écrasé), puis sursaute de surprise', 
       if (this.classList.contains('react') && Array.isArray(args[0])) gestes.push((args[0] as Keyframe[]).map((k) => String(k.transform ?? '')));
       return animate.apply(this, args);
     };
+    // Yeux relevés à chaque écriture (KOB-402) : le `>` du pincement ne dure
+    // que 240 ms, un sondage depuis le test peut le manquer sous charge.
+    const yeux: string[] = [];
+    (window as unknown as { __yeux: string[] }).__yeux = yeux;
+    const texte = Object.getOwnPropertyDescriptor(Node.prototype, 'textContent')!;
+    Object.defineProperty(Node.prototype, 'textContent', {
+      ...texte,
+      set(this: Node, v: string) {
+        texte.set!.call(this, v);
+        if (this === document.querySelector('.kobi .g')) yeux.push(v);
+      },
+    });
   });
   const errors = await openUi(page, 'state=listen&backdrop=1');
-  await expect(page.locator('.kobi')).toHaveClass(/m-listen/);
+  // Kobi posé, yeux d'écoute affichés : un clic pendant le brouillage des
+  // yeux de l'entrée en écoute verrait son `>` remplacé avant d'être peint.
+  await kobiPose(page);
+  await expect(page.locator('.kobi .g').first()).toHaveText('O');
   const box = (await page.locator('.kobi .pill').boundingBox())!;
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-  await page.evaluate(() => ((window as unknown as { __gestes: string[][] }).__gestes.length = 0));
+  await page.evaluate(() => {
+    (window as unknown as { __gestes: string[][] }).__gestes.length = 0;
+    (window as unknown as { __yeux: string[] }).__yeux.length = 0;
+  });
   await page.mouse.down();
   await expect(page.locator('.kobi')).toHaveAttribute('data-pinched', '1');
-  await expect(page.locator('.kobi .g').first()).toHaveText('>');
+  // Yeux pincés `>`, puis ronds de surprise `O`.
+  const yeux = () => page.evaluate(() => (window as unknown as { __yeux: string[] }).__yeux.slice());
+  await expect
+    .poll(async () => {
+      const y = await yeux();
+      const pince = y.indexOf('>');
+      return pince >= 0 && y.indexOf('O', pince) > pince;
+    })
+    .toBe(true);
   // Écrasé (plus large que haut), puis le sursaut part de la pose écrasée.
   const gestes = () => page.evaluate(() => (window as unknown as { __gestes: string[][] }).__gestes);
   await expect.poll(async () => (await gestes()).some((g) => g.includes('scale(1.2,.72)'))).toBe(true);
