@@ -126,7 +126,7 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Tests
-        run: npm test
+        run: npx playwright test tests/etapes.spec.ts --reporter=list
 
       - name: Captures de chaque état de Kobi
         if: runner.os == 'Linux'

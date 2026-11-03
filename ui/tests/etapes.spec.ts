@@ -27,6 +27,25 @@ async function ouvrir(page: Page): Promise<string[]> {
     localStorage.setItem('kobi.affichage', JSON.stringify({ v: 2, auto: 'jamais', delai: 0 }));
     const w = window as unknown as { __TAURI__: { window: unknown }; __deplacements: number };
     w.__deplacements = 0;
+    const sonde: unknown[] = [];
+    (w as unknown as { __sonde: unknown[] }).__sonde = sonde;
+    const desc = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollTop')!;
+    Object.defineProperty(Element.prototype, 'scrollTop', {
+      get() { return desc.get!.call(this); },
+      set(v: number) {
+        if ((this as Element).classList?.contains('lecture-corps')) sonde.push({ t: Math.round(performance.now()), ecrit: Math.round(v), avant: Math.round(desc.get!.call(this)) });
+        desc.set!.call(this, v);
+      },
+      configurable: true,
+    });
+    for (const type of ['pointerdown', 'pointermove', 'pointerup', 'click', 'toggle', 'focusin', 'scroll', 'mousedown', 'selectstart']) {
+      window.addEventListener(type, (e) => {
+        const cible = e.target as Element;
+        const corps = document.querySelector('.lecture-corps');
+        const box = document.querySelectorAll('.vex-etapes')[3]?.querySelector('summary')?.getBoundingClientRect();
+        sonde.push({ t: Math.round(performance.now()), type, cible: `${cible.tagName}.${cible.className}`, x: (e as MouseEvent).clientX, y: (e as MouseEvent).clientY, st: corps && Math.round(desc.get!.call(corps)), sh: corps?.scrollHeight, ch: corps?.clientHeight, box3: box && [Math.round(box.top), Math.round(box.bottom)], depl: w.__deplacements, dp: e.defaultPrevented });
+      }, true);
+    }
     let pris = false;
     // Comme la vraie fenêtre : une fois le déplacement lancé, la coque a la
     // souris et le relâchement n'arrive pas à la page, donc pas de clic.
@@ -87,8 +106,15 @@ async function cliquer(page: Page, cible: Locator): Promise<void> {
 
 async function deplier(page: Page, box: Locator): Promise<void> {
   await expect(box).not.toHaveAttribute('open');
+  await page.evaluate(() => ((window as unknown as { __sonde: unknown[] }).__sonde.length = 0));
+  const avant = await box.locator('summary').boundingBox();
   await cliquer(page, box.locator('summary'));
-  await expect(box).toHaveAttribute('open', '');
+  try {
+    await expect(box).toHaveAttribute('open', '', { timeout: 3000 });
+  } catch (e) {
+    const sonde = await page.evaluate(() => (window as unknown as { __sonde: unknown[] }).__sonde);
+    throw new Error(`SONDE summary avant ${JSON.stringify(avant)}\n${sonde.map((x) => JSON.stringify(x)).join('\n')}\n${e}`);
+  }
   // Replié de nouveau pour le clic suivant (clic simple, sans glisser).
   await box.locator('summary').click();
   await expect(box).not.toHaveAttribute('open');
@@ -123,6 +149,39 @@ test('50 clics sur « N étapes », dans toutes les situations : 50 dépliages, 
   expect(await page.evaluate(() => (window as unknown as { __deplacements: number }).__deplacements)).toBe(0);
   await expectNoErrors(errors);
 });
+
+for (const mode of ['immobile', 'geste', 'geste-sans-selection', 'geste-sans-focus']) {
+  for (const cache of [0, -6, 8]) {
+    test(`SONDE bord bas ${mode} ${cache}`, async ({ page }) => {
+      await ouvrir(page);
+      const corps = vue(page).locator('.lecture-corps');
+      const s = vue(page).locator('.vex-etapes').nth(2).locator('summary');
+      if (mode === 'geste-sans-selection') await page.addStyleTag({ content: 'summary { user-select: none; }' });
+      if (mode === 'geste-sans-focus') await s.evaluate((n) => n.addEventListener('mousedown', (e) => e.preventDefault()));
+      await corps.evaluate((c) => (c.scrollTop = 0));
+      const bas = await corps.evaluate((c) => c.getBoundingClientRect().top + c.clientTop + c.clientHeight);
+      const r0 = (await s.boundingBox())!;
+      await corps.evaluate((c, d) => (c.scrollTop = d), r0.y + r0.height - cache - bas);
+      await page.waitForTimeout(300);
+      await page.evaluate(() => ((window as unknown as { __sonde: unknown[] }).__sonde.length = 0));
+      const b = (await s.boundingBox())!;
+      const st = () => corps.evaluate((c) => c.scrollTop);
+      const suite: unknown[] = [await st()];
+      await page.mouse.move(b.x + 40, b.y + b.height / 2);
+      await page.mouse.down();
+      suite.push(await st());
+      if (mode !== 'immobile') await page.mouse.move(b.x + 44, b.y + b.height / 2 + 3, { steps: 3 });
+      suite.push(await st());
+      await page.waitForTimeout(200);
+      suite.push(await st());
+      await page.mouse.up();
+      suite.push(await st());
+      const open = await s.evaluate((n) => (n.parentElement as HTMLDetailsElement).open);
+      const sonde = await page.evaluate(() => (window as unknown as { __sonde: unknown[] }).__sonde);
+      console.log(`SONDE3 ${mode} cache=${cache} bas=${bas} box=${JSON.stringify(b)} st=${JSON.stringify(suite)} open=${open}\n${sonde.map((x) => JSON.stringify(x)).join('\n')}`);
+    });
+  }
+}
 
 test('clic pendant que la réponse en flux s’allonge en bas de la vue : la ligne ne monte pas sous le doigt, la boîte s’ouvre (KOB-376)', async ({ page }) => {
   const errors = await ouvrir(page);
