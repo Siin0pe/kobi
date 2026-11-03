@@ -11,6 +11,13 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Target plus petit (KOB-397) : les étapes à moteur (Nemotron, Kyutai)
+  # relient de gros binaires de test après celles du workspace ; avec les
+  # infos de débogage complètes, le disque du runner ubuntu se remplissait
+  # et ld mourait (Bus error). Les numéros de ligne restent dans les traces.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+  CARGO_INCREMENTAL: 0
 
 jobs:
   rust:
@@ -22,6 +29,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+
+      # Place sur le disque du runner ubuntu (KOB-397) : les SDK qu'aucune
+      # étape n'utilise (.NET, Android, GHC, CodeQL) font plus de 20 Go.
+      - name: Place disque (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
 
       - name: Dépendances système Linux
         if: runner.os == 'Linux'
@@ -57,11 +73,19 @@ jobs:
           cargo clippy -p kobi-wake --no-default-features --features ort-static --all-targets -- -D warnings
           cargo test -p kobi-wake --no-default-features --features ort-static
 
+      - name: Place disque avant Kyutai (Linux)
+        if: runner.os == 'Linux'
+        run: df -h /
+
       # Kyutai STT : candle, Rust pur, rien de natif à télécharger.
       - name: Moteur Kyutai (moshi, candle)
         run: |
           cargo clippy -p kobi-stt -p kobi-bench --features kobi-stt/kyutai,kobi-bench/kyutai --all-targets -- -D warnings
           cargo test -p kobi-stt -p kobi-bench --features kobi-stt/kyutai,kobi-bench/kyutai
+
+      - name: Place disque à la fin (Linux)
+        if: runner.os == 'Linux'
+        run: df -h /
 
   ui:
     name: interface (chromium)
