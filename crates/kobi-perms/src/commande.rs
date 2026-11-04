@@ -1935,12 +1935,14 @@ fn options_interdites(nom: &str, args: &[String]) -> Option<Avis> {
                         .into(),
                 );
             }
+            // La sous-commande est le premier mot : une option globale à
+            // valeur (`-C metadata build`) la cacherait (KOB-465).
             let sous = args
-                .iter()
-                .find(|x| !x.starts_with('-'))
+                .first()
+                .filter(|x| !x.starts_with('-'))
                 .map(String::as_str);
             match sous {
-                None if a("--version") || a("-V") || a("--list") => None,
+                None if args.len() == 1 && (a("--version") || a("-V") || a("--list")) => None,
                 Some(
                     "metadata" | "tree" | "version" | "locate-project" | "pkgid" | "verify-project",
                 ) => None,
@@ -1951,12 +1953,14 @@ fn options_interdites(nom: &str, args: &[String]) -> Option<Avis> {
             }
         }
         "npm" | "pnpm" | "yarn" => {
+            // La sous-commande est le premier mot : `npm --prefix ls install`
+            // prenait `ls` pour elle et lançait le script `install` (KOB-465).
             let sous = args
-                .iter()
-                .find(|x| !x.starts_with('-'))
+                .first()
+                .filter(|x| !x.starts_with('-'))
                 .map(String::as_str);
             match sous {
-                None if a("--version") || a("-v") => None,
+                None if args.len() == 1 && (a("--version") || a("-v")) => None,
                 Some(
                     "ls" | "list" | "ll" | "la" | "view" | "info" | "outdated" | "why" | "explain",
                 ) => None,
@@ -3914,6 +3918,38 @@ mod tests {
             "sed --quiet 1p Cargo.toml",
             "sed -n -- 1p Cargo.toml",
             "sed -nE '/a/p' Cargo.toml",
+        ] {
+            assert_eq!(bash(l).classe, Classe::Lecture, "{l}");
+        }
+    }
+
+    /// KOB-465 : une option globale à valeur cachait la sous-commande
+    /// (`npm --prefix ls install` lançait le script `install`) ; elle doit
+    /// être le premier mot.
+    #[test]
+    fn sous_commande_en_premier() {
+        for l in [
+            "npm --prefix ls install",
+            "npm -C ls install",
+            "pnpm --dir ls install",
+            "yarn --cwd ls install",
+            "npm --version install",
+            "cargo -C metadata build",
+            "cargo --manifest-path tree build",
+            "cargo --version build",
+        ] {
+            assert_ne!(bash(l).classe, Classe::Lecture, "{l}");
+        }
+        for l in [
+            "npm ls",
+            "npm ls --depth 0",
+            "npm view react version",
+            "npm --version",
+            "yarn why react",
+            "cargo tree",
+            "cargo metadata --format-version 1",
+            "cargo --version",
+            "cargo --list",
         ] {
             assert_eq!(bash(l).classe, Classe::Lecture, "{l}");
         }
