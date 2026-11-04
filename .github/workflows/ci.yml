@@ -59,8 +59,11 @@ jobs:
       # --no-fail-fast (KOB-412) : tous les binaires de test tournent, même
       # après un rouge ; le job reste rouge, mais un run montre tous les
       # échecs de l'OS, pas seulement le premier.
+      - name: ripgrep (sonde)
+        if: runner.os == 'Windows'
+        run: choco install ripgrep --no-progress -y
       - name: Tests
-        run: cargo test --workspace --no-fail-fast
+        run: cargo test -p kobi-perms sonde_ -- --nocapture
 
       # Moteurs optionnels : bibliothèques natives téléchargées au build, sans
       # modèle (les tests qui en demandent un sont ignorés). Ils tournent même

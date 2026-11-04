@@ -550,6 +550,54 @@ mod tests {
         assert!(x.contient(&c.join("y"), None));
     }
 
+    /// SONDE (ne pas merger) : ripgrep (outils Grep et Glob de Claude Code)
+    /// entre-t-il dans une jonction ou un lien de dossier qui sort ?
+    #[cfg(windows)]
+    #[test]
+    fn sonde_ripgrep_jonction() {
+        let base = std::env::temp_dir().join(format!("sonde-rg-{}", std::process::id()));
+        let code = base.join("code");
+        let dehors = base.join("dehors");
+        std::fs::create_dir_all(&code).unwrap();
+        std::fs::create_dir_all(&dehors).unwrap();
+        std::fs::write(dehors.join("secret.txt"), "MARQUEUR_DEHORS_9K").unwrap();
+        std::fs::write(code.join("a.txt"), "rien").unwrap();
+        let j = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(code.join("jonction"))
+            .arg(&dehors)
+            .output()
+            .unwrap();
+        let l = std::os::windows::fs::symlink_dir(&dehors, code.join("lien"));
+        let mut out = vec![format!(
+            "mklink /J : {} ; symlink_dir : {:?}",
+            j.status,
+            l.is_ok()
+        )];
+        for (nom, args) in [
+            ("rg motif", vec!["MARQUEUR_DEHORS_9K", "."]),
+            ("rg --files", vec!["--files", "."]),
+            (
+                "rg --files --hidden --no-ignore",
+                vec!["--files", "--hidden", "--no-ignore", "."],
+            ),
+        ] {
+            let r = std::process::Command::new("rg")
+                .args(&args)
+                .current_dir(&code)
+                .output();
+            let texte = r
+                .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+                .unwrap_or_else(|e| format!("erreur {e}"));
+            out.push(format!(
+                "{nom} : dehors vu {} fois ; sortie : {}",
+                texte.matches("secret.txt").count() + texte.matches("MARQUEUR_DEHORS_9K").count(),
+                texte.replace('\n', " | ")
+            ));
+        }
+        panic!("SONDE\n{}", out.join("\n"));
+    }
+
     fn ctx() -> Contexte {
         Contexte::new(vec![
             PathBuf::from("C:/Users/moi/Desktop/kobi"),
