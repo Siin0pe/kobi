@@ -2369,6 +2369,14 @@ impl<R: Runtime> Chef<R> {
         }
     }
 
+    /// Une question, la dernière ou une plus ancienne détachée par sa carte,
+    /// attend-elle encore sa réponse (KOB-391, KOB-430) ?
+    fn une_question_tourne(&self) -> bool {
+        self.historique
+            .iter()
+            .any(|b| matches!(b.statut, "attente" | "reponse" | "tache"))
+    }
+
     /// La dernière question posée attend-elle encore sa réponse (en cours,
     /// partie en tâche, ou en attente du réseau) ?
     fn question_en_cours(&self) -> bool {
@@ -3575,8 +3583,8 @@ impl<R: Runtime> Chef<R> {
         // la carte (pas celle de la carte elle-même, partie en tâche pour la
         // demander).
         // Une carte des notes venue du calme ne repasse qu'une fois rien
-        // d'autre en cours : sinon elle retenait le résultat de la tâche de la
-        // question en cours (« propose » ne livre pas).
+        // d'autre en cours, question plus ancienne détachée comprise : sinon
+        // elle retenait son résultat (« propose » ne livre pas).
         let attend = |notes: bool| {
             self.cartes_ouvertes.iter().any(|(k, o)| {
                 self.cartes.contains_key(k)
@@ -3587,8 +3595,8 @@ impl<R: Runtime> Chef<R> {
                     }
             })
         };
-        let carte_mcp =
-            attend(false) || (attend(true) && !self.question_en_cours() && self.taches.is_empty());
+        let carte_mcp = attend(false)
+            || (attend(true) && !self.une_question_tourne() && self.taches.is_empty());
         if (!self.validations.est_vide() || carte_mcp)
             && !(self.question_en_cours() && self.dernier != self.question_a_la_carte)
             && self.calme_a.is_none()
@@ -3618,10 +3626,7 @@ impl<R: Runtime> Chef<R> {
         // carte), ni tâche, ni résultat à livrer (carte sans tour acceptée,
         // tâche finie en erreur) ; il revient au calme au lieu de rester figé
         // (KOB-391).
-        let une_question_tourne = self
-            .historique
-            .iter()
-            .any(|b| matches!(b.statut, "attente" | "reponse" | "tache"));
+        let une_question_tourne = self.une_question_tourne();
         if self.activite() == Some("reflechit")
             && !une_question_tourne
             && self.taches.is_empty()
@@ -6107,6 +6112,61 @@ mod tests {
             assert!(
                 c.a_livrer.is_empty(),
                 "résultat livré sans attendre la carte"
+            );
+        });
+        // Une question plus ancienne, détachée par sa carte acceptée (sans
+        // annonce, hors `taches`), tourne encore après la réponse à une autre :
+        // la carte des notes ne retient pas son résultat (relecture finale de
+        // KOB-430).
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            c.recevoir(Message::Cerveau(Retour::Carte {
+                tour: 0,
+                carte: 1,
+                outil: "mcp__carnet__ecrire_note".into(),
+                entree: serde_json::json!({"texte": "note"}),
+            }));
+            c.recevoir(Message::Interpelle);
+            c.envoyer("ajoute le ticket".into(), None, true);
+            let x = c.dernier;
+            c.recevoir(Message::Cerveau(Retour::Carte {
+                tour: x,
+                carte: 2,
+                outil: "mcp__linear__save_issue".into(),
+                entree: serde_json::json!({"title": "Autre"}),
+            }));
+            c.recevoir(Message::Cerveau(Retour::CarteFermee {
+                carte: 2,
+                accepte: Some(true),
+            }));
+            c.recevoir(Message::Cerveau(Retour::Detache {
+                tour: x,
+                annonce: false,
+            }));
+            c.recevoir(Message::Interpelle);
+            c.envoyer("Quelle est la date de la démo ?".into(), None, true);
+            let y = c.dernier;
+            c.recevoir(Message::Cerveau(Retour::Fin {
+                tour: y,
+                texte: "La démo est jeudi.".into(),
+            }));
+            for _ in 0..3 {
+                c.calme_a = c.calme_a.map(|(_, e)| (Instant::now(), e));
+                c.tick();
+            }
+            assert_ne!(c.activite(), Some("propose"), "la question X tourne encore");
+            c.recevoir(Message::Cerveau(Retour::Resultat {
+                tour: x,
+                texte: "Ticket ajouté.".into(),
+            }));
+            for _ in 0..3 {
+                c.livrable_a = None;
+                c.tick();
+            }
+            assert!(
+                c.a_livrer.is_empty(),
+                "résultat de X livré sans attendre la carte"
             );
         });
     }
