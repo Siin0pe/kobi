@@ -581,6 +581,12 @@ impl FileValidations {
         self.0.is_empty()
     }
 
+    /// Cartes de la file, dans l'ordre (tests).
+    #[cfg(test)]
+    pub fn ids(&self) -> Vec<String> {
+        self.0.iter().map(|(i, _)| i.clone()).collect()
+    }
+
     /// Une autre carte que `id` attend-elle ?
     pub fn autre_que(&self, id: &str) -> bool {
         self.0.iter().any(|(i, _)| i != id)
