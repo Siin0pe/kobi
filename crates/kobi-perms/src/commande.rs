@@ -491,6 +491,21 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
             '@' if ps && matches!(c.get(i + 1), Some('(' | '{' | '"' | '\'')) => {
                 return Err("expression PowerShell `@( )` non analysable".into())
             }
+            // `@x`, `@env:X` : splatting, la valeur de la variable devient des
+            // arguments (`echo @env:CLE` l'affiche, KOB-470). En tête de mot,
+            // d'élément de tableau, après une continuation (accent grave et
+            // saut de ligne : le mot est vide) ou après `-Param:`, que
+            // PowerShell coupe. `%an@%ae` reste un mot.
+            '@' if ps
+                && (!dans_mot
+                    || mot.is_empty()
+                    || c.get(i.wrapping_sub(1)) == Some(&',')
+                    || (commence_par_un_tiret(&mot) && mot.ends_with(':')))
+                && c.get(i + 1)
+                    .is_some_and(|n| n.is_alphanumeric() || matches!(n, '_' | '?' | ':' | '^')) =>
+            {
+                return Err("splatting PowerShell `@variable` non analysable".into())
+            }
             x if x == echap => {
                 dans_mot = true;
                 i += 1;
@@ -3310,6 +3325,59 @@ mod tests {
         // Un chemin Rust n'est pas un fournisseur.
         assert!(!fournisseur_ps("crate::commande"));
         assert!(fournisseur_ps(r"Microsoft.PowerShell.Core\Environment::X"));
+    }
+
+    /// KOB-470 : `@variable` (splatting) éclate la valeur en arguments :
+    /// `echo @env:ANTHROPIC_API_KEY` affichait la clé, un caractère par ligne
+    /// (sonde #425). Traité comme `$` : jamais une lecture.
+    #[test]
+    fn splatting_powershell_jamais_lu() {
+        let x = ctx();
+        for l in [
+            "echo @env:ANTHROPIC_API_KEY",
+            "Write-Output @env:ANTHROPIC_API_KEY",
+            "gc @env:ANTHROPIC_API_KEY",
+            "ls @env:ANTHROPIC_API_KEY",
+            "echo @variable:HOME",
+            "echo @global:x",
+            "echo @x",
+            "echo @_",
+            "echo a,@env:X",
+            "echo @{a=1}",
+            "Get-ChildItem @p",
+            "echo -InputObject:@env:ANTHROPIC_API_KEY",
+            "Write-Host -Object:@env:ANTHROPIC_API_KEY",
+            "echo \u{2013}InputObject:@env:ANTHROPIC_API_KEY",
+            "Write-Host \u{2014}Object:@env:ANTHROPIC_API_KEY",
+            "echo `\n@env:ANTHROPIC_API_KEY",
+            "echo @^",
+        ] {
+            // Comme `$` : jamais une lecture (carte).
+            assert_ne!(
+                analyser(l, Shell::PowerShell, &x).classe.cle(),
+                "lecture",
+                "{l}"
+            );
+        }
+        assert_eq!(
+            analyser("echo @env:X", Shell::PowerShell, &x).classe,
+            analyser("echo $env:X", Shell::PowerShell, &x).classe
+        );
+        // Au milieu d'un mot, ou entre guillemets, `@` n'est pas un splatting.
+        for l in [
+            "git log --format=%an@%ae",
+            "echo a@b",
+            "echo '@env:X'",
+            "echo @",
+        ] {
+            assert_eq!(
+                analyser(l, Shell::PowerShell, &x).classe.cle(),
+                "lecture",
+                "{l}"
+            );
+        }
+        // Sous Bash, `@x` n'est qu'un mot.
+        assert_eq!(analyser("echo @x", Shell::Bash, &x).classe.cle(), "lecture");
     }
 
     /// KOB-439 : `where.exe` juge le dossier de `-R` comme celui de `/R`, et
