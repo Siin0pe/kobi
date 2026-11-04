@@ -1558,6 +1558,25 @@ fn options_interdites(nom: &str, args: &[String]) -> Option<Avis> {
     if suit_les_liens {
         return ecrit(format!("`{nom}` suit les liens en parcourant les dossiers"));
     }
+    // `--files0-from=F` : la liste des fichiers lus est dans `F`, jamais
+    // jugée ici (KOB-442).
+    // De même pour `strings @F` (arguments pris dans `F`), `file -f F` et
+    // `sha256sum -c F` (fichiers listés dans `F`, ouverts pour vérification).
+    let liste_dans_un_fichier = match nom {
+        "sort" | "wc" | "du" => longue("--files0-from"),
+        "find" => a("-files0-from"),
+        "strings" => commence("@"),
+        "file" => court('f') || longue("--files-from"),
+        "md5sum" | "sha1sum" | "sha256sum" | "sha512sum" | "b2sum" | "cksum" => {
+            court('c') || longue("--check")
+        }
+        _ => false,
+    };
+    if liste_dans_un_fichier {
+        return ecrit(format!(
+            "`{nom}` lit des chemins pris dans un fichier (`files0-from`)"
+        ));
+    }
     match nom {
         "find" => {
             if a("-delete") {
@@ -2925,6 +2944,44 @@ mod tests {
                 Classe::Lecture,
                 "{l} par une jonction qui sort"
             );
+        }
+    }
+
+    /// KOB-442 : `--files0-from` lit la liste des fichiers dans un fichier ;
+    /// ces chemins ne sont pas jugés (sonde : `sort --files0-from=liste`
+    /// affichait un fichier hors des dossiers).
+    #[test]
+    fn liste_de_fichiers_dans_un_fichier() {
+        for l in [
+            "sort --files0-from=liste",
+            "sort --files0-from liste",
+            "sort --files0=liste",
+            "wc --files0-from=liste",
+            "wc --f=liste",
+            "du --files0-from=liste",
+            "find -files0-from liste",
+            // Même famille (relecture sécurité de KOB-442).
+            "strings @liste",
+            "strings -a @liste",
+            "sha256sum -c sommes",
+            "md5sum --check sommes",
+            "cksum -c sommes",
+            "file -f liste",
+            "file --files-from liste",
+        ] {
+            assert_ne!(bash(l).classe, Classe::Lecture, "{l}");
+        }
+        for l in [
+            "sort -t, -k2 Cargo.toml",
+            "sort --field-separator=, Cargo.toml",
+            "wc -l Cargo.toml",
+            "du -sh src",
+            "rg --files",
+            "strings Cargo.toml",
+            "sha256sum Cargo.toml",
+            "file Cargo.toml",
+        ] {
+            assert_eq!(bash(l).classe, Classe::Lecture, "{l}");
         }
     }
 
