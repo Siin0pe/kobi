@@ -66,15 +66,135 @@ impl Contexte {
     }
 
     /// `chemin`, relatif à `depuis`, est-il dans un dossier déclaré ?
+    /// Sur le texte, puis sur le disque : chemin et dossiers sont résolus
+    /// sans rien suivre ni ouvrir ([`resolu`]), un lien remplacé par sa
+    /// cible et `..` appliqué au chemin déjà résolu (KOB-432). Sans cela,
+    /// `code/sortie/secret`, où `sortie` vise `~/.ssh`, passait pour un
+    /// chemin du dossier.
     pub fn contient(&self, chemin: &Path, depuis: Option<&Path>) -> bool {
         let Some(cible) = absolu(chemin, depuis) else {
             return false;
         };
-        let cible = cle_de_chemin(&cible);
-        self.dossiers.iter().any(|d| {
-            let d = cle_de_chemin(d);
-            !d.is_empty() && (cible == d || cible.starts_with(&format!("{d}/")))
-        })
+        if !self.dossiers.iter().any(|d| sous(&cible, d)) {
+            return false;
+        }
+        let brut = match depuis {
+            Some(d) if !est_absolu(&chemin.to_string_lossy().replace('\\', "/")) => d.join(chemin),
+            _ => PathBuf::from(git_bash_vers_windows(
+                &chemin.to_string_lossy().replace('\\', "/"),
+            )),
+        };
+        let Some(reel) = resolu(&brut) else {
+            return false;
+        };
+        self.dossiers
+            .iter()
+            .filter_map(|d| resolu(d))
+            .any(|d| sous(&reel, &d))
+    }
+}
+
+/// `cible` est `dossier` ou en dessous, sur le texte (casse ignorée).
+fn sous(cible: &Path, dossier: &Path) -> bool {
+    let (cible, d) = (cle_de_chemin(cible), cle_de_chemin(dossier));
+    !d.is_empty() && (cible == d || cible.starts_with(&format!("{d}/")))
+}
+
+/// Chemin résolu sans rien suivre ni ouvrir : chaque composant existant est
+/// lu avec `symlink_metadata`, un lien est remplacé par sa cible
+/// (`read_link`), et `..` remonte le chemin déjà résolu, comme le système.
+/// Rien n'est résolu par `canonicalize` : sous Windows, suivre un lien vers
+/// un partage réseau ouvrirait déjà une connexion SMB (KOB-344). Après un
+/// composant absent (fichier à créer), la suite est prise telle quelle :
+/// rien n'y peut être un lien. `None` : cible réseau ou de périphérique,
+/// trop de liens (boucle), ou erreur de lecture autre qu'« absent ».
+pub fn resolu(chemin: &Path) -> Option<PathBuf> {
+    use std::collections::VecDeque;
+    let mut a_lire: VecDeque<PathBuf> = chemin
+        .components()
+        .map(|c| PathBuf::from(c.as_os_str()))
+        .collect();
+    let mut actuel = PathBuf::new();
+    let mut liens = 0;
+    let mut absent = false;
+    while let Some(morceau) = a_lire.pop_front() {
+        match morceau.components().next() {
+            None | Some(Component::CurDir) => continue,
+            Some(Component::ParentDir) => {
+                actuel.pop();
+                continue;
+            }
+            Some(Component::Prefix(_) | Component::RootDir) => {
+                actuel.push(&morceau);
+                continue;
+            }
+            Some(Component::Normal(_)) => {}
+        }
+        let candidat = actuel.join(&morceau);
+        if absent {
+            actuel = candidat;
+            continue;
+        }
+        match std::fs::symlink_metadata(&candidat) {
+            Ok(m) if m.file_type().is_symlink() => {
+                liens += 1;
+                if liens > LIENS_MAX {
+                    return None;
+                }
+                let lien = std::fs::read_link(&candidat).ok()?;
+                let cible = cible_locale(&lien, &actuel)?;
+                actuel = PathBuf::new();
+                for c in cible.components().rev() {
+                    a_lire.push_front(PathBuf::from(c.as_os_str()));
+                }
+            }
+            Ok(_) => actuel = candidat,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                absent = true;
+                actuel = candidat;
+            }
+            Err(_) => return None,
+        }
+    }
+    Some(actuel)
+}
+
+/// Liens suivis au plus pour un chemin, comme Linux (KOB-432).
+const LIENS_MAX: usize = 40;
+
+/// Cible d'un lien, rendue absolue depuis le dossier du lien. `None` pour
+/// une cible réseau ou de périphérique (`\\serveur\…`, `\\?\UNC\…`,
+/// `\\.\…`, `\??\…`, racine sans disque sous Windows) : refusée sans être
+/// touchée. Un `\\?\C:\…` local perd son préfixe, pour se comparer aux
+/// dossiers déclarés.
+fn cible_locale(lien: &Path, dossier_du_lien: &Path) -> Option<PathBuf> {
+    // Sous Windows, NT ne coupe une cible que sur `\\` : un `/` la ferait
+    // juger autrement qu'il ne l'ouvre (KOB-425).
+    if cfg!(windows) && lien.to_string_lossy().contains('/') {
+        return None;
+    }
+    let texte = lien.to_string_lossy().replace('/', "\\");
+    if let Some(reste) = texte.strip_prefix("\\\\?\\") {
+        let b = reste.as_bytes();
+        return (b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && b[2] == b'\\')
+            .then(|| PathBuf::from(reste));
+    }
+    if texte.starts_with("\\\\") || texte.starts_with("\\??\\") {
+        return None;
+    }
+    if cfg!(windows)
+        && lien.has_root()
+        && !matches!(lien.components().next(), Some(Component::Prefix(_)))
+    {
+        return None;
+    }
+    if lien.is_absolute() || (cfg!(windows) && lien.has_root()) {
+        Some(lien.to_path_buf())
+    } else if cfg!(windows) && matches!(lien.components().next(), Some(Component::Prefix(_))) {
+        // `C:x` : relatif au dossier courant de ce lecteur, inconnu ici.
+        None
+    } else {
+        Some(dossier_du_lien.join(lien))
     }
 }
 
@@ -226,6 +346,121 @@ fn cle_de_chemin(chemin: &Path) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// KOB-432 : un lien sous un dossier déclaré est suivi sans être ouvert :
+    /// ce qui sort par un lien est hors des dossiers, pour la lecture,
+    /// l'écriture et les commandes ; ce qui y reste est permis.
+    #[cfg(unix)]
+    #[test]
+    fn liens_qui_sortent_hors_des_dossiers() {
+        use std::os::unix::fs::symlink;
+        let code = tempfile::tempdir().unwrap();
+        let dehors = tempfile::tempdir().unwrap();
+        let (c, d) = (code.path(), dehors.path());
+        std::fs::write(d.join("secret"), "x").unwrap();
+        std::fs::create_dir_all(c.join("sous")).unwrap();
+        std::fs::write(c.join("sous/permis"), "x").unwrap();
+        std::fs::create_dir_all(d.join("ssl")).unwrap();
+        // Lien qui sort, lien qui reste, chaîne qui sort, lien relatif qui
+        // sort, liens cassés dedans et dehors, boucle.
+        symlink(d, c.join("sortie")).unwrap();
+        symlink(c.join("sous"), c.join("dedans")).unwrap();
+        symlink(c.join("maillon2"), c.join("maillon1")).unwrap();
+        symlink(d, c.join("maillon2")).unwrap();
+        let profondeur = c.components().count();
+        symlink(
+            format!(
+                "{}{}",
+                "../".repeat(profondeur),
+                d.strip_prefix("/").unwrap().display()
+            ),
+            c.join("relatif"),
+        )
+        .unwrap();
+        symlink(c.join("absent"), c.join("casse_dedans")).unwrap();
+        symlink(d.join("absent"), c.join("casse_dehors")).unwrap();
+        symlink(c.join("boucle"), c.join("boucle")).unwrap();
+        symlink(d.join("ssl"), c.join("ssl")).unwrap();
+        let mut x = Contexte::new(vec![c.to_path_buf()]);
+        x.cwd = Some(c.to_path_buf());
+        let lire = |p: &str| classer(&Action::LireFichier { chemin: c.join(p) }, &x).cle();
+        let ecrire = |p: &str| {
+            classer(
+                &Action::EcrireFichier {
+                    chemin: c.join(p),
+                    avant: None,
+                    apres: String::new(),
+                },
+                &x,
+            )
+            .cle()
+        };
+        let cat = |p: &str| {
+            commande::analyser(&format!("cat {p}"), crate::Shell::Bash, &x)
+                .classe
+                .cle()
+        };
+        for dehors in [
+            "sortie/secret",
+            "maillon1/secret",
+            "relatif/secret",
+            "casse_dehors",
+            "boucle",
+            // `..` après un lien remonte depuis sa cible, pas depuis le lien.
+            "ssl/../secret",
+        ] {
+            assert_eq!(lire(dehors), "refus", "lecture {dehors}");
+            assert_eq!(ecrire(dehors), "refus", "écriture {dehors}");
+            assert_eq!(cat(dehors), "refus", "commande {dehors}");
+        }
+        for dedans in [
+            "dedans/permis",
+            "sous/permis",
+            "casse_dedans",
+            "nouveau.txt",
+        ] {
+            assert_eq!(lire(dedans), "lecture", "lecture {dedans}");
+            assert_eq!(ecrire(dedans), "ecriture", "écriture {dedans}");
+            assert_eq!(cat(dedans), "lecture", "commande {dedans}");
+        }
+        // Le dossier de la commande lui-même, par un lien qui sort.
+        let mut par_lien = x.clone();
+        par_lien.cwd = Some(c.join("sortie"));
+        assert_eq!(
+            commande::analyser("cat secret", crate::Shell::Bash, &par_lien)
+                .classe
+                .cle(),
+            "refus"
+        );
+    }
+
+    /// KOB-432, sous Windows : un lien vers un partage réseau est refusé sans
+    /// être suivi (aucune connexion SMB) ; une cible à `/` aussi (KOB-425).
+    #[cfg(windows)]
+    #[test]
+    fn liens_reseau_refuses_sans_les_suivre() {
+        use std::os::windows::fs::{symlink_dir, symlink_file};
+        let code = tempfile::tempdir().unwrap();
+        let c = code.path();
+        if symlink_dir(r"\\attaquant\p", c.join("reseau")).is_err() {
+            assert!(std::env::var_os("CI").is_none(), "liens impossibles en CI");
+            return;
+        }
+        std::fs::create_dir_all(c.join("x")).unwrap();
+        std::fs::write(c.join("y"), "x").unwrap();
+        symlink_file(r"x\../y", c.join("barre")).unwrap();
+        let x = Contexte::new(vec![c.to_path_buf()]);
+        let debut = std::time::Instant::now();
+        assert!(!x.contient(&c.join(r"reseau\fichier"), None));
+        assert!(!x.contient(&c.join("barre"), None));
+        // Sans tentative de connexion : la réponse est immédiate.
+        assert!(
+            debut.elapsed() < std::time::Duration::from_secs(2),
+            "{:?}",
+            debut.elapsed()
+        );
+        assert!(x.contient(&c.join("y"), None));
+    }
 
     fn ctx() -> Contexte {
         Contexte::new(vec![
