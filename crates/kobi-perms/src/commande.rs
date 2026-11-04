@@ -1138,7 +1138,7 @@ fn parcours_recursif(nom: &str, args: &[String], shell: Shell) -> bool {
         "ls" | "dir" if shell == Shell::PowerShell => recurse(),
         "dir" => interrupteur("/s"),
         "tree" => true,
-        "where" => interrupteur("/r") || interrupteur("-r"),
+        "where" => args.iter().any(|x| est_r_de_where(x)),
         _ => false,
     }
 }
@@ -1170,10 +1170,7 @@ fn racines_du_parcours(
 ) -> Result<Vec<PathBuf>, Avis> {
     let mut textes: Vec<&str> = Vec::new();
     if nom == "where" {
-        if let Some(i) = args
-            .iter()
-            .position(|x| x.eq_ignore_ascii_case("/r") || x.eq_ignore_ascii_case("-r"))
-        {
+        if let Some(i) = args.iter().position(|x| est_r_de_where(x)) {
             textes.extend(args.get(i + 1).map(String::as_str));
         }
     } else {
@@ -1791,17 +1788,12 @@ fn where_exe(args: &[String], ctx: &Contexte, cwd: &Path) -> Option<Avis> {
     };
     // Un seul dossier de parcours : le contrôle des jonctions (KOB-434) ne
     // juge que le premier.
-    if args
-        .iter()
-        .filter(|x| x.eq_ignore_ascii_case("/r") || x.eq_ignore_ascii_case("-r"))
-        .count()
-        > 1
-    {
+    if args.iter().filter(|x| est_r_de_where(x)).count() > 1 {
         return carte("/R … /R");
     }
     let mut i = 0;
     while i < args.len() {
-        let x = args[i].as_str();
+        let x = arg_de_where(&args[i]);
         let bas = x.to_ascii_lowercase();
         if bas == "/r" || bas == "-r" {
             let Some(d) = args.get(i + 1) else {
@@ -1836,6 +1828,21 @@ fn where_exe(args: &[String], ctx: &Contexte, cwd: &Path) -> Option<Avis> {
         i += 1;
     }
     None
+}
+
+/// Argument tel que where.exe le reçoit : un `-…` entre guillemets ou dans
+/// un tableau PowerShell porte un `./` de tête ajouté par `decouper` (KOB-437),
+/// que l'exécutable ne voit pas (`'-R'` est bien l'option `-R`).
+fn arg_de_where(x: &str) -> &str {
+    x.strip_prefix("./")
+        .filter(|r| r.starts_with('-'))
+        .unwrap_or(x)
+}
+
+/// `/R` ou `-R` de where.exe, sous toutes ses formes.
+fn est_r_de_where(x: &str) -> bool {
+    let x = arg_de_where(x);
+    x.eq_ignore_ascii_case("/r") || x.eq_ignore_ascii_case("-r")
 }
 
 /// Tous les chemins des arguments doivent rester dans les dossiers déclarés.
@@ -2410,6 +2417,21 @@ mod tests {
             cle("where.exe x,/R,C:/Users/moi/.ssh,*", Shell::PowerShell),
             "refus"
         );
+        // `'-R'` ou `x,-R` : PowerShell passe `-R` à where.exe, même si le
+        // découpage le garde comme valeur (`./-R`).
+        for l in [
+            r"where.exe '-R' \Users\moi\.ssh *",
+            r"where.exe x,-R,\Users\moi\.ssh,*",
+            r"where.exe '-R' ..\..\.. *",
+            r#"where.exe "-r" ..\..\.. *"#,
+        ] {
+            assert_ne!(cle(l, Shell::PowerShell), "lecture", "{l}");
+        }
+        assert!(parcours_recursif(
+            "where",
+            &v_mots("./-R . *.rs"),
+            Shell::PowerShell
+        ));
         // … et l'alias `Where-Object` sous PowerShell (pipeline).
         assert_eq!(
             cle("Get-ChildItem | where Name -like 'a:b*'", Shell::PowerShell),
