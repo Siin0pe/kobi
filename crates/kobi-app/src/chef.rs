@@ -784,8 +784,8 @@ fn boucle<R: Runtime>(app: AppHandle<R>, rx: Receiver<Message>) {
         let mut chef = chef.0.lock().unwrap_or_else(|e| e.into_inner());
         if matches!(message, Some(Message::Arreter)) {
             // Fin d'un essai : l'écrivain s'arrête sans finir sa file (le
-            // dossier d'essai part avec lui) et son fil est joint ; le
-            // runtime du cerveau part avec ce fil (KOB-427).
+            // dossier d'essai part avec lui), son fil s'arrête de lui-même ;
+            // le runtime du cerveau part avec ce fil (KOB-427).
             std::mem::replace(&mut chef.ecrivain, Ecrivain::ferme()).abandonner();
             return;
         }
@@ -3973,8 +3973,9 @@ mod tests {
 
     /// Réunion menée par le vrai chef, avec un Claude qui ne répond jamais :
     /// les comptes rendus sont injectés à la main.
-    /// App d'essai du chef. À sa fin, le fil du chef s'arrête, l'écrivain se
-    /// ferme et leurs fils sont joints : un essai ne laisse aucun fil
+    /// App d'essai du chef. À sa fin, le fil du chef s'arrête et il est joint
+    /// (le runtime du cerveau part avec lui) ; l'écrivain s'arrête de
+    /// lui-même après l'écriture en cours : un essai ne laisse aucun fil
     /// derrière lui (KOB-427).
     struct Essai(Option<tauri::App<tauri::test::MockRuntime>>);
 
@@ -8308,7 +8309,7 @@ mod tests {
             let mut h = Hasard(graine);
             // Un premier cas, pour que les fils durables du processus (pool
             // de tests, runtime) existent déjà avant la mesure.
-            let _ = verifier(&[Ev::Tic]);
+            verifier(&[Ev::Tic]).expect("cas de chauffe");
             let fils_avant = fils_du_processus();
             for numero in 0..suites {
                 let suite: Vec<Ev> = (0..longueur).map(|_| tirer(&mut h)).collect();
@@ -8319,11 +8320,11 @@ mod tests {
             }
             // Chaque cas joint ses fils : leur nombre ne grossit pas avec le
             // nombre de cas (KOB-427). Une fuite en ajoutait environ quatre
-            // par cas ; la marge couvre les autres tests qui tournent en
-            // même temps.
+            // par cas ; la marge (un fil par cas, 100 au moins) couvre les
+            // autres tests qui tournent en même temps.
             if let (Some(avant), Some(apres)) = (fils_avant, fils_du_processus()) {
                 assert!(
-                    apres < avant + 100,
+                    apres < avant + suites.max(100),
                     "{suites} cas : {avant} fils avant, {apres} après"
                 );
             }
