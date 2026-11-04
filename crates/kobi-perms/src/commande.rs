@@ -1666,7 +1666,8 @@ fn options_interdites(nom: &str, args: &[String]) -> Option<Avis> {
     };
     let longue = |o: &str| args.iter().any(|x| abrege(x, o));
     let suit_les_liens = match nom {
-        "grep" | "egrep" | "fgrep" => court('R') || longue("--dereference-recursive"),
+        // `-S` : le grep BSD de macOS suit tous les liens (KOB-454).
+        "grep" | "egrep" | "fgrep" => court('R') || court('S') || longue("--dereference-recursive"),
         "rg" | "fd" => court('L') || longue("--follow"),
         "find" => a("-L") || a("-follow"),
         "tree" => court('l'),
@@ -3246,6 +3247,20 @@ mod tests {
         assert_eq!(cle("where //R C:/Users/moi/Desktop/kobi '*.rs'"), "lecture");
         assert_eq!(cle("where //Q git"), "lecture");
         assert_ne!(cle("where //X git"), "lecture");
+    }
+
+    /// KOB-454 : `grep -S` (grep BSD de macOS) suit tous les liens, comme
+    /// `-R` : sur la carte, seul ou groupé (`-rS`).
+    #[test]
+    fn grep_s_suit_les_liens() {
+        let x = ctx();
+        for l in ["grep -rS motif .", "grep -S motif src", "egrep -SR x ."] {
+            assert_ne!(analyser(l, Shell::Bash, &x).classe, Classe::Lecture, "{l}");
+        }
+        assert_eq!(
+            analyser("grep -r motif .", Shell::Bash, &x).classe,
+            Classe::Lecture
+        );
     }
 
     fn v_mots(l: &str) -> Vec<String> {
