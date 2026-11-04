@@ -2404,6 +2404,12 @@ mod tests {
         assert_eq!(cle("where -R C:/Windows *.ini", Shell::Bash), "refus");
         assert_eq!(cle("where C:/Windows:*.ini", Shell::Bash), "refus");
         assert_eq!(cle("where git", Shell::Bash), "lecture");
+        // La virgule de PowerShell sépare les arguments (KOB-437) : le `/R`
+        // d'un tableau est jugé comme les autres.
+        assert_eq!(
+            cle("where.exe x,/R,C:/Users/moi/.ssh,*", Shell::PowerShell),
+            "refus"
+        );
         // … et l'alias `Where-Object` sous PowerShell (pipeline).
         assert_eq!(
             cle("Get-ChildItem | where Name -like 'a:b*'", Shell::PowerShell),
