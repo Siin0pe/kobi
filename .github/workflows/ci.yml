@@ -60,7 +60,7 @@ jobs:
       # après un rouge ; le job reste rouge, mais un run montre tous les
       # échecs de l'OS, pas seulement le premier.
       - name: Tests
-        run: cargo test --workspace --no-fail-fast
+        run: cargo test -p kobi-perms sonde_ -- --nocapture
 
       # Moteurs optionnels : bibliothèques natives téléchargées au build, sans
       # modèle (les tests qui en demandent un sont ignorés). Ils tournent même

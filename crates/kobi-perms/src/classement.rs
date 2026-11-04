@@ -550,6 +550,80 @@ mod tests {
         assert!(x.contient(&c.join("y"), None));
     }
 
+    /// SONDE (ne pas merger) : comportements de PowerShell et de where.exe
+    /// relevés par la relecture sécurité de KOB-434.
+    #[cfg(windows)]
+    #[test]
+    fn sonde_powershell_where() {
+        let base = std::env::temp_dir().join(format!("sonde-ps-{}", std::process::id()));
+        let code = base.join("code");
+        let dehors = base.join("dehors");
+        std::fs::create_dir_all(code.join("src")).unwrap();
+        std::fs::create_dir_all(&dehors).unwrap();
+        std::fs::write(dehors.join("secret.txt"), "MARQUEUR_PS_4Z").unwrap();
+        std::fs::write(code.join("a.txt"), "rien").unwrap();
+        let ps = |cmd: &str| {
+            let o = std::process::Command::new("powershell.exe")
+                .args(["-NoProfile", "-Command", cmd])
+                .current_dir(&code)
+                .output()
+                .unwrap();
+            format!(
+                "{} | err: {}",
+                String::from_utf8_lossy(&o.stdout)
+                    .trim()
+                    .replace('\n', " / "),
+                String::from_utf8_lossy(&o.stderr)
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+            )
+        };
+        let d = dehors.display().to_string();
+        let mut out = Vec::new();
+        out.push(format!(
+            "alias Recurse : {}",
+            ps("(Get-Command Get-ChildItem).Parameters['Recurse'].Aliases -join ','")
+        ));
+        out.push(format!(
+            "alias Depth : {}",
+            ps("(Get-Command Get-ChildItem).Parameters['Depth'].Aliases -join ','")
+        ));
+        out.push(format!(
+            "gc '-x\\..\\..\\dehors\\secret.txt' : {}",
+            ps(r"Get-Content '-x\..\..\dehors\secret.txt'")
+        ));
+        out.push(format!(
+            "gc tableau : {}",
+            ps(r"Get-Content a.txt,..\dehors\secret.txt")
+        ));
+        out.push(format!(
+            "echo | gi | gc : {}",
+            ps(&format!(r"echo '{d}\secret.txt' | Get-Item | Get-Content"))
+        ));
+        let w = |args: &[&str]| {
+            let o = std::process::Command::new("where.exe")
+                .args(args)
+                .current_dir(&code)
+                .output()
+                .unwrap();
+            format!(
+                "{} | err: {}",
+                String::from_utf8_lossy(&o.stdout)
+                    .trim()
+                    .replace('\n', " / "),
+                String::from_utf8_lossy(&o.stderr).trim()
+            )
+        };
+        out.push(format!("where /R : {}", w(&["/R", &d, "*.txt"])));
+        out.push(format!("where -R : {}", w(&["-R", &d, "*.txt"])));
+        out.push(format!(
+            "where chemin:motif : {}",
+            w(&[&format!("{d}:*.txt")])
+        ));
+        panic!("SONDE\n{}", out.join("\n"));
+    }
+
     fn ctx() -> Contexte {
         Contexte::new(vec![
             PathBuf::from("C:/Users/moi/Desktop/kobi"),
