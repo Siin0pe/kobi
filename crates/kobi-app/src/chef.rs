@@ -2904,12 +2904,16 @@ impl<R: Runtime> Chef<R> {
     /// les a refusées) : fermées comme un refus (KOB-72).
     fn cartes_expirees(&mut self) {
         let echeance = kobi_perms::DEFAULT_TIMEOUT + Duration::from_secs(5);
-        let expirees: Vec<u64> = self
+        let mut expirees: Vec<u64> = self
             .cartes_ouvertes
             .iter()
             .filter(|(_, ouverte)| ouverte.elapsed() > echeance)
             .map(|(carte, _)| *carte)
             .collect();
+        // Dans l'ordre d'ouverture, pas celui de la table : l'ordre des
+        // fermetures compte (dernière carte, origine des cartes des notes),
+        // il ne doit pas changer d'une fois à l'autre (KOB-395).
+        expirees.sort_unstable();
         for carte in expirees {
             tracing::info!(carte, "carte sans réponse : refusée à l'échéance");
             self.retour(Retour::CarteFermee {
@@ -7825,7 +7829,7 @@ mod tests {
 
     /// KOB-395 : test de propriété « Kobi ne reste jamais figé ». Des suites
     /// d'événements tirées au hasard (graine fixe, générateur maison) sont
-    /// jouées sur le chef ; trois propriétés sont vérifiées à la fin. Un
+    /// jouées sur le chef ; quatre propriétés sont vérifiées. Un
     /// contre-exemple est réduit à sa suite minimale et affiché.
     mod propriete {
         use super::*;
@@ -7859,10 +7863,10 @@ mod tests {
         /// leur rang parmi ceux qui existent (le plus récent d'abord).
         #[derive(Debug, Clone)]
         enum Ev {
-            /// Dite (`nom` : l'écoute interpelle Kobi, avec ou sans le nom)
+            /// Dite (`voix` : l'écoute interpelle Kobi, avec ou sans le nom)
             /// ou tapée au clavier.
             Question {
-                nom: bool,
+                voix: bool,
                 texte: usize,
             },
             Texte(usize),
@@ -7889,11 +7893,11 @@ mod tests {
         fn tirer(h: &mut Hasard) -> Ev {
             match h.sous(22) {
                 0..=2 => Ev::Question {
-                    nom: h.sous(3) != 0,
+                    voix: h.sous(3) != 0,
                     texte: h.sous(TEXTES.len()),
                 },
                 3 => Ev::Question {
-                    nom: false,
+                    voix: false,
                     texte: h.sous(TEXTES.len()),
                 },
                 4 => Ev::Texte(h.sous(3)),
@@ -7918,11 +7922,16 @@ mod tests {
         /// Le temps passe : délais du chef échus, puis un tic.
         fn avancer(c: &mut Chef<tauri::test::MockRuntime>) {
             if let Some((_, e)) = c.calme_a {
-                c.calme_a = Some((Instant::now() - Duration::from_millis(1), e));
+                let echu = Instant::now()
+                    .checked_sub(Duration::from_millis(1))
+                    .unwrap_or_else(Instant::now);
+                c.calme_a = Some((echu, e));
             }
             c.livrable_a = None;
             if let Some((t, Some(_))) = c.patience_reportee {
-                c.patience_reportee = Some((t, Some(Instant::now() - cerveau::PATIENCE)));
+                if let Some(depuis) = Instant::now().checked_sub(cerveau::PATIENCE) {
+                    c.patience_reportee = Some((t, Some(depuis)));
+                }
             }
             c.tick();
         }
@@ -7979,7 +7988,7 @@ mod tests {
 
         fn jouer(c: &mut Chef<tauri::test::MockRuntime>, ev: &Ev, jeu: &mut Jeu) {
             match *ev {
-                Ev::Question { nom, texte } => {
+                Ev::Question { voix, texte } => {
                     let texte = TEXTES[texte];
                     // Comme le cerveau et la validation : « oui » ou « non »
                     // à une carte reviennent comme sa fermeture.
@@ -7988,7 +7997,7 @@ mod tests {
                     // L'écoute interpelle Kobi avant toute phrase qu'elle lui
                     // passe, avec ou sans le nom (`Interpeller`) ; au clavier,
                     // `question` le fait elle-même.
-                    if nom {
+                    if voix {
                         c.recevoir(Message::Interpelle);
                         c.recevoir(Message::Question {
                             texte: texte.into(),
@@ -8100,9 +8109,6 @@ mod tests {
                         outil: "mcp__carnet__ecrire_note".into(),
                         entree: serde_json::json!({ "title": "Note d'essai" }),
                     }));
-                    // Deux ouvertures dans la même milliseconde n'ont pas
-                    // d'ordre à l'écran.
-                    std::thread::sleep(Duration::from_millis(1));
                 }
                 Ev::FermeeMcp(k, accepte) => {
                     let Some(carte) = rang(&cartes_mcp(c), k) else {
@@ -8129,7 +8135,7 @@ mod tests {
             }
         }
 
-        /// Joue `suite` sur un chef neuf et vérifie les trois propriétés.
+        /// Joue `suite` sur un chef neuf et vérifie les quatre propriétés.
         fn verifier(suite: &[Ev]) -> Result<(), String> {
             let (app, _dir) = chef_en_essai();
             avec_chef(&app, |c| {
@@ -8144,14 +8150,15 @@ mod tests {
                     avancer(c);
                 }
                 // 3. Carte visible : une carte attend, Kobi ne dort pas.
-                if carte_attend(c) && !matches!(etat(&c.app).etat, "pause" | "fin") {
-                    if matches!(c.activite(), Some("calme") | None) {
-                        return Err(format!(
-                            "carte qui attend, mais activité {:?} (état {})",
-                            c.activite(),
-                            etat(&c.app).etat
-                        ));
-                    }
+                if carte_attend(c)
+                    && !matches!(etat(&c.app).etat, "pause" | "fin")
+                    && matches!(c.activite(), Some("calme") | None)
+                {
+                    return Err(format!(
+                        "carte qui attend, mais activité {:?} (état {})",
+                        c.activite(),
+                        etat(&c.app).etat
+                    ));
                 }
                 // Tout se termine : cartes tranchées, tours finis.
                 for id in validations(c) {
