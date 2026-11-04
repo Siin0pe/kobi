@@ -1299,6 +1299,20 @@ fn commande(
         let Some(cible) = args.iter().find(|a| !a.starts_with('-')) else {
             return Avis::refus("`cd` sans dossier mène hors des dossiers de code");
         };
+        // PowerShell : `Env:`, `Variable:`, `HKCU:\…` ne sont pas des
+        // dossiers ; les suivre comme un sous-dossier ferait passer
+        // `gc ANTHROPIC_API_KEY` pour un fichier du code (KOB-468).
+        if shell == Shell::PowerShell && (lecteur_ps(cible) || fournisseur_ps(cible)) {
+            return Avis::refus(format!("{cible} est hors des dossiers de code déclarés"));
+        }
+        // PowerShell 6.2 et plus : `cd -` et `cd +` parcourent l'historique
+        // des dossiers (`'-'` arrive ici en `./-`, mis par `decouper`).
+        if shell == Shell::PowerShell && matches!(arg_d_executable(cible), "-" | "+" | "./+") {
+            return Avis::ecriture(
+                Genre::Commande,
+                "`cd -` ou `cd +` (historique des dossiers) : vérifié sur la carte",
+            );
+        }
         if let Some(avis) = juger_chemin(ctx, cible, cwd) {
             return avis;
         }
@@ -2337,7 +2351,7 @@ fn chemins(nom: &str, args: &[String], shell: Shell, ctx: &Contexte, cwd: &Path)
     // Lecteurs PowerShell (`Env:`, `Variable:`, `HKLM:`…) : pas des dossiers
     // (KOB-227, `Get-Content Env:ANTHROPIC_API_KEY`).
     if ps {
-        if let Some(x) = args.iter().find(|x| lecteur_ps(x)) {
+        if let Some(x) = args.iter().find(|x| lecteur_ps(x) || fournisseur_ps(x)) {
             return Avis::refus(format!("{x} est hors des dossiers de code déclarés"));
         }
     }
@@ -2718,6 +2732,33 @@ fn lecteur_ps(x: &str) -> bool {
         .unwrap_or(x);
     x.split_once(':')
         .is_some_and(|(nom, _)| nom.len() >= 2 && nom.chars().all(|c| c.is_ascii_alphanumeric()))
+}
+
+/// Chemin qualifié par un fournisseur PowerShell
+/// (`Microsoft.PowerShell.Core\Environment::X`, `FileSystem::C:\x`) :
+/// `lecteur_ps` ne le voit pas, et le reste passerait pour un fichier relatif
+/// (KOB-468). Un chemin Rust (`crate::x`) n'est pas un fournisseur.
+fn fournisseur_ps(x: &str) -> bool {
+    let x = x
+        .split_once(':')
+        .map(|(_, v)| v)
+        .filter(|_| x.starts_with('-'))
+        .unwrap_or(x);
+    x.split_once("::").is_some_and(|(avant, _)| {
+        let nom = avant.rsplit(['\\', '/']).next().unwrap_or(avant);
+        [
+            "alias",
+            "environment",
+            "filesystem",
+            "function",
+            "registry",
+            "variable",
+            "certificate",
+            "wsman",
+        ]
+        .iter()
+        .any(|f| nom.eq_ignore_ascii_case(f))
+    })
 }
 
 /// Valeur d'option qui désigne un fichier (`/x`, `C:\x`, `../x`, `~/x`).
@@ -3208,6 +3249,63 @@ mod tests {
                 .cle(),
             "refus"
         );
+    }
+
+    /// KOB-468 : un `cd` vers un lecteur PowerShell (`Env:`, `Variable:`,
+    /// `HKCU:`) ne fait pas passer la suite pour un fichier du dossier :
+    /// `cd Env:; gc ANTHROPIC_API_KEY` lisait la clé sans carte.
+    #[test]
+    fn cd_vers_un_lecteur_powershell() {
+        let x = ctx();
+        for l in [
+            "cd Env:; gc ANTHROPIC_API_KEY",
+            r"cd Env:\; gc ANTHROPIC_API_KEY",
+            "Set-Location Env:; Get-Content ANTHROPIC_API_KEY",
+            "Set-Location -Path Env:; gc ANTHROPIC_API_KEY",
+            "Set-Location -LiteralPath Env:; gc ANTHROPIC_API_KEY",
+            "sl Variable:; gc x",
+            "chdir Env:; gc ANTHROPIC_API_KEY",
+            "pushd Env:; gc ANTHROPIC_API_KEY",
+            r"cd HKCU:\Software; gci",
+            "cd alias:; ri where -Force",
+            r"cd Microsoft.PowerShell.Core\Environment::; gc ANTHROPIC_API_KEY",
+            r"gc Microsoft.PowerShell.Core\Environment::ANTHROPIC_API_KEY",
+            "gc Env:ANTHROPIC_API_KEY",
+        ] {
+            assert_eq!(
+                analyser(l, Shell::PowerShell, &x).classe.cle(),
+                "refus",
+                "{l}"
+            );
+        }
+        for l in [
+            r"gc FileSystem::C:\Users\moi\.ssh\id_rsa",
+            r"gc -Path:Environment::ANTHROPIC_API_KEY",
+            r"cd Registry::HKEY_CURRENT_USER; gci",
+        ] {
+            assert_eq!(
+                analyser(l, Shell::PowerShell, &x).classe.cle(),
+                "refus",
+                "{l}"
+            );
+        }
+        assert_eq!(
+            analyser("cd src; gc a.rs", Shell::PowerShell, &x)
+                .classe
+                .cle(),
+            "lecture"
+        );
+        // Historique des dossiers (PowerShell 6.2+) : jamais une lecture.
+        for l in ["cd '-'; gc .ssh/id_rsa", "cd +; gc x", "cd -Path '-'; gc x"] {
+            assert_ne!(
+                analyser(l, Shell::PowerShell, &x).classe.cle(),
+                "lecture",
+                "{l}"
+            );
+        }
+        // Un chemin Rust n'est pas un fournisseur.
+        assert!(!fournisseur_ps("crate::commande"));
+        assert!(fournisseur_ps(r"Microsoft.PowerShell.Core\Environment::X"));
     }
 
     /// KOB-439 : `where.exe` juge le dossier de `-R` comme celui de `/R`, et
