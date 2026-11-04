@@ -1980,6 +1980,32 @@ fn options_interdites(nom: &str, args: &[String], shell: Shell) -> Option<Avis> 
             "`{nom} -ShowCommandInfo` affiche le code des fonctions"
         ));
     }
+    // jq lit hors du dossier par son filtre (`import`, `include`), lit
+    // l'environnement (`env`, `$ENV`), et charge un filtre ou des tests d'un
+    // fichier (`-f`, `-nf`, `--run-tests`) ou des modules (`-L`) : sur la
+    // carte (KOB-463).
+    if nom == "jq" {
+        // Tous les mots : un filtre peut commencer par un tiret
+        // (`jq -n '-1|env.X'`).
+        let mot_cle = args.iter().any(|x| {
+            ["import", "include", "env", "ENV"]
+                .iter()
+                .any(|m| mot_entier(x, m))
+        });
+        let fichier = args.iter().any(|x| {
+            x == "--from-file"
+                || x == "--run-tests"
+                || x.starts_with("-L")
+                || abrege(x, "--library-path")
+                || (x.starts_with('-') && !x.starts_with("--") && x.contains('f'))
+        });
+        if mot_cle || fichier {
+            return ecrit(
+                "`jq` lit des fichiers ou l'environnement (import, env, -f, -L) : sur la carte"
+                    .into(),
+            );
+        }
+    }
     if liste_dans_un_fichier {
         return ecrit(format!(
             "`{nom}` lit des chemins pris dans un fichier (`files0-from`)"
@@ -2225,6 +2251,20 @@ fn positionnels_uniq(args: &[String]) -> usize {
         i += 1;
     }
     n
+}
+
+/// `mot` apparaît-il dans `texte` comme un mot entier (ni lettre, ni
+/// chiffre, ni `_` autour), hors d'un champ jq (`.env`, `.include`, jamais
+/// exécutés) ? `env.X` oui, `.environment` et `.spec.env` non.
+fn mot_entier(texte: &str, mot: &str) -> bool {
+    let ident = |c: char| c.is_alphanumeric() || c == '_';
+    texte.match_indices(mot).any(|(i, _)| {
+        !texte[..i]
+            .chars()
+            .next_back()
+            .is_some_and(|c| ident(c) || c == '.')
+            && !texte[i + mot.len()..].chars().next().is_some_and(ident)
+    })
 }
 
 /// Positionnels de `xxd`, sans les valeurs d'options (`-l 64`, `-s -0x10`).
@@ -4643,15 +4683,15 @@ mod tests {
         let mut x = Contexte::new(vec![c.to_path_buf()]);
         x.cwd = Some(c.to_path_buf());
         for l in [
-            "jq -n --rawfile a -lien/secret.txt -f prog",
-            "jq -n --slurpfile a -lien/s.json --from-file prog",
-            "jq -n --argfile a -lien/s.json -f prog",
+            "jq -n --rawfile a -lien/secret.txt .",
+            "jq -n --slurpfile a -lien/s.json .",
+            "jq -n --argfile a -lien/s.json .",
             "jq --rawfile a ../../x . f.json",
         ] {
             assert_ne!(analyser(l, Shell::Bash, &x).classe, Classe::Lecture, "{l}");
         }
         for l in [
-            "jq -n --rawfile a f.json -f prog",
+            "jq --rawfile a f.json . f.json",
             "jq --arg x -y . f.json",
             "jq --argjson n 3 . f.json",
             "jq . f.json",
@@ -4767,6 +4807,52 @@ mod tests {
             "uniq -",
         ] {
             assert_eq!(bash(l).classe, Classe::Lecture, "{l}");
+        }
+    }
+
+    /// KOB-463 : jq lit hors du dossier par `import`/`include`, lit
+    /// l'environnement (`env`, `$ENV`), et charge des fichiers par `-f`,
+    /// `--run-tests` ou `-L` (sonde sur main : tout classé lecture).
+    #[cfg(unix)]
+    #[test]
+    fn jq_filtre_qui_lit() {
+        let code = tempfile::tempdir().unwrap();
+        let dehors = tempfile::tempdir().unwrap();
+        let c = code.path();
+        std::os::unix::fs::symlink(dehors.path(), c.join("lien")).unwrap();
+        std::fs::write(c.join("f.json"), "{}").unwrap();
+        let mut x = Contexte::new(vec![c.to_path_buf()]);
+        x.cwd = Some(c.to_path_buf());
+        for l in [
+            r#"jq -n 'import "lien/secret" as $s; $s'"#,
+            r#"jq -n 'include "lien/m"; x'"#,
+            "jq -n env.ANTHROPIC_API_KEY",
+            "jq -n env",
+            "jq -n '$ENV.HOME'",
+            // Filtre qui commence par un tiret (relecture sécurité).
+            "jq -n '-1|env.X'",
+            "jq -n '-1, $ENV.X'",
+            "jq -nf lien/secret.json",
+            "jq -rf lien/secret.json f.json",
+            "jq -f prog f.json",
+            "jq --from-file prog f.json",
+            "jq --run-tests lien/t.txt",
+            "jq -L lien -n x",
+            "jq -Llien -n x",
+        ] {
+            assert_ne!(analyser(l, Shell::Bash, &x).classe, Classe::Lecture, "{l}");
+        }
+        for l in [
+            "jq . f.json",
+            "jq -r .name f.json",
+            "jq '.environment' f.json",
+            "jq '.envoi' f.json",
+            "jq '.spec.containers[].env' f.json",
+            "jq .include f.json",
+            "jq -n 1",
+            "jq --arg x y . f.json",
+        ] {
+            assert_eq!(analyser(l, Shell::Bash, &x).classe, Classe::Lecture, "{l}");
         }
     }
 
