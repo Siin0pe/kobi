@@ -1558,6 +1558,18 @@ fn options_interdites(nom: &str, args: &[String]) -> Option<Avis> {
     if suit_les_liens {
         return ecrit(format!("`{nom}` suit les liens en parcourant les dossiers"));
     }
+    // `--files0-from=F` : la liste des fichiers lus est dans `F`, jamais
+    // jugée ici (KOB-442).
+    let liste_dans_un_fichier = match nom {
+        "sort" | "wc" | "du" => longue("--files0-from"),
+        "find" => a("-files0-from"),
+        _ => false,
+    };
+    if liste_dans_un_fichier {
+        return ecrit(format!(
+            "`{nom}` lit des chemins pris dans un fichier (`files0-from`)"
+        ));
+    }
     match nom {
         "find" => {
             if a("-delete") {
@@ -2925,6 +2937,33 @@ mod tests {
                 Classe::Lecture,
                 "{l} par une jonction qui sort"
             );
+        }
+    }
+
+    /// KOB-442 : `--files0-from` lit la liste des fichiers dans un fichier ;
+    /// ces chemins ne sont pas jugés (sonde : `sort --files0-from=liste`
+    /// affichait un fichier hors des dossiers).
+    #[test]
+    fn liste_de_fichiers_dans_un_fichier() {
+        for l in [
+            "sort --files0-from=liste",
+            "sort --files0-from liste",
+            "sort --files0=liste",
+            "wc --files0-from=liste",
+            "wc --f=liste",
+            "du --files0-from=liste",
+            "find -files0-from liste",
+        ] {
+            assert_ne!(bash(l).classe, Classe::Lecture, "{l}");
+        }
+        for l in [
+            "sort -t, -k2 Cargo.toml",
+            "sort --field-separator=, Cargo.toml",
+            "wc -l Cargo.toml",
+            "du -sh src",
+            "rg --files",
+        ] {
+            assert_eq!(bash(l).classe, Classe::Lecture, "{l}");
         }
     }
 
