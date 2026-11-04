@@ -90,6 +90,8 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
     // dans tous.
     let mut cwds = vec![cwd];
     let mut mots: Vec<String> = Vec::new();
+    // La commande en cours reçoit-elle l'entrée d'un `|` ?
+    let mut apres_pipe = false;
     let mut i = 0;
     while i <= jetons.len() {
         let jeton = jetons.get(i);
@@ -112,6 +114,18 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
                     ));
                 }
                 if !mots.is_empty() {
+                    // Sous Windows, un parcours récursif qui reçoit ses
+                    // chemins d'un `|` (`gci ..\autre | gci -Recurse`) part
+                    // de dossiers qu'on ne voit pas ici : sur la carte
+                    // (KOB-434).
+                    let nom = mots[0].to_lowercase();
+                    let nom = nom.strip_suffix(".exe").unwrap_or(&nom);
+                    if cfg!(windows) && apres_pipe && parcours_recursif(nom, &mots[1..], shell) {
+                        avis = avis.pire(Avis::ecriture(
+                            Genre::Commande,
+                            "parcours récursif sur des chemins venus d'un `|` : sur la carte",
+                        ));
+                    }
                     let mut suivants = Vec::new();
                     for c in &cwds {
                         let mut nouveau = c.clone();
@@ -133,6 +147,7 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
                     }
                     cwds = suivants;
                     mots.clear();
+                    apres_pipe = op == "|";
                 } else if matches!(op, "|" | "&&" | "||") {
                     // `| ls`, `ls && && x` : rien avant l'opérateur.
                     return avis.pire(Avis::ecriture(Genre::Commande, "enchaînement incomplet"));
@@ -192,7 +207,15 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
     let mut i = 0;
     let fin_mot = |jetons: &mut Vec<Jeton>, mot: &mut String, dans_mot: &mut bool| {
         if *dans_mot {
-            jetons.push(Jeton::Mot(std::mem::take(mot)));
+            let mut m = std::mem::take(mot);
+            // PowerShell prend aussi `–`, `—` et `―` pour le tiret d'un
+            // paramètre (`gci –Recurse`, `gc –LiteralPath:…`) : ramenés à
+            // `-`, sinon le paramètre passait pour un chemin (KOB-434).
+            if ps && m.starts_with(['\u{2013}', '\u{2014}', '\u{2015}']) {
+                let premier = m.chars().next().map_or(0, char::len_utf8);
+                m.replace_range(..premier, "-");
+            }
+            jetons.push(Jeton::Mot(m));
             *dans_mot = false;
         }
     };
@@ -942,7 +965,211 @@ fn commande(mots: &[String], shell: Shell, ctx: &Contexte, cwd: &mut PathBuf) ->
     if let Some(a) = options_interdites(&nom, args) {
         return a;
     }
-    chemins(&nom, args, shell, ctx, cwd)
+    let avis = chemins(&nom, args, shell, ctx, cwd);
+    // Sous Windows, les parcours récursifs entrent dans les jonctions et les
+    // liens de dossier, même ceux qui sortent (sonde #392, KOB-434) : le
+    // départ est jugé, puis tout l'arbre, sans rien suivre.
+    if cfg!(windows) && avis.classe == Classe::Lecture && parcours_recursif(&nom, args, shell) {
+        let racines = match racines_du_parcours(&nom, args, ctx, cwd) {
+            Ok(r) => r,
+            Err(a) => return a,
+        };
+        if let Err(a) = arbre_sans_lien_qui_sort(ctx, &racines, cwd) {
+            return a;
+        }
+    }
+    avis
+}
+
+/// Commande qui parcourt des dossiers récursivement : `Get-ChildItem`,
+/// `gci`, `ls` ou `dir` avec `-Recurse` ou `-Depth` (qui l'implique,
+/// PowerShell 5 et plus), `dir /S`, `tree`, `where /R` (cmd).
+fn parcours_recursif(nom: &str, args: &[String], shell: Shell) -> bool {
+    // `-s` est un alias de `-Recurse` ; `-d` est `-Directory`, pas `-Depth`.
+    let recurse = || {
+        args.iter().any(|x| {
+            abrege_ps(x, "-recurse")
+                || est_depth(x)
+                || x.split([':', '='])
+                    .next()
+                    .is_some_and(|o| o.eq_ignore_ascii_case("-s"))
+        })
+    };
+    let interrupteur = |c: &str| args.iter().any(|x| x.eq_ignore_ascii_case(c));
+    match nom {
+        "get-childitem" | "gci" => recurse(),
+        "ls" | "dir" if shell == Shell::PowerShell => recurse(),
+        "dir" => interrupteur("/s"),
+        "tree" => true,
+        "where" => interrupteur("/r"),
+        _ => false,
+    }
+}
+
+/// `-Depth` ou son abréviation, au moins `-de` (`-d` est `-Directory`).
+fn est_depth(x: &str) -> bool {
+    x.split([':', '=']).next().is_some_and(|o| o.len() >= 3) && abrege_ps(x, "-depth")
+}
+
+/// Paramètre PowerShell ou son abréviation (`-r`, `-rec` pour `-Recurse`),
+/// valeur collée comprise (`-Recurse:$true`).
+fn abrege_ps(x: &str, nom: &str) -> bool {
+    let x = x.split([':', '=']).next().unwrap_or(x).to_lowercase();
+    x.len() >= 2 && x.starts_with('-') && !x.starts_with("--") && nom.starts_with(&x)
+}
+
+/// Dossiers où commence le parcours, tels que la commande les prendra : les
+/// positionnels et les valeurs de `-Path`/`-LiteralPath` (`-Path:x`
+/// compris), jamais les valeurs des autres options (`-Filter`, `-Exclude`,
+/// `-Depth`…) ; pour `where`, le dossier de `/R`. Chacun est jugé par
+/// `contient` avant tout accès au disque, coupé avant son premier joker,
+/// puis résolu sans rien suivre (une racine qui est une jonction est
+/// remplacée par sa cible). Sans positionnel : le dossier de la commande.
+fn racines_du_parcours(
+    nom: &str,
+    args: &[String],
+    ctx: &Contexte,
+    cwd: &Path,
+) -> Result<Vec<PathBuf>, Avis> {
+    let mut textes: Vec<&str> = Vec::new();
+    if nom == "where" {
+        if let Some(i) = args.iter().position(|x| x.eq_ignore_ascii_case("/r")) {
+            textes.extend(args.get(i + 1).map(String::as_str));
+        }
+    } else {
+        let mut i = 0;
+        while i < args.len() {
+            let x = args[i].as_str();
+            if x.starts_with('-') && x.len() > 1 {
+                let (option, valeur) = match x.split_once([':', '=']) {
+                    Some((o, v)) => (o, Some(v)),
+                    None => (x, None),
+                };
+                let chemin = abrege_ps(option, "-path")
+                    || abrege_ps(option, "-literalpath")
+                    || option.eq_ignore_ascii_case("-lp")
+                    || option.eq_ignore_ascii_case("-pspath");
+                let a_valeur = chemin
+                    || est_depth(option)
+                    || options_a_valeur(nom)
+                        .iter()
+                        .any(|o| *o != "-depth" && abrege_ps(option, o));
+                match (chemin, valeur) {
+                    (true, Some(v)) => textes.push(v),
+                    (true, None) => {
+                        textes.extend(args.get(i + 1).map(String::as_str));
+                        i += 1;
+                    }
+                    (false, None) if a_valeur => i += 1,
+                    _ => {}
+                }
+                i += 1;
+                continue;
+            }
+            // Interrupteurs de cmd (`/S`, `/F`, `/B`).
+            if !(x.starts_with('/') && x.len() == 2) {
+                textes.push(x);
+            }
+            i += 1;
+        }
+    }
+    let mut racines = Vec::new();
+    for t in textes {
+        if !ctx.contient(Path::new(t), Some(cwd)) {
+            return Err(Avis::refus(format!(
+                "{t} est hors des dossiers de code déclarés"
+            )));
+        }
+        let Some(absolu) = crate::classement::absolu(Path::new(t), Some(cwd)) else {
+            return Err(Avis::ecriture(
+                Genre::Commande,
+                format!("parcours depuis `{t}` : vérifié sur la carte"),
+            ));
+        };
+        // Avant le premier joker : `..\*.rs` part de `..`.
+        let fixe: PathBuf = absolu
+            .components()
+            .take_while(|c| !a_des_jokers(&c.as_os_str().to_string_lossy()))
+            .collect();
+        match crate::classement::resolu(&fixe) {
+            Some(r) => racines.push(r),
+            None => {
+                return Err(Avis::ecriture(
+                    Genre::Commande,
+                    format!("parcours depuis `{t}` : vérifié sur la carte"),
+                ))
+            }
+        }
+    }
+    if racines.is_empty() {
+        racines.extend(crate::classement::resolu(cwd));
+    }
+    Ok(racines)
+}
+
+/// L'arbre sous `racines` ne contient-il aucun lien qui sort des dossiers ?
+/// Parcouru comme le ferait la commande, mais sans rien ouvrir hors des
+/// dossiers : `read_dir` sur les vrais dossiers, chaque lien (jonction
+/// comprise) jugé par `contient` ; un lien qui reste dedans est suivi par sa
+/// cible résolue, car la commande le suivrait aussi (une jonction dedans peut
+/// mener à une autre qui sort). Un dossier déjà vu ne l'est pas deux fois.
+/// À un lien qui sort, à une erreur de lecture (autre qu'« absent »), ou
+/// au-delà de [`ENTREES_MAX`] entrées : validé sur la carte.
+fn arbre_sans_lien_qui_sort(ctx: &Contexte, racines: &[PathBuf], cwd: &Path) -> Result<(), Avis> {
+    const ENTREES_MAX: usize = 10_000;
+    let carte = |raison: String| Err(Avis::ecriture(Genre::Commande, raison));
+    let mut a_voir: Vec<PathBuf> = racines.to_vec();
+    let mut vus = std::collections::HashSet::new();
+    let mut entrees_vues = 0usize;
+    while let Some(dossier) = a_voir.pop() {
+        if !vus.insert(dossier.clone()) {
+            continue;
+        }
+        let entrees = match std::fs::read_dir(&dossier) {
+            Ok(e) => e,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                return carte(format!(
+                    "parcours récursif : {} illisible ({e}), sur la carte",
+                    dossier.display()
+                ))
+            }
+        };
+        for e in entrees {
+            let Ok(e) = e else {
+                return carte("parcours récursif : entrée illisible, sur la carte".into());
+            };
+            entrees_vues += 1;
+            if entrees_vues > ENTREES_MAX {
+                return carte(
+                    "parcours récursif trop grand pour être vérifié : sur la carte".into(),
+                );
+            }
+            let chemin = e.path();
+            let Ok(genre) = e.file_type() else {
+                return carte(format!(
+                    "parcours récursif : {} illisible, sur la carte",
+                    chemin.display()
+                ));
+            };
+            if genre.is_symlink() {
+                if !ctx.contient(&chemin, Some(cwd)) {
+                    return carte(format!(
+                        "le parcours récursif suivrait {}, qui sort des dossiers : sur la carte",
+                        chemin.display()
+                    ));
+                }
+                if let Some(cible) = crate::classement::resolu(&chemin) {
+                    if cible.is_dir() {
+                        a_voir.push(cible);
+                    }
+                }
+            } else if genre.is_dir() {
+                a_voir.push(chemin);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Options ou sous-commandes qui écrivent, par commande.
@@ -1412,6 +1639,18 @@ fn git(args: &[String]) -> Option<Avis> {
 
 /// Tous les chemins des arguments doivent rester dans les dossiers déclarés.
 fn chemins(nom: &str, args: &[String], shell: Shell, ctx: &Contexte, cwd: &Path) -> Avis {
+    // `where.exe /R dossier motif` parcourt `dossier` : il est jugé comme un
+    // chemin, quel que soit le shell (`where` est aussi `Where-Object`).
+    if nom == "where" {
+        if let Some(i) = args.iter().position(|x| x.eq_ignore_ascii_case("/r")) {
+            let Some(d) = args.get(i + 1) else {
+                return Avis::refus("`where /R` sans dossier");
+            };
+            if let Some(avis) = juger_chemin(ctx, d, cwd) {
+                return avis;
+            }
+        }
+    }
     if SANS_CHEMIN_PS.contains(&nom) {
         return Avis::lecture();
     }
@@ -1430,6 +1669,21 @@ fn chemins(nom: &str, args: &[String], shell: Shell, ctx: &Contexte, cwd: &Path)
     while i < args.len() {
         let x = &args[i];
         let bas = x.to_lowercase();
+        // Sous PowerShell, un nom de paramètre n'a ni `/` ni `\` : `'-x\..\y'`
+        // (entre guillemets, ou au tiret Unicode ramené à `-`) est un
+        // chemin, jugé comme tel (KOB-434).
+        if ps
+            && x.starts_with('-')
+            && x.split([':', '='])
+                .next()
+                .is_some_and(|o| o.contains(['/', '\\']))
+        {
+            if let Some(avis) = juger_chemin(ctx, x, cwd) {
+                return avis;
+            }
+            i += 1;
+            continue;
+        }
         if x.starts_with('-') && x.len() > 1 {
             // `--git-dir=/x`, `-Path=…`, PowerShell `-Path:/x` : la valeur est
             // vérifiée si c'est un chemin.
@@ -1697,6 +1951,202 @@ fn ressemble_a_un_chemin(v: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// KOB-434 : les parcours récursifs reconnus, et l'arbre vérifié sans
+    /// rien suivre (les liens sont jugés, pas traversés).
+    #[test]
+    fn parcours_recursifs_reconnus() {
+        let v = |l: &str| l.split(' ').map(str::to_owned).collect::<Vec<_>>();
+        assert!(parcours_recursif(
+            "get-childitem",
+            &v("-Recurse -Filter *.rs"),
+            Shell::PowerShell
+        ));
+        assert!(parcours_recursif(
+            "gci",
+            &v("crates -rec"),
+            Shell::PowerShell
+        ));
+        assert!(parcours_recursif("ls", &v("-r"), Shell::PowerShell));
+        assert!(parcours_recursif("dir", &v("/S /B"), Shell::Bash));
+        assert!(parcours_recursif("tree", &v("/F"), Shell::Bash));
+        assert!(parcours_recursif("where", &v("/R . *.rs"), Shell::Bash));
+        assert!(!parcours_recursif("gci", &v("crates"), Shell::PowerShell));
+        assert!(!parcours_recursif("ls", &v("-r"), Shell::Bash));
+        assert!(!parcours_recursif("dir", &v("/B"), Shell::Bash));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn arbre_verifie_sans_suivre_les_liens() {
+        use std::os::unix::fs::symlink;
+        let code = tempfile::tempdir().unwrap();
+        let dehors = tempfile::tempdir().unwrap();
+        let c = code.path();
+        std::fs::create_dir_all(c.join("a/b")).unwrap();
+        std::fs::write(c.join("a/b/f.rs"), "").unwrap();
+        symlink(c.join("a"), c.join("a/b/vers_a")).unwrap();
+        let mut x = Contexte::new(vec![c.to_path_buf()]);
+        x.cwd = Some(c.to_path_buf());
+        // Un lien qui reste dedans est suivi par sa cible, une seule fois :
+        // la boucle `vers_a` finit.
+        assert!(arbre_sans_lien_qui_sort(&x, &[c.to_path_buf()], c).is_ok());
+        // Un lien qui reste dedans mène à un autre qui sort : vu, sur la
+        // carte (la commande les suivrait tous deux).
+        std::fs::create_dir_all(c.join("autre")).unwrap();
+        symlink(c.join("autre"), c.join("a/vers_autre")).unwrap();
+        symlink(dehors.path(), c.join("autre/sortie")).unwrap();
+        let racine_a = [c.join("a")];
+        let avis = arbre_sans_lien_qui_sort(&x, &racine_a, c).unwrap_err();
+        assert_eq!(avis.classe.cle(), "ecriture", "{}", avis.raison);
+        // Les racines : positionnels et `-Path`, jamais les valeurs de
+        // `-Exclude`, `-Filter` ou `-Depth` ; le dossier courant sinon.
+        let v = |l: &str| l.split(' ').map(str::to_owned).collect::<Vec<_>>();
+        let r = |l: &str| racines_du_parcours("gci", &v(l), &x, c).unwrap();
+        let reel = |p: &std::path::Path| crate::classement::resolu(p).unwrap();
+        assert_eq!(r("a -Filter *.rs"), vec![reel(&c.join("a"))]);
+        assert_eq!(r("-Recurse -Exclude a"), vec![reel(c)]);
+        assert_eq!(r("-Recurse -Excl a"), vec![reel(c)]);
+        assert_eq!(r("-Depth 3"), vec![reel(c)]);
+        assert_eq!(r("-Path:a -Recurse"), vec![reel(&c.join("a"))]);
+        assert_eq!(r("-LiteralPath a"), vec![reel(&c.join("a"))]);
+        // Un joker : le parcours part de ce qui le précède.
+        assert_eq!(r("a/*.rs -Recurse"), vec![reel(&c.join("a"))]);
+        // Une racine hors des dossiers, même en valeur d'option `-Path` :
+        // refusée sans accès au disque.
+        assert_eq!(
+            racines_du_parcours("gci", &v("-Path:/etc"), &x, c)
+                .unwrap_err()
+                .classe
+                .cle(),
+            "refus"
+        );
+    }
+
+    /// KOB-434 : un dossier de code déclaré sous un lien (comme `/var` →
+    /// `/private/var` sous macOS) se parcourt par sa forme résolue sans
+    /// paraître sortir de lui-même ; un lien qui sort reste vu.
+    #[cfg(unix)]
+    #[test]
+    fn dossier_declare_sous_un_lien() {
+        use std::os::unix::fs::symlink;
+        let base = tempfile::tempdir().unwrap();
+        let dehors = tempfile::tempdir().unwrap();
+        let reel = base.path().join("prive");
+        std::fs::create_dir_all(reel.join("code/src")).unwrap();
+        symlink(&reel, base.path().join("var")).unwrap();
+        let declare = base.path().join("var/code");
+        symlink(declare.join("src"), declare.join("vers_src")).unwrap();
+        let mut x = Contexte::new(vec![declare.clone()]);
+        x.cwd = Some(declare.clone());
+        let racines = racines_du_parcours("gci", &[], &x, &declare).unwrap();
+        // Résolue jusqu'au bout (sous macOS, le dossier temporaire lui-même
+        // est sous `/var` → `/private/var`).
+        let attendu = crate::classement::resolu(&reel.join("code")).unwrap();
+        assert_eq!(racines, vec![attendu], "racine résolue");
+        assert!(arbre_sans_lien_qui_sort(&x, &racines, &declare).is_ok());
+        symlink(dehors.path(), declare.join("src/sortie")).unwrap();
+        assert!(arbre_sans_lien_qui_sort(&x, &racines, &declare).is_err());
+    }
+
+    /// KOB-434 : `-Depth` implique `-Recurse` ; un tiret Unicode est un
+    /// tiret de paramètre pour PowerShell ; `where /R` juge son dossier.
+    #[test]
+    fn parcours_depth_tirets_et_where() {
+        let v = |l: &str| l.split(' ').map(str::to_owned).collect::<Vec<_>>();
+        assert!(parcours_recursif("gci", &v("-Depth 20"), Shell::PowerShell));
+        // `-s` est un alias de `-Recurse` ; `-d` est `-Directory`.
+        assert!(parcours_recursif("gci", &v("-s"), Shell::PowerShell));
+        assert!(!parcours_recursif("gci", &v("-d src"), Shell::PowerShell));
+        // `gc –LiteralPath:C:/Windows/win.ini` : le tiret long ne cache plus
+        // le chemin, refusé hors des dossiers.
+        let x = ctx();
+        assert_eq!(
+            analyser(
+                "Get-Content \u{2013}LiteralPath:C:/Windows/win.ini",
+                Shell::PowerShell,
+                &x
+            )
+            .classe
+            .cle(),
+            "refus"
+        );
+        assert_eq!(
+            analyser("where.exe /R C:/Users/moi/.ssh *", Shell::PowerShell, &x)
+                .classe
+                .cle(),
+            "refus"
+        );
+        // Un chemin qui commence par un tiret (entre guillemets) : pas un
+        // paramètre pour PowerShell, jugé comme un chemin.
+        assert_eq!(
+            analyser(
+                r"Get-Content '-x\..\..\..\Windows\win.ini'",
+                Shell::PowerShell,
+                &x
+            )
+            .classe
+            .cle(),
+            "refus"
+        );
+        assert_eq!(
+            analyser("where /R C:/Windows *.ini", Shell::Bash, &x)
+                .classe
+                .cle(),
+            "refus"
+        );
+    }
+
+    /// KOB-434, sous Windows : un parcours récursif qui passerait par une
+    /// jonction ou un lien de dossier qui sort n'est jamais une lecture sans
+    /// carte ; sans lien qui sort, il reste une lecture.
+    #[cfg(windows)]
+    #[test]
+    fn parcours_recursif_et_jonction_qui_sort() {
+        let code = tempfile::tempdir().unwrap();
+        let dehors = tempfile::tempdir().unwrap();
+        let c = code.path();
+        std::fs::create_dir_all(c.join("src")).unwrap();
+        std::fs::write(c.join("src/a.rs"), "").unwrap();
+        let mut x = Contexte::new(vec![c.to_path_buf()]);
+        x.cwd = Some(c.to_path_buf());
+        // Formes réelles sous Windows (PowerShell) ; `dir /S` ou `tree /F`
+        // y prendraient `/S` pour un chemin, déjà refusé hors des dossiers.
+        let lignes = [
+            ("Get-ChildItem -Recurse", Shell::PowerShell),
+            ("gci src -rec", Shell::PowerShell),
+            ("tree", Shell::PowerShell),
+            ("gci -Depth 5", Shell::PowerShell),
+            ("gci \u{2013}Recurse", Shell::PowerShell),
+        ];
+        for (l, sh) in lignes {
+            assert_eq!(
+                analyser(l, sh, &x).classe,
+                Classe::Lecture,
+                "{l} sans lien qui sort"
+            );
+        }
+        // Un parcours récursif qui reçoit ses chemins d'un `|` : sur la carte,
+        // même sans lien qui sort.
+        assert_ne!(
+            analyser("gci src | gci -Recurse", Shell::PowerShell, &x).classe,
+            Classe::Lecture
+        );
+        let j = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(c.join("src").join("jonction"))
+            .arg(dehors.path())
+            .output()
+            .unwrap();
+        assert!(j.status.success(), "mklink /J");
+        for (l, sh) in lignes {
+            assert_ne!(
+                analyser(l, sh, &x).classe,
+                Classe::Lecture,
+                "{l} par une jonction qui sort"
+            );
+        }
+    }
 
     const KOBI: &str = "C:/Users/moi/Desktop/kobi";
 
