@@ -1031,7 +1031,7 @@ fn lien_vers_le_reseau(chemin: &Path, peripheriques: bool) -> bool {
             || !prefixe_local(&cible)
             || racine_sans_disque(&cible)
             || (peripheriques
-                && (a_deux_points(&cible) || nom_a_barre(&cible) || lecteur_sans_racine(&cible)))
+                && (a_deux_points(&cible) || cible_a_barre(&cible) || lecteur_sans_racine(&cible)))
         {
             return true;
         }
@@ -1176,6 +1176,16 @@ fn nom_a_barre(chemin: &Path) -> bool {
     chemin.components().any(
         |c| matches!(c, std::path::Component::Normal(nom) if nom.to_string_lossy().contains('/')),
     )
+}
+
+/// Une cible de lien dont le texte contient un `/`, quelle que soit sa forme.
+/// Rust y voit un séparateur (cible relative) ou le garde dans un nom
+/// (verbatim), mais NT, en substituant le lien, ne coupe que sur `\` : une
+/// cible relative `x\../y` lui fait traverser `x` (lien vers le réseau,
+/// erreur 67 sur windows-latest, sonde #383) quand le parcours juge `y`.
+/// Une cible légitime n'en a pas besoin : refusée (KOB-425).
+fn cible_a_barre(cible: &Path) -> bool {
+    cible.as_os_str().to_string_lossy().contains('/')
 }
 
 /// Un nom à point ou espace final (`x.`, `d `) : Win32 les retire d'un
