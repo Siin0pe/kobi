@@ -461,6 +461,13 @@ mod tests {
             "cat */secret",
             "cat {sortie,x}/secret",
             "cat [s]ortie/secret",
+            // Ce que notre lecture du motif ne prend pas, mais un shell si.
+            "cat [[:alpha:]]ortie/secret",
+            "cat [!]a]ortie/secret",
+            "cat .*/secret",
+            "cat {x}/{sortie,q}/secret",
+            "cat **/secret",
+            "cat +(sortie)/secret",
             "grep -R motif .",
             "rg -L motif",
             "find -L .",
@@ -477,6 +484,14 @@ mod tests {
                 "{ligne}"
             );
         }
+        // PowerShell compare les jokers sans la casse : `SORTI?` désigne
+        // `sortie`, que notre lecture du motif écarte ; jamais lu sans carte.
+        assert_ne!(
+            commande::analyser("Get-Content SORTI?/secret", crate::Shell::PowerShell, &x)
+                .classe
+                .cle(),
+            "lecture"
+        );
         // Un motif qui ne désigne que des fichiers du dossier reste une lecture.
         assert_eq!(cat("sous/*"), "lecture");
         // Sous Linux, la casse compte : `projet` n'est pas `Projet`.

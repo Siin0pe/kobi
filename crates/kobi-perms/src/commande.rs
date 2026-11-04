@@ -1492,11 +1492,12 @@ fn chemins(nom: &str, args: &[String], shell: Shell, ctx: &Contexte, cwd: &Path)
 }
 
 /// Un chemin donné à une commande est-il permis ? `None` s'il l'est. Un
-/// motif (`*`, `?`, `[…]`) est développé comme le ferait le shell ou la
-/// cmdlet, sans rien suivre, et chaque fichier qu'il désigne est jugé : sinon
-/// `cat sorti?/secret`, absent tel quel, passait pour un chemin du dossier
-/// avant que le shell le change en `sortie/secret` (KOB-432). Les accolades,
-/// ou un motif trop large, se font valider sur la carte.
+/// motif (`*`, `?`, `[…]`) est développé plus largement que tout shell, sans
+/// rien suivre, et chaque chemin possible est jugé : sinon `cat
+/// sorti?/secret`, absent tel quel, passait pour un chemin du dossier avant
+/// que le shell le change en `sortie/secret` (KOB-432). Ce que le shell
+/// développe autrement (accolades, `**`, motifs étendus) ou un motif trop
+/// large se fait valider sur la carte.
 fn juger_chemin(ctx: &Contexte, x: &str, cwd: &Path) -> Option<Avis> {
     let hors = |p: &str| {
         Some(Avis::refus(format!(
@@ -1506,12 +1507,12 @@ fn juger_chemin(ctx: &Contexte, x: &str, cwd: &Path) -> Option<Avis> {
     if !ctx.contient(Path::new(x), Some(cwd)) {
         return hors(x);
     }
-    // Accolades développées par Bash : `{a,b}` ou `{1..3}` (pas `{}`).
-    let accolades = x
-        .split_once('{')
-        .and_then(|(_, r)| r.split_once('}'))
-        .is_some_and(|(dedans, _)| dedans.contains(',') || dedans.contains(".."));
-    if accolades {
+    // Accolades (`{a,b}`, `{1..3}`, n'importe où), `**` (zsh, `globstar`),
+    // motifs étendus (`extglob` : `@(…)`, `+(…)`…), ou un motif à
+    // backtracking coûteux : validés sur la carte plutôt que devinés.
+    let accolades = x.contains('{') && x.contains('}') && (x.contains(',') || x.contains(".."));
+    let etendu = ["@(", "+(", "!(", "*(", "?("].iter().any(|o| x.contains(o));
+    if accolades || etendu || x.contains("**") || x.matches('*').count() > 6 {
         return Some(Avis::ecriture(
             Genre::Commande,
             format!("motif `{x}` : vérifié sur la carte"),
@@ -1521,10 +1522,30 @@ fn juger_chemin(ctx: &Contexte, x: &str, cwd: &Path) -> Option<Avis> {
         return None;
     }
     match developper(ctx, x, cwd) {
-        Ok(chemins) => chemins
-            .iter()
-            .find(|p| !ctx.contient(p, Some(cwd)))
-            .and_then(|p| hors(&p.display().to_string())),
+        Ok(chemins) => {
+            // Ce que le motif désigne et qui sort : refusé. Ce que notre
+            // lecture du motif écarte, mais qu'un shell pourrait prendre
+            // (classes POSIX, casse sous PowerShell…), et qui sort : validé
+            // sur la carte, jamais lu sans elle.
+            if let Some((p, _)) = chemins
+                .iter()
+                .find(|(p, pris)| *pris && !ctx.contient(p, Some(cwd)))
+            {
+                return hors(&p.display().to_string());
+            }
+            chemins
+                .iter()
+                .find(|(p, _)| !ctx.contient(p, Some(cwd)))
+                .map(|(p, _)| {
+                    Avis::ecriture(
+                        Genre::Commande,
+                        format!(
+                            "motif `{x}` : {} sort des dossiers, vérifié sur la carte",
+                            p.display()
+                        ),
+                    )
+                })
+        }
         Err(avis) => Some(avis),
     }
 }
@@ -1534,31 +1555,38 @@ fn a_des_jokers(x: &str) -> bool {
     x.contains(['*', '?', '['])
 }
 
-/// Fichiers désignés par un motif, composant par composant depuis sa partie
-/// fixe. Chaque dossier est jugé avant d'être listé : `read_dir` suivrait un
-/// lien qui sort (sous Windows, vers un partage réseau). Les noms cachés sont
-/// comptés aussi : plus large que le shell, jamais moins.
-fn developper(ctx: &Contexte, motif: &str, cwd: &Path) -> Result<Vec<PathBuf>, Avis> {
+/// Chemins qu'un motif peut désigner, composant par composant depuis sa
+/// partie fixe, chacun avec « pris par notre lecture du motif ». Pour un
+/// composant à jokers, **toutes** les entrées du dossier sont gardées, plus
+/// `.` et `..` si le composant commence par un point (bash avant 5.2) : plus
+/// large que n'importe quel shell, jamais moins. Chaque dossier est jugé
+/// avant d'être listé : `read_dir` suivrait un lien qui sort (sous Windows,
+/// vers un partage réseau).
+fn developper(ctx: &Contexte, motif: &str, cwd: &Path) -> Result<Vec<(PathBuf, bool)>, Avis> {
     const MAX: usize = 256;
     let texte = motif.replace('\\', "/");
-    let (mut courants, reste) = if let Some(r) = texte.strip_prefix('/') {
-        (vec![PathBuf::from("/")], r.to_owned())
+    let (depart, reste) = if let Some(r) = texte.strip_prefix('/') {
+        (PathBuf::from("/"), r.to_owned())
     } else if texte.len() >= 2 && texte.as_bytes()[1] == b':' {
         let (lecteur, r) = texte.split_at(2);
         (
-            vec![PathBuf::from(format!("{lecteur}/"))],
+            PathBuf::from(format!("{lecteur}/")),
             r.trim_start_matches('/').to_owned(),
         )
     } else {
-        (vec![cwd.to_path_buf()], texte)
+        (cwd.to_path_buf(), texte)
     };
+    let mut courants = vec![(depart, true)];
     for morceau in reste.split('/').filter(|m| !m.is_empty()) {
         if !a_des_jokers(morceau) {
-            courants = courants.into_iter().map(|c| c.join(morceau)).collect();
+            courants = courants
+                .into_iter()
+                .map(|(c, pris)| (c.join(morceau), pris))
+                .collect();
             continue;
         }
         let mut suivants = Vec::new();
-        for dossier in &courants {
+        for (dossier, pris) in &courants {
             if !ctx.contient(dossier, Some(cwd)) {
                 return Err(Avis::refus(format!(
                     "{} est hors des dossiers de code déclarés",
@@ -1568,15 +1596,19 @@ fn developper(ctx: &Contexte, motif: &str, cwd: &Path) -> Result<Vec<PathBuf>, A
             let Ok(entrees) = std::fs::read_dir(dossier) else {
                 continue;
             };
-            for e in entrees.flatten() {
-                if correspond(morceau, &e.file_name().to_string_lossy()) {
-                    suivants.push(dossier.join(e.file_name()));
-                    if suivants.len() > MAX {
-                        return Err(Avis::ecriture(
-                            Genre::Commande,
-                            format!("motif `{motif}` trop large : vérifié sur la carte"),
-                        ));
-                    }
+            let points = morceau
+                .starts_with('.')
+                .then(|| [".", ".."].map(std::ffi::OsString::from))
+                .into_iter()
+                .flatten();
+            for nom in entrees.flatten().map(|e| e.file_name()).chain(points) {
+                let garde = *pris && correspond(morceau, &nom.to_string_lossy());
+                suivants.push((dossier.join(&nom), garde));
+                if suivants.len() > MAX {
+                    return Err(Avis::ecriture(
+                        Genre::Commande,
+                        format!("motif `{motif}` trop large : vérifié sur la carte"),
+                    ));
                 }
             }
         }
