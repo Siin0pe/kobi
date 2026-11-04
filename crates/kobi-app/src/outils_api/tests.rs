@@ -528,6 +528,38 @@ fn nom_a_barre_seulement_en_verbatim() {
     assert!(nom_a_barre(Path::new(r"\\?\C:\x\../y")));
 }
 
+/// SONDE (ne pas merger) : cibles relatives à `\\` doublé.
+#[cfg(windows)]
+#[test]
+fn sonde_double_barre_inverse() {
+    use std::os::windows::fs::{symlink_dir, symlink_file};
+    let dir = codebase();
+    let racine = dir.path().to_path_buf();
+    if symlink_dir(r"\\127.0.0.1\p", racine.join("x")).is_err() {
+        panic!("SONDE liens impossibles");
+    }
+    fs::create_dir_all(racine.join("x2")).unwrap();
+    fs::write(racine.join("y"), "ordinaire").unwrap();
+    let mut out = Vec::new();
+    for (nom, cible) in [
+        ("d1", r"x\\..\y"),
+        ("d2", r"x\..\\y"),
+        ("d3", r"x2\\..\y"),
+        ("d4", r"x\\\..\y"),
+    ] {
+        let cree = symlink_file(cible, racine.join(nom)).map_err(|e| e.to_string());
+        let relue = fs::read_link(racine.join(nom)).map(|c| format!("{:?}", c.as_os_str()));
+        let juge = lien_vers_le_reseau(&racine.join(nom), true);
+        let nt = fs::read(racine.join(nom))
+            .map(|c| format!("lu {} octets", c.len()))
+            .unwrap_or_else(|e| format!("{:?} {e}", e.raw_os_error()));
+        out.push(format!(
+            "{nom} cible={cible:?} cree={cree:?} relue={relue:?} juge={juge} nt={nt}"
+        ));
+    }
+    panic!("SONDE\n{}", out.join("\n"));
+}
+
 /// Rien ne se lit hors des dossiers permis : chemin absolu, `..`, lien
 /// symbolique qui sort.
 #[test]
