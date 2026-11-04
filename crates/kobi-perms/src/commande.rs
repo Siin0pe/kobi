@@ -1095,6 +1095,13 @@ fn commande(mots: &[String], shell: Shell, ctx: &Contexte, cwd: &mut PathBuf) ->
     if let Some(a) = options_interdites(&nom, args) {
         return a;
     }
+    // `where` est le programme `where.exe` sauf sous PowerShell, où seul le
+    // nom avec `.exe` l'appelle (sans, c'est l'alias `Where-Object`).
+    if nom == "where" && (shell != Shell::PowerShell || premier.to_lowercase().ends_with(".exe")) {
+        if let Some(a) = where_exe(args, ctx, cwd) {
+            return a;
+        }
+    }
     let avis = chemins(&nom, args, shell, ctx, cwd);
     // Sous Windows, les parcours récursifs entrent dans les jonctions et les
     // liens de dossier, même ceux qui sortent (sonde #392, KOB-434) : le
@@ -1131,7 +1138,7 @@ fn parcours_recursif(nom: &str, args: &[String], shell: Shell) -> bool {
         "ls" | "dir" if shell == Shell::PowerShell => recurse(),
         "dir" => interrupteur("/s"),
         "tree" => true,
-        "where" => interrupteur("/r"),
+        "where" => interrupteur("/r") || interrupteur("-r"),
         _ => false,
     }
 }
@@ -1163,7 +1170,10 @@ fn racines_du_parcours(
 ) -> Result<Vec<PathBuf>, Avis> {
     let mut textes: Vec<&str> = Vec::new();
     if nom == "where" {
-        if let Some(i) = args.iter().position(|x| x.eq_ignore_ascii_case("/r")) {
+        if let Some(i) = args
+            .iter()
+            .position(|x| x.eq_ignore_ascii_case("/r") || x.eq_ignore_ascii_case("-r"))
+        {
             textes.extend(args.get(i + 1).map(String::as_str));
         }
     } else {
@@ -1767,6 +1777,51 @@ fn git(args: &[String]) -> Option<Avis> {
     }
 }
 
+/// `where.exe` : ses dossiers sont des chemins, jugés comme tels (KOB-439).
+/// Celui de `/R` ou `-R` (les deux formes marchent), et la partie chemin
+/// d'un motif `chemin:motif`, qui liste aussi ce dossier (`\\hôte\partage:x`
+/// ouvrirait une connexion réseau). Une variable (`$PATH:motif`), une option
+/// inconnue ou un `C:motif` (lecteur, ou dossier `C` ?) passent par la carte.
+fn where_exe(args: &[String], ctx: &Contexte, cwd: &Path) -> Option<Avis> {
+    let carte = |x: &str| {
+        Some(Avis::ecriture(
+            Genre::Commande,
+            format!("`where.exe {x}` : vérifié sur la carte"),
+        ))
+    };
+    let mut i = 0;
+    while i < args.len() {
+        let x = args[i].as_str();
+        let bas = x.to_ascii_lowercase();
+        if bas == "/r" || bas == "-r" {
+            let Some(d) = args.get(i + 1) else {
+                return Some(Avis::refus("`where /R` sans dossier"));
+            };
+            if let Some(a) = juger_chemin(ctx, d, cwd) {
+                return Some(a);
+            }
+            i += 2;
+            continue;
+        }
+        if x.len() == 2 && x.starts_with(['/', '-']) {
+            if !matches!(&bas[1..], "q" | "f" | "t" | "?") {
+                return carte(x);
+            }
+        } else if x.starts_with(['-', '$']) {
+            return carte(x);
+        } else if let Some((chemin, _)) = x.rsplit_once(':') {
+            if chemin.len() <= 1 {
+                return carte(x);
+            }
+            if let Some(a) = juger_chemin(ctx, chemin, cwd) {
+                return Some(a);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
 /// Tous les chemins des arguments doivent rester dans les dossiers déclarés.
 fn chemins(nom: &str, args: &[String], shell: Shell, ctx: &Contexte, cwd: &Path) -> Avis {
     // `where.exe /R dossier motif` parcourt `dossier` : il est jugé comme un
@@ -2288,6 +2343,62 @@ mod tests {
                 .cle(),
             "refus"
         );
+    }
+
+    /// KOB-439 : `where.exe` juge le dossier de `-R` comme celui de `/R`, et
+    /// la partie chemin d'un motif `chemin:motif` ; `where git` reste une
+    /// lecture, et l'alias `Where-Object` de PowerShell n'est pas touché.
+    #[test]
+    fn where_exe_juge_ses_dossiers() {
+        let x = ctx();
+        let cle = |l: &str, s| analyser(l, s, &x).classe.cle();
+        for shell in [Shell::PowerShell, Shell::Bash] {
+            for l in [
+                "where.exe -R C:/Users/moi/.ssh *",
+                "where.exe -r C:/Users/moi/.ssh *",
+                "where.exe /R C:/Users/moi/.ssh *",
+                "where.exe C:/Windows:*.ini",
+                r"where.exe C:\Windows:*.ini",
+                r"where.exe \\hote\partage:x",
+                "where.exe /Q C:/Users/moi/.ssh:*",
+            ] {
+                assert_eq!(cle(l, shell), "refus", "{l} ({shell:?})");
+            }
+            for l in [
+                "where.exe $PATH:*.exe",
+                "where.exe C:*.ini",
+                "where.exe /X git",
+                "where.exe -Rx C:/Windows *",
+            ] {
+                assert_ne!(cle(l, shell), "lecture", "{l} ({shell:?})");
+            }
+            for l in [
+                "where.exe git",
+                "where.exe /Q git",
+                "where.exe /R C:/Users/moi/Desktop/kobi *.rs",
+                "where.exe C:/Users/moi/Desktop/kobi/src:*.rs",
+            ] {
+                assert_eq!(cle(l, shell), "lecture", "{l} ({shell:?})");
+            }
+        }
+        // Sans `.exe`, `where` est le programme sous Bash…
+        assert_eq!(cle("where -R C:/Windows *.ini", Shell::Bash), "refus");
+        assert_eq!(cle("where C:/Windows:*.ini", Shell::Bash), "refus");
+        assert_eq!(cle("where git", Shell::Bash), "lecture");
+        // … et l'alias `Where-Object` sous PowerShell (pipeline).
+        assert_eq!(
+            cle("Get-ChildItem | where Name -like 'a:b*'", Shell::PowerShell),
+            "lecture"
+        );
+        assert!(parcours_recursif(
+            "where",
+            &v_mots("-R . *.rs"),
+            Shell::Bash
+        ));
+    }
+
+    fn v_mots(l: &str) -> Vec<String> {
+        l.split(' ').map(str::to_owned).collect()
     }
 
     /// KOB-434, sous Windows : un parcours récursif qui passerait par une
