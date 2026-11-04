@@ -533,9 +533,14 @@ fn sonde_barre_dans_une_cible_relative() {
         let relue = fs::read_link(racine.join(nom)).map(|c| format!("{:?}", c.as_os_str()));
         let juge = lien_vers_le_reseau(&racine.join(nom), true);
         let t0 = std::time::Instant::now();
-        let nt = fs::read(racine.join(nom)).map(|c| format!("lu {} octets", c.len())).unwrap_or_else(|e| format!("{:?} {e}", e.raw_os_error()));
+        let nt = fs::read(racine.join(nom))
+            .map(|c| format!("lu {} octets", c.len()))
+            .unwrap_or_else(|e| format!("{:?} {e}", e.raw_os_error()));
         let ms = t0.elapsed().as_millis();
-        let lu = lecteur(&dir).lire(&json!({ "file_path": nom })).map(|_| "lu".to_string()).unwrap_or_else(|e| e);
+        let lu = lecteur(&dir)
+            .lire(&json!({ "file_path": nom }))
+            .map(|_| "lu".to_string())
+            .unwrap_or_else(|e| e);
         out.push(format!("{nom} cible={cible:?} cree={cree:?} relue={relue:?} juge={juge} nt={nt} ({ms} ms) lire={lu}"));
     }
     panic!("SONDE\n{}", out.join("\n"));
