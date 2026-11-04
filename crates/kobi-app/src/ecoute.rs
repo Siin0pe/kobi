@@ -1698,13 +1698,6 @@ impl<R: Runtime> Fil<R> {
                         dit_a: Some(dit_a),
                     }
                 }
-                Action::EnvoyerPeutEtre(q) => {
-                    tracing::info!(
-                        longueur = q.len(),
-                        "phrase qui cite Kobi, peut-être pour lui"
-                    );
-                    Message::QuestionPeutEtre(q, dit_a)
-                }
                 Action::Abandonner => {
                     tracing::info!("interpellation sans question");
                     Message::SansQuestion
@@ -2490,17 +2483,14 @@ mod tests {
                 println!("{nom}: {finals:?} -> {envoyees:?}");
             } else {
                 fausses += interpellations;
-                // Ce qui part vers Claude (KOB-237) : questions, et phrases
-                // « peut-être pas pour toi ». Longueur seulement : le corpus
-                // réel n'est jamais recopié.
+                // Ce qui part vers Claude (KOB-237) : les questions. Longueur
+                // seulement : le corpus réel n'est jamais recopié.
                 for a in &actions {
-                    let (genre, q) = match a {
-                        Action::Envoyer(q) => ("question", q),
-                        Action::EnvoyerPeutEtre(q) => ("peut-être pas pour toi", q),
-                        _ => continue,
+                    let Action::Envoyer(q) = a else {
+                        continue;
                     };
                     envois += 1;
-                    println!("{nom}: {genre} envoyée, {} caractères", q.chars().count());
+                    println!("{nom}: question envoyée, {} caractères", q.chars().count());
                 }
                 for f in finals
                     .iter()

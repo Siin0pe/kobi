@@ -150,9 +150,6 @@ pub enum Message {
         affiche: String,
         consigne: String,
     },
-    /// Phrase dite qui cite Kobi sans qu'on sache si elle lui parle
-    /// (KOB-168) : Claude peut ne rien répondre, Kobi reste alors silencieux.
-    QuestionPeutEtre(String, Instant),
     /// L'interpellation n'a pas été suivie d'une question.
     SansQuestion,
     /// Question dite avant l'arrêt, transcrite pendant « Annuler » : gardée
@@ -542,17 +539,12 @@ pub struct Chef<R: Runtime> {
     /// Cartes de validation ouvertes (KOB-156), dans l'ordre de l'écran :
     /// « oui » ou « non » répond à celle affichée (KOB-218).
     validations: crate::validation::FileValidations,
-    /// La question en cours de traitement ne s'adresse peut-être pas à Kobi.
-    peut_etre: bool,
     /// Instant de l'audio de la question en cours de traitement, si elle a
     /// été dite (KOB-324).
     question_dite_a: Option<Instant>,
     /// La question en cours est différée (KOB-307) : elle part sur une
     /// session sans pilotage.
     differee: bool,
-    /// Tour d'une telle question : sa réponse n'est montrée qu'une fois
-    /// finie, et une réponse « rien » le laisse silencieux (KOB-168).
-    tour_peut_etre: Option<u64>,
     /// Compte rendu remis à l'écrivain, pas encore sur le disque : quitter
     /// l'attend encore (KOB-226).
     compte_rendu_a_ecrire: bool,
@@ -568,15 +560,6 @@ pub struct Chef<R: Runtime> {
     arret_definitif: Option<Instant>,
     /// Jusqu'où les pistes ont transcrit leur audio (KOB-198).
     avancement: Avancement,
-}
-
-/// Consigne jointe à une phrase qui cite Kobi sans lui parler à coup sûr
-/// (KOB-168).
-const CONSIGNE_PEUT_ETRE: &str = "Cette phrase, entendue au micro, contient ton nom mais ne s'adresse peut-être pas à toi (on peut parler de toi à quelqu'un d'autre). Si elle ne t'est pas adressée, réponds seulement « — » et rien d'autre ; sinon réponds normalement.\n\nPhrase : ";
-
-/// Réponse « rien » à une phrase qui ne s'adressait pas à Kobi.
-fn est_silence(reponse: &str) -> bool {
-    matches!(reponse.trim(), "" | "—" | "–" | "-" | "…" | "(silence)")
 }
 
 /// Chef partagé (état géré par Tauri).
@@ -933,10 +916,8 @@ impl<R: Runtime> Chef<R> {
             notes_acceptees: HashSet::new(),
             cartes_ouvertes: HashMap::new(),
             validations: Default::default(),
-            peut_etre: false,
             question_dite_a: None,
             differee: false,
-            tour_peut_etre: None,
             compte_rendu_a_ecrire: false,
             comptes_rendus_abandonnes: 0,
             questions_differees: Vec::new(),
@@ -1073,16 +1054,6 @@ impl<R: Runtime> Chef<R> {
                 self.transition(&[Evenement::Interpellation]);
                 let _ = self.app.emit(EVENEMENT_QUESTION, &affiche);
                 self.envoyer(affiche, Some(consigne), false);
-            }
-            Message::QuestionPeutEtre(texte, dit_a) => {
-                if self.dit_avant_l_arret(Some(dit_a), &texte) {
-                    return;
-                }
-                self.peut_etre = true;
-                self.question_dite_a = Some(dit_a);
-                self.question(texte, true);
-                self.question_dite_a = None;
-                self.peut_etre = false;
             }
             Message::Segment(s, dit_a) => self.segment(s, dit_a),
             Message::Avancement(source, jusqu_a) => self.avancement.avancer(source, jusqu_a),
@@ -1329,7 +1300,7 @@ impl<R: Runtime> Chef<R> {
 
     /// Envoie une question à Claude : `texte` est montré et rangé, Claude
     /// reçoit `consigne` à la place s'il y en a une.
-    fn envoyer(&mut self, texte: String, mut consigne: Option<String>, voix: bool) {
+    fn envoyer(&mut self, texte: String, consigne: Option<String>, voix: bool) {
         self.tour += 1;
         self.dernier = self.tour;
         self.calme_a = None;
@@ -1343,10 +1314,6 @@ impl<R: Runtime> Chef<R> {
             .as_ref()
             .map(|r| r.notes.clone())
             .unwrap_or_default();
-        if self.peut_etre && consigne.is_none() {
-            consigne = Some(format!("{CONSIGNE_PEUT_ETRE}{texte}"));
-            self.tour_peut_etre = Some(self.tour);
-        }
         if let Some(r) = &mut self.reunion {
             r.latences.question(self.tour, Instant::now());
         }
@@ -2548,30 +2515,6 @@ impl<R: Runtime> Chef<R> {
                 };
                 crate::activite::noter(&self.app, crate::activite::Genre::Reunion, &texte, None);
             }
-            // Phrase peut-être pas pour Kobi : rien ne s'affiche avant la fin.
-            Retour::Texte { tour, .. } if self.tour_peut_etre == Some(tour) => {}
-            Retour::Fin { tour, texte }
-                if self.tour_peut_etre == Some(tour) && est_silence(&texte) =>
-            {
-                tracing::info!(tour, "phrase qui ne s'adressait pas à Kobi : silence");
-                self.tour_peut_etre = None;
-                self.rangement.remove(&tour);
-                if let Some(r) = &mut self.reunion {
-                    r.latences.abandon(tour);
-                }
-                self.historique.retain(|b| b.tour != tour);
-                if self.voix.as_ref().is_some_and(|(t, _)| *t == tour) {
-                    if let Some((_, r)) = self.voix.take() {
-                        r.lacher(&self.app);
-                    }
-                }
-                if tour == self.dernier {
-                    // Retour au calme sans montrer de réponse.
-                    self.transition(&[Evenement::ReponseCommence]);
-                    self.transition(&[Evenement::ReponseTerminee]);
-                }
-                self.emettre_historique();
-            }
             Retour::Texte { tour, texte } => {
                 if let Some(r) = &mut self.reunion {
                     r.latences.premier_mot(tour, Instant::now());
@@ -2596,9 +2539,6 @@ impl<R: Runtime> Chef<R> {
                 tracing::info!(tour, "réponse terminée");
                 if let Some(r) = &mut self.reunion {
                     r.latences.fin(tour, Instant::now());
-                }
-                if self.tour_peut_etre == Some(tour) {
-                    self.tour_peut_etre = None;
                 }
                 self.retenir(tour, &texte);
                 self.ranger(tour, Qui::Kobi, &texte, false);
@@ -3931,19 +3871,6 @@ mod tests {
             moment(&m),
             "(Maintenant : dimanche 1 février 2026, 23 h 59.)"
         );
-    }
-
-    /// Phrase qui ne s'adressait peut-être pas à Kobi (KOB-168) : « — » ou
-    /// rien en réponse le laisse silencieux ; une vraie réponse s'affiche.
-    #[test]
-    fn reponse_silence_a_une_phrase_qui_ne_lui_parlait_pas() {
-        for silence in ["", "  ", "—", " — ", "–", "-", "…", "(silence)"] {
-            assert!(est_silence(silence), "{silence:?}");
-        }
-        assert!(!est_silence("Il est 14 h 05."));
-        assert!(!est_silence("— Il est 14 h 05."));
-        assert!(CONSIGNE_PEUT_ETRE.contains("réponds seulement « — »"));
-        assert!(CONSIGNE_PEUT_ETRE.ends_with("Phrase : "));
     }
 
     #[test]
@@ -7468,10 +7395,6 @@ mod tests {
             for ordre in ["démarre la réunion", "reprends", "termine la réunion"] {
                 c.recevoir(dite(ordre, avant));
             }
-            c.recevoir(Message::QuestionPeutEtre(
-                "reprends l'enregistrement".into(),
-                avant,
-            ));
             // L'écouteur fait écouter Kobi avant la question : il n'y reste pas.
             c.recevoir(Message::Interpelle);
             c.recevoir(dite("termine la réunion", avant));
@@ -8312,10 +8235,6 @@ mod tests {
             Stop,
             /// « Kobi… » puis rien : l'écoute abandonne l'appel.
             AppelSansQuestion,
-            /// Phrase qui cite Kobi, peut-être pour lui (KOB-276).
-            PeutEtre(usize),
-            /// Sa réponse : un silence (« — »), la phrase n'était pas pour lui.
-            FinSilence(usize),
             /// Oups posé par l'écoute elle-même (micro perdu), hors du chef :
             /// elle l'acquitte d'elle-même après `ERREUR_AFFICHEE`.
             OupsEcoute,
@@ -8334,7 +8253,7 @@ mod tests {
         }
 
         fn tirer(h: &mut Hasard) -> Ev {
-            match h.sous(35) {
+            match h.sous(33) {
                 0..=2 => Ev::Question {
                     voix: h.sous(3) != 0,
                     texte: h.sous(TEXTES.len()),
@@ -8361,14 +8280,12 @@ mod tests {
                 19 => Ev::Terminer(h.sous(2) == 0),
                 20 => Ev::Stop,
                 21 => Ev::AppelSansQuestion,
-                22 => Ev::PeutEtre(h.sous(TEXTES.len())),
-                23 => Ev::FinSilence(h.sous(3)),
-                24 => Ev::OupsEcoute,
-                25 => Ev::Patience(h.sous(3)),
-                26 => Ev::Relance(h.sous(3)),
-                27 => Ev::Echeance(h.sous(5) as u8),
-                28 => Ev::Avance,
-                29 => Ev::Echo(h.sous(2)),
+                22 => Ev::OupsEcoute,
+                23 => Ev::Patience(h.sous(3)),
+                24 => Ev::Relance(h.sous(3)),
+                25 => Ev::Echeance(h.sous(5) as u8),
+                26 => Ev::Avance,
+                27 => Ev::Echo(h.sous(2)),
                 _ => Ev::Tic,
             }
         }
@@ -8837,31 +8754,6 @@ mod tests {
                 Ev::AppelSansQuestion => {
                     c.recevoir(Message::Interpelle);
                     c.recevoir(Message::SansQuestion);
-                }
-                Ev::PeutEtre(texte) => {
-                    c.recevoir(Message::QuestionPeutEtre(
-                        format!("Kobi {}", TEXTES[texte]),
-                        Instant::now(),
-                    ));
-                    if c.bulle(c.tour).is_some_and(|b| b.statut == "attente") {
-                        jeu.derniere = Some(c.tour);
-                    }
-                }
-                Ev::FinSilence(k) => {
-                    let Some(tour) = rang(&tours(c), k) else {
-                        return;
-                    };
-                    if c.bulle(tour)
-                        .is_some_and(|b| matches!(b.statut, "attente" | "reponse"))
-                        && !jeu.detaches.contains(&tour)
-                        && !carte_du_tour_ouverte(c, jeu, tour)
-                    {
-                        jeu.finis.insert(tour);
-                        c.recevoir(Message::Cerveau(Retour::Fin {
-                            tour,
-                            texte: "—".into(),
-                        }));
-                    }
                 }
                 Ev::OupsEcoute => {
                     c.transition(&[Evenement::Erreur]);
