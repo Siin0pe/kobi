@@ -170,12 +170,15 @@ pub fn resolu(chemin: &Path) -> Option<PathBuf> {
             // (ERROR_INVALID_NAME) : il n'existe pas, ce n'est pas un lien ;
             // lu comme un absent, et ce que le joker désigne est jugé un à un
             // (KOB-438). Tout autre nom invalide (`<`, `|`, valides sous Git
-            // Bash ; chemin trop long sous Linux, qui cacherait un lien au-delà
+            // Bash, même à côté d'un joker ; chemin trop long sous Linux, qui cacherait un lien au-delà
             // de PATH_MAX) reste refusé.
             Err(e)
                 if cfg!(windows)
                     && e.kind() == std::io::ErrorKind::InvalidFilename
-                    && morceau.to_string_lossy().contains(['*', '?']) =>
+                    && morceau.to_string_lossy().contains(['*', '?'])
+                    && !morceau
+                        .to_string_lossy()
+                        .contains(['<', '>', '"', '|', ':']) =>
             {
                 absents = 1;
                 actuel = candidat;
@@ -411,6 +414,8 @@ mod tests {
             assert!(x.contient(&joker, None));
             assert!(x.contient(&joker.join("..").join("..").join("src"), None));
             assert!(!x.contient(&joker.join("..").join("..").join(".."), None));
+            // `a*<` : Git Bash ouvre un vrai nom (caractères privés MSYS).
+            assert_eq!(resolu(&c.join("src").join("a*<")), None);
         }
     }
 
