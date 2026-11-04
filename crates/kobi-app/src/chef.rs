@@ -2241,7 +2241,9 @@ impl<R: Runtime> Chef<R> {
         // Le tour d'une carte de Kobi n'est pas connu : acceptée, elle n'est
         // pas retenue pour la suite.
         let explicite = reponse != crate::validation::Reponse::Delai;
-        self.decider_la_proposition(derniere, reponse.acceptee(), None, explicite);
+        // Sa question, peut-être une tâche annoncée, reste connue (KOB-431).
+        let tache = Some(self.question_a_la_carte);
+        self.decider_la_proposition(derniere, reponse.acceptee(), None, tache, explicite);
         // Plus de carte : la fenêtre de suite reprend sa durée habituelle
         // (KOB-197), et celle de la carte se ferme (KOB-273).
         self.si_plus_aucune_carte();
@@ -2314,11 +2316,14 @@ impl<R: Runtime> Chef<R> {
     /// tour ; refusée aussi si une carte retenue appartient à la question en
     /// cours, toujours en cours (KOB-381) ; sinon il revient au calme, sauf si
     /// une carte des notes venue du calme attend encore (KOB-338, KOB-380).
+    /// `tache` : la question à l'ouverture d'une carte de Kobi, à défaut de
+    /// son tour ; tâche annoncée, Kobi y revient (KOB-431).
     fn decider_la_proposition(
         &mut self,
         derniere: bool,
         acceptee: bool,
         tour: Option<u64>,
+        tache: Option<u64>,
         explicite: bool,
     ) {
         if !derniere {
@@ -2339,16 +2344,19 @@ impl<R: Runtime> Chef<R> {
                     .any(|b| b.tour == t && matches!(b.statut, "attente" | "reponse" | "tache"))
         }) && (explicite || self.activite() == Some("propose"));
         if acceptee || tour_continue {
-            self.transition(&[Evenement::PermissionAccordee]);
+            let accordee = self.transition(&[Evenement::PermissionAccordee]);
             // La carte d'une tâche annoncée : la tâche reprend en arrière-plan,
             // Kobi redevient « je m'en occupe », pas « réfléchit », sauf si une
-            // question au premier plan attend sa réponse (KOB-431).
+            // question au premier plan attend sa réponse (KOB-431). Kobi
+            // n'était plus en proposition (lecture d'une autre réponse) : rien
+            // ne change.
             let repris = if acceptee {
-                tour.or(en_attente)
+                tour.or(en_attente).or(tache)
             } else {
                 en_attente
             };
-            if repris.is_some_and(|t| self.taches.contains_key(&t))
+            if accordee
+                && repris.is_some_and(|t| self.taches.contains_key(&t))
                 && !self
                     .historique
                     .iter()
@@ -2898,6 +2906,7 @@ impl<R: Runtime> Chef<R> {
                             derniere,
                             accepte == Some(true),
                             tour,
+                            None,
                             accepte.is_some(),
                         );
                     }
@@ -6435,6 +6444,62 @@ mod tests {
                 );
             });
         }
+        // Cliquée pendant la lecture d'une autre réponse : Kobi n'est plus en
+        // proposition, il continue de répondre.
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.question("et la revue ?".into(), false);
+            let tache = c.tour;
+            c.recevoir(Message::Cerveau(Retour::Detache {
+                tour: tache,
+                annonce: true,
+            }));
+            c.recevoir(Message::Cerveau(Retour::Carte {
+                tour: tache,
+                carte: 7,
+                outil: "mcp__carnet__ecrire_note".into(),
+                entree: serde_json::json!({ "title": "Note" }),
+            }));
+            c.question("résume le projet".into(), false);
+            let tour = c.tour;
+            c.recevoir(Message::Cerveau(Retour::Fin {
+                tour,
+                texte: "Le projet avance.".into(),
+            }));
+            let avant = c.activite();
+            c.recevoir(Message::Decision {
+                carte: 7,
+                accepte: true,
+            });
+            c.recevoir(Message::Cerveau(Retour::CarteFermee {
+                carte: 7,
+                accepte: Some(true),
+            }));
+            assert_eq!(c.activite(), avant, "la lecture continue");
+        });
+    }
+
+    /// KOB-431 : de même pour une carte de Kobi (validation) demandée par une
+    /// tâche annoncée, dont le tour n'est pas connu.
+    #[test]
+    fn validation_d_une_tache_acceptee_rend_kobi_occupe() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.question("et la revue ?".into(), false);
+            let tache = c.tour;
+            c.recevoir(Message::Cerveau(Retour::Detache {
+                tour: tache,
+                annonce: true,
+            }));
+            c.validation_ouverte("v1".into(), "Écrire la note");
+            assert_eq!(c.activite(), Some("propose"));
+            c.recevoir(Message::ValidationFermee {
+                id: "v1".into(),
+                reponse: crate::validation::Reponse::Accepte,
+            });
+            c.tick();
+            assert_eq!(c.activite(), Some("occupe"));
+        });
     }
 
     /// KOB-331 : une action des notes acceptée juste avant « Terminer »
