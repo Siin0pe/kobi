@@ -974,7 +974,7 @@ fn lien_vers_le_reseau(chemin: &Path, peripheriques: bool) -> bool {
     // seul, ce nom passerait pour un lecteur (`Y:`) et le parcours ne
     // jugerait plus rien, alors que NT ouvre le flux de `y` en suivant son
     // lien (KOB-398). Pareil dans chaque cible de lien, plus bas.
-    if peripheriques && a_deux_points(chemin) {
+    if peripheriques && (a_deux_points(chemin) || nom_a_barre(chemin)) {
         return true;
     }
     let mut a_lire: VecDeque<PathBuf> = chemin
@@ -1030,7 +1030,8 @@ fn lien_vers_le_reseau(chemin: &Path, peripheriques: bool) -> bool {
         if chemin_reseau(&cible.to_string_lossy())
             || !prefixe_local(&cible)
             || racine_sans_disque(&cible)
-            || (peripheriques && (a_deux_points(&cible) || lecteur_sans_racine(&cible)))
+            || (peripheriques
+                && (a_deux_points(&cible) || nom_a_barre(&cible) || lecteur_sans_racine(&cible)))
         {
             return true;
         }
@@ -1163,6 +1164,17 @@ fn lecteur_sans_racine(chemin: &Path) -> bool {
 fn a_deux_points(chemin: &Path) -> bool {
     chemin.components().any(
         |c| matches!(c, std::path::Component::Normal(nom) if nom.to_string_lossy().contains(':')),
+    )
+}
+
+/// Un nom du chemin contient un `/` : seul un chemin verbatim en garde (ailleurs
+/// c'est un séparateur), et NT ne l'ouvre pas comme nom. Mais joint ou réduit
+/// sur une base verbatim, `PathBuf` le redécoupe et applique son `..` :
+/// `\\?\C:\d\x\../y` devenait `\\?\C:\d\y`, jugé sans voir `x`, que NT
+/// traverse (lien vers le réseau, KOB-425). Refusé d'emblée, comme `:`.
+fn nom_a_barre(chemin: &Path) -> bool {
+    chemin.components().any(
+        |c| matches!(c, std::path::Component::Normal(nom) if nom.to_string_lossy().contains('/')),
     )
 }
 
