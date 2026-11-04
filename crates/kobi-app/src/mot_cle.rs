@@ -446,12 +446,6 @@ pub enum Action {
     Question(String),
     /// Question finie, à envoyer à Claude.
     Envoyer(String),
-    /// Phrase finie qui cite Kobi sans qu'on sache si elle lui parle
-    /// (KOB-168) : Claude la reçoit marquée « peut-être pas pour toi » et
-    /// peut ne rien répondre. Plus émise depuis KOB-237 (un doute n'envoie
-    /// rien) ; gardée tant que le chef traite `QuestionPeutEtre`.
-    #[allow(dead_code, reason = "plus émise depuis KOB-237")]
-    EnvoyerPeutEtre(String),
     /// Rien n'a suivi l'interpellation : retour au calme.
     Abandonner,
     /// Question dite avant l'arrêt de la réunion, transcrite pendant
@@ -925,8 +919,8 @@ impl Ecouteur {
     }
 
     /// Phrase qui contient le nom (KOB-168) : Kobi se met à écouter s'il est
-    /// appelé (ou peut-être) ; la phrase finie part à Claude, se tait si elle
-    /// le cite seulement. En réunion, un doute vaut silence.
+    /// appelé, et la phrase finie part à Claude ; s'il est seulement cité, ou
+    /// dans le doute, rien ne part (KOB-237).
     fn phrase_avec_nom(
         &mut self,
         texte: &str,
@@ -1575,7 +1569,7 @@ mod tests {
         assert!(
             !actions
                 .iter()
-                .any(|a| matches!(a, Envoyer(_) | EnvoyerPeutEtre(_) | Interpeller)),
+                .any(|a| matches!(a, Envoyer(_) | Interpeller)),
             "{actions:?}"
         );
         // Les phrases suivantes de la conversation (73 et 84 caractères dans le
