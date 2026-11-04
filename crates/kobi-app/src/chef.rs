@@ -2369,6 +2369,14 @@ impl<R: Runtime> Chef<R> {
         }
     }
 
+    /// Une question, la dernière ou une plus ancienne détachée par sa carte,
+    /// attend-elle encore sa réponse (KOB-391, KOB-430) ?
+    fn une_question_tourne(&self) -> bool {
+        self.historique
+            .iter()
+            .any(|b| matches!(b.statut, "attente" | "reponse" | "tache"))
+    }
+
     /// La dernière question posée attend-elle encore sa réponse (en cours,
     /// partie en tâche, ou en attente du réseau) ?
     fn question_en_cours(&self) -> bool {
@@ -3566,20 +3574,29 @@ impl<R: Runtime> Chef<R> {
         {
             self.transition(&[Evenement::TacheLongue]);
         }
-        // Une carte de Kobi ou de la conversation attend encore et Kobi est
-        // libre (réponse à une autre question finie) : il y repropose
-        // (KOB-384). Une carte des notes venue d'ailleurs n'y ramène pas
-        // (KOB-338), ni une carte MCP déjà refusée à l'échéance ; un
-        // résultat à livrer passe d'abord, et la question en cours, partie en
-        // tâche, livrera le sien sans attendre la carte (pas celle de la
-        // carte elle-même, partie en tâche pour la demander).
-        let carte_mcp = self.cartes.keys().any(|k| {
-            !self.cartes_des_notes.contains_key(k)
-                && self
-                    .cartes_ouvertes
-                    .get(k)
-                    .is_some_and(|o| o.elapsed() < kobi_perms::DEFAULT_TIMEOUT)
-        });
+        // Une carte de Kobi, de la conversation ou des notes venue du calme
+        // attend encore et Kobi est libre (réponse à une autre question
+        // finie) : il y repropose (KOB-384, KOB-430). Une carte des notes
+        // venue d'ailleurs n'y ramène pas (KOB-338), ni une carte MCP déjà
+        // refusée à l'échéance ; un résultat à livrer passe d'abord, et la
+        // question en cours, partie en tâche, livrera le sien sans attendre
+        // la carte (pas celle de la carte elle-même, partie en tâche pour la
+        // demander).
+        // Une carte des notes venue du calme ne repasse qu'une fois rien
+        // d'autre en cours, question plus ancienne détachée comprise : sinon
+        // elle retenait son résultat (« propose » ne livre pas).
+        let attend = |notes: bool| {
+            self.cartes_ouvertes.iter().any(|(k, o)| {
+                self.cartes.contains_key(k)
+                    && o.elapsed() < kobi_perms::DEFAULT_TIMEOUT
+                    && match self.cartes_des_notes.get(k) {
+                        None => !notes,
+                        Some(du_calme) => notes && *du_calme,
+                    }
+            })
+        };
+        let carte_mcp = attend(false)
+            || (attend(true) && !self.une_question_tourne() && self.taches.is_empty());
         if (!self.validations.est_vide() || carte_mcp)
             && !(self.question_en_cours() && self.dernier != self.question_a_la_carte)
             && self.calme_a.is_none()
@@ -3591,16 +3608,25 @@ impl<R: Runtime> Chef<R> {
                 self.transition(&[Evenement::TacheLongue]);
             }
             self.transition(&[Evenement::PermissionDemandee]);
+            // L'interface ne montre une carte MCP qu'à son événement : sans
+            // lui, « propose » n'affichait rien, et la carte restait cachée
+            // jusqu'à son échéance (KOB-430). C'est celle à laquelle « oui » ou
+            // « non » répondront, la plus récente, comme dans l'interface.
+            if carte_mcp {
+                if let Some(ui) = self
+                    .carte_affichee()
+                    .and_then(|k| self.cartes.get(&k).cloned())
+                {
+                    let _ = self.app.emit(EVENEMENT_CARTE, &ui);
+                }
+            }
         }
         // Kobi réfléchit sans rien qui puisse répondre : aucune question qui
         // tourne encore (ni la dernière, ni une plus ancienne détachée par sa
         // carte), ni tâche, ni résultat à livrer (carte sans tour acceptée,
         // tâche finie en erreur) ; il revient au calme au lieu de rester figé
         // (KOB-391).
-        let une_question_tourne = self
-            .historique
-            .iter()
-            .any(|b| matches!(b.statut, "attente" | "reponse" | "tache"));
+        let une_question_tourne = self.une_question_tourne();
         if self.activite() == Some("reflechit")
             && !une_question_tourne
             && self.taches.is_empty()
@@ -5952,6 +5978,197 @@ mod tests {
                 assert_eq!(c.activite(), Some("repond"));
             });
         }
+    }
+
+    /// Une carte des notes venue du calme attend, l'utilisateur pose une
+    /// question ; une fois sa réponse lue, Kobi repropose la carte au lieu de
+    /// rester au calme, où elle restait cachée jusqu'à son échéance (refus
+    /// silencieux, 9e essai, KOB-429).
+    #[test]
+    fn carte_des_notes_reproposee_apres_une_question() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            c.recevoir(Message::Cerveau(Retour::Carte {
+                tour: 0,
+                carte: 1,
+                outil: "mcp__carnet__ecrire_note".into(),
+                entree: serde_json::json!({"texte": "note"}),
+            }));
+            assert_eq!(c.activite(), Some("propose"));
+            assert_eq!(c.cartes_des_notes.get(&1), Some(&true));
+            c.recevoir(Message::Interpelle);
+            c.envoyer("Quelle est la date de la démo ?".into(), None, true);
+            let tour = c.dernier;
+            c.recevoir(Message::Cerveau(Retour::Fin {
+                tour,
+                texte: "La démo est jeudi.".into(),
+            }));
+            assert_eq!(c.activite(), Some("repond"));
+            // L'interface la remontre : l'événement `carte` est renvoyé.
+            let remontrees = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let r = remontrees.clone();
+            tauri::Listener::listen_any(&c.app, EVENEMENT_CARTE, move |e| {
+                r.lock().unwrap().push(e.payload().to_owned());
+            });
+            c.calme_a = c.calme_a.map(|(_, e)| (Instant::now(), e));
+            c.tick();
+            assert_eq!(
+                c.activite(),
+                Some("propose"),
+                "la carte des notes est reproposée"
+            );
+            let remontrees = remontrees.lock().unwrap();
+            assert_eq!(remontrees.len(), 1, "{remontrees:?}");
+            assert!(remontrees[0].contains("\"pending\""), "{remontrees:?}");
+            assert!(remontrees[0].contains("\"id\":\"1\""), "{remontrees:?}");
+        });
+        // Une autre carte des notes, venue pendant la réponse (pas du calme),
+        // est la plus récente : c'est elle qui est remontrée, celle à laquelle
+        // « oui » ou « non » répondront (relecture de KOB-430).
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            let notes = |carte| {
+                Message::Cerveau(Retour::Carte {
+                    tour: 0,
+                    carte,
+                    outil: "mcp__carnet__ecrire_note".into(),
+                    entree: serde_json::json!({"texte": "note"}),
+                })
+            };
+            c.recevoir(notes(1));
+            c.recevoir(Message::Interpelle);
+            c.envoyer("Quelle est la date de la démo ?".into(), None, true);
+            let tour = c.dernier;
+            c.recevoir(Message::Cerveau(Retour::Texte {
+                tour,
+                texte: "La démo ".into(),
+            }));
+            std::thread::sleep(Duration::from_millis(2));
+            c.recevoir(notes(2));
+            assert_eq!(c.cartes_des_notes.get(&2), Some(&false));
+            c.recevoir(Message::Cerveau(Retour::Fin {
+                tour,
+                texte: "La démo est jeudi.".into(),
+            }));
+            let remontrees = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let r = remontrees.clone();
+            tauri::Listener::listen_any(&c.app, EVENEMENT_CARTE, move |e| {
+                r.lock().unwrap().push(e.payload().to_owned());
+            });
+            c.calme_a = c.calme_a.map(|(_, e)| (Instant::now(), e));
+            c.tick();
+            assert_eq!(c.activite(), Some("propose"));
+            assert_eq!(c.carte_affichee(), Some(2));
+            let remontrees = remontrees.lock().unwrap();
+            assert_eq!(remontrees.len(), 1, "{remontrees:?}");
+            assert!(remontrees[0].contains("\"id\":\"2\""), "{remontrees:?}");
+        });
+        // La question partie en tâche tourne encore : la carte des notes ne
+        // retient pas son résultat, Kobi reste « au travail » (relecture de
+        // KOB-430).
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            c.recevoir(Message::Cerveau(Retour::Carte {
+                tour: 0,
+                carte: 1,
+                outil: "mcp__carnet__ecrire_note".into(),
+                entree: serde_json::json!({"texte": "note"}),
+            }));
+            c.recevoir(Message::Interpelle);
+            c.envoyer("résume le projet".into(), None, true);
+            let tour = c.dernier;
+            // La question ouvre sa propre carte, acceptée, puis part en
+            // tâche : la garde « question à la carte » ne la retient plus.
+            c.recevoir(Message::Cerveau(Retour::Carte {
+                tour,
+                carte: 2,
+                outil: "mcp__linear__save_issue".into(),
+                entree: serde_json::json!({"title": "Autre"}),
+            }));
+            c.recevoir(Message::Cerveau(Retour::CarteFermee {
+                carte: 2,
+                accepte: Some(true),
+            }));
+            c.recevoir(Message::Cerveau(Retour::Detache {
+                tour,
+                annonce: true,
+            }));
+            for _ in 0..3 {
+                c.calme_a = c.calme_a.map(|(_, e)| (Instant::now(), e));
+                c.tick();
+            }
+            assert_eq!(c.activite(), Some("occupe"), "la tâche tourne encore");
+            c.recevoir(Message::Cerveau(Retour::Resultat {
+                tour,
+                texte: "Le projet avance.".into(),
+            }));
+            for _ in 0..3 {
+                c.livrable_a = None;
+                c.tick();
+            }
+            assert!(
+                c.a_livrer.is_empty(),
+                "résultat livré sans attendre la carte"
+            );
+        });
+        // Une question plus ancienne, détachée par sa carte acceptée (sans
+        // annonce, hors `taches`), tourne encore après la réponse à une autre :
+        // la carte des notes ne retient pas son résultat (relecture finale de
+        // KOB-430).
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            c.recevoir(Message::Cerveau(Retour::Carte {
+                tour: 0,
+                carte: 1,
+                outil: "mcp__carnet__ecrire_note".into(),
+                entree: serde_json::json!({"texte": "note"}),
+            }));
+            c.recevoir(Message::Interpelle);
+            c.envoyer("ajoute le ticket".into(), None, true);
+            let x = c.dernier;
+            c.recevoir(Message::Cerveau(Retour::Carte {
+                tour: x,
+                carte: 2,
+                outil: "mcp__linear__save_issue".into(),
+                entree: serde_json::json!({"title": "Autre"}),
+            }));
+            c.recevoir(Message::Cerveau(Retour::CarteFermee {
+                carte: 2,
+                accepte: Some(true),
+            }));
+            c.recevoir(Message::Cerveau(Retour::Detache {
+                tour: x,
+                annonce: false,
+            }));
+            c.recevoir(Message::Interpelle);
+            c.envoyer("Quelle est la date de la démo ?".into(), None, true);
+            let y = c.dernier;
+            c.recevoir(Message::Cerveau(Retour::Fin {
+                tour: y,
+                texte: "La démo est jeudi.".into(),
+            }));
+            for _ in 0..3 {
+                c.calme_a = c.calme_a.map(|(_, e)| (Instant::now(), e));
+                c.tick();
+            }
+            assert_ne!(c.activite(), Some("propose"), "la question X tourne encore");
+            c.recevoir(Message::Cerveau(Retour::Resultat {
+                tour: x,
+                texte: "Ticket ajouté.".into(),
+            }));
+            for _ in 0..3 {
+                c.livrable_a = None;
+                c.tick();
+            }
+            assert!(
+                c.a_livrer.is_empty(),
+                "résultat de X livré sans attendre la carte"
+            );
+        });
     }
 
     /// KOB-384 : une carte de Kobi attend, l'utilisateur pose une autre
