@@ -205,8 +205,18 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
     let mut dans_mot = false;
     let c: Vec<char> = ligne.chars().collect();
     let mut i = 0;
-    let fin_mot = |jetons: &mut Vec<Jeton>, mot: &mut String, dans_mot: &mut bool| {
+    // Mot entre guillemets, ou voisin d'une virgule (élément d'un tableau
+    // PowerShell) : jamais un paramètre (KOB-437).
+    let mut cite = false;
+    let mut apres_virgule = false;
+    let fin_mot = |jetons: &mut Vec<Jeton>,
+                   mot: &mut String,
+                   dans_mot: &mut bool,
+                   cite: &mut bool,
+                   apres_virgule: &mut bool,
+                   avant_virgule: bool| {
         if *dans_mot {
+            let litteral = std::mem::take(cite) || std::mem::take(apres_virgule) || avant_virgule;
             let mut m = std::mem::take(mot);
             // PowerShell prend aussi `–`, `—` et `―` pour le tiret d'un
             // paramètre (`gci –Recurse`, `gc –LiteralPath:…`) : ramenés à
@@ -215,6 +225,13 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
                 let premier = m.chars().next().map_or(0, char::len_utf8);
                 m.replace_range(..premier, "-");
             }
+            // Un élément de tableau ou une chaîne entre guillemets qui commence
+            // par un tiret est une valeur pour PowerShell, pas un paramètre :
+            // `./` le garde chemin relatif, jugé comme tel, sans qu'il prenne
+            // pour valeur l'élément suivant (`gc a,'-Encoding',..\x`).
+            if ps && litteral && m.starts_with('-') {
+                m.insert_str(0, "./");
+            }
             jetons.push(Jeton::Mot(m));
             *dans_mot = false;
         }
@@ -222,13 +239,31 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
     while i < c.len() {
         let ch = c[i];
         match ch {
-            ' ' | '\t' => fin_mot(&mut jetons, &mut mot, &mut dans_mot),
+            ' ' | '\t' => fin_mot(
+                &mut jetons,
+                &mut mot,
+                &mut dans_mot,
+                &mut cite,
+                &mut apres_virgule,
+                false,
+            ),
             // PowerShell : `a,b` est un tableau ; chaque élément est un mot,
             // jugé à part (KOB-437). Entre guillemets, la virgule reste dans
             // le nom (boucles des guillemets ci-dessous).
-            ',' if ps => fin_mot(&mut jetons, &mut mot, &mut dans_mot),
+            ',' if ps => {
+                fin_mot(
+                    &mut jetons,
+                    &mut mot,
+                    &mut dans_mot,
+                    &mut cite,
+                    &mut apres_virgule,
+                    true,
+                );
+                apres_virgule = true;
+            }
             '\'' => {
                 dans_mot = true;
+                cite = true;
                 i += 1;
                 loop {
                     match c.get(i) {
@@ -246,6 +281,7 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
             }
             '"' => {
                 dans_mot = true;
+                cite = true;
                 i += 1;
                 loop {
                     match c.get(i) {
@@ -303,11 +339,25 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
             // `\r` seul finit aussi une ligne (PowerShell) : un séparateur,
             // comme `\n` (KOB-298).
             ';' | '\n' | '\r' | '(' | ')' => {
-                fin_mot(&mut jetons, &mut mot, &mut dans_mot);
+                fin_mot(
+                    &mut jetons,
+                    &mut mot,
+                    &mut dans_mot,
+                    &mut cite,
+                    &mut apres_virgule,
+                    false,
+                );
                 jetons.push(Jeton::Op(ch.to_string()));
             }
             '|' => {
-                fin_mot(&mut jetons, &mut mot, &mut dans_mot);
+                fin_mot(
+                    &mut jetons,
+                    &mut mot,
+                    &mut dans_mot,
+                    &mut cite,
+                    &mut apres_virgule,
+                    false,
+                );
                 if c.get(i + 1) == Some(&'|') {
                     i += 1;
                     jetons.push(Jeton::Op("||".into()));
@@ -317,11 +367,25 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
             }
             '&' => {
                 if c.get(i + 1) == Some(&'&') {
-                    fin_mot(&mut jetons, &mut mot, &mut dans_mot);
+                    fin_mot(
+                        &mut jetons,
+                        &mut mot,
+                        &mut dans_mot,
+                        &mut cite,
+                        &mut apres_virgule,
+                        false,
+                    );
                     i += 1;
                     jetons.push(Jeton::Op("&&".into()));
                 } else if c.get(i + 1) == Some(&'>') {
-                    fin_mot(&mut jetons, &mut mot, &mut dans_mot);
+                    fin_mot(
+                        &mut jetons,
+                        &mut mot,
+                        &mut dans_mot,
+                        &mut cite,
+                        &mut apres_virgule,
+                        false,
+                    );
                     i += 1;
                     let mut r = String::from("&>");
                     if c.get(i + 1) == Some(&'>') {
@@ -330,7 +394,14 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
                     }
                     jetons.push(Jeton::Redir(r));
                 } else {
-                    fin_mot(&mut jetons, &mut mot, &mut dans_mot);
+                    fin_mot(
+                        &mut jetons,
+                        &mut mot,
+                        &mut dans_mot,
+                        &mut cite,
+                        &mut apres_virgule,
+                        false,
+                    );
                     jetons.push(Jeton::Op("&".into()));
                 }
             }
@@ -341,7 +412,14 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
                     r = std::mem::take(&mut mot);
                     dans_mot = false;
                 } else {
-                    fin_mot(&mut jetons, &mut mot, &mut dans_mot);
+                    fin_mot(
+                        &mut jetons,
+                        &mut mot,
+                        &mut dans_mot,
+                        &mut cite,
+                        &mut apres_virgule,
+                        false,
+                    );
                 }
                 r.push(ch);
                 while let Some(&n) = c.get(i + 1) {
@@ -373,7 +451,14 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
         }
         i += 1;
     }
-    fin_mot(&mut jetons, &mut mot, &mut dans_mot);
+    fin_mot(
+        &mut jetons,
+        &mut mot,
+        &mut dans_mot,
+        &mut cite,
+        &mut apres_virgule,
+        false,
+    );
     Ok(jetons)
 }
 
@@ -1968,6 +2053,17 @@ mod tests {
             "gc README.md,C:/Users/moi/.ssh/id_rsa",
             r"gci -Recurse src,..\..\autre",
             "Select-String motif -Path Cargo.toml,C:/Windows/win.ini",
+            // Un élément qui ressemble à une option ne cache pas le suivant
+            // (relecture sécurité de KOB-437).
+            r"Get-Content Cargo.toml,'-Encoding',..\..\..\..\Windows\win.ini",
+            r"Get-Content Cargo.toml,-Encoding,C:\Windows\win.ini",
+            r"gc Cargo.toml,'\u{2013}Tail',C:\Windows\win.ini",
+            r"gci -Recurse src,'-Filter',C:\Windows",
+            // Espaces autour de la virgule, virgule unaire, tableau mixte.
+            r"gc Cargo.toml , C:\Windows\win.ini",
+            r"gc Cargo.toml, C:\Windows\win.ini",
+            r"gc ,C:\Windows\win.ini",
+            r"gc 'Cargo.toml',C:\Windows\win.ini",
         ] {
             assert_ne!(
                 analyser(ligne, Shell::PowerShell, &x).classe,
@@ -1979,6 +2075,11 @@ mod tests {
             "Get-Content Cargo.toml,README.md",
             "Get-Content 'a,b.txt'",
             "gc \"a,b.txt\"",
+            // Virgule échappée : un seul nom ; propriétés de Select-Object.
+            "gc a`,b.txt",
+            "gci src | Select-Object Name,Length",
+            // Un vrai paramètre reste un paramètre.
+            "Get-Content -Encoding utf8 Cargo.toml",
         ] {
             assert_eq!(
                 analyser(ligne, Shell::PowerShell, &x).classe,
