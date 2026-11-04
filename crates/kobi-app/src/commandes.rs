@@ -53,8 +53,8 @@ avec une durée et une sortie limitées. Pour les commandes et les fichiers de c
 « tu ne fais que lire ».
 
 - Ce qui ne modifie rien passe tout de suite : `git log`, `git status`, `git show`, `git diff`, \
-`git blame`, `ls`, `cat`, `head`, `tail`, `wc`, `rg`, `grep`, `find`, `tree`, `cargo metadata`, \
-`cargo tree`, `npm ls`, `gh pr view`, `gh issue list`, `Get-ChildItem`, `Get-Content`, `Select-String`…
+`git blame`, `ls`, `cat`, `head`, `tail`, `wc`, `rg`, `grep`, `find`, `tree`, \
+`gh pr view`, `gh issue list`, `Get-ChildItem`, `Get-Content`, `Select-String`…
 - Une commande qui modifie, crée ou supprime, et toute écriture de fichier, attendent un « oui » de \
 l'utilisateur : Kobi lui montre une carte et attend jusqu'à une minute. Appelle simplement l'outil, \
 sans demander l'accord en texte, même pour une suppression : la carte de Kobi est la confirmation.
