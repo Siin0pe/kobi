@@ -8291,7 +8291,7 @@ mod tests {
 
     /// KOB-395 : test de propriété « Kobi ne reste jamais figé ». Des suites
     /// d'événements tirées au hasard (graine fixe, générateur maison) sont
-    /// jouées sur le chef ; quatre propriétés sont vérifiées. Un
+    /// jouées sur le chef ; cinq propriétés sont vérifiées. Un
     /// contre-exemple est réduit à sa suite minimale et affiché.
     mod propriete {
         use super::*;
@@ -8521,6 +8521,8 @@ mod tests {
             /// Cartes cliquées dont le cerveau n'a pas encore renvoyé la
             /// fermeture, et la réponse donnée.
             cliquees: BTreeMap<u64, bool>,
+            /// Propriété 5 : carte des notes cachée au tic précédent.
+            notes_cachee: bool,
             /// Oups de l'écoute pas encore acquittés par elle.
             oups_ecoute: u32,
             /// Tours qui ont déjà eu leur patience, ou leur relance : le
@@ -8621,6 +8623,39 @@ mod tests {
             })
         }
 
+        /// Propriété 5, carte des notes visible après la réponse : une carte
+        /// des notes venue du calme attend, et Kobi est libre (rien ne
+        /// tourne, rien à livrer, aucun délai) ; il la propose au lieu de
+        /// rester au calme (KOB-430).
+        fn carte_des_notes_cachee(c: &Chef<tauri::test::MockRuntime>, jeu: &Jeu) -> Option<String> {
+            let du_calme = c.cartes.keys().any(|k| {
+                c.cartes_des_notes.get(k) == Some(&true)
+                    && c.cartes_ouvertes
+                        .get(k)
+                        .is_some_and(|o| o.elapsed() < kobi_perms::DEFAULT_TIMEOUT)
+            });
+            let libre = !c
+                .historique
+                .iter()
+                .any(|b| matches!(b.statut, "attente" | "reponse" | "tache"))
+                && c.taches.is_empty()
+                && c.a_livrer.is_empty()
+                && c.calme_a.is_none()
+                && c.livrable_a.is_none()
+                && jeu.oups_ecoute == 0;
+            (du_calme
+                && libre
+                && matches!(etat(&c.app).etat, "veille" | "assistant" | "reunion")
+                && matches!(c.activite(), Some("calme") | None))
+            .then(|| {
+                format!(
+                    "carte des notes venue du calme qui attend, Kobi libre, mais activité {:?} (état {})",
+                    c.activite(),
+                    etat(&c.app).etat
+                )
+            })
+        }
+
         /// Les propriétés vérifiées à chaque tic.
         fn verifier_le_tic(c: &Chef<tauri::test::MockRuntime>, jeu: &mut Jeu) {
             if c.calme_a.is_none() && c.a_livrer.is_empty() {
@@ -8628,12 +8663,28 @@ mod tests {
                     jeu.violations.push(e);
                 }
             }
+            // Une règle de fin de tic (retour au calme, KOB-391) n'est reprise
+            // par la reproposition qu'au tic suivant : cachée deux tics de
+            // suite, la carte l'est vraiment.
+            match carte_des_notes_cachee(c, jeu) {
+                Some(e) if jeu.notes_cachee => jeu.violations.push(e),
+                Some(_) => jeu.notes_cachee = true,
+                None => jeu.notes_cachee = false,
+            }
             if let Some(e) = fige(c, jeu) {
                 jeu.violations.push(e);
             }
         }
 
         fn jouer(c: &mut Chef<tauri::test::MockRuntime>, ev: &Ev, jeu: &mut Jeu) {
+            // Propriété 5 : « deux tics de suite », sans autre événement entre
+            // eux.
+            if !matches!(
+                ev,
+                Ev::Tic | Ev::Avance | Ev::Echeance(_) | Ev::EcheanceMcp(_)
+            ) {
+                jeu.notes_cachee = false;
+            }
             match *ev {
                 Ev::Question { voix, texte } => {
                     let texte = TEXTES[texte];
@@ -8935,7 +8986,7 @@ mod tests {
             }
         }
 
-        /// Joue `suite` sur un chef neuf et vérifie les quatre propriétés.
+        /// Joue `suite` sur un chef neuf et vérifie les cinq propriétés.
         fn verifier(suite: &[Ev]) -> Result<(), String> {
             let (app, _dir) = chef_en_essai();
             avec_chef(&app, |c| {
@@ -9041,7 +9092,13 @@ mod tests {
             verifier(&[Ev::Tic]).expect("cas de chauffe");
             let fils_avant = fils_du_processus();
             for numero in 0..suites {
-                let suite: Vec<Ev> = (0..longueur).map(|_| tirer(&mut h)).collect();
+                let mut suite: Vec<Ev> = (0..longueur).map(|_| tirer(&mut h)).collect();
+                // Une suite sur trois commence en réunion, avec une carte des
+                // notes venue du calme : elles n'existent qu'en réunion, et un
+                // `Demarrer` tiré au hasard arrive souvent trop tard (KOB-430).
+                if numero % 3 == 0 {
+                    suite.splice(0..0, [Ev::Demarrer, Ev::CarteMcp(0, true)]);
+                }
                 if verifier(&suite).is_err() {
                     let (minimale, raison) = reduire(suite);
                     panic!(
