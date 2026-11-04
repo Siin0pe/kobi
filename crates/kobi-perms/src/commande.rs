@@ -223,6 +223,10 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
         let ch = c[i];
         match ch {
             ' ' | '\t' => fin_mot(&mut jetons, &mut mot, &mut dans_mot),
+            // PowerShell : `a,b` est un tableau ; chaque élément est un mot,
+            // jugé à part (KOB-437). Entre guillemets, la virgule reste dans
+            // le nom (boucles des guillemets ci-dessous).
+            ',' if ps => fin_mot(&mut jetons, &mut mot, &mut dans_mot),
             '\'' => {
                 dans_mot = true;
                 i += 1;
@@ -1951,6 +1955,43 @@ fn ressemble_a_un_chemin(v: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// KOB-437 : sous PowerShell, `a,b` est un tableau de deux chemins
+    /// (sonde #396 : `gc a.txt,..\dehors\secret.txt` lit les deux), chacun
+    /// jugé ; entre guillemets, la virgule reste dans le nom.
+    #[test]
+    fn tableaux_powershell_a_virgule() {
+        let x = ctx();
+        for ligne in [
+            "Get-Content Cargo.toml,C:/Windows/win.ini",
+            r"Get-Content Cargo.toml,..\..\..\..\Windows\win.ini",
+            "gc README.md,C:/Users/moi/.ssh/id_rsa",
+            r"gci -Recurse src,..\..\autre",
+            "Select-String motif -Path Cargo.toml,C:/Windows/win.ini",
+        ] {
+            assert_ne!(
+                analyser(ligne, Shell::PowerShell, &x).classe,
+                Classe::Lecture,
+                "{ligne}"
+            );
+        }
+        for ligne in [
+            "Get-Content Cargo.toml,README.md",
+            "Get-Content 'a,b.txt'",
+            "gc \"a,b.txt\"",
+        ] {
+            assert_eq!(
+                analyser(ligne, Shell::PowerShell, &x).classe,
+                Classe::Lecture,
+                "{ligne}"
+            );
+        }
+        // Sous Bash, la virgule n'est qu'un caractère du nom.
+        assert_eq!(
+            analyser("cat a,b.txt", Shell::Bash, &x).classe,
+            Classe::Lecture
+        );
+    }
 
     /// KOB-434 : les parcours récursifs reconnus, et l'arbre vérifié sans
     /// rien suivre (les liens sont jugés, pas traversés).
