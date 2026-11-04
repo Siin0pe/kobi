@@ -195,6 +195,19 @@ enum Jeton {
     Redir(String),
 }
 
+/// Le mot commence-t-il par un tiret de paramètre PowerShell (`-`, `–`,
+/// `—`, `―`) ?
+fn commence_par_un_tiret(mot: &str) -> bool {
+    mot.starts_with(['-', '\u{2013}', '\u{2014}', '\u{2015}'])
+}
+
+/// Paramètre dont le nom n'est pas fermé par `:` ou `=` (`-Recurse`, et non
+/// `--format=%h` ni `-Path:a.txt`) : des guillemets qui le suivent rendraient
+/// son sens ambigu (KOB-437).
+fn parametre_ouvert(mot: &str) -> bool {
+    commence_par_un_tiret(mot) && !mot.contains([':', '='])
+}
+
 /// Découpe la ligne en jetons. Refuse ce qui demanderait d'exécuter du code
 /// pour connaître la commande : substitutions, variables, blocs.
 fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
@@ -205,8 +218,18 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
     let mut dans_mot = false;
     let c: Vec<char> = ligne.chars().collect();
     let mut i = 0;
-    let fin_mot = |jetons: &mut Vec<Jeton>, mot: &mut String, dans_mot: &mut bool| {
+    // Mot entre guillemets, ou voisin d'une virgule (élément d'un tableau
+    // PowerShell) : jamais un paramètre (KOB-437).
+    let mut cite = false;
+    let mut apres_virgule = false;
+    let fin_mot = |jetons: &mut Vec<Jeton>,
+                   mot: &mut String,
+                   dans_mot: &mut bool,
+                   cite: &mut bool,
+                   apres_virgule: &mut bool,
+                   avant_virgule: bool| {
         if *dans_mot {
+            let litteral = std::mem::take(cite) || std::mem::take(apres_virgule) || avant_virgule;
             let mut m = std::mem::take(mot);
             // PowerShell prend aussi `–`, `—` et `―` pour le tiret d'un
             // paramètre (`gci –Recurse`, `gc –LiteralPath:…`) : ramenés à
@@ -215,6 +238,13 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
                 let premier = m.chars().next().map_or(0, char::len_utf8);
                 m.replace_range(..premier, "-");
             }
+            // Un élément de tableau ou une chaîne entre guillemets qui commence
+            // par un tiret est une valeur pour PowerShell, pas un paramètre :
+            // `./` le garde chemin relatif, jugé comme tel, sans qu'il prenne
+            // pour valeur l'élément suivant (`gc a,'-Encoding',..\x`).
+            if ps && litteral && m.starts_with('-') {
+                m.insert_str(0, "./");
+            }
             jetons.push(Jeton::Mot(m));
             *dans_mot = false;
         }
@@ -222,8 +252,49 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
     while i < c.len() {
         let ch = c[i];
         match ch {
-            ' ' | '\t' => fin_mot(&mut jetons, &mut mot, &mut dans_mot),
+            ' ' | '\t' => fin_mot(
+                &mut jetons,
+                &mut mot,
+                &mut dans_mot,
+                &mut cite,
+                &mut apres_virgule,
+                false,
+            ),
+            // PowerShell : `a,b` est un tableau ; chaque élément est un mot,
+            // jugé à part (KOB-437). Entre guillemets, la virgule reste dans
+            // le nom (boucles des guillemets ci-dessous).
+            ',' if ps => {
+                // `-Recurse,src` : PowerShell finit-il le paramètre à la
+                // virgule ? Un mot à tiret hors guillemets qui touche une
+                // virgule sans en suivre une est ambigu : sur la carte plutôt
+                // que deviné (un vrai `-Recurse` y serait caché).
+                // Une valeur collée (`--format=%h,%s`, `-Path:a,b`) ferme le
+                // nom : le mot reste un paramètre, la suite est sa valeur.
+                let parametre = dans_mot && !cite && !apres_virgule && commence_par_un_tiret(&mot);
+                if parametre && (parametre_ouvert(&mot) || mot.ends_with([':', '='])) {
+                    return Err(format!("`{mot},` : paramètre ou valeur ? À valider"));
+                }
+                fin_mot(
+                    &mut jetons,
+                    &mut mot,
+                    &mut dans_mot,
+                    &mut cite,
+                    &mut apres_virgule,
+                    !parametre,
+                );
+                apres_virgule = true;
+            }
             '\'' => {
+                // Un mot à tiret hors guillemets qui se poursuit entre
+                // guillemets (`-Recurse''`) : paramètre ou chaîne ? Ambigu.
+                if ps && dans_mot && !cite && !apres_virgule && parametre_ouvert(&mot) {
+                    return Err(format!(
+                        "`{mot}` suivi de guillemets : paramètre ou valeur ? À valider"
+                    ));
+                }
+                // Après une valeur collée (`--format='%h %s'`), le mot reste
+                // un paramètre.
+                cite |= !(dans_mot && commence_par_un_tiret(&mot));
                 dans_mot = true;
                 i += 1;
                 loop {
@@ -241,6 +312,14 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
                 }
             }
             '"' => {
+                // Un mot à tiret hors guillemets qui se poursuit entre
+                // guillemets (`-Recurse''`) : paramètre ou chaîne ? Ambigu.
+                if ps && dans_mot && !cite && !apres_virgule && parametre_ouvert(&mot) {
+                    return Err(format!(
+                        "`{mot}` suivi de guillemets : paramètre ou valeur ? À valider"
+                    ));
+                }
+                cite |= !(dans_mot && commence_par_un_tiret(&mot));
                 dans_mot = true;
                 i += 1;
                 loop {
@@ -299,11 +378,25 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
             // `\r` seul finit aussi une ligne (PowerShell) : un séparateur,
             // comme `\n` (KOB-298).
             ';' | '\n' | '\r' | '(' | ')' => {
-                fin_mot(&mut jetons, &mut mot, &mut dans_mot);
+                fin_mot(
+                    &mut jetons,
+                    &mut mot,
+                    &mut dans_mot,
+                    &mut cite,
+                    &mut apres_virgule,
+                    false,
+                );
                 jetons.push(Jeton::Op(ch.to_string()));
             }
             '|' => {
-                fin_mot(&mut jetons, &mut mot, &mut dans_mot);
+                fin_mot(
+                    &mut jetons,
+                    &mut mot,
+                    &mut dans_mot,
+                    &mut cite,
+                    &mut apres_virgule,
+                    false,
+                );
                 if c.get(i + 1) == Some(&'|') {
                     i += 1;
                     jetons.push(Jeton::Op("||".into()));
@@ -313,11 +406,25 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
             }
             '&' => {
                 if c.get(i + 1) == Some(&'&') {
-                    fin_mot(&mut jetons, &mut mot, &mut dans_mot);
+                    fin_mot(
+                        &mut jetons,
+                        &mut mot,
+                        &mut dans_mot,
+                        &mut cite,
+                        &mut apres_virgule,
+                        false,
+                    );
                     i += 1;
                     jetons.push(Jeton::Op("&&".into()));
                 } else if c.get(i + 1) == Some(&'>') {
-                    fin_mot(&mut jetons, &mut mot, &mut dans_mot);
+                    fin_mot(
+                        &mut jetons,
+                        &mut mot,
+                        &mut dans_mot,
+                        &mut cite,
+                        &mut apres_virgule,
+                        false,
+                    );
                     i += 1;
                     let mut r = String::from("&>");
                     if c.get(i + 1) == Some(&'>') {
@@ -326,7 +433,14 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
                     }
                     jetons.push(Jeton::Redir(r));
                 } else {
-                    fin_mot(&mut jetons, &mut mot, &mut dans_mot);
+                    fin_mot(
+                        &mut jetons,
+                        &mut mot,
+                        &mut dans_mot,
+                        &mut cite,
+                        &mut apres_virgule,
+                        false,
+                    );
                     jetons.push(Jeton::Op("&".into()));
                 }
             }
@@ -336,8 +450,17 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
                 if dans_mot && (mot.chars().all(|d| d.is_ascii_digit()) || (ps && mot == "*")) {
                     r = std::mem::take(&mut mot);
                     dans_mot = false;
+                    cite = false;
+                    apres_virgule = false;
                 } else {
-                    fin_mot(&mut jetons, &mut mot, &mut dans_mot);
+                    fin_mot(
+                        &mut jetons,
+                        &mut mot,
+                        &mut dans_mot,
+                        &mut cite,
+                        &mut apres_virgule,
+                        false,
+                    );
                 }
                 r.push(ch);
                 while let Some(&n) = c.get(i + 1) {
@@ -369,7 +492,14 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
         }
         i += 1;
     }
-    fin_mot(&mut jetons, &mut mot, &mut dans_mot);
+    fin_mot(
+        &mut jetons,
+        &mut mot,
+        &mut dans_mot,
+        &mut cite,
+        &mut apres_virgule,
+        false,
+    );
     Ok(jetons)
 }
 
@@ -1951,6 +2081,69 @@ fn ressemble_a_un_chemin(v: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// KOB-437 : sous PowerShell, `a,b` est un tableau de deux chemins
+    /// (sonde #396 : `gc a.txt,..\dehors\secret.txt` lit les deux), chacun
+    /// jugé ; entre guillemets, la virgule reste dans le nom.
+    #[test]
+    fn tableaux_powershell_a_virgule() {
+        let x = ctx();
+        for ligne in [
+            "Get-Content Cargo.toml,C:/Windows/win.ini",
+            r"Get-Content Cargo.toml,..\..\..\..\Windows\win.ini",
+            "gc README.md,C:/Users/moi/.ssh/id_rsa",
+            r"gci -Recurse src,..\..\autre",
+            "Select-String motif -Path Cargo.toml,C:/Windows/win.ini",
+            // Un élément qui ressemble à une option ne cache pas le suivant
+            // (relecture sécurité de KOB-437).
+            r"Get-Content Cargo.toml,'-Encoding',..\..\..\..\Windows\win.ini",
+            r"Get-Content Cargo.toml,-Encoding,C:\Windows\win.ini",
+            "gc Cargo.toml,'\u{2013}Tail',C:\\Windows\\win.ini",
+            // Un paramètre collé à une virgule ou à des guillemets : ambigu,
+            // sur la carte (un vrai `-Recurse` n'y est jamais caché).
+            "gci -Recurse,src",
+            "gci -Recurse, src",
+            "gci -Recurse'' src",
+            "gci -Recurse:,src",
+            "gc -Path:Cargo.toml,C:/Windows/win.ini",
+            r"gci -Recurse src,'-Filter',C:\Windows",
+            // Espaces autour de la virgule, virgule unaire, tableau mixte.
+            r"gc Cargo.toml , C:\Windows\win.ini",
+            r"gc Cargo.toml, C:\Windows\win.ini",
+            r"gc ,C:\Windows\win.ini",
+            r"gc 'Cargo.toml',C:\Windows\win.ini",
+        ] {
+            assert_ne!(
+                analyser(ligne, Shell::PowerShell, &x).classe,
+                Classe::Lecture,
+                "{ligne}"
+            );
+        }
+        for ligne in [
+            "Get-Content Cargo.toml,README.md",
+            "Get-Content 'a,b.txt'",
+            "gc \"a,b.txt\"",
+            // Virgule échappée : un seul nom ; propriétés de Select-Object.
+            "gc a`,b.txt",
+            "gci src | Select-Object Name,Length",
+            // Un vrai paramètre reste un paramètre.
+            "Get-Content -Encoding utf8 Cargo.toml",
+            // Une valeur collée ferme le nom du paramètre : pas d'ambiguïté.
+            "git log -5 --format='%h %s'",
+            "gc -Path:Cargo.toml,README.md",
+        ] {
+            assert_eq!(
+                analyser(ligne, Shell::PowerShell, &x).classe,
+                Classe::Lecture,
+                "{ligne}"
+            );
+        }
+        // Sous Bash, la virgule n'est qu'un caractère du nom.
+        assert_eq!(
+            analyser("cat a,b.txt", Shell::Bash, &x).classe,
+            Classe::Lecture
+        );
+    }
 
     /// KOB-434 : les parcours récursifs reconnus, et l'arbre vérifié sans
     /// rien suivre (les liens sont jugés, pas traversés).
