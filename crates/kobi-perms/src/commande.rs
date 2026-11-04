@@ -186,6 +186,21 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
                             }
                         }
                     }
+                    // `Get-Command` livre le texte d'un script (`ScriptContents`,
+                    // sonde #411), même trouvé dans le PATH par un nom nu
+                    // (`gcm npm`) ou un joker. Seul en bout de chaîne, il
+                    // n'affiche que le type, le nom et la source : lu par un
+                    // `|`, ou recevant des noms par un `|`, sur la carte
+                    // (KOB-459).
+                    if shell == Shell::PowerShell
+                        && matches!(nom, "get-command" | "gcm")
+                        && (apres_pipe || op == "|")
+                    {
+                        avis = avis.pire(Avis::ecriture(
+                            Genre::Commande,
+                            format!("`{nom}` dans un `|` peut livrer le texte d'un script : sur la carte"),
+                        ));
+                    }
                     if shell == Shell::PowerShell {
                         source_libre |= SOURCE_LIBRE.contains(&nom);
                         if AMONT_SUR.contains(&nom) {
@@ -935,8 +950,6 @@ const SANS_CHEMIN_PS: &[&str] = &[
     "compare",
     "convertto-json",
     "convertfrom-json",
-    "get-command",
-    "gcm",
     "get-help",
     "get-member",
     "gm",
@@ -1681,6 +1694,14 @@ fn options_interdites(nom: &str, args: &[String]) -> Option<Avis> {
         }
         _ => false,
     };
+    // `gcm -ShowCommandInfo` affiche `Definition` : le corps des fonctions
+    // chargées (modules, profil) (relecture de KOB-459).
+    if matches!(nom, "get-command" | "gcm") && args.iter().any(|x| abrege_ps(x, "-showcommandinfo"))
+    {
+        return ecrit(format!(
+            "`{nom} -ShowCommandInfo` affiche le code des fonctions"
+        ));
+    }
     if liste_dans_un_fichier {
         return ecrit(format!(
             "`{nom}` lit des chemins pris dans un fichier (`files0-from`)"
@@ -3439,6 +3460,48 @@ mod tests {
             "git branch --contains abc",
         ] {
             assert_eq!(analyser(l, Shell::Bash, &x).classe, Classe::Lecture, "{l}");
+        }
+    }
+
+    /// KOB-459 : `Get-Command` sur un script en livre le contenu
+    /// (`ScriptContents`, sonde #411) : son argument est un chemin, jugé ; dans
+    /// un `|`, même sur un nom nu ou un joker, il passe par la carte.
+    #[test]
+    fn get_command_sur_un_script() {
+        let x = ctx();
+        for l in [
+            "gcm C:/Windows/s.ps1",
+            r"Get-Command C:\Users\moi\s.ps1",
+            "gcm ../../s.ps1",
+            "gcm s.ps1 | Select-Object -ExpandProperty ScriptContents",
+            "gcm * | Select-Object -ExpandProperty ScriptContents",
+            "gcm npm | Select-Object -ExpandProperty ScriptContents",
+            "gcm -Name:s.ps1 | Select-Object -ExpandProperty ScriptContents",
+            "gcm -CommandType ExternalScript | Format-List *",
+            "gcm git | ConvertTo-Json",
+            "gci outils | gcm",
+            "gcm -CommandType Function -ShowCommandInfo",
+            "gcm prompt -ShowC",
+        ] {
+            assert_ne!(
+                analyser(l, Shell::PowerShell, &x).classe,
+                Classe::Lecture,
+                "{l}"
+            );
+        }
+        for l in [
+            "gcm git",
+            "Get-Command cargo",
+            "gcm python -All",
+            "gcm -Name git",
+            "gcm s.ps1",
+            "gcm ./outils/s.ps1",
+        ] {
+            assert_eq!(
+                analyser(l, Shell::PowerShell, &x).classe,
+                Classe::Lecture,
+                "{l}"
+            );
         }
     }
 
