@@ -969,7 +969,6 @@ fn chemin_reseau(chemin: &str) -> bool {
 /// lien, rendue en `\\?\…`, ne le rend pas verbatim (KOB-367).
 fn lien_vers_le_reseau(chemin: &Path, peripheriques: bool) -> bool {
     use std::collections::VecDeque;
-    use std::path::Component;
     // Un `:` dans un nom (flux NTFS, `y::$DATA`) est refusé d'emblée : relu
     // seul, ce nom passerait pour un lecteur (`Y:`) et le parcours ne
     // jugerait plus rien, alors que NT ouvre le flux de `y` en suivant son
@@ -977,26 +976,27 @@ fn lien_vers_le_reseau(chemin: &Path, peripheriques: bool) -> bool {
     if peripheriques && (a_deux_points(chemin) || nom_a_barre(chemin)) {
         return true;
     }
-    let mut a_lire: VecDeque<PathBuf> = chemin
-        .components()
-        .map(|c| PathBuf::from(c.as_os_str()))
-        .collect();
+    // Chaque composant garde la nature qu'il avait au découpage, sans être
+    // relu seul comme un chemin (KOB-413). Les noms qui changeraient de
+    // nature (`:`, `/`) restent refusés plus haut : `resolu.join` les
+    // redécouperait (KOB-398, KOB-425).
+    let mut a_lire: VecDeque<Morceau> = decouper(chemin).collect();
     let mut resolu = PathBuf::new();
     let mut liens = 0;
     let verbatim = chemin_verbatim(&chemin.to_string_lossy());
     while let Some(morceau) = a_lire.pop_front() {
-        match morceau.components().next() {
-            Some(Component::CurDir) | None => continue,
-            Some(Component::ParentDir) => {
+        let morceau = match morceau {
+            Morceau::Courant => continue,
+            Morceau::Parent => {
                 resolu.pop();
                 continue;
             }
-            Some(Component::Prefix(_) | Component::RootDir) => {
-                resolu.push(&morceau);
+            Morceau::Debut(debut) => {
+                resolu.push(debut);
                 continue;
             }
-            Some(Component::Normal(_)) => {}
-        }
+            Morceau::Nom(nom) => nom,
+        };
         // Un nom que Win32 changerait (point ou espace final, KOB-398) est
         // refusé comme un nom de périphérique : le chemin ouvert ne serait
         // pas celui qui est jugé ici.
@@ -1062,24 +1062,42 @@ fn lien_vers_le_reseau(chemin: &Path, peripheriques: bool) -> bool {
             if remonte_au_dessus_de_la_racine(&substitue) {
                 return true;
             }
-            let reste: Vec<PathBuf> = a_lire.drain(..).collect();
+            let reste: Vec<Morceau> = a_lire.drain(..).collect();
             resolu = PathBuf::new();
-            a_lire.extend(
-                reduire_sur_le_texte(&substitue)
-                    .components()
-                    .map(|c| PathBuf::from(c.as_os_str())),
-            );
+            a_lire.extend(decouper(&reduire_sur_le_texte(&substitue)));
             a_lire.extend(reste);
             continue;
         }
         if cible.is_absolute() {
             resolu = PathBuf::new();
         }
-        for composant in cible.components().rev() {
-            a_lire.push_front(PathBuf::from(composant.as_os_str()));
+        let cible: Vec<Morceau> = decouper(&cible).collect();
+        for morceau in cible.into_iter().rev() {
+            a_lire.push_front(morceau);
         }
     }
     false
+}
+
+/// Composant du chemin parcouru, avec sa nature établie une fois, au
+/// découpage (KOB-413).
+#[derive(Debug, PartialEq)]
+enum Morceau {
+    /// Préfixe ou racine : le parcours repart de là.
+    Debut(std::ffi::OsString),
+    Parent,
+    Courant,
+    Nom(std::ffi::OsString),
+}
+
+fn decouper(chemin: &Path) -> impl Iterator<Item = Morceau> + '_ {
+    use std::path::Component;
+    chemin.components().map(|c| match c {
+        Component::Prefix(_) | Component::RootDir => Morceau::Debut(c.as_os_str().to_owned()),
+        Component::ParentDir => Morceau::Parent,
+        Component::CurDir => Morceau::Courant,
+        Component::Normal(nom) => Morceau::Nom(nom.to_owned()),
+    })
 }
 
 /// Un `..` du chemin remonterait-il au-dessus de sa racine (ou de son
