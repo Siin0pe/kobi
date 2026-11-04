@@ -2040,7 +2040,10 @@ mod tests {
         let mut x = Contexte::new(vec![declare.clone()]);
         x.cwd = Some(declare.clone());
         let racines = racines_du_parcours("gci", &[], &x, &declare).unwrap();
-        assert_eq!(racines, vec![reel.join("code")], "racine résolue");
+        // Résolue jusqu'au bout (sous macOS, le dossier temporaire lui-même
+        // est sous `/var` → `/private/var`).
+        let attendu = crate::classement::resolu(&reel.join("code")).unwrap();
+        assert_eq!(racines, vec![attendu], "racine résolue");
         assert!(arbre_sans_lien_qui_sort(&x, &racines, &declare).is_ok());
         symlink(dehors.path(), declare.join("src/sortie")).unwrap();
         assert!(arbre_sans_lien_qui_sort(&x, &racines, &declare).is_err());
