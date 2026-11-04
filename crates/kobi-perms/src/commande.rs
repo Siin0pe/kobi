@@ -2212,7 +2212,15 @@ fn arg_d_executable(x: &str) -> &str {
 
 /// Argument tel que where.exe le reçoit (voir [`arg_d_executable`]).
 fn arg_de_where(x: &str) -> &str {
-    arg_d_executable(x)
+    let x = arg_d_executable(x);
+    // Git Bash (MSYS) passe `//R` à where.exe comme `/R` : c'est même la
+    // forme naturelle, `/R` seul y étant pris pour un chemin (KOB-449). Comme
+    // MSYS, seulement sans autre `/` : `//hôte/partage` est un chemin réseau,
+    // transmis tel quel.
+    match x.strip_prefix('/') {
+        Some(r) if r.starts_with('/') && !r[1..].contains('/') => r,
+        _ => x,
+    }
 }
 
 /// `/R` ou `-R` de where.exe, sous toutes ses formes.
@@ -3166,6 +3174,55 @@ mod tests {
             &v_mots("-R . *.rs"),
             Shell::Bash
         ));
+    }
+
+    /// KOB-449 : sous Git Bash, `//R` est le `/R` de where.exe (MSYS le
+    /// ramène à `/R`) : son dossier est jugé, comme celui de `/R`.
+    #[test]
+    fn where_double_barre_sous_git_bash() {
+        let x = ctx();
+        let cle = |l: &str| analyser(l, Shell::Bash, &x).classe.cle();
+        for l in [
+            "where //R /c/Users/moi/.ssh '*'",
+            "where //r C:/Users/moi/.ssh '*'",
+            "where //R src //R /c/Users/moi/.ssh '*'",
+        ] {
+            assert_ne!(cle(l), "lecture", "{l}");
+        }
+        // Un chemin réseau (`//hôte/partage`) n'est pas ramené à un chemin
+        // local : il reste hors des dossiers.
+        for l in [
+            "where //c/Users/moi/Desktop/kobi:'*'",
+            "where //cygdrive/c/Users/moi/Desktop/kobi:'*'",
+        ] {
+            assert_ne!(cle(l), "lecture", "{l}");
+            assert_ne!(
+                analyser(
+                    &l.replace("where", "where.exe").replace('\'', ""),
+                    Shell::PowerShell,
+                    &x
+                )
+                .classe
+                .cle(),
+                "lecture",
+                "{l} (PowerShell)"
+            );
+        }
+        // Variante à barres obliques inverses sous PowerShell : jamais une
+        // lecture (where.exe y voit un chemin réseau).
+        assert_ne!(
+            analyser(
+                r"where.exe //c\Users\moi\Desktop\kobi:*",
+                Shell::PowerShell,
+                &x
+            )
+            .classe
+            .cle(),
+            "lecture"
+        );
+        assert_eq!(cle("where //R C:/Users/moi/Desktop/kobi '*.rs'"), "lecture");
+        assert_eq!(cle("where //Q git"), "lecture");
+        assert_ne!(cle("where //X git"), "lecture");
     }
 
     fn v_mots(l: &str) -> Vec<String> {
