@@ -1222,6 +1222,26 @@ fn commande(
         &mots[1..]
     };
     if CD.contains(&nom.as_str()) {
+        // PowerShell : un paramètre qui prend une valeur (`-ea 0`,
+        // `-StackName .`) ferait prendre cette valeur pour le dossier visé ;
+        // seuls `-Path`, `-LiteralPath` et `-PassThru` sont suivis, et un seul
+        // dossier (KOB-458).
+        if shell == Shell::PowerShell {
+            let autre = args.iter().any(|a| {
+                a.starts_with('-')
+                    && !["-path", "-literalpath", "-passthru"]
+                        .iter()
+                        .any(|o| abrege_ps(a, o))
+                    && !a.eq_ignore_ascii_case("-lp")
+            });
+            let dossiers = args.iter().filter(|a| !a.starts_with('-')).count();
+            if autre || dossiers > 1 {
+                return Avis::ecriture(
+                    Genre::Commande,
+                    "`cd` avec un paramètre ou plusieurs dossiers : vérifié sur la carte",
+                );
+            }
+        }
         let Some(cible) = args.iter().find(|a| !a.starts_with('-')) else {
             return Avis::refus("`cd` sans dossier mène hors des dossiers de code");
         };
@@ -1333,6 +1353,11 @@ fn racines_du_parcours(
     cwd: &Path,
 ) -> Result<Vec<PathBuf>, Avis> {
     let mut textes: Vec<&str> = Vec::new();
+    // Un paramètre que le parcours ne connaît pas peut prendre une valeur
+    // (`-ea 0`, `-Exclude a,b`) : cette valeur passerait pour une racine et
+    // cacherait le dossier courant, d'où partirait vraiment le parcours. Il
+    // est alors parcouru aussi (KOB-457).
+    let mut doute = false;
     if nom == "where" {
         if let Some(i) = args.iter().position(|x| est_r_de_where(x)) {
             textes.extend(args.get(i + 1).map(String::as_str));
@@ -1341,7 +1366,14 @@ fn racines_du_parcours(
         let mut i = 0;
         while i < args.len() {
             let x = args[i].as_str();
-            if x.starts_with('-') && x.len() > 1 {
+            // Un nom de paramètre n'a ni `/` ni `\` : `–x\..\..` est un chemin
+            // pour PowerShell, comme dans `chemins()` (KOB-434), donc une
+            // racine du parcours (KOB-457).
+            let chemin_a_tiret = x
+                .split([':', '='])
+                .next()
+                .is_some_and(|o| o.contains(['/', '\\']));
+            if x.starts_with('-') && x.len() > 1 && !chemin_a_tiret {
                 let (option, valeur) = match x.split_once([':', '=']) {
                     Some((o, v)) => (o, Some(v)),
                     None => (x, None),
@@ -1355,6 +1387,22 @@ fn racines_du_parcours(
                     || options_a_valeur(nom)
                         .iter()
                         .any(|o| *o != "-depth" && abrege_ps(option, o));
+                let sur = chemin
+                    || est_depth(option)
+                    || [
+                        "-recurse",
+                        "-filter",
+                        "-force",
+                        "-file",
+                        "-directory",
+                        "-name",
+                        "-hidden",
+                        "-readonly",
+                        "-system",
+                    ]
+                    .iter()
+                    .any(|o| abrege_ps(option, o));
+                doute |= !sur;
                 match (chemin, valeur) {
                     (true, Some(v)) => textes.push(v),
                     (true, None) => {
@@ -1402,8 +1450,12 @@ fn racines_du_parcours(
             }
         }
     }
-    if racines.is_empty() {
-        racines.extend(crate::classement::resolu(cwd));
+    if racines.is_empty() || doute {
+        if let Some(r) = crate::classement::resolu(cwd) {
+            if !racines.contains(&r) {
+                racines.push(r);
+            }
+        }
     }
     Ok(racines)
 }
@@ -2944,10 +2996,15 @@ mod tests {
             r"Get-Content '-x\..\..\..\Windows\win.ini'",
             r"cat '-x\..\..\..\Windows\win.ini'",
             r"type '-x\..\..\..\Windows\win.ini'",
+        ] {
+            assert_eq!(cle(l), "refus", "{l}");
+        }
+        // Avec un paramètre, `cd`/`pushd` passe par la carte (KOB-458).
+        for l in [
             r"cd '-x\..\..\..\Windows' -ea 0; gc win.ini",
             r"pushd '-x\..\..\..\Windows' -StackName .; gc win.ini",
         ] {
-            assert_eq!(cle(l), "refus", "{l}");
+            assert_ne!(cle(l), "lecture", "{l}");
         }
     }
 
@@ -3142,6 +3199,94 @@ mod tests {
                 Classe::Lecture,
                 "{l} par une jonction qui sort"
             );
+        }
+    }
+
+    /// KOB-457 : la valeur d'un paramètre que le parcours ne connaît pas
+    /// (`-ErrorAction SilentlyContinue`, `-ea 0`, `-Exclude a,b`) ne cache plus
+    /// le dossier courant : il est parcouru aussi.
+    #[test]
+    fn parcours_avec_un_parametre_inconnu_garde_le_dossier_courant() {
+        let code = tempfile::tempdir().unwrap();
+        let c = code.path();
+        let x = Contexte::new(vec![c.to_path_buf()]);
+        let courant = crate::classement::resolu(c).unwrap();
+        for l in [
+            "-Recurse -ErrorAction SilentlyContinue",
+            "-Recurse -ea 0",
+            "-Recurse -Exclude target node_modules",
+        ] {
+            let r = racines_du_parcours("get-childitem", &v_mots(l), &x, c).unwrap();
+            assert!(r.contains(&courant), "{l} : {r:?}");
+        }
+        // Un mot à tiret avec `/` ou `\` est un chemin pour PowerShell : depuis
+        // `src`, `-x/../..` part du dossier de code, pas de `src`.
+        std::fs::create_dir_all(c.join("src")).unwrap();
+        let r = racines_du_parcours(
+            "get-childitem",
+            &v_mots("-Recurse -x/../.."),
+            &x,
+            &c.join("src"),
+        )
+        .unwrap();
+        assert!(r.contains(&courant), "-x/../.. : {r:?}");
+    }
+
+    /// KOB-457, sous Windows : avec une jonction qui sort, ces parcours
+    /// passent par la carte, comme `Get-ChildItem -Recurse` seul.
+    #[cfg(windows)]
+    #[test]
+    fn parcours_avec_un_parametre_inconnu_et_jonction_qui_sort() {
+        let code = tempfile::tempdir().unwrap();
+        let dehors = tempfile::tempdir().unwrap();
+        let c = code.path();
+        let mut x = Contexte::new(vec![c.to_path_buf()]);
+        x.cwd = Some(c.to_path_buf());
+        let j = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(c.join("jonction"))
+            .arg(dehors.path())
+            .output()
+            .unwrap();
+        assert!(j.status.success(), "mklink /J");
+        for l in [
+            "Get-ChildItem -Recurse -ErrorAction SilentlyContinue",
+            "Get-ChildItem -Recurse -ea 0",
+            "Get-ChildItem -Recurse -Exclude target,node_modules",
+        ] {
+            assert_ne!(
+                analyser(l, Shell::PowerShell, &x).classe,
+                Classe::Lecture,
+                "{l}"
+            );
+        }
+    }
+
+    /// KOB-458 : sous PowerShell, un paramètre qui prend une valeur ne fait
+    /// pas prendre cette valeur pour le dossier visé par `cd` ou `pushd`.
+    #[test]
+    fn cd_avec_un_parametre_sous_powershell() {
+        let racine = tempfile::tempdir().unwrap();
+        let code = racine.path().join("code");
+        let dehors = racine.path().join("dehors");
+        std::fs::create_dir_all(code.join("src")).unwrap();
+        std::fs::create_dir_all(&dehors).unwrap();
+        std::fs::write(dehors.join("secret.txt"), "x").unwrap();
+        std::fs::write(code.join("src/a.rs"), "").unwrap();
+        let mut x = Contexte::new(vec![code.clone()]);
+        x.cwd = Some(code.clone());
+        let d = dehors.display().to_string();
+        let ps = Shell::PowerShell;
+        for l in [
+            format!("cd -ea 0 {d}; gc secret.txt"),
+            format!("cd -ErrorAction SilentlyContinue {d}; gc secret.txt"),
+            format!("pushd -StackName . {d}; gc secret.txt"),
+            "cd -ea 0 ../dehors; gc secret.txt".to_owned(),
+        ] {
+            assert_ne!(analyser(&l, ps, &x).classe, Classe::Lecture, "{l}");
+        }
+        for l in ["cd src; gc a.rs", "cd -Path src; gc a.rs"] {
+            assert_eq!(analyser(l, ps, &x).classe, Classe::Lecture, "{l}");
         }
     }
 
