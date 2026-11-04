@@ -2985,6 +2985,75 @@ mod tests {
         }
     }
 
+    /// Sonde Windows (à fermer sans merge) : classement par Kobi et effet
+    /// réel de gcm, Join-Path/Split-Path -Resolve et `:` sous Git Bash.
+    #[cfg(windows)]
+    #[test]
+    fn sonde_windows_divers() {
+        let code = tempfile::tempdir().unwrap();
+        let dehors = tempfile::tempdir().unwrap();
+        let c = code.path();
+        let d = dehors.path();
+        std::fs::write(d.join("s.ps1"), "'SECRET-PS1'").unwrap();
+        std::fs::write(d.join("secret.txt"), "SECRET-TXT").unwrap();
+        let j = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(c.join("a\u{F03A}b"))
+            .arg(d)
+            .output()
+            .unwrap();
+        eprintln!(
+            "SONDE mklink {:?} {}",
+            j.status,
+            String::from_utf8_lossy(&j.stdout)
+        );
+        let mut x = Contexte::new(vec![c.to_path_buf()]);
+        x.cwd = Some(c.to_path_buf());
+        let dd = d.display().to_string();
+        let ps = [
+            format!(r"gcm {dd}\s.ps1 | Select-Object -ExpandProperty ScriptContents"),
+            format!(r"gcm {dd}\s.ps1 | Select-Object ScriptBlock"),
+            format!(r"gcm {dd}\secret.txt | Format-List Name,Source,FileVersionInfo"),
+            format!(r"Get-Command -Name {dd}\s.ps1 -Syntax"),
+        ];
+        for l in &ps {
+            let classe = analyser(l, Shell::PowerShell, &x).classe;
+            let r = std::process::Command::new("powershell")
+                .args(["-NoProfile", "-Command", l])
+                .current_dir(c)
+                .output()
+                .unwrap();
+            eprintln!(
+                "SONDE PS {l} => {classe:?} ; sortie : {} {}",
+                String::from_utf8_lossy(&r.stdout).replace('\n', " | "),
+                String::from_utf8_lossy(&r.stderr)
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+            );
+        }
+        let bash = r"C:\Program Files\Git\bin\bash.exe";
+        for l in ["cat 'a:b/secret.txt'", "cat a:b/secret.txt", "ls a:b"] {
+            let classe = analyser(l, Shell::Bash, &x).classe;
+            let r = std::process::Command::new(bash)
+                .args(["-c", l])
+                .current_dir(c)
+                .output();
+            let sortie = match r {
+                Ok(r) => format!(
+                    "{} {}",
+                    String::from_utf8_lossy(&r.stdout).replace('\n', " | "),
+                    String::from_utf8_lossy(&r.stderr)
+                        .lines()
+                        .next()
+                        .unwrap_or("")
+                ),
+                Err(e) => format!("bash absent : {e}"),
+            };
+            eprintln!("SONDE BASH {l} => {classe:?} ; sortie : {sortie}");
+        }
+    }
+
     const KOBI: &str = "C:/Users/moi/Desktop/kobi";
 
     fn ctx() -> Contexte {
