@@ -75,7 +75,18 @@ impl Contexte {
         let Some(cible) = absolu(chemin, depuis) else {
             return false;
         };
-        if !self.dossiers.iter().any(|d| sous(&cible, d)) {
+        // Sur le texte d'abord, sans toucher au disque pour un chemin d'ailleurs
+        // (un partage réseau). Un dossier déclaré se compare aussi sous sa
+        // forme résolue : un parcours qui arrive par `/private/var/…` (macOS)
+        // ou par la cible d'une jonction reste dans `/var/…` déclaré
+        // (KOB-434).
+        let dossiers: Vec<PathBuf> = self.dossiers.iter().filter_map(|d| resolu(d)).collect();
+        if !self
+            .dossiers
+            .iter()
+            .chain(&dossiers)
+            .any(|d| sous(&cible, d))
+        {
             return false;
         }
         let brut = match depuis {
@@ -88,7 +99,6 @@ impl Contexte {
         // texte (Claude Code, Win32, PowerShell, Git Bash le réduisent avant
         // d'ouvrir). Les deux doivent rester dans les dossiers : sinon
         // `s1/../y`, où `s1` reste dedans et `y` sort, passait.
-        let dossiers: Vec<PathBuf> = self.dossiers.iter().filter_map(|d| resolu(d)).collect();
         [brut, cible]
             .iter()
             .all(|p| resolu(p).is_some_and(|reel| dossiers.iter().any(|d| sous(&reel, d))))

@@ -2023,6 +2023,29 @@ mod tests {
         );
     }
 
+    /// KOB-434 : un dossier de code déclaré sous un lien (comme `/var` →
+    /// `/private/var` sous macOS) se parcourt par sa forme résolue sans
+    /// paraître sortir de lui-même ; un lien qui sort reste vu.
+    #[cfg(unix)]
+    #[test]
+    fn dossier_declare_sous_un_lien() {
+        use std::os::unix::fs::symlink;
+        let base = tempfile::tempdir().unwrap();
+        let dehors = tempfile::tempdir().unwrap();
+        let reel = base.path().join("prive");
+        std::fs::create_dir_all(reel.join("code/src")).unwrap();
+        symlink(&reel, base.path().join("var")).unwrap();
+        let declare = base.path().join("var/code");
+        symlink(declare.join("src"), declare.join("vers_src")).unwrap();
+        let mut x = Contexte::new(vec![declare.clone()]);
+        x.cwd = Some(declare.clone());
+        let racines = racines_du_parcours("gci", &[], &x, &declare).unwrap();
+        assert_eq!(racines, vec![reel.join("code")], "racine résolue");
+        assert!(arbre_sans_lien_qui_sort(&x, &racines, &declare).is_ok());
+        symlink(dehors.path(), declare.join("src/sortie")).unwrap();
+        assert!(arbre_sans_lien_qui_sort(&x, &racines, &declare).is_err());
+    }
+
     /// KOB-434 : `-Depth` implique `-Recurse` ; un tiret Unicode est un
     /// tiret de paramètre pour PowerShell ; `where /R` juge son dossier.
     #[test]
