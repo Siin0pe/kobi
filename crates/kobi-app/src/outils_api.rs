@@ -1183,9 +1183,10 @@ fn nom_a_barre(chemin: &Path) -> bool {
 /// (verbatim), mais NT, en substituant le lien, ne coupe que sur `\` : une
 /// cible relative `x\../y` lui fait traverser `x` (lien vers le réseau,
 /// erreur 67 sur windows-latest, sonde #383) quand le parcours juge `y`.
-/// Une cible légitime n'en a pas besoin : refusée (KOB-425).
+/// Une cible légitime n'en a pas besoin : refusée (KOB-425). Ailleurs, `/`
+/// est le séparateur de toute cible : rien à juger.
 fn cible_a_barre(cible: &Path) -> bool {
-    cible.as_os_str().to_string_lossy().contains('/')
+    cfg!(windows) && cible.as_os_str().to_string_lossy().contains('/')
 }
 
 /// Un nom à point ou espace final (`x.`, `d `) : Win32 les retire d'un

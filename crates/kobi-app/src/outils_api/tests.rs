@@ -521,8 +521,9 @@ fn nom_a_barre_d_une_cible_verbatim_refuse() {
 #[test]
 fn nom_a_barre_seulement_en_verbatim() {
     assert!(!nom_a_barre(Path::new("a/../y")));
-    // Dans le texte d'une cible, quelle que soit sa forme.
-    assert!(cible_a_barre(Path::new("x/../y")));
+    // Dans le texte d'une cible, quelle que soit sa forme, sous Windows
+    // seulement : ailleurs, c'est le séparateur (`/var` → `private/var`).
+    assert_eq!(cible_a_barre(Path::new("x/../y")), cfg!(windows));
     assert!(!cible_a_barre(Path::new(r"x\..\y")));
     #[cfg(windows)]
     assert!(nom_a_barre(Path::new(r"\\?\C:\x\../y")));
