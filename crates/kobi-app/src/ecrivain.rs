@@ -4,7 +4,9 @@
 //! lent, cela ne retarde ni les questions ni l'interface.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
+use std::sync::Arc;
 
 use kobi_session::stockage::{Conversation, Origine, Qui, ReunionOuverte, Stockage};
 use kobi_stt::Segment;
@@ -30,8 +32,9 @@ impl Disque {
 
 type Ecriture = Box<dyn FnOnce(&mut Disque) + Send>;
 
-/// Poignée de l'écrivain.
-pub struct Ecrivain(Sender<Ecriture>);
+/// Poignée de l'écrivain, et sa demande d'arrêt sans finir la file
+/// (KOB-427).
+pub struct Ecrivain(Sender<Ecriture>, Arc<AtomicBool>);
 
 /// Ce que l'écrivain signale au chef.
 #[derive(Debug, Clone, PartialEq)]
@@ -56,6 +59,8 @@ impl Ecrivain {
     /// Lance le fil ; `compte` reçoit ce que le chef doit savoir.
     pub fn lancer(compte: impl Fn(Nouvelle) + Send + 'static) -> Self {
         let (tx, rx) = mpsc::channel::<Ecriture>();
+        let arret = Arc::new(AtomicBool::new(false));
+        let arrete = Arc::clone(&arret);
         std::thread::Builder::new()
             .name("ecrivain".into())
             .spawn(move || {
@@ -64,11 +69,30 @@ impl Ecrivain {
                     ..Disque::default()
                 };
                 while let Ok(ecriture) = rx.recv() {
+                    if arrete.load(Ordering::SeqCst) {
+                        break;
+                    }
                     ecriture(&mut disque);
                 }
             })
             .expect("fil de l'écrivain");
-        Self(tx)
+        Self(tx, arret)
+    }
+
+    /// Arrête l'écrivain sans finir sa file : fin d'un essai, dont le
+    /// dossier part avec lui (KOB-427). Son fil termine au plus l'écriture
+    /// en cours, puis s'arrête de lui-même ; il n'est pas attendu (une
+    /// écriture synchronisée sur disque coûtait jusqu'à une seconde par
+    /// essai).
+    pub fn abandonner(self) {
+        let Self(tx, arret) = self;
+        arret.store(true, Ordering::SeqCst);
+        drop(tx);
+    }
+
+    /// Un écrivain sans fil, déjà fermé : ce qu'on lui confie est perdu.
+    pub fn ferme() -> Self {
+        Self(mpsc::channel().0, Arc::new(AtomicBool::new(false)))
     }
 
     fn envoyer(&self, ecriture: impl FnOnce(&mut Disque) + Send + 'static) {

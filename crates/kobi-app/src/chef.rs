@@ -165,6 +165,11 @@ pub enum Message {
     /// L'écoute est mise en pause hors réunion : la conversation se termine
     /// et Kobi revient en veille (KOB-238).
     EcouteCoupee,
+    /// Arrête le fil du chef (fermeture de l'app d'essai, KOB-427) :
+    /// l'écrivain se ferme, la boucle se termine. L'app, elle, s'arrête
+    /// avec le processus.
+    #[cfg_attr(not(test), allow(dead_code))]
+    Arreter,
     /// Segment final de la transcription continue, et l'instant (horloge du
     /// système) où sa fin a été dite : sous charge, il arrive bien après
     /// (KOB-198).
@@ -749,16 +754,24 @@ pub fn installer<R: Runtime>(
         ecrivain,
         Duration::from_secs(60 * u64::from(intervalle_min.max(1))),
     ))));
-    let app = app.clone();
-    std::thread::Builder::new()
-        .name("chef".into())
-        .spawn(move || {
-            // Le runtime vit aussi longtemps que le fil.
-            let _rt = rt;
-            boucle(app, rx)
-        })
-        .expect("fil du chef");
+    let fil = {
+        let app = app.clone();
+        std::thread::Builder::new()
+            .name("chef".into())
+            .spawn(move || {
+                // Le runtime vit aussi longtemps que le fil.
+                let _rt = rt;
+                boucle(app, rx)
+            })
+            .expect("fil du chef")
+    };
+    app.manage(FilDuChef(Mutex::new(Some(fil))));
 }
+
+/// Fil du chef, à joindre après `Message::Arreter` (KOB-427, essais).
+pub struct FilDuChef(
+    #[cfg_attr(not(test), allow(dead_code))] pub Mutex<Option<std::thread::JoinHandle<()>>>,
+);
 
 fn boucle<R: Runtime>(app: AppHandle<R>, rx: Receiver<Message>) {
     loop {
@@ -769,6 +782,13 @@ fn boucle<R: Runtime>(app: AppHandle<R>, rx: Receiver<Message>) {
         };
         let chef = app.state::<ChefPartage<R>>();
         let mut chef = chef.0.lock().unwrap_or_else(|e| e.into_inner());
+        if matches!(message, Some(Message::Arreter)) {
+            // Fin d'un essai : l'écrivain s'arrête sans finir sa file (le
+            // dossier d'essai part avec lui) et son fil est joint ; le
+            // runtime du cerveau part avec ce fil (KOB-427).
+            std::mem::replace(&mut chef.ecrivain, Ecrivain::ferme()).abandonner();
+            return;
+        }
         if let Some(m) = message {
             chef.recevoir(m);
         }
@@ -1028,6 +1048,8 @@ impl<R: Runtime> Chef<R> {
             Message::SansQuestion => {
                 self.transition(&[Evenement::PasDeQuestion]);
             }
+            // Traité par la boucle, qui s'arrête.
+            Message::Arreter => {}
             Message::EcouteCoupee => {
                 // Micro coupé : plus rien ne fera passer le délai de la
                 // conversation, elle se termine tout de suite (KOB-238).
@@ -3951,14 +3973,40 @@ mod tests {
 
     /// Réunion menée par le vrai chef, avec un Claude qui ne répond jamais :
     /// les comptes rendus sont injectés à la main.
-    fn chef_en_essai() -> (tauri::App<tauri::test::MockRuntime>, tempfile::TempDir) {
+    /// App d'essai du chef. À sa fin, le fil du chef s'arrête, l'écrivain se
+    /// ferme et leurs fils sont joints : un essai ne laisse aucun fil
+    /// derrière lui (KOB-427).
+    struct Essai(Option<tauri::App<tauri::test::MockRuntime>>);
+
+    impl std::ops::Deref for Essai {
+        type Target = tauri::App<tauri::test::MockRuntime>;
+
+        fn deref(&self) -> &Self::Target {
+            self.0.as_ref().expect("app d'essai")
+        }
+    }
+
+    impl Drop for Essai {
+        fn drop(&mut self) {
+            let Some(app) = self.0.take() else { return };
+            if let Some(bus) = app.try_state::<Bus>() {
+                let _ = bus.0.lock().map(|tx| tx.send(Message::Arreter));
+            }
+            let fil = app
+                .try_state::<FilDuChef>()
+                .and_then(|f| f.0.lock().ok().and_then(|mut f| f.take()));
+            if let Some(fil) = fil {
+                let _ = fil.join();
+            }
+        }
+    }
+
+    fn chef_en_essai() -> (Essai, tempfile::TempDir) {
         let jamais: Fabrique = Arc::new(|_| Box::pin(std::future::pending()));
         chef_en_essai_avec(jamais)
     }
 
-    fn chef_en_essai_avec(
-        fabrique: Fabrique,
-    ) -> (tauri::App<tauri::test::MockRuntime>, tempfile::TempDir) {
+    fn chef_en_essai_avec(fabrique: Fabrique) -> (Essai, tempfile::TempDir) {
         use tauri::test::{mock_builder, mock_context, noop_assets};
         let dir = tempfile::tempdir().unwrap();
         let app = crate::session::installer(mock_builder())
@@ -3968,7 +4016,7 @@ mod tests {
         cfg.stockage.dossier = Some(dir.path().join("donnees"));
         crate::stockage::installer(app.handle(), &cfg, None);
         installer(app.handle(), fabrique, 5, cerveau::Delais::default());
-        (app, dir)
+        (Essai(Some(app)), dir)
     }
 
     fn avec_chef<T>(
@@ -8258,6 +8306,10 @@ mod tests {
                 .and_then(|g| g.parse().ok())
                 .unwrap_or(LONGUEUR);
             let mut h = Hasard(graine);
+            // Un premier cas, pour que les fils durables du processus (pool
+            // de tests, runtime) existent déjà avant la mesure.
+            let _ = verifier(&[Ev::Tic]);
+            let fils_avant = fils_du_processus();
             for numero in 0..suites {
                 let suite: Vec<Ev> = (0..longueur).map(|_| tirer(&mut h)).collect();
                 if verifier(&suite).is_err() {
@@ -8265,6 +8317,27 @@ mod tests {
                     panic!("suite n° {numero} : {raison}\nsuite minimale : {minimale:#?}");
                 }
             }
+            // Chaque cas joint ses fils : leur nombre ne grossit pas avec le
+            // nombre de cas (KOB-427). Une fuite en ajoutait environ quatre
+            // par cas ; la marge couvre les autres tests qui tournent en
+            // même temps.
+            if let (Some(avant), Some(apres)) = (fils_avant, fils_du_processus()) {
+                assert!(
+                    apres < avant + 100,
+                    "{suites} cas : {avant} fils avant, {apres} après"
+                );
+            }
+        }
+
+        /// Nombre de fils du processus (Linux, `/proc/self/status`).
+        fn fils_du_processus() -> Option<usize> {
+            std::fs::read_to_string("/proc/self/status")
+                .ok()?
+                .lines()
+                .find_map(|l| l.strip_prefix("Threads:"))?
+                .trim()
+                .parse()
+                .ok()
         }
     }
 }
