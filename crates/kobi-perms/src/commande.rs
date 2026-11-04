@@ -1369,6 +1369,14 @@ fn commande(
     if let Some(a) = options_interdites(&nom, args) {
         return a;
     }
+    // git exécute ce que dit la config du dépôt visé (`core.fsmonitor` sur
+    // `git status`, `diff.external` d'un dépôt nu intégré sur `git diff`,
+    // KOB-469) : seule une config connue sans effet passe.
+    if nom == "git" {
+        if let Err(raison) = config_git_sure(cwd, args) {
+            return Avis::ecriture(Genre::Commande, raison);
+        }
+    }
     // `where` est le programme `where.exe` sauf sous PowerShell, où seul le
     // nom avec `.exe` l'appelle (sans, c'est l'alias `Where-Object`).
     if nom == "where" && (shell != Shell::PowerShell || premier.to_lowercase().ends_with(".exe")) {
@@ -2061,6 +2069,325 @@ fn script_sed_sur(script: &str) -> bool {
     })
 }
 
+/// Le dépôt que `git` va lire est-il sans effet ? Le dossier de départ
+/// (`-C` compris) est résolu en chemin réel, puis chaque dossier jusqu'à la
+/// racine est examiné, sans s'arrêter au premier dépôt trouvé : un `.git`
+/// (dossier ou fichier `gitdir:`), ou tout ce qui ressemble à un dépôt nu
+/// (`HEAD` de n'importe quel type, avec `objects` ou `refs`). Pour chacun :
+/// la config (`config`, `config.worktree`, `commondir`) passe la liste
+/// blanche, aucun hook autre qu'un `.sample`, pas d'`alternates`, et de même
+/// pour ses sous-modules (`modules/`, `.gitmodules`). Tout doute est une
+/// raison de passer par la carte (KOB-469).
+fn config_git_sure(cwd: &Path, args: &[String]) -> Result<(), String> {
+    let doute = |quoi: String| Err(format!("dépôt git {quoi} : sur la carte"));
+    let mut depart = cwd.to_path_buf();
+    let mut i = 0;
+    while let Some(x) = args.get(i) {
+        if x == "-C" {
+            match args.get(i + 1) {
+                Some(d) if !a_des_jokers(d) => depart = depart.join(d),
+                _ => return doute("désigné par un `-C` incertain".into()),
+            }
+            i += 2;
+            continue;
+        }
+        if x.starts_with("--git-dir") || x.starts_with("--work-tree") || x == "--bare" {
+            return doute(format!("désigné par `{x}`"));
+        }
+        if !x.starts_with('-') {
+            break;
+        }
+        i += 1;
+    }
+    if !depart.is_absolute() {
+        return Ok(());
+    }
+    let Some(reel) = crate::classement::resolu(&depart) else {
+        return doute(format!("introuvable ({})", depart.display()));
+    };
+    let existe = |p: &Path| std::fs::symlink_metadata(p).is_ok();
+    let mut depots: Vec<(PathBuf, Option<PathBuf>)> = Vec::new();
+    for d in reel.ancestors() {
+        let point_git = d.join(".git");
+        match std::fs::symlink_metadata(&point_git) {
+            Ok(m) if m.is_file() => {
+                let Ok(texte) = std::fs::read_to_string(&point_git) else {
+                    return doute(format!("illisible ({})", point_git.display()));
+                };
+                let Some(chemin) = texte.trim().strip_prefix("gitdir:") else {
+                    return doute(format!("inattendu ({})", point_git.display()));
+                };
+                depots.push((d.join(chemin.trim()), Some(d.to_path_buf())));
+            }
+            Ok(_) => depots.push((point_git, Some(d.to_path_buf()))),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return doute(format!("illisible ({})", point_git.display())),
+        }
+        if existe(&d.join("HEAD")) && (existe(&d.join("objects")) || existe(&d.join("refs"))) {
+            depots.push((d.to_path_buf(), None));
+        }
+    }
+    let mut vus = 0usize;
+    while let Some((git_dir, arbre)) = depots.pop() {
+        vus += 1;
+        if vus > 200 {
+            return doute("trop de dépôts imbriqués".into());
+        }
+        let mut dossiers = vec![git_dir.clone()];
+        match std::fs::read_to_string(git_dir.join("commondir")) {
+            Ok(c) => dossiers.push(git_dir.join(c.trim())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return doute("illisible (commondir)".into()),
+        }
+        for g in &dossiers {
+            for nom in ["config", "config.worktree"] {
+                match std::fs::read_to_string(g.join(nom)) {
+                    Ok(texte) => {
+                        if let Some(cle) = cle_git_a_effet(&texte) {
+                            return doute(format!("`{cle}` ({})", g.join(nom).display()));
+                        }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(_) => return doute(format!("illisible ({})", g.join(nom).display())),
+                }
+            }
+            match std::fs::read_dir(g.join("hooks")) {
+                Ok(entrees) => {
+                    for e in entrees.flatten() {
+                        if !e.file_name().to_string_lossy().ends_with(".sample") {
+                            return doute(format!("avec un hook ({})", e.path().display()));
+                        }
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return doute(format!("illisible ({})", g.join("hooks").display())),
+            }
+            for alt in ["objects/info/alternates", "objects/info/http-alternates"] {
+                if existe(&g.join(alt)) {
+                    return doute(format!(
+                        "avec des objets ailleurs ({})",
+                        g.join(alt).display()
+                    ));
+                }
+            }
+            // Sous-modules absorbés : `modules/<nom>/` (à toute profondeur).
+            let mut a_voir = vec![g.join("modules")];
+            while let Some(dossier) = a_voir.pop() {
+                let entrees = match std::fs::read_dir(&dossier) {
+                    Ok(e) => e,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(_) => return doute("illisible (modules)".into()),
+                };
+                for e in entrees.flatten() {
+                    let chemin = e.path();
+                    if chemin.join("HEAD").exists() || chemin.join("config").exists() {
+                        depots.push((chemin, None));
+                    } else if chemin.is_dir() {
+                        a_voir.push(chemin);
+                    }
+                    if depots.len() > 200 {
+                        return doute("trop de sous-modules".into());
+                    }
+                }
+            }
+        }
+        // Sous-modules de l'index (gitlinks, mode 160000), même sans
+        // `.gitmodules` : `git status` entre dans leur `.git`.
+        if let Some(arbre) = &arbre {
+            let gitlinks = match gitlinks_de_l_index(&git_dir) {
+                Ok(g) => g,
+                Err(raison) => return doute(raison),
+            };
+            for c in gitlinks {
+                let sous = arbre.join(&c);
+                let point_git = sous.join(".git");
+                match std::fs::symlink_metadata(&point_git) {
+                    Ok(m) if m.is_file() => {
+                        let Ok(texte) = std::fs::read_to_string(&point_git) else {
+                            return doute("sous-module illisible".into());
+                        };
+                        let Some(chemin) = texte.trim().strip_prefix("gitdir:") else {
+                            return doute(format!("inattendu ({})", point_git.display()));
+                        };
+                        depots.push((sous.join(chemin.trim()), Some(sous)));
+                    }
+                    Ok(_) => depots.push((point_git, Some(sous))),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(_) => return doute("sous-module illisible".into()),
+                }
+            }
+        }
+        // Sous-modules déclarés dans l'arbre (`.gitmodules`), même non
+        // absorbés (`sub/.git` dossier).
+        if let Some(arbre) = arbre {
+            match std::fs::read_to_string(arbre.join(".gitmodules")) {
+                Ok(texte) => {
+                    for ligne in texte.lines() {
+                        let ligne = ligne.trim();
+                        let Some((cle, valeur)) = ligne.split_once('=') else {
+                            continue;
+                        };
+                        if cle.trim().eq_ignore_ascii_case("path") {
+                            let sous = arbre.join(valeur.trim());
+                            let point_git = sous.join(".git");
+                            match std::fs::symlink_metadata(&point_git) {
+                                Ok(m) if m.is_file() => {
+                                    let texte =
+                                        std::fs::read_to_string(&point_git).map_err(|_| {
+                                            "sous-module illisible : sur la carte".to_owned()
+                                        })?;
+                                    let Some(chemin) = texte.trim().strip_prefix("gitdir:") else {
+                                        return doute(format!(
+                                            "inattendu ({})",
+                                            point_git.display()
+                                        ));
+                                    };
+                                    depots.push((sous.join(chemin.trim()), Some(sous)));
+                                }
+                                Ok(_) => depots.push((point_git, Some(sous))),
+                                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                                Err(_) => return doute("sous-module illisible".into()),
+                            }
+                        }
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return doute("illisible (.gitmodules)".into()),
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Chemins des gitlinks (mode 160000) de l'index de `git_dir` (versions 2
+/// et 3, SHA-1). Index absent : aucun. Index partagé (`sharedindex.*`),
+/// version 4, autre format ou index illisible : `Err`, sur la carte.
+fn gitlinks_de_l_index(git_dir: &Path) -> Result<Vec<String>, String> {
+    let index = match std::fs::read(git_dir.join("index")) {
+        Ok(o) => o,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(_) => return Err("index illisible".into()),
+    };
+    let partage = std::fs::read_dir(git_dir).map_or(true, |d| {
+        d.flatten()
+            .any(|e| e.file_name().to_string_lossy().starts_with("sharedindex."))
+    });
+    if partage {
+        return Err("index partagé".into());
+    }
+    let u32_a = |o: usize| -> Option<u32> {
+        index
+            .get(o..o + 4)
+            .map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
+    };
+    if index.get(0..4) != Some(b"DIRC".as_slice()) {
+        return Err("index inconnu".into());
+    }
+    let version = u32_a(4).ok_or("index tronqué")?;
+    if !matches!(version, 2 | 3) {
+        return Err(format!("index version {version}"));
+    }
+    let n = u32_a(8).ok_or("index tronqué")? as usize;
+    let mut o = 12;
+    let mut chemins = Vec::new();
+    for _ in 0..n {
+        let debut = o;
+        let mode = u32_a(o + 24).ok_or("index tronqué")?;
+        let drapeaux = index
+            .get(o + 60..o + 62)
+            .map(|b| u16::from_be_bytes([b[0], b[1]]))
+            .ok_or("index tronqué")?;
+        o += 62;
+        if version == 3 && drapeaux & 0x4000 != 0 {
+            o += 2;
+        }
+        let reste = index.get(o..).ok_or("index tronqué")?;
+        let fin = reste.iter().position(|&b| b == 0).ok_or("index tronqué")?;
+        let chemin = String::from_utf8_lossy(&reste[..fin]).into_owned();
+        o += fin;
+        // Entrée complétée par des NUL jusqu'à un multiple de 8.
+        o = debut + (o - debut + 8) / 8 * 8;
+        if mode & 0o170000 == 0o160000 {
+            chemins.push(chemin);
+        }
+    }
+    Ok(chemins)
+}
+
+/// Première clé d'une config git qui n'est pas connue sans effet sur une
+/// lecture (`include`, `core.fsmonitor`, `core.pager`, `diff.external`,
+/// `filter.*`, `extensions.partialclone`…), ou ligne qu'on ne sait pas
+/// lire. `None` : tout est connu.
+fn cle_git_a_effet(texte: &str) -> Option<String> {
+    let permise = |section: &str, cle: &str| match section {
+        "core" => matches!(
+            cle,
+            "repositoryformatversion"
+                | "filemode"
+                | "bare"
+                | "logallrefupdates"
+                | "ignorecase"
+                | "precomposeunicode"
+                | "symlinks"
+                | "autocrlf"
+                | "eol"
+                | "safecrlf"
+                | "quotepath"
+                | "longpaths"
+                | "untrackedcache"
+                | "checkstat"
+                | "trustctime"
+                | "fscache"
+                | "preloadindex"
+                | "abbrev"
+                | "sparsecheckout"
+                | "sparsecheckoutcone"
+        ),
+        "remote" => matches!(
+            cle,
+            "url" | "fetch" | "pushurl" | "push" | "tagopt" | "prune" | "mirror" | "gh-resolved"
+        ),
+        "branch" => matches!(
+            cle,
+            "remote" | "merge" | "rebase" | "pushremote" | "description" | "vscode-merge-base"
+        ),
+        "user" => matches!(cle, "name" | "email" | "signingkey"),
+        "submodule" => matches!(cle, "url" | "active" | "branch" | "shallow" | "ignore"),
+        // `objectformat` (SHA-256) change le format de l'index lu plus haut :
+        // seul le format par défaut, SHA-1, jamais écrit, est connu.
+        "extensions" => cle == "worktreeconfig",
+        "commit" => matches!(cle, "gpgsign" | "verbose" | "cleanup" | "status"),
+        "pull" | "push" | "fetch" | "init" | "gc" | "color" | "advice" | "http" | "lfs" | "gui"
+        | "maintenance" => true,
+        _ => false,
+    };
+    let mut section = String::new();
+    for ligne in texte.lines() {
+        let mut reste = ligne.trim();
+        if let Some(apres) = reste.strip_prefix('[') {
+            let Some(fin) = apres.find(']') else {
+                return Some(ligne.trim().to_owned());
+            };
+            let tete = &apres[..fin];
+            section = tete
+                .split(['.', ' ', '"'])
+                .next()
+                .unwrap_or("")
+                .to_lowercase();
+            reste = apres[fin + 1..].trim();
+        }
+        if reste.is_empty() || reste.starts_with(['#', ';']) {
+            continue;
+        }
+        let cle = reste.split('=').next().unwrap_or("").trim().to_lowercase();
+        let lisible = !cle.is_empty() && cle.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+        if !lisible || reste.ends_with('\\') || !permise(&section, &cle) {
+            return Some(format!("{section}.{cle}"));
+        }
+    }
+    None
+}
+
 /// `git` : options globales et sous-commandes en lecture.
 fn git(args: &[String]) -> Option<Avis> {
     let ecrit = |raison: String| Some(Avis::ecriture(Genre::Commande, raison));
@@ -2182,7 +2509,19 @@ fn git(args: &[String]) -> Option<Avis> {
             .find(|x| !x.starts_with('-'))
             .map(String::as_str)
         {
-            None | Some("show" | "get-url") => None,
+            None | Some("get-url") => None,
+            // `git remote show NOM` contacte le dépôt distant, à une adresse
+            // choisie par la config (et peut lancer `credential.helper`,
+            // KOB-469) : seuls `-n` (sans réseau) et la liste restent en
+            // lecture.
+            Some("show")
+                if !reste.iter().any(|x| x == "--")
+                    && (reste.iter().filter(|x| !x.starts_with('-')).count() == 1
+                        || reste.iter().any(|x| x == "-n")) =>
+            {
+                None
+            }
+            Some("show") => ecrit("`git remote show NOM` contacte le dépôt distant".into()),
             _ => ecrit("`git remote` modifie les dépôts distants".into()),
         },
         "stash" => match reste.first().map(String::as_str) {
@@ -4043,6 +4382,314 @@ mod tests {
             assert_ne!(bash(l).classe, Classe::Lecture, "{l}");
         }
         assert_eq!(bash("go version").classe, Classe::Lecture);
+    }
+
+    /// KOB-469 : git exécute ce que dit la config du dépôt visé
+    /// (`core.fsmonitor` sur `git status`, `diff.external` d'un dépôt nu
+    /// intégré sur `git diff`) : seule une config connue sans effet passe.
+    #[test]
+    fn config_git_examinee() {
+        let ecrire = |chemin: &Path, texte: &str| {
+            std::fs::create_dir_all(chemin.parent().unwrap()).unwrap();
+            std::fs::write(chemin, texte).unwrap();
+        };
+        let saine = "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\
+                     [remote \"origin\"]\n\turl = https://x/y.git\n\
+                     [branch \"main\"]\n\tremote = origin\n\tmerge = refs/heads/main\n\
+                     [user]\n\tname = A\n";
+        let classe = |c: &Path, ligne: &str| {
+            let mut x = Contexte::new(vec![c.to_path_buf()]);
+            x.cwd = Some(c.to_path_buf());
+            analyser(ligne, Shell::Bash, &x).classe
+        };
+        // Dépôt ordinaire : lecture ; avec une clé à effet : carte.
+        for (cle, attendu_carte) in [
+            ("", false),
+            ("[core]\n\tfsmonitor = touch PWNED\n", true),
+            ("[core]\n\tpager = touch PWNED\n", true),
+            ("[core]\n\teditor = touch PWNED\n", true),
+            ("[core]\n\tworktree = /etc\n", true),
+            ("[pager]\n\tlog = touch PWNED\n", true),
+            ("[diff]\n\texternal = touch PWNED\n", true),
+            ("[diff \"x\"]\n\ttextconv = touch PWNED\n", true),
+            ("[filter \"lfs\"]\n\tclean = git-lfs clean -- %f\n", true),
+            ("[include]\n\tpath = autre\n", true),
+            ("[includeIf \"gitdir:/\"]\n\tpath = autre\n", true),
+            ("[core]\n\tFsMonitor = touch PWNED\n", true),
+            ("[core \"x\"]\n\tfsmonitor = touch PWNED\n", true),
+            ("[core] fsmonitor = touch PWNED\n", true),
+            ("ligne illisible\n", true),
+        ] {
+            let d = tempfile::tempdir().unwrap();
+            let c = d.path();
+            ecrire(&c.join(".git/config"), &format!("{saine}{cle}"));
+            for ligne in ["git status", "git log -1", "git diff"] {
+                let carte = classe(c, ligne) != Classe::Lecture;
+                assert_eq!(carte, attendu_carte, "{ligne} avec {cle:?}");
+            }
+        }
+        // Dépôt nu intégré (`evil/` : HEAD, objects, refs, config).
+        let d = tempfile::tempdir().unwrap();
+        let c = d.path();
+        ecrire(&c.join(".git/config"), saine);
+        ecrire(&c.join("evil/HEAD"), "ref: refs/heads/main\n");
+        std::fs::create_dir_all(c.join("evil/objects")).unwrap();
+        std::fs::create_dir_all(c.join("evil/refs")).unwrap();
+        ecrire(&c.join("evil/config"), "[diff]\n\texternal = touch PWNED\n");
+        assert_ne!(
+            classe(c, "cd evil && git diff HEAD~1 HEAD"),
+            Classe::Lecture
+        );
+        assert_ne!(classe(c, "git -C evil show"), Classe::Lecture);
+        assert_eq!(classe(c, "git status"), Classe::Lecture);
+        // `.git` fichier (`gitdir:`), et le `commondir` d'un worktree.
+        let d = tempfile::tempdir().unwrap();
+        let c = d.path();
+        ecrire(&c.join("depot/.git/config"), saine);
+        ecrire(&c.join("depot/.git/worktrees/w/commondir"), "../..\n");
+        ecrire(
+            &c.join("w/.git"),
+            &format!("gitdir: {}\n", c.join("depot/.git/worktrees/w").display()),
+        );
+        assert_eq!(classe(c, "cd w && git status"), Classe::Lecture);
+        ecrire(
+            &c.join("depot/.git/config"),
+            &format!("{saine}[core]\n\tfsmonitor = x\n"),
+        );
+        assert_ne!(classe(c, "cd w && git status"), Classe::Lecture);
+        ecrire(&c.join("depot/.git/config"), saine);
+        ecrire(
+            &c.join("depot/.git/worktrees/w/config.worktree"),
+            "[core]\n\tpager = x\n",
+        );
+        assert_ne!(classe(c, "cd w && git status"), Classe::Lecture);
+        // Sous-module : `modules/<nom>/config`.
+        let d = tempfile::tempdir().unwrap();
+        let c = d.path();
+        ecrire(&c.join(".git/config"), saine);
+        ecrire(
+            &c.join(".git/modules/lib/config"),
+            "[core]\n\tfsmonitor = x\n",
+        );
+        assert_ne!(classe(c, "git status"), Classe::Lecture);
+        // `--git-dir`, `.git` fichier inattendu : sur la carte.
+        let d = tempfile::tempdir().unwrap();
+        let c = d.path();
+        ecrire(&c.join(".git"), "pas un gitdir\n");
+        assert_ne!(classe(c, "git status"), Classe::Lecture);
+        assert_ne!(classe(c, "git --git-dir=ailleurs log"), Classe::Lecture);
+        // Relecture sécurité : ce que git découvre autrement.
+        #[cfg(unix)]
+        {
+            let nu = |c: &Path, nom: &str| {
+                ecrire(
+                    &c.join(nom).join("config"),
+                    "[diff]\n\texternal = touch PWNED\n",
+                );
+                std::fs::create_dir_all(c.join(nom).join("objects")).unwrap();
+            };
+            // `refs` fichier, HEAD détaché : un dépôt nu pour git.
+            let d = tempfile::tempdir().unwrap();
+            let c = d.path();
+            ecrire(&c.join(".git/config"), saine);
+            nu(c, "evil");
+            ecrire(
+                &c.join("evil/HEAD"),
+                "0123456789012345678901234567890123456789\n",
+            );
+            ecrire(&c.join("evil/refs"), "");
+            assert_ne!(
+                classe(c, "cd evil && git diff HEAD~1 HEAD"),
+                Classe::Lecture
+            );
+            // `HEAD` lien pendant.
+            let d = tempfile::tempdir().unwrap();
+            let c = d.path();
+            ecrire(&c.join(".git/config"), saine);
+            nu(c, "evil2");
+            std::os::unix::fs::symlink("refs/heads/master", c.join("evil2/HEAD")).unwrap();
+            assert_ne!(classe(c, "cd evil2 && git diff"), Classe::Lecture);
+            // Leurre dans le dépôt nu : on ne s'arrête pas au premier.
+            let d = tempfile::tempdir().unwrap();
+            let c = d.path();
+            ecrire(&c.join(".git/config"), saine);
+            nu(c, "evil3");
+            ecrire(&c.join("evil3/HEAD"), "ref: refs/heads/main\n");
+            std::fs::create_dir_all(c.join("evil3/refs/heads")).unwrap();
+            ecrire(&c.join("evil3/w/HEAD"), "invalide\n");
+            std::fs::create_dir_all(c.join("evil3/w/objects")).unwrap();
+            std::fs::create_dir_all(c.join("evil3/w/refs")).unwrap();
+            assert_ne!(classe(c, "cd evil3/w && git diff"), Classe::Lecture);
+            // Raccourci (lien) vers l'intérieur du dépôt nu ; `-C` à joker.
+            std::os::unix::fs::symlink(c.join("evil3/refs/heads"), c.join("raccourci")).unwrap();
+            assert_ne!(classe(c, "git -C raccourci diff"), Classe::Lecture);
+            assert_ne!(classe(c, "cd raccourci && git diff"), Classe::Lecture);
+            assert_ne!(classe(c, "git -C evil[3] diff"), Classe::Lecture);
+        }
+        // Hook, `--bare`, alternates, dépôt partiel, sous-module non absorbé.
+        let d = tempfile::tempdir().unwrap();
+        let c = d.path();
+        ecrire(&c.join(".git/config"), saine);
+        ecrire(&c.join(".git/hooks/pre-commit.sample"), "");
+        assert_eq!(classe(c, "git status"), Classe::Lecture);
+        assert_ne!(classe(c, "git --bare diff HEAD~1 HEAD"), Classe::Lecture);
+        ecrire(&c.join(".git/hooks/post-index-change"), "touch PWNED");
+        assert_ne!(classe(c, "git status"), Classe::Lecture);
+        let d = tempfile::tempdir().unwrap();
+        let c = d.path();
+        ecrire(&c.join(".git/config"), saine);
+        ecrire(
+            &c.join(".git/objects/info/alternates"),
+            "../../../hors/.git/objects\n",
+        );
+        assert_ne!(classe(c, "git log"), Classe::Lecture);
+        let d = tempfile::tempdir().unwrap();
+        let c = d.path();
+        ecrire(
+            &c.join(".git/config"),
+            &format!("{saine}[extensions]\n\tpartialclone = origin\n"),
+        );
+        assert_ne!(classe(c, "git log -1"), Classe::Lecture);
+        ecrire(
+            &c.join(".git/config"),
+            &format!("{saine}[remote \"origin\"]\n\tpromisor = true\n"),
+        );
+        assert_ne!(classe(c, "git log -1"), Classe::Lecture);
+        let d = tempfile::tempdir().unwrap();
+        let c = d.path();
+        ecrire(&c.join(".git/config"), saine);
+        ecrire(
+            &c.join(".gitmodules"),
+            "[submodule \"sub\"]\n\tpath = sub\n\turl = x\n",
+        );
+        ecrire(
+            &c.join("sub/.git/config"),
+            "[core]\n\tfsmonitor = touch PWNED\n",
+        );
+        assert_ne!(classe(c, "git status"), Classe::Lecture);
+        // Configs courantes et inoffensives : lecture.
+        let d = tempfile::tempdir().unwrap();
+        let c = d.path();
+        ecrire(
+            &c.join(".git/config"),
+            &format!(
+                "{saine}[core]\n\tsymlinks = false\n\tignorecase = true\n\tautocrlf = true\n\
+                 [branch \"main\"]\n\tvscode-merge-base = origin/main\n\
+                 [remote \"origin\"]\n\tgh-resolved = base\n\
+                 [gui]\n\twmstate = normal\n\
+                 [user]\n\tsigningkey = ABC\n[commit]\n\tgpgsign = true\n\
+                 [lfs \"https://x/y.git/info/lfs\"]\n\taccess = basic\n"
+            ),
+        );
+        assert_eq!(classe(c, "git status"), Classe::Lecture);
+        assert_eq!(classe(c, "git log -3"), Classe::Lecture);
+        // `credential.helper` : lancé par `git remote show NOM` (réseau).
+        ecrire(
+            &c.join(".git/config"),
+            &format!("{saine}[credential]\n\thelper = !touch PWNED\n"),
+        );
+        assert_ne!(classe(c, "git log -3"), Classe::Lecture);
+        // Gitlink de l'index sans `.gitmodules` : index v2 écrit à la main.
+        let index = |chemin: &str, version: u32| {
+            let mut e = vec![0u8; 24];
+            e.extend(0o160000u32.to_be_bytes());
+            e.extend([0u8; 12 + 20]);
+            e.extend((chemin.len() as u16).to_be_bytes());
+            e.extend(chemin.as_bytes());
+            while !e.len().is_multiple_of(8) || e.len() == 62 + chemin.len() {
+                e.push(0);
+            }
+            let mut i = b"DIRC".to_vec();
+            i.extend(version.to_be_bytes());
+            i.extend(1u32.to_be_bytes());
+            i.extend(e);
+            i
+        };
+        let d = tempfile::tempdir().unwrap();
+        let c = d.path();
+        ecrire(&c.join(".git/config"), saine);
+        std::fs::write(c.join(".git/index"), index("sub", 2)).unwrap();
+        ecrire(&c.join("sub/.git/config"), saine);
+        assert_eq!(classe(c, "git status"), Classe::Lecture);
+        ecrire(
+            &c.join("sub/.git/config"),
+            "[core]\n\tfsmonitor = touch PWNED\n",
+        );
+        assert_ne!(classe(c, "git status"), Classe::Lecture);
+        std::fs::write(c.join(".git/index"), index("sub", 4)).unwrap();
+        ecrire(&c.join("sub/.git/config"), saine);
+        assert_ne!(classe(c, "git status"), Classe::Lecture);
+        // SHA-256 : un autre format d'index, sur la carte.
+        ecrire(
+            &c.join(".git/config"),
+            &format!("{saine}[extensions]\n\tobjectformat = sha256\n"),
+        );
+        std::fs::write(c.join(".git/index"), index("sub", 2)).unwrap();
+        assert_ne!(classe(c, "git status"), Classe::Lecture);
+    }
+
+    /// KOB-469 : `git remote show NOM` contacte le dépôt distant (et peut
+    /// lancer `credential.helper`) ; `-n` et la liste restent des lectures.
+    #[test]
+    fn git_remote_show_sans_reseau() {
+        assert_ne!(bash("git remote show origin").classe, Classe::Lecture);
+        assert_eq!(bash("git remote show -n origin").classe, Classe::Lecture);
+        // Après `--`, `-n` est un nom de dépôt distant, pas l'option.
+        assert_ne!(bash("git remote show origin -- -n").classe, Classe::Lecture);
+        assert_eq!(bash("git remote show").classe, Classe::Lecture);
+        assert_eq!(bash("git remote -v").classe, Classe::Lecture);
+    }
+
+    /// KOB-469 : l'index écrit par le vrai git est lu, et ses gitlinks
+    /// trouvés (plusieurs entrées de longueurs variées, version 2 et 3).
+    #[test]
+    fn index_reel_lu() {
+        let d = tempfile::tempdir().unwrap();
+        let c = d.path();
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(c)
+                .output()
+        };
+        let Ok(o) = git(&["init", "-q"]) else {
+            return; // git absent
+        };
+        assert!(o.status.success());
+        for (nom, contenu) in [
+            ("a", "1"),
+            ("dossier/long-nom-de-fichier.rs", "22"),
+            ("b.txt", "333"),
+        ] {
+            std::fs::create_dir_all(c.join(nom).parent().unwrap()).unwrap();
+            std::fs::write(c.join(nom), contenu).unwrap();
+        }
+        assert!(git(&["add", "."]).unwrap().status.success());
+        let sha = "1234567890123456789012345678901234567890";
+        assert!(git(&[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{sha},sub/mod")
+        ])
+        .unwrap()
+        .status
+        .success());
+        assert_eq!(
+            gitlinks_de_l_index(&c.join(".git")).unwrap(),
+            vec!["sub/mod"]
+        );
+        // Version 3 (drapeaux étendus) : `--intent-to-add`.
+        std::fs::write(c.join("nouveau"), "x").unwrap();
+        assert!(git(&["add", "-N", "nouveau"]).unwrap().status.success());
+        assert!(git(&["update-index", "--index-version", "3"])
+            .unwrap()
+            .status
+            .success());
+        assert_eq!(
+            gitlinks_de_l_index(&c.join(".git")).unwrap(),
+            vec!["sub/mod"]
+        );
     }
 
     const KOBI: &str = "C:/Users/moi/Desktop/kobi";
