@@ -6467,6 +6467,7 @@ mod tests {
                 texte: "Le projet avance.".into(),
             }));
             let avant = c.activite();
+            assert_eq!(avant, Some("repond"));
             c.recevoir(Message::Decision {
                 carte: 7,
                 accepte: true,
