@@ -8592,17 +8592,20 @@ mod tests {
                     .iter()
                     .filter(en_cours)
                     .any(|b| jeu.detaches.contains(&b.tour));
-            // Un délai armé en fera sortir : retour au calme, Oups de
-            // l'écoute, ou résultat à livrer après sa transition.
-            let sortie = c.calme_a.is_some()
-                || jeu.oups_ecoute > 0
-                || (c.livrable_a.is_some() && !c.a_livrer.is_empty());
+            let sortie = c.calme_a.is_some() || jeu.oups_ecoute > 0;
             let raison = match c.activite() {
                 Some("calme" | "note") | None => true,
                 // Chaque appel du jeu est suivi, dans le même événement, de
                 // sa question ou de son abandon.
                 Some("ecoute") => false,
-                Some("reflechit") => premier_plan,
+                // Ou un résultat que `livrer` fera passer : sans question en
+                // cours, ou celui de la dernière question (KOB-387).
+                Some("reflechit") => {
+                    premier_plan
+                        || (!c.a_livrer.is_empty()
+                            && (!c.question_en_cours()
+                                || c.a_livrer.iter().any(|(t, ..)| *t == c.dernier)))
+                }
                 Some("repond") => premier_plan || c.livrable_a.is_some(),
                 Some("propose") => carte,
                 Some("occupe") => tache || premier_plan,
