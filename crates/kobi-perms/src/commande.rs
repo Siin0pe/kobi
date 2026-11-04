@@ -90,6 +90,8 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
     // dans tous.
     let mut cwds = vec![cwd];
     let mut mots: Vec<String> = Vec::new();
+    // La commande en cours reçoit-elle l'entrée d'un `|` ?
+    let mut apres_pipe = false;
     let mut i = 0;
     while i <= jetons.len() {
         let jeton = jetons.get(i);
@@ -112,6 +114,18 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
                     ));
                 }
                 if !mots.is_empty() {
+                    // Sous Windows, un parcours récursif qui reçoit ses
+                    // chemins d'un `|` (`gci ..\autre | gci -Recurse`) part
+                    // de dossiers qu'on ne voit pas ici : sur la carte
+                    // (KOB-434).
+                    let nom = mots[0].to_lowercase();
+                    let nom = nom.strip_suffix(".exe").unwrap_or(&nom);
+                    if cfg!(windows) && apres_pipe && parcours_recursif(nom, &mots[1..], shell) {
+                        avis = avis.pire(Avis::ecriture(
+                            Genre::Commande,
+                            "parcours récursif sur des chemins venus d'un `|` : sur la carte",
+                        ));
+                    }
                     let mut suivants = Vec::new();
                     for c in &cwds {
                         let mut nouveau = c.clone();
@@ -133,6 +147,7 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
                     }
                     cwds = suivants;
                     mots.clear();
+                    apres_pipe = op == "|";
                 } else if matches!(op, "|" | "&&" | "||") {
                     // `| ls`, `ls && && x` : rien avant l'opérateur.
                     return avis.pire(Avis::ecriture(Genre::Commande, "enchaînement incomplet"));
@@ -970,9 +985,15 @@ fn commande(mots: &[String], shell: Shell, ctx: &Contexte, cwd: &mut PathBuf) ->
 /// `gci`, `ls` ou `dir` avec `-Recurse` ou `-Depth` (qui l'implique,
 /// PowerShell 5 et plus), `dir /S`, `tree`, `where /R` (cmd).
 fn parcours_recursif(nom: &str, args: &[String], shell: Shell) -> bool {
+    // `-s` est un alias de `-Recurse` ; `-d` est `-Directory`, pas `-Depth`.
     let recurse = || {
-        args.iter()
-            .any(|x| abrege_ps(x, "-recurse") || abrege_ps(x, "-depth"))
+        args.iter().any(|x| {
+            abrege_ps(x, "-recurse")
+                || est_depth(x)
+                || x.split([':', '='])
+                    .next()
+                    .is_some_and(|o| o.eq_ignore_ascii_case("-s"))
+        })
     };
     let interrupteur = |c: &str| args.iter().any(|x| x.eq_ignore_ascii_case(c));
     match nom {
@@ -983,6 +1004,11 @@ fn parcours_recursif(nom: &str, args: &[String], shell: Shell) -> bool {
         "where" => interrupteur("/r"),
         _ => false,
     }
+}
+
+/// `-Depth` ou son abréviation, au moins `-de` (`-d` est `-Directory`).
+fn est_depth(x: &str) -> bool {
+    x.split([':', '=']).next().is_some_and(|o| o.len() >= 3) && abrege_ps(x, "-depth")
 }
 
 /// Paramètre PowerShell ou son abréviation (`-r`, `-rec` pour `-Recurse`),
@@ -1024,8 +1050,10 @@ fn racines_du_parcours(
                     || option.eq_ignore_ascii_case("-lp")
                     || option.eq_ignore_ascii_case("-pspath");
                 let a_valeur = chemin
-                    || abrege_ps(option, "-depth")
-                    || options_a_valeur(nom).iter().any(|o| abrege_ps(option, o));
+                    || est_depth(option)
+                    || options_a_valeur(nom)
+                        .iter()
+                        .any(|o| *o != "-depth" && abrege_ps(option, o));
                 match (chemin, valeur) {
                     (true, Some(v)) => textes.push(v),
                     (true, None) => {
@@ -1641,6 +1669,21 @@ fn chemins(nom: &str, args: &[String], shell: Shell, ctx: &Contexte, cwd: &Path)
     while i < args.len() {
         let x = &args[i];
         let bas = x.to_lowercase();
+        // Sous PowerShell, un nom de paramètre n'a ni `/` ni `\` : `'-x\..\y'`
+        // (entre guillemets, ou au tiret Unicode ramené à `-`) est un
+        // chemin, jugé comme tel (KOB-434).
+        if ps
+            && x.starts_with('-')
+            && x.split([':', '='])
+                .next()
+                .is_some_and(|o| o.contains(['/', '\\']))
+        {
+            if let Some(avis) = juger_chemin(ctx, x, cwd) {
+                return avis;
+            }
+            i += 1;
+            continue;
+        }
         if x.starts_with('-') && x.len() > 1 {
             // `--git-dir=/x`, `-Path=…`, PowerShell `-Path:/x` : la valeur est
             // vérifiée si c'est un chemin.
@@ -1986,6 +2029,9 @@ mod tests {
     fn parcours_depth_tirets_et_where() {
         let v = |l: &str| l.split(' ').map(str::to_owned).collect::<Vec<_>>();
         assert!(parcours_recursif("gci", &v("-Depth 20"), Shell::PowerShell));
+        // `-s` est un alias de `-Recurse` ; `-d` est `-Directory`.
+        assert!(parcours_recursif("gci", &v("-s"), Shell::PowerShell));
+        assert!(!parcours_recursif("gci", &v("-d src"), Shell::PowerShell));
         // `gc –LiteralPath:C:/Windows/win.ini` : le tiret long ne cache plus
         // le chemin, refusé hors des dossiers.
         let x = ctx();
@@ -2003,6 +2049,18 @@ mod tests {
             analyser("where.exe /R C:/Users/moi/.ssh *", Shell::PowerShell, &x)
                 .classe
                 .cle(),
+            "refus"
+        );
+        // Un chemin qui commence par un tiret (entre guillemets) : pas un
+        // paramètre pour PowerShell, jugé comme un chemin.
+        assert_eq!(
+            analyser(
+                r"Get-Content '-x\..\..\..\Windows\win.ini'",
+                Shell::PowerShell,
+                &x
+            )
+            .classe
+            .cle(),
             "refus"
         );
         assert_eq!(
@@ -2042,6 +2100,12 @@ mod tests {
                 "{l} sans lien qui sort"
             );
         }
+        // Un parcours récursif qui reçoit ses chemins d'un `|` : sur la carte,
+        // même sans lien qui sort.
+        assert_ne!(
+            analyser("gci src | gci -Recurse", Shell::PowerShell, &x).classe,
+            Classe::Lecture
+        );
         let j = std::process::Command::new("cmd")
             .args(["/C", "mklink", "/J"])
             .arg(c.join("src").join("jonction"))
