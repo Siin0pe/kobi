@@ -166,7 +166,15 @@ pub fn resolu(chemin: &Path) -> Option<PathBuf> {
                 }
             }
             Ok(_) => actuel = candidat,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // Un nom que le système ne peut pas porter (`*` sous Windows,
+            // nom trop long) n'existe pas : ce n'est pas un lien, la suite
+            // se lit comme après un absent (KOB-438, `gci src/*/*`).
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidFilename
+                ) =>
+            {
                 absents = 1;
                 actuel = candidat;
             }
@@ -377,6 +385,24 @@ fn cle_de_chemin(chemin: &Path) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// KOB-438 : un nom que le système refuse (`*` sous Windows, nom trop
+    /// long partout) n'existe pas : lu comme un absent, pas comme hors des
+    /// dossiers ; un `..` qui suit revient sur le disque.
+    #[test]
+    fn nom_invalide_lu_comme_absent() {
+        let code = tempfile::tempdir().unwrap();
+        let c = code.path();
+        std::fs::create_dir_all(c.join("src")).unwrap();
+        let x = Contexte::new(vec![c.to_path_buf()]);
+        let long = "a".repeat(300);
+        let invalide = if cfg!(windows) { "*" } else { long.as_str() };
+        let chemin = c.join("src").join(invalide);
+        assert_eq!(resolu(&chemin), Some(chemin.clone()));
+        assert!(x.contient(&chemin, None));
+        assert!(x.contient(&chemin.join("..").join("..").join("src"), None));
+        assert!(!x.contient(&chemin.join("..").join("..").join(".."), None));
+    }
 
     /// KOB-432 : un lien sous un dossier déclaré est suivi sans être ouvert :
     /// ce qui sort par un lien est hors des dossiers, pour la lecture,

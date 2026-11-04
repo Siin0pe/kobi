@@ -1277,6 +1277,11 @@ fn racines_du_parcours(
     }
     let mut racines = Vec::new();
     for t in textes {
+        if !ctx.contient(Path::new(t), Some(cwd)) {
+            return Err(Avis::refus(format!(
+                "{t} est hors des dossiers de code déclarés"
+            )));
+        }
         let Some(absolu) = crate::classement::absolu(Path::new(t), Some(cwd)) else {
             return Err(Avis::ecriture(
                 Genre::Commande,
@@ -1288,19 +1293,6 @@ fn racines_du_parcours(
             .components()
             .take_while(|c| !a_des_jokers(&c.as_os_str().to_string_lossy()))
             .collect();
-        // Avec un joker, c'est le départ fixe qui est jugé : Windows ne sait
-        // pas résoudre un nom qui contient `*` ; les chemins que le joker
-        // désigne sont jugés un à un par la commande elle-même.
-        let juge = if a_des_jokers(t) {
-            fixe.as_path()
-        } else {
-            Path::new(t)
-        };
-        if !ctx.contient(juge, Some(cwd)) {
-            return Err(Avis::refus(format!(
-                "{t} est hors des dossiers de code déclarés"
-            )));
-        }
         match crate::classement::resolu(&fixe) {
             Some(r) => racines.push(r),
             None => {
@@ -2481,6 +2473,16 @@ mod tests {
                 "{l} sans lien qui sort"
             );
         }
+        // Un joker sur des dossiers qui existent reste une lecture (sous
+        // Windows, `src\*` n'est pas un nom valide : il est lu comme absent).
+        assert_eq!(
+            analyser("cat src/*.rs", Shell::Bash, &x).classe,
+            Classe::Lecture
+        );
+        assert_eq!(
+            analyser("Get-Content src/*.rs", Shell::PowerShell, &x).classe,
+            Classe::Lecture
+        );
         let lien = c.join("src/sous/lien");
         #[cfg(unix)]
         std::os::unix::fs::symlink(dehors.path(), &lien).unwrap();
