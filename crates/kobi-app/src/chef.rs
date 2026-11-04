@@ -6075,6 +6075,18 @@ mod tests {
             c.recevoir(Message::Interpelle);
             c.envoyer("résume le projet".into(), None, true);
             let tour = c.dernier;
+            // La question ouvre sa propre carte, acceptée, puis part en
+            // tâche : la garde « question à la carte » ne la retient plus.
+            c.recevoir(Message::Cerveau(Retour::Carte {
+                tour,
+                carte: 2,
+                outil: "mcp__linear__save_issue".into(),
+                entree: serde_json::json!({"title": "Autre"}),
+            }));
+            c.recevoir(Message::Cerveau(Retour::CarteFermee {
+                carte: 2,
+                accepte: Some(true),
+            }));
             c.recevoir(Message::Cerveau(Retour::Detache {
                 tour,
                 annonce: true,
