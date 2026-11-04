@@ -1255,6 +1255,47 @@ fn commande(
                 );
             }
         }
+        // Bash : `cd -P` suit les liens physiquement (`dedans/..` mène au
+        // parent réel du lien), alors que le dossier courant est suivi ici sur
+        // le texte : sur la carte (KOB-453).
+        if shell == Shell::Bash
+            && args
+                .iter()
+                .any(|a| a.starts_with('-') && !a.starts_with("--") && a[1..].contains('P'))
+        {
+            return Avis::ecriture(
+                Genre::Commande,
+                "`cd -P` suit les liens : vérifié sur la carte",
+            );
+        }
+        // Bash et zsh : le dossier courant suivi sur le texte diverge aussi
+        // quand `pushd -n` ne bouge pas, quand `pushd ±N` tourne la pile, et
+        // quand zsh lit `cd ancien nouveau` comme un remplacement (KOB-462).
+        if shell == Shell::Bash {
+            // `pushd` : toute option (`-n`, `+1`, `'+1 '`, qui vaut `+1` pour
+            // bash) ; `cd ±N` : zsh y lit une entrée de la pile.
+            let numero = |a: &str| {
+                let a = a.trim_end();
+                a.len() > 1
+                    && a.starts_with(['+', '-'])
+                    && a[1..].bytes().all(|b| b.is_ascii_digit())
+            };
+            let pile = if nom == "pushd" {
+                args.iter().any(|a| a.starts_with(['+', '-']) && a != "--")
+            } else {
+                args.iter().any(|a| numero(a))
+            };
+            // zsh arrête les options au premier opérande : tout mot qui suit
+            // compte (`cd ancien nouveau`, `cd u/code -L`).
+            let premier = args.iter().position(|a| !a.starts_with('-'));
+            let plusieurs = premier.is_some_and(|i| i + 1 < args.len());
+            if pile || plusieurs {
+                return Avis::ecriture(
+                    Genre::Commande,
+                    "`cd`/`pushd` qui ne suit pas un seul dossier : vérifié sur la carte",
+                );
+            }
+        }
         let Some(cible) = args.iter().find(|a| !a.starts_with('-')) else {
             return Avis::refus("`cd` sans dossier mène hors des dossiers de code");
         };
@@ -1265,6 +1306,16 @@ fn commande(
             return Avis::ecriture(Genre::Commande, "`cd` vers un motif : vérifié sur la carte");
         }
         if let Some(nouveau) = crate::classement::absolu(Path::new(cible), Some(cwd)) {
+            // Bash : un `cd` logique vers un dossier absent sur le texte, mais
+            // présent physiquement, est refait physiquement (`dedans/../z` mène
+            // au parent réel du lien) : le texte ne vaut plus (KOB-462).
+            let physique = std::fs::canonicalize(cwd.join(cible)).is_ok_and(|p| p.is_dir());
+            if shell == Shell::Bash && !nouveau.is_dir() && physique {
+                return Avis::ecriture(
+                    Genre::Commande,
+                    format!("`cd {cible}` : dossier absent sur le texte, vérifié sur la carte"),
+                );
+            }
             *cwd = nouveau;
         }
         return Avis::lecture();
@@ -3259,6 +3310,77 @@ mod tests {
         }
         assert_eq!(
             analyser("grep -r motif .", Shell::Bash, &x).classe,
+            Classe::Lecture
+        );
+    }
+
+    /// KOB-453 : `cd -P` suit les liens physiquement ; le dossier courant
+    /// suivi sur le texte ne vaut plus, la suite passe par la carte.
+    #[cfg(unix)]
+    #[test]
+    fn cd_physique_sous_bash() {
+        use std::os::unix::fs::symlink;
+        let racine = tempfile::tempdir().unwrap();
+        let code = racine.path().join("code");
+        let dehors = racine.path().join("dehors");
+        std::fs::create_dir_all(code.join("sous/profond")).unwrap();
+        std::fs::create_dir_all(&dehors).unwrap();
+        std::fs::write(dehors.join("secret.txt"), "x").unwrap();
+        symlink(code.join("sous/profond"), code.join("dedans")).unwrap();
+        symlink(dehors.join("secret.txt"), code.join("sous/y")).unwrap();
+        let mut x = Contexte::new(vec![code.clone()]);
+        x.cwd = Some(code.clone());
+        for l in [
+            "cd -P dedans/.. && cat y",
+            "cd dedans && cd -P .. && cat y",
+            "cd -LP dedans/.. && cat y",
+        ] {
+            assert_ne!(analyser(l, Shell::Bash, &x).classe, Classe::Lecture, "{l}");
+        }
+        // `cd` logique (par défaut) : le texte suffit.
+        assert_eq!(
+            analyser("cd sous && ls", Shell::Bash, &x).classe,
+            Classe::Lecture
+        );
+    }
+
+    /// Le dossier courant suivi sur le texte diverge aussi sans `-P` : un
+    /// `cd` logique qui échoue est refait physiquement par bash, `pushd -n`
+    /// ne change pas de dossier, `pushd +N` tourne la pile, et zsh lit
+    /// `cd ancien nouveau` comme un remplacement dans `$PWD`.
+    #[cfg(unix)]
+    #[test]
+    fn dossier_courant_qui_diverge_sous_bash() {
+        use std::os::unix::fs::symlink;
+        let racine = tempfile::tempdir().unwrap();
+        let code = racine.path().join("code");
+        let dehors = racine.path().join("dehors");
+        std::fs::create_dir_all(code.join("sous/profond")).unwrap();
+        std::fs::create_dir_all(code.join("sous/z")).unwrap();
+        std::fs::create_dir_all(code.join("a/b")).unwrap();
+        std::fs::create_dir_all(&dehors).unwrap();
+        std::fs::write(dehors.join("secret.txt"), "x").unwrap();
+        symlink(code.join("sous/profond"), code.join("dedans")).unwrap();
+        symlink(dehors.join("secret.txt"), code.join("sous/z/lien")).unwrap();
+        let mut x = Contexte::new(vec![code.clone()]);
+        x.cwd = Some(code.clone());
+        for l in [
+            "cd dedans/../z && cat lien",
+            "pushd -n a/b && cat ../dehors/secret.txt",
+            "pushd +1 && cat ../dehors/secret.txt",
+            "cd a/b a && cat ../dehors/secret.txt",
+            "pushd a/b && pushd '+1 ' && cat ../../../dehors/secret.txt",
+            "pushd a/b && cd +1 && cat ../../../dehors/secret.txt",
+            "cd a/b -L && cat ../dehors/secret.txt",
+        ] {
+            assert_ne!(analyser(l, Shell::Bash, &x).classe, Classe::Lecture, "{l}");
+        }
+        assert_eq!(
+            analyser("cd a/b && ls", Shell::Bash, &x).classe,
+            Classe::Lecture
+        );
+        assert_eq!(
+            analyser("pushd a && ls", Shell::Bash, &x).classe,
             Classe::Lecture
         );
     }
