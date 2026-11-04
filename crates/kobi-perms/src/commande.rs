@@ -1789,6 +1789,16 @@ fn where_exe(args: &[String], ctx: &Contexte, cwd: &Path) -> Option<Avis> {
             format!("`where.exe {x}` : vérifié sur la carte"),
         ))
     };
+    // Un seul dossier de parcours : le contrôle des jonctions (KOB-434) ne
+    // juge que le premier.
+    if args
+        .iter()
+        .filter(|x| x.eq_ignore_ascii_case("/r") || x.eq_ignore_ascii_case("-r"))
+        .count()
+        > 1
+    {
+        return carte("/R … /R");
+    }
     let mut i = 0;
     while i < args.len() {
         let x = args[i].as_str();
@@ -1807,10 +1817,16 @@ fn where_exe(args: &[String], ctx: &Contexte, cwd: &Path) -> Option<Avis> {
             if !matches!(&bas[1..], "q" | "f" | "t" | "?") {
                 return carte(x);
             }
-        } else if x.starts_with(['-', '$']) {
+        } else if x.starts_with(['-', '$'])
+            || (x.starts_with('/') && x.len() > 2 && !x[1..].contains('/'))
+        {
+            // Option longue, variable, ou option collée à sa valeur
+            // (`/RC:\x`) : un chemin Bash (`/c/x`) a un second `/`.
             return carte(x);
         } else if let Some((chemin, _)) = x.rsplit_once(':') {
-            if chemin.len() <= 1 {
+            // `C:motif` : lecteur, ou dossier `C` ? Un `;` : where.exe peut
+            // le lire comme une liste de dossiers, comme `PATH`.
+            if chemin.len() <= 1 || chemin.contains(';') {
                 return carte(x);
             }
             if let Some(a) = juger_chemin(ctx, chemin, cwd) {
@@ -2369,6 +2385,9 @@ mod tests {
                 "where.exe C:*.ini",
                 "where.exe /X git",
                 "where.exe -Rx C:/Windows *",
+                r"where.exe /RC:\Windows *",
+                "where.exe /R src /R tests *",
+                r"where.exe src;C:\Windows:*.ini",
             ] {
                 assert_ne!(cle(l, shell), "lecture", "{l} ({shell:?})");
             }
