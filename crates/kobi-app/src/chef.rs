@@ -759,9 +759,12 @@ pub fn installer<R: Runtime>(
         std::thread::Builder::new()
             .name("chef".into())
             .spawn(move || {
-                // Le runtime vit aussi longtemps que le fil.
-                let _rt = rt;
-                boucle(app, rx)
+                // Le runtime vit aussi longtemps que le fil. Quand la boucle
+                // s'arrête (fin d'un essai, KOB-427), il est fermé sans
+                // attendre ses tâches bloquantes : la jointure du fil reste
+                // bornée.
+                boucle(app, rx);
+                rt.shutdown_background();
             })
             .expect("fil du chef")
     };
