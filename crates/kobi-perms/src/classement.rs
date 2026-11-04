@@ -227,6 +227,57 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// SONDE (ne pas merger) : les parcours récursifs de Windows entrent-ils
+    /// dans une jonction ou un lien de dossier qui sort ?
+    #[cfg(windows)]
+    #[test]
+    fn sonde_parcours_recursif_windows() {
+        let base = std::env::temp_dir().join(format!("sonde-gci-{}", std::process::id()));
+        let code = base.join("code");
+        let dehors = base.join("dehors");
+        std::fs::create_dir_all(&code).unwrap();
+        std::fs::create_dir_all(&dehors).unwrap();
+        std::fs::write(dehors.join("SECRET-DEHORS.txt"), "x").unwrap();
+        std::fs::write(code.join("dedans.txt"), "x").unwrap();
+        let j = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(code.join("jonction"))
+            .arg(&dehors)
+            .output()
+            .unwrap();
+        let l = std::os::windows::fs::symlink_dir(&dehors, code.join("lien"));
+        let mut out = vec![format!(
+            "mklink /J : {} ; symlink_dir : {:?}",
+            j.status,
+            l.is_ok()
+        )];
+        for (nom, prog, args) in [
+            (
+                "powershell 5.1 gci -Recurse",
+                "powershell.exe",
+                vec!["-NoProfile", "-Command", "Get-ChildItem -Recurse -Name ."],
+            ),
+            (
+                "pwsh gci -Recurse",
+                "pwsh",
+                vec!["-NoProfile", "-Command", "Get-ChildItem -Recurse -Name ."],
+            ),
+            ("tree /F", "cmd", vec!["/C", "tree", "/F"]),
+            ("dir /S /B", "cmd", vec!["/C", "dir", "/S", "/B"]),
+        ] {
+            let r = std::process::Command::new(prog)
+                .args(&args)
+                .current_dir(&code)
+                .output();
+            let texte = r
+                .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+                .unwrap_or_else(|e| format!("erreur {e}"));
+            let n = texte.matches("SECRET-DEHORS").count();
+            out.push(format!("{nom} : SECRET-DEHORS vu {n} fois"));
+        }
+        panic!("SONDE\n{}", out.join("\n"));
+    }
+
     fn ctx() -> Contexte {
         Contexte::new(vec![
             PathBuf::from("C:/Users/moi/Desktop/kobi"),
