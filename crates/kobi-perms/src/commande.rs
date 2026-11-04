@@ -992,7 +992,6 @@ fn options_a_valeur(nom: &str) -> &'static [&'static str] {
             "--context",
             "--after-context",
             "--before-context",
-            "--color",
             "--label",
         ],
         "rg" => &[
@@ -1060,9 +1059,10 @@ fn options_a_valeur(nom: &str) -> &'static [&'static str] {
         "cut" => &["-d", "-f", "-c", "-b", "--delimiter", "--fields"],
         "sort" => &["-k", "-t", "--key", "--field-separator"],
         "uniq" => &["-f", "-s", "-w"],
+        // Seules les options dont git prend le mot suivant pour valeur :
+        // `--format`, `--pretty`, `-U`, `--abbrev`, `--contains`… le laissent
+        // à la commande (révision ou chemin), jugé alors (KOB-452).
         "git" => &[
-            "--format",
-            "--pretty",
             "--since",
             "--until",
             "--after",
@@ -1075,15 +1075,7 @@ fn options_a_valeur(nom: &str) -> &'static [&'static str] {
             "-G",
             "-n",
             "--max-count",
-            "-U",
-            "--abbrev",
             "--date",
-            "--sort",
-            "--points-at",
-            "--contains",
-            "--merged",
-            "--no-merged",
-            "--depth",
         ],
         "gh" => &[
             "--json",
@@ -2201,10 +2193,18 @@ fn chemins(nom: &str, args: &[String], shell: Shell, ctx: &Contexte, cwd: &Path)
         }
     }
     let juge = |v: &str| bases.iter().find_map(|b| juger_chemin(ctx, v, b));
+    // Après `--`, plus d'options : chaque mot est un opérande, jugé même
+    // s'il commence par un tiret (`cat -- -lien/x`, KOB-452).
+    let mut fin_des_options = false;
     let mut i = 0;
     while i < args.len() {
         let x = &args[i];
         let bas = x.to_lowercase();
+        if x == "--" && !fin_des_options {
+            fin_des_options = true;
+            i += 1;
+            continue;
+        }
         // Sous PowerShell, un nom de paramètre n'a ni `/` ni `\` : `'-x\..\y'`
         // (entre guillemets, ou au tiret Unicode ramené à `-`) est un
         // chemin, jugé comme tel (KOB-434).
@@ -2248,6 +2248,20 @@ fn chemins(nom: &str, args: &[String], shell: Shell, ctx: &Contexte, cwd: &Path)
                 if let Some(avis) = juge(f) {
                     return avis;
                 }
+            }
+            // Après `--`, le mot est aussi un opérande : motif ou chemin. Les
+            // contrôles ci-dessus restent, car PowerShell retire le premier
+            // `--` avant un exécutable (le mot y redevient une option).
+            if fin_des_options {
+                if motif_vu {
+                    if let Some(avis) = juge(x) {
+                        return avis;
+                    }
+                } else {
+                    motif_vu = true;
+                }
+                i += 1;
+                continue;
             }
             if nom == "git" && x == "-C" {
                 if let Some(d) = args.get(i + 1) {
@@ -3222,6 +3236,64 @@ mod tests {
             ("git -C sub log", Shell::Bash),
         ] {
             assert_eq!(analyser(l, sh, &x).classe, Classe::Lecture, "{l}");
+        }
+    }
+
+    /// KOB-452 : après `--`, tout mot est un opérande, même s'il commence
+    /// par un tiret (`cat -- -lien/secret.txt` lisait hors des dossiers) ;
+    /// pour grep, le premier reste le motif.
+    #[cfg(unix)]
+    #[test]
+    fn operandes_apres_deux_tirets() {
+        let code = tempfile::tempdir().unwrap();
+        let dehors = tempfile::tempdir().unwrap();
+        let c = code.path();
+        std::fs::write(dehors.path().join("secret.txt"), "s").unwrap();
+        std::os::unix::fs::symlink(dehors.path(), c.join("-lien")).unwrap();
+        std::fs::write(c.join("-fichier"), "").unwrap();
+        std::fs::write(c.join("x"), "").unwrap();
+        let mut x = Contexte::new(vec![c.to_path_buf()]);
+        x.cwd = Some(c.to_path_buf());
+        for l in [
+            "cat -- -lien/secret.txt",
+            "head -n 3 -- -lien/secret.txt",
+            "grep -- -motif -lien/secret.txt",
+            "rg -- -motif -lien",
+            "ls -- -lien",
+            // Une option à valeur facultative ne prend pas le mot suivant
+            // (relecture sécurité de KOB-452).
+            "grep --color -- secret -lien/secret.txt",
+            "grep --color secret -- -lien/secret.txt",
+            "git diff --no-index -- -lien/secret.txt x",
+            "git diff --no-index --abbrev -- -lien/secret.txt x",
+        ] {
+            assert_ne!(analyser(l, Shell::Bash, &x).classe, Classe::Lecture, "{l}");
+        }
+        let dehors_abs = dehors.path().join("secret.txt").display().to_string();
+        for l in [
+            format!("grep --color secret {dehors_abs}"),
+            format!("git diff --no-index --abbrev {dehors_abs} x"),
+        ] {
+            assert_ne!(analyser(&l, Shell::Bash, &x).classe, Classe::Lecture, "{l}");
+        }
+        // PowerShell retire le premier `--` devant un exécutable : la valeur
+        // de l'option reste contrôlée.
+        assert_ne!(
+            analyser("grep -- --file=C:/Windows/win.ini x", Shell::PowerShell, &x).classe,
+            Classe::Lecture
+        );
+        for l in [
+            "cat -- -fichier",
+            "cat -- x",
+            "grep -- -motif x",
+            "grep -e motif -- -fichier",
+            "git log -- x",
+            "grep --color=auto motif x",
+            "git log --abbrev=8 -- x",
+            "git log --format=%h x",
+            "git branch --contains abc",
+        ] {
+            assert_eq!(analyser(l, Shell::Bash, &x).classe, Classe::Lecture, "{l}");
         }
     }
 
