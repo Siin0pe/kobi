@@ -90,6 +90,8 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
     // dans tous.
     let mut cwds = vec![cwd];
     let mut mots: Vec<String> = Vec::new();
+    // Mots dont `decouper` a mis le `./` de tête (valeur PowerShell, KOB-447).
+    let mut cites: Vec<bool> = Vec::new();
     // La commande en cours reçoit-elle l'entrée d'un `|` ?
     let mut apres_pipe = false;
     // Nom de la commande précédente, celle dont la sortie arrive par le `|`.
@@ -194,7 +196,7 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
                     let mut suivants = Vec::new();
                     for c in &cwds {
                         let mut nouveau = c.clone();
-                        avis = avis.pire(commande(&mots, shell, ctx, &mut nouveau));
+                        avis = avis.pire(commande(&mots, &cites, shell, ctx, &mut nouveau));
                         // Seul `&&` garantit que le `cd` a réussi ; `|` le lance
                         // dans un sous-shell.
                         if op != "&&" && !suivants.contains(c) {
@@ -212,6 +214,7 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
                     }
                     cwds = suivants;
                     mots.clear();
+                    cites.clear();
                     apres_pipe = op == "|";
                 } else if matches!(op, "|" | "&&" | "||") {
                     // `| ls`, `ls && && x` : rien avant l'opérateur.
@@ -227,7 +230,11 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
             }
             Some(Jeton::Redir(r)) => {
                 let cible = match jetons.get(i + 1) {
-                    Some(Jeton::Mot(m)) if !r.contains('&') || r.ends_with('>') => Some(m.clone()),
+                    Some(Jeton::Mot(m) | Jeton::Cite(m))
+                        if !r.contains('&') || r.ends_with('>') =>
+                    {
+                        Some(m.clone())
+                    }
                     _ => None,
                 };
                 let mut saute = 0;
@@ -241,6 +248,12 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
             }
             Some(Jeton::Mot(m)) => {
                 mots.push(m.clone());
+                cites.push(false);
+                i += 1;
+            }
+            Some(Jeton::Cite(m)) => {
+                mots.push(m.clone());
+                cites.push(true);
                 i += 1;
             }
         }
@@ -254,6 +267,10 @@ const DOSSIERS_POSSIBLES: usize = 8;
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Jeton {
     Mot(String),
+    /// Valeur PowerShell entre guillemets ou élément de tableau qui commence
+    /// par un tiret : `decouper` y a mis un `./` de tête (KOB-437), qu'un
+    /// exécutable ne reçoit pas (KOB-447).
+    Cite(String),
     /// `;`, `&&`, `||`, `|`, `&`, saut de ligne, `(`, `)`.
     Op(String),
     /// `>`, `>>`, `2>`, `2>&1`, `<`, `<<`, `*>`…
@@ -317,8 +334,10 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
             let mut m = std::mem::take(mot);
             // PowerShell prend aussi `–`, `—` et `―` pour le tiret d'un
             // paramètre (`gci –Recurse`, `gc –LiteralPath:…`) : ramenés à
-            // `-`, sinon le paramètre passait pour un chemin (KOB-434).
-            if ps && m.starts_with(['\u{2013}', '\u{2014}', '\u{2015}']) {
+            // `-`, sinon le paramètre passait pour un chemin (KOB-434). Pas
+            // entre guillemets ni dans un tableau : c'est une valeur, reçue
+            // telle quelle (`rg . '–e' x` : un fichier `–e`, KOB-447).
+            if ps && !litteral && m.starts_with(['\u{2013}', '\u{2014}', '\u{2015}']) {
                 let premier = m.chars().next().map_or(0, char::len_utf8);
                 m.replace_range(..premier, "-");
             }
@@ -328,8 +347,10 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
             // pour valeur l'élément suivant (`gc a,'-Encoding',..\x`).
             if ps && litteral && m.starts_with('-') {
                 m.insert_str(0, "./");
+                jetons.push(Jeton::Cite(m));
+            } else {
+                jetons.push(Jeton::Mot(m));
             }
-            jetons.push(Jeton::Mot(m));
             *dans_mot = false;
         }
     };
@@ -879,6 +900,15 @@ const LECTURE_PS: &[&str] = &[
     "?",
 ];
 
+/// Changements de dossier courant (cmdlets ou leurs alias sous PowerShell).
+const CD: &[&str] = &["cd", "set-location", "sl", "chdir", "pushd"];
+
+/// Noms de [`LECTURE_SIMPLE`] qui sont, sous PowerShell (Windows), des alias de
+/// cmdlets : `'-x'` y reste une valeur, comme pour la cmdlet (KOB-447).
+const ALIAS_PS: &[&str] = &[
+    "ls", "dir", "cat", "echo", "type", "pwd", "sort", "diff", "where", "more",
+];
+
 /// Cmdlets de pipeline : leurs arguments sont des noms de propriétés, pas des chemins.
 const SANS_CHEMIN_PS: &[&str] = &[
     "measure-object",
@@ -1147,7 +1177,13 @@ fn option_de_motif(nom: &str, x: &str) -> Option<bool> {
 }
 
 /// Une commande simple : nom et arguments.
-fn commande(mots: &[String], shell: Shell, ctx: &Contexte, cwd: &mut PathBuf) -> Avis {
+fn commande(
+    mots: &[String],
+    cites: &[bool],
+    shell: Shell,
+    ctx: &Contexte,
+    cwd: &mut PathBuf,
+) -> Avis {
     let premier = &mots[0];
     if !premier.starts_with('-') && premier.contains('=') && shell == Shell::Bash {
         return Avis::ecriture(
@@ -1162,9 +1198,38 @@ fn commande(mots: &[String], shell: Shell, ctx: &Contexte, cwd: &mut PathBuf) ->
         );
     }
     let nom = premier.to_lowercase();
+    let exe = nom.ends_with(".exe");
     let nom = nom.strip_suffix(".exe").unwrap_or(&nom).to_owned();
-    let args = &mots[1..];
-    if nom == "cd" || nom == "set-location" || nom == "sl" || nom == "chdir" || nom == "pushd" {
+    // Sous PowerShell, un exécutable reçoit `'--x'` tel quel : une option,
+    // pas une valeur. Le `./` que `decouper` met devant (pour les cmdlets,
+    // KOB-437) est retiré, sinon les contrôles d'options ne le voyaient plus
+    // (`rg '--pre=calc.exe'`, KOB-447).
+    // Seul le `./` mis par `decouper` est retiré : un `./-e` écrit tel quel
+    // est un fichier pour l'exécutable aussi. `cd` et ses alias sont des
+    // cmdlets.
+    let natif = shell == Shell::PowerShell
+        && (exe
+            || !(LECTURE_PS.contains(&nom.as_str())
+                || ALIAS_PS.contains(&nom.as_str())
+                || CD.contains(&nom.as_str())));
+    let recus: Vec<String>;
+    let args: &[String] = if natif {
+        recus = mots[1..]
+            .iter()
+            .zip(cites.iter().skip(1).chain(std::iter::repeat(&false)))
+            .map(|(x, &cite)| {
+                if cite {
+                    arg_d_executable(x).to_owned()
+                } else {
+                    x.clone()
+                }
+            })
+            .collect();
+        &recus
+    } else {
+        &mots[1..]
+    };
+    if CD.contains(&nom.as_str()) {
         let Some(cible) = args.iter().find(|a| !a.starts_with('-')) else {
             return Avis::refus("`cd` sans dossier mène hors des dossiers de code");
         };
@@ -2071,13 +2136,18 @@ fn where_exe(args: &[String], ctx: &Contexte, cwd: &Path) -> Option<Avis> {
     None
 }
 
-/// Argument tel que where.exe le reçoit : un `-…` entre guillemets ou dans
+/// Argument tel qu'un exécutable le reçoit : un `-…` entre guillemets ou dans
 /// un tableau PowerShell porte un `./` de tête ajouté par `decouper` (KOB-437),
 /// que l'exécutable ne voit pas (`'-R'` est bien l'option `-R`).
-fn arg_de_where(x: &str) -> &str {
+fn arg_d_executable(x: &str) -> &str {
     x.strip_prefix("./")
         .filter(|r| r.starts_with('-'))
         .unwrap_or(x)
+}
+
+/// Argument tel que where.exe le reçoit (voir [`arg_d_executable`]).
+fn arg_de_where(x: &str) -> &str {
+    arg_d_executable(x)
 }
 
 /// `/R` ou `-R` de where.exe, sous toutes ses formes.
@@ -2823,6 +2893,67 @@ mod tests {
 
     /// KOB-434 : `-Depth` implique `-Recurse` ; un tiret Unicode est un
     /// tiret de paramètre pour PowerShell ; `where /R` juge son dossier.
+    /// KOB-447 : sous PowerShell, une option d'exécutable entre guillemets ou
+    /// dans un tableau est vue comme l'option elle-même (classée comme sans
+    /// guillemets) ; pour une cmdlet ou son alias, `'-x'` reste une valeur.
+    #[test]
+    fn option_d_executable_entre_guillemets_sous_powershell() {
+        let x = ctx();
+        let ps = Shell::PowerShell;
+        let cle = |l: &str| analyser(l, ps, &x).classe.cle();
+        for (cite, nu) in [
+            ("rg '--pre=calc.exe' foo", "rg --pre=calc.exe foo"),
+            ("rg foo,--pre=calc", "rg foo --pre=calc"),
+            ("git grep '-Ocalc.exe' foo", "git grep -Ocalc.exe foo"),
+            ("git diff '--output=C:/x.bat'", "git diff --output=C:/x.bat"),
+            ("rg '-L' foo", "rg -L foo"),
+            ("rg.exe '--pre=calc.exe' foo", "rg.exe --pre=calc.exe foo"),
+        ] {
+            assert_ne!(cle(cite), "lecture", "{cite}");
+            assert_eq!(cle(cite), cle(nu), "{cite} / {nu}");
+        }
+        // Un `./-e` écrit tel quel est un fichier pour l'exécutable : il ne
+        // devient pas l'option `-e` qui ferait sauter le chemin suivant.
+        for l in [
+            r"rg . ./-e C:\Windows\win.ini",
+            r"head.exe ./-n C:\Windows\win.ini",
+            r"grep.exe x ./-f ..\..\..\secret",
+            "rg . '\u{2013}e' C:/Windows/win.ini",
+            "head.exe '\u{2014}n' C:/Windows/win.ini",
+            "rg . foo,\u{2013}e,C:/Windows/win.ini",
+        ] {
+            assert_ne!(cle(l), "lecture", "{l}");
+        }
+        // Cmdlet ou alias, `cd` compris : la valeur entre guillemets reste un
+        // chemin jugé.
+        for l in [
+            r"Get-Content '-x\..\..\..\Windows\win.ini'",
+            r"cat '-x\..\..\..\Windows\win.ini'",
+            r"type '-x\..\..\..\Windows\win.ini'",
+            r"cd '-x\..\..\..\Windows' -ea 0; gc win.ini",
+            r"pushd '-x\..\..\..\Windows' -StackName .; gc win.ini",
+        ] {
+            assert_eq!(cle(l), "refus", "{l}");
+        }
+    }
+
+    /// KOB-448 : sous PowerShell, l'option de format de git entre guillemets
+    /// n'est pas prise pour un chemin (refusée à tort depuis KOB-437).
+    #[test]
+    fn git_log_format_entre_guillemets_sous_powershell() {
+        let x = ctx();
+        for l in [
+            "git log '--format=%h %s'",
+            r#"git log "--pretty=format:%h %s""#,
+        ] {
+            assert_eq!(
+                analyser(l, Shell::PowerShell, &x).classe.cle(),
+                "lecture",
+                "{l}"
+            );
+        }
+    }
+
     #[test]
     fn parcours_depth_tirets_et_where() {
         let v = |l: &str| l.split(' ').map(str::to_owned).collect::<Vec<_>>();
