@@ -1819,6 +1819,15 @@ fn options_interdites(nom: &str, args: &[String], shell: Shell) -> Option<Avis> 
         "find" => a("-L") || a("-follow"),
         "tree" => court('l'),
         "ls" | "du" => court('L') || longue("--dereference"),
+        // GNU `dir` est `ls -C -b` (KOB-472) ; sous PowerShell, c'est
+        // `Get-ChildItem`, où `-L` abrège `-LiteralPath`.
+        "dir" if shell != Shell::PowerShell => {
+            court('L')
+                || longue("--dereference")
+                || args
+                    .iter()
+                    .any(|x| x.eq_ignore_ascii_case("-followsymlink"))
+        }
         // `diff -r` compare les cibles des liens qu'il trouve.
         "diff" => court('r') || longue("--recursive"),
         _ => args
@@ -3650,6 +3659,24 @@ mod tests {
         assert_eq!(
             analyser("sort -f a.txt", Shell::Bash, &x).classe.cle(),
             "lecture"
+        );
+    }
+
+    /// KOB-472 : GNU `dir` suit les liens avec `-L` comme `ls` ; sous
+    /// PowerShell, `dir -L` est `Get-ChildItem -LiteralPath`.
+    #[test]
+    fn dir_l_suit_les_liens_sous_bash() {
+        let x = ctx();
+        for l in ["dir -RL .", "dir -R --dereference .", "dir -LR src"] {
+            assert_ne!(analyser(l, Shell::Bash, &x).classe.cle(), "lecture", "{l}");
+        }
+        assert_eq!(
+            analyser("dir -R src", Shell::Bash, &x).classe.cle(),
+            "lecture"
+        );
+        assert_eq!(
+            analyser("dir -L src", Shell::PowerShell, &x).classe,
+            analyser("gci -L src", Shell::PowerShell, &x).classe
         );
     }
 
