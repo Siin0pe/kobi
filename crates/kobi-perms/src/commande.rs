@@ -195,6 +195,12 @@ enum Jeton {
     Redir(String),
 }
 
+/// Le mot commence-t-il par un tiret de paramètre PowerShell (`-`, `–`,
+/// `—`, `―`) ?
+fn commence_par_un_tiret(mot: &str) -> bool {
+    mot.starts_with(['-', '\u{2013}', '\u{2014}', '\u{2015}'])
+}
+
 /// Découpe la ligne en jetons. Refuse ce qui demanderait d'exécuter du code
 /// pour connaître la commande : substitutions, variables, blocs.
 fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
@@ -251,6 +257,13 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
             // jugé à part (KOB-437). Entre guillemets, la virgule reste dans
             // le nom (boucles des guillemets ci-dessous).
             ',' if ps => {
+                // `-Recurse,src` : PowerShell finit-il le paramètre à la
+                // virgule ? Un mot à tiret hors guillemets qui touche une
+                // virgule sans en suivre une est ambigu : sur la carte plutôt
+                // que deviné (un vrai `-Recurse` y serait caché).
+                if dans_mot && !cite && !apres_virgule && commence_par_un_tiret(&mot) {
+                    return Err(format!("`{mot},` : paramètre ou valeur ? À valider"));
+                }
                 fin_mot(
                     &mut jetons,
                     &mut mot,
@@ -262,6 +275,13 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
                 apres_virgule = true;
             }
             '\'' => {
+                // Un mot à tiret hors guillemets qui se poursuit entre
+                // guillemets (`-Recurse''`) : paramètre ou chaîne ? Ambigu.
+                if ps && dans_mot && !cite && !apres_virgule && commence_par_un_tiret(&mot) {
+                    return Err(format!(
+                        "`{mot}` suivi de guillemets : paramètre ou valeur ? À valider"
+                    ));
+                }
                 dans_mot = true;
                 cite = true;
                 i += 1;
@@ -280,6 +300,13 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
                 }
             }
             '"' => {
+                // Un mot à tiret hors guillemets qui se poursuit entre
+                // guillemets (`-Recurse''`) : paramètre ou chaîne ? Ambigu.
+                if ps && dans_mot && !cite && !apres_virgule && commence_par_un_tiret(&mot) {
+                    return Err(format!(
+                        "`{mot}` suivi de guillemets : paramètre ou valeur ? À valider"
+                    ));
+                }
                 dans_mot = true;
                 cite = true;
                 i += 1;
@@ -411,6 +438,8 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
                 if dans_mot && (mot.chars().all(|d| d.is_ascii_digit()) || (ps && mot == "*")) {
                     r = std::mem::take(&mut mot);
                     dans_mot = false;
+                    cite = false;
+                    apres_virgule = false;
                 } else {
                     fin_mot(
                         &mut jetons,
@@ -2057,7 +2086,12 @@ mod tests {
             // (relecture sécurité de KOB-437).
             r"Get-Content Cargo.toml,'-Encoding',..\..\..\..\Windows\win.ini",
             r"Get-Content Cargo.toml,-Encoding,C:\Windows\win.ini",
-            r"gc Cargo.toml,'\u{2013}Tail',C:\Windows\win.ini",
+            "gc Cargo.toml,'\u{2013}Tail',C:\\Windows\\win.ini",
+            // Un paramètre collé à une virgule ou à des guillemets : ambigu,
+            // sur la carte (un vrai `-Recurse` n'y est jamais caché).
+            "gci -Recurse,src",
+            "gci -Recurse, src",
+            "gci -Recurse'' src",
             r"gci -Recurse src,'-Filter',C:\Windows",
             // Espaces autour de la virgule, virgule unaire, tableau mixte.
             r"gc Cargo.toml , C:\Windows\win.ini",
