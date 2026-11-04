@@ -41,6 +41,30 @@ async function francais(racine: Locator, ou: string): Promise<string[]> {
   return (await textes(racine)).filter((x) => FRANCAIS.test(x.replace(ENDONYMES, ''))).map((x) => `${ou} : ${x}`);
 }
 
+/**
+ * Attend que le texte sous `racine` soit posé : inchangé pendant 6 images.
+ * Le mot et le titre de l'accueil arrivent brouillés (un pas toutes les
+ * 60 ms) ; relu en plein brouillage, « La$!+?=* » passait pour du français
+ * (KOB-428). Un délai fixe ne suffisait pas sous charge.
+ */
+async function pose(racine: Locator): Promise<void> {
+  await racine.evaluate(
+    (r) =>
+      new Promise<void>((ok) => {
+        let avant: string | null = null;
+        let stables = 0;
+        const pas = (): void => {
+          const x = r.textContent ?? '';
+          stables = x === avant ? stables + 1 : 0;
+          avant = x;
+          if (stables >= 6) ok();
+          else requestAnimationFrame(pas);
+        };
+        requestAnimationFrame(pas);
+      }),
+  );
+}
+
 const emettre = (page: Page, evenement: string, charge: unknown) =>
   page.evaluate(([e, c]) => (window as unknown as { __emit: (e: string, p: unknown) => void }).__emit(e as string, c), [evenement, charge] as const);
 
@@ -55,7 +79,7 @@ test('balayage (KOB-211) : le premier lancement en anglais, chaque étape', asyn
   const restes: string[] = [];
   for (let i = 0; i <= n + 1; i++) {
     await page.evaluate((i) => window.bienvenue.aller(i), i);
-    await page.waitForTimeout(250);
+    await pose(accueil);
     restes.push(...(await francais(accueil, `étape ${i}`)));
   }
   expect([...new Set(restes)]).toEqual([]);

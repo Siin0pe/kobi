@@ -5,7 +5,10 @@ export async function openUi(page: Page, query: string): Promise<string[]> {
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(String(e)));
   page.on('console', (m) => {
-    if (m.type() === 'error') errors.push(m.text());
+    // Tampons de sockets épuisés sur le poste de CI Windows, quand toute la
+    // suite tourne en parallèle : une panne du système, pas de l'app. Ce qui
+    // ne se serait pas chargé, les assertions du test le voient (KOB-428).
+    if (m.type() === 'error' && !m.text().includes('net::ERR_NO_BUFFER_SPACE')) errors.push(m.text());
   });
   await page.goto(`/?${query}`);
   await page.waitForFunction(() => 'kobi' in window);
