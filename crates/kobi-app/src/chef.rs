@@ -2357,7 +2357,9 @@ impl<R: Runtime> Chef<R> {
                 en_attente
             };
             if accordee
-                && repris.is_some_and(|t| self.taches.contains_key(&t))
+                && repris.is_some_and(|t| {
+                    self.taches.contains_key(&t) && !self.tours_peut_etre.contains(&t)
+                })
                 && !self
                     .historique
                     .iter()
@@ -2765,6 +2767,9 @@ impl<R: Runtime> Chef<R> {
                 entree,
             } => {
                 tracing::info!(tour, carte, %outil, "carte de confirmation");
+                // Une phrase peut-être qui demande une action s'adressait bien
+                // à Kobi (KOB-435).
+                self.tours_peut_etre.remove(&tour);
                 // Proposée par les notes après « Terminer » (tour de notes
                 // déjà en cours) : refusée sans être montrée (KOB-331).
                 if tour == 0 && self.reunion.as_ref().is_none_or(|r| r.fin_demandee) {
@@ -3390,7 +3395,7 @@ impl<R: Runtime> Chef<R> {
         // Kobi réfléchit sans question en cours (carte acceptée après la
         // réponse à une autre question, son tour parti en tâche) : rien ne
         // l'en sortira, le résultat passe par « au travail » (KOB-384).
-        let sans_question = activite == Some("reflechit") && !self.question_en_cours();
+        let sans_question = activite == Some("reflechit") && !self.question_de_kobi_en_cours();
         // Kobi réfléchit à la question en cours, dont le tour, détaché par
         // une carte acceptée, livre sa réponse ici : elle passe tout de suite,
         // devant les résultats plus anciens, qui suivent ensuite (KOB-387).
@@ -3626,13 +3631,14 @@ impl<R: Runtime> Chef<R> {
         // carte), ni tâche, ni résultat à livrer (carte sans tour acceptée,
         // tâche finie en erreur) ; il revient au calme au lieu de rester figé
         // (KOB-391).
-        let une_question_tourne = self
-            .historique
-            .iter()
-            .any(|b| matches!(b.statut, "attente" | "reponse" | "tache"));
+        // Une phrase peut-être pas pour Kobi n'y compte pas (KOB-435).
+        let une_question_tourne = self.historique.iter().any(|b| {
+            matches!(b.statut, "attente" | "reponse" | "tache")
+                && !self.tours_peut_etre.contains(&b.tour)
+        });
         if self.activite() == Some("reflechit")
             && !une_question_tourne
-            && self.taches.is_empty()
+            && !self.tache_de_kobi()
             && self.a_livrer.is_empty()
             && self.calme_a.is_none()
         {
@@ -6650,6 +6656,66 @@ mod tests {
             c.livrable_a = None;
             c.tick();
             assert_eq!(c.activite(), Some("propose"));
+        });
+    }
+
+    /// KOB-435 : une phrase peut-être en cours ne retient pas le résultat
+    /// d'une tâche quand Kobi réfléchit après une carte acceptée ; une phrase
+    /// peut-être qui demande une carte s'adressait à Kobi.
+    #[test]
+    fn phrase_peut_etre_ne_retient_pas_un_resultat() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.question("fais le compte rendu".into(), false);
+            let tache = c.tour;
+            c.recevoir(Message::Cerveau(Retour::Detache {
+                tour: tache,
+                annonce: true,
+            }));
+            c.recevoir(Message::QuestionPeutEtre(
+                "Kobi, la revue est demain".into(),
+                Instant::now(),
+            ));
+            // Sans réponse au bout de 4 s, le cerveau la détache : jusque-là,
+            // le résultat attend derrière elle (KOB-422).
+            let peut_etre = c.tour;
+            c.recevoir(Message::Cerveau(Retour::Detache {
+                tour: peut_etre,
+                annonce: true,
+            }));
+            c.validation_ouverte("v1".into(), "Écrire la note");
+            c.livrable_a = None;
+            c.tick();
+            c.recevoir(Message::ValidationFermee {
+                id: "v1".into(),
+                reponse: crate::validation::Reponse::Accepte,
+            });
+            c.recevoir(Message::Cerveau(Retour::Resultat {
+                tour: tache,
+                texte: "Compte rendu prêt.".into(),
+            }));
+            for _ in 0..5 {
+                c.livrable_a = None;
+                if let Some((_, e)) = c.calme_a {
+                    c.calme_a = Some((Instant::now(), e));
+                }
+                c.tick();
+            }
+            assert!(c.a_livrer.is_empty(), "le résultat de la tâche est livré");
+            assert_ne!(c.activite(), Some("reflechit"));
+            // Une phrase peut-être qui demande une carte : pour Kobi.
+            c.recevoir(Message::QuestionPeutEtre(
+                "Kobi, crée le ticket".into(),
+                Instant::now(),
+            ));
+            let tour = c.tour;
+            c.recevoir(Message::Cerveau(Retour::Carte {
+                tour,
+                carte: 9,
+                outil: "mcp__carnet__ecrire_note".into(),
+                entree: serde_json::json!({ "title": "Ticket" }),
+            }));
+            assert!(!c.tours_peut_etre.contains(&tour));
         });
     }
 
