@@ -273,6 +273,14 @@ fn parametre_ouvert(mot: &str) -> bool {
     commence_par_un_tiret(mot) && !mot.contains([':', '='])
 }
 
+/// PowerShell coupe un mot qui commence par un guillemet juste après le
+/// guillemet fermant (`'x'/R` donne `x` puis `/R`, sonde #402) : le
+/// caractère qui suit le guillemet fermé en `i` en fait-il un second
+/// argument, au lieu de finir le mot (KOB-441) ?
+fn suite_collee(c: &[char], i: usize) -> bool {
+    c.get(i + 1).is_some_and(|x| !" \t\n\r,;|&<>)".contains(*x))
+}
+
 /// Découpe la ligne en jetons. Refuse ce qui demanderait d'exécuter du code
 /// pour connaître la commande : substitutions, variables, blocs.
 fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
@@ -281,7 +289,18 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
     let mut jetons = Vec::new();
     let mut mot = String::new();
     let mut dans_mot = false;
-    let c: Vec<char> = ligne.chars().collect();
+    let brut: Vec<char> = ligne.chars().collect();
+    // PowerShell prend aussi `‘ ’ ‚ ‛` pour `'` et `“ ” „` pour `"` : le
+    // découpage suit ces délimiteurs, le mot garde le caractère tapé (le
+    // vrai nom du fichier) (KOB-441).
+    let c: Vec<char> = brut
+        .iter()
+        .map(|&x| match x {
+            '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}' if ps => '\'',
+            '\u{201C}' | '\u{201D}' | '\u{201E}' if ps => '"',
+            x => x,
+        })
+        .collect();
     let mut i = 0;
     // Mot entre guillemets, ou voisin d'une virgule (élément d'un tableau
     // PowerShell) : jamais un paramètre (KOB-437).
@@ -359,6 +378,10 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
                 }
                 // Après une valeur collée (`--format='%h %s'`), le mot reste
                 // un paramètre.
+                // Après `-Param:` aussi, PowerShell lit la valeur comme un
+                // argument à part.
+                let debut = !dans_mot
+                    || (!cite && commence_par_un_tiret(&mot) && mot.ends_with([':', '=']));
                 cite |= !(dans_mot && commence_par_un_tiret(&mot));
                 dans_mot = true;
                 i += 1;
@@ -367,13 +390,18 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
                         None => return Err("guillemet simple non fermé".into()),
                         // PowerShell : `''` dans une chaîne simple vaut `'`.
                         Some('\'') if ps && c.get(i + 1) == Some(&'\'') => {
-                            mot.push('\'');
+                            mot.push(brut[i]);
                             i += 1;
                         }
                         Some('\'') => break,
-                        Some(&x) => mot.push(x),
+                        Some(_) => mot.push(brut[i]),
                     }
                     i += 1;
+                }
+                if ps && debut && suite_collee(&c, i) {
+                    return Err(format!(
+                        "`'{mot}'` suivi d'autres caractères : un ou deux arguments ? À valider"
+                    ));
                 }
             }
             '"' => {
@@ -384,6 +412,10 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
                         "`{mot}` suivi de guillemets : paramètre ou valeur ? À valider"
                     ));
                 }
+                // Après `-Param:` aussi, PowerShell lit la valeur comme un
+                // argument à part.
+                let debut = !dans_mot
+                    || (!cite && commence_par_un_tiret(&mot) && mot.ends_with([':', '=']));
                 cite |= !(dans_mot && commence_par_un_tiret(&mot));
                 dans_mot = true;
                 i += 1;
@@ -398,13 +430,18 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
                         Some(&x) if x == echap => {
                             i += 1;
                             match c.get(i) {
-                                Some(&y) => mot.push(y),
+                                Some(_) => mot.push(brut[i]),
                                 None => return Err("échappement en fin de ligne".into()),
                             }
                         }
-                        Some(&x) => mot.push(x),
+                        Some(_) => mot.push(brut[i]),
                     }
                     i += 1;
+                }
+                if ps && debut && suite_collee(&c, i) {
+                    return Err(format!(
+                        "`\"{mot}\"` suivi d'autres caractères : un ou deux arguments ? À valider"
+                    ));
                 }
             }
             '$' => return Err("variable ou substitution `$` non analysable".into()),
@@ -423,7 +460,7 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
                 i += 1;
                 match c.get(i) {
                     Some('\n') => {}
-                    Some(&y) => mot.push(y),
+                    Some(_) => mot.push(brut[i]),
                     None => return Err("échappement en fin de ligne".into()),
                 }
             }
@@ -549,6 +586,11 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
                     }
                 }
                 jetons.push(Jeton::Redir(r));
+            }
+            // Espace insécable et autres blancs : PowerShell y coupe-t-il le
+            // mot ? Sur la carte plutôt que deviné (KOB-441).
+            x if ps && x.is_whitespace() => {
+                return Err(format!("blanc inhabituel U+{:04X} : à valider", x as u32))
             }
             x => {
                 dans_mot = true;
@@ -2339,6 +2381,62 @@ fn ressemble_a_un_chemin(v: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// KOB-441 : sous PowerShell, `'x'/R` donne deux arguments (sonde
+    /// #402 : `where.exe 'x'/R ..\dehors secret.txt` a listé le fichier) ;
+    /// Kobi n'y voyait qu'un mot. Ce qui suit un mot entre guillemets, collé,
+    /// passe par la carte ; un guillemet au milieu d'un mot reste du mot.
+    #[test]
+    fn mot_apres_guillemet_powershell() {
+        let x = ctx();
+        for ligne in [
+            r"where.exe 'x'/R ..\dehors secret.txt",
+            r"where 'x'/R ..\dehors secret.txt",
+            r#"where.exe "x"/R ..\dehors secret.txt"#,
+            r"Get-Content 'x'..\..\..\..\Windows\win.ini",
+            "gc ''C:/Windows/win.ini",
+            "gc 'Cargo.toml'\"C:/Windows/win.ini\"",
+            "gc Cargo.toml,'x'C:/Windows/win.ini",
+            // Guillemets typographiques, que PowerShell prend pour des
+            // guillemets (relecture sécurité de KOB-441).
+            "where.exe \u{2018}x\u{2019}/R ..\\dehors secret.txt",
+            "where.exe 'x\u{2019} /R ..\\dehors secret.txt \u{2018}'",
+            "where.exe \"x\u{201D} /R ..\\dehors secret.txt \u{201C}\"",
+            // Valeur collée à un paramètre, puis autre chose.
+            "where.exe -Param:'x'/R ..\\dehors secret.txt",
+            // Blancs Unicode : coupure incertaine.
+            "where.exe 'x'\u{A0}/R ..\\dehors secret.txt",
+            "where.exe x\u{A0}/R ..\\dehors secret.txt",
+        ] {
+            assert_ne!(
+                analyser(ligne, Shell::PowerShell, &x).classe,
+                Classe::Lecture,
+                "{ligne}"
+            );
+        }
+        for ligne in [
+            "gc 'Cargo.toml'",
+            "gc \"Cargo.toml\"",
+            "gc x'y'z",
+            "gc 'Cargo.toml','README.md'",
+            "gc 'Cargo.toml' | Select-String motif",
+            "gc 'Cargo.toml';gc README.md",
+            "git log --format='%h %s'",
+            // Apostrophe typographique dans une chaîne double : un caractère.
+            "git log --grep \"l\u{2019}appli\"",
+        ] {
+            assert_eq!(
+                analyser(ligne, Shell::PowerShell, &x).classe,
+                Classe::Lecture,
+                "{ligne}"
+            );
+        }
+        // Bash colle les morceaux : un seul mot, comme le voit Kobi.
+        assert_eq!(
+            analyser("cat 'src'/main.rs", Shell::Bash, &x).classe,
+            Classe::Lecture
+        );
+    }
 
     /// KOB-437 : sous PowerShell, `a,b` est un tableau de deux chemins
     /// (sonde #396 : `gc a.txt,..\dehors\secret.txt` lit les deux), chacun
