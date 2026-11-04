@@ -976,9 +976,10 @@ fn lien_vers_le_reseau(chemin: &Path, peripheriques: bool) -> bool {
     if peripheriques && (a_deux_points(chemin) || nom_a_barre(chemin)) {
         return true;
     }
-    // Chaque composant garde la nature qu'il avait au découpage : relu seul,
-    // un nom pourrait changer de nature (`y::$DATA` passait pour le lecteur
-    // `Y:`), et le parcours ne jugerait plus ce que NT ouvre (KOB-413).
+    // Chaque composant garde la nature qu'il avait au découpage, sans être
+    // relu seul comme un chemin (KOB-413). Les noms qui changeraient de
+    // nature (`:`, `/`) restent refusés plus haut : `resolu.join` les
+    // redécouperait (KOB-398, KOB-425).
     let mut a_lire: VecDeque<Morceau> = decouper(chemin).collect();
     let mut resolu = PathBuf::new();
     let mut liens = 0;

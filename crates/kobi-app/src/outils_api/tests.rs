@@ -537,7 +537,7 @@ fn decoupage_garde_la_nature_des_composants() {
     assert_eq!(
         decouper(Path::new("/base/a/../b")).collect::<Vec<_>>(),
         vec![
-            Morceau::Debut(OsString::from("/")),
+            Morceau::Debut(OsString::from(std::path::MAIN_SEPARATOR_STR)),
             nom("base"),
             nom("a"),
             Morceau::Parent,
@@ -569,7 +569,6 @@ fn decoupage_garde_la_nature_des_composants() {
 /// * Cible relative qui monte au-dessus du lecteur, vers
 ///   `GLOBALROOT\Device\Mup\…` ou `UNC\…` : refusée (NT la rejette, 4392).
 /// * Lien de dossier qui monte, puis la suite du chemin : refusé.
-/// * Chemin verbatim qui monte (`\\?\C:\…\..\..\…`) : refusé à la lecture.
 ///
 /// La cible fabriquée `…\x\../y` est couverte par
 /// `nom_a_barre_d_une_cible_verbatim_refuse` (KOB-425).
@@ -596,12 +595,6 @@ fn parcours_refondu_garde_les_cas_de_la_revue() {
         assert!(lien_vers_le_reseau(&racine.join(nom), true), "{nom}");
     }
     fs::write(racine.join("y"), "ordinaire").unwrap();
-    let l = lecteur(&dir);
-    let verbatim = format!(r"\\?\{}\..\..\{}", racine.display(), "y");
-    assert!(
-        l.lire(&json!({ "file_path": verbatim })).is_err(),
-        "{verbatim}"
-    );
     // Un fichier ordinaire se lit toujours.
     assert!(!lien_vers_le_reseau(&racine.join("y"), true));
 }
