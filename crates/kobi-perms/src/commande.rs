@@ -2114,6 +2114,23 @@ fn chemins(nom: &str, args: &[String], shell: Shell, ctx: &Contexte, cwd: &Path)
     // Motif donné par une option (`grep /etc/passwd -e root`) : tous les
     // positionnels sont des chemins (KOB-227).
     let mut motif_vu = !MOTIF_D_ABORD.contains(&nom) || motif_par_option(nom, args);
+    // `git -C d` : git lit ses chemins depuis `d` (`--git-dir=lien`) ; ils
+    // sont jugés depuis chaque dossier possible (KOB-444).
+    let mut bases = vec![cwd.to_path_buf()];
+    if nom == "git" {
+        let mut j = 0;
+        while j < args.len() {
+            if args[j] == "-C" {
+                if let Some(d) = args.get(j + 1) {
+                    let suivante = bases[bases.len() - 1].join(d);
+                    bases.push(suivante);
+                }
+                j += 1;
+            }
+            j += 1;
+        }
+    }
+    let juge = |v: &str| bases.iter().find_map(|b| juger_chemin(ctx, v, b));
     let mut i = 0;
     while i < args.len() {
         let x = &args[i];
@@ -2135,20 +2152,36 @@ fn chemins(nom: &str, args: &[String], shell: Shell, ctx: &Contexte, cwd: &Path)
         }
         if x.starts_with('-') && x.len() > 1 {
             // `--git-dir=/x`, `-Path=…`, PowerShell `-Path:/x` : la valeur est
-            // vérifiée si c'est un chemin.
+            // vérifiée si c'est un chemin, ou un nom qui existe dans le
+            // dossier (`--from-file=lien`, `-Path:lien`, KOB-444), lu sans
+            // rien suivre.
             let valeur = x
                 .split_once('=')
                 .or_else(|| if ps { x.split_once(':') } else { None });
+            // Sous PowerShell, un joker (`-Path:l*`) est développé par la
+            // cmdlet : jugé aussi. Sous Bash, `--include=*.rs` est un filtre
+            // de noms, pas un chemin.
             if let Some((_, v)) = valeur {
-                if ressemble_a_un_chemin(v) {
-                    if let Some(avis) = juger_chemin(ctx, v, cwd) {
+                let existe = !v.is_empty()
+                    && bases
+                        .iter()
+                        .any(|b| std::fs::symlink_metadata(b.join(v)).is_ok());
+                if ressemble_a_un_chemin(v) || existe || (ps && a_des_jokers(v)) {
+                    if let Some(avis) = juge(v) {
                         return avis;
                     }
                 }
             }
+            // `grep -flien`, `rg -iflien` : le fichier de motifs collé à `-f`
+            // dans des options courtes groupées (KOB-444).
+            if let Some(f) = fichier_colle_a_f(nom, x) {
+                if let Some(avis) = juge(f) {
+                    return avis;
+                }
+            }
             if nom == "git" && x == "-C" {
                 if let Some(d) = args.get(i + 1) {
-                    if let Some(avis) = juger_chemin(ctx, d, cwd) {
+                    if let Some(avis) = juge(d) {
                         return avis;
                     }
                 }
@@ -2186,12 +2219,32 @@ fn chemins(nom: &str, args: &[String], shell: Shell, ctx: &Contexte, cwd: &Path)
             i += 1;
             continue;
         }
-        if let Some(avis) = juger_chemin(ctx, x, cwd) {
+        if let Some(avis) = juge(x) {
             return avis;
         }
         i += 1;
     }
     Avis::lecture()
+}
+
+/// grep, rg : dans des options courtes groupées, la première qui prend une
+/// valeur prend la suite du mot ; si c'est `-f` (fichier de motifs) et que
+/// la suite n'est pas vide, c'est ce fichier (`-iflien` → `lien`). Seules
+/// comptent les lettres qui prennent une valeur dans toutes les variantes
+/// (GNU grep, ugrep, ripgrep) : `-Tflien` est `-T` puis `-f lien`.
+fn fichier_colle_a_f<'a>(nom: &str, x: &'a str) -> Option<&'a str> {
+    let a_valeur = match nom {
+        "grep" | "egrep" | "fgrep" => "efmABCdD",
+        "rg" => "efmABCdDgtTjMEr",
+        _ => return None,
+    };
+    if x.starts_with("--") {
+        return None;
+    }
+    let reste = x.strip_prefix('-')?;
+    let (i, c) = reste.char_indices().find(|(_, c)| a_valeur.contains(*c))?;
+    let valeur = &reste[i + c.len_utf8()..];
+    (c == 'f' && !valeur.is_empty()).then_some(valeur)
 }
 
 /// Un chemin donné à une commande est-il permis ? `None` s'il l'est. Un
@@ -2982,6 +3035,62 @@ mod tests {
             "file Cargo.toml",
         ] {
             assert_eq!(bash(l).classe, Classe::Lecture, "{l}");
+        }
+    }
+
+    /// KOB-444 : une valeur collée qui ne ressemble pas à un chemin mais
+    /// nomme un lien du dossier qui sort (`diff --from-file=lien x` affichait
+    /// le fichier) est jugée comme en argument séparé.
+    #[cfg(unix)]
+    #[test]
+    fn valeur_collee_qui_nomme_un_lien() {
+        let code = tempfile::tempdir().unwrap();
+        let dehors = tempfile::tempdir().unwrap();
+        let c = code.path();
+        std::fs::write(dehors.path().join("secret"), "s").unwrap();
+        std::os::unix::fs::symlink(dehors.path().join("secret"), c.join("lien")).unwrap();
+        std::fs::write(c.join("x"), "").unwrap();
+        std::fs::write(c.join("motifs"), "").unwrap();
+        std::fs::create_dir_all(c.join("sub")).unwrap();
+        // Un nom qui n'existe que sous `sub` : jugé depuis `-C sub`.
+        std::os::unix::fs::symlink(dehors.path(), c.join("sub").join("depot")).unwrap();
+        let mut x = Contexte::new(vec![c.to_path_buf()]);
+        x.cwd = Some(c.to_path_buf());
+        for (l, sh) in [
+            ("diff --from-file=lien x", Shell::Bash),
+            ("diff --to-file=lien x", Shell::Bash),
+            ("grep --file=lien x", Shell::Bash),
+            ("Get-Content -Path:lien", Shell::PowerShell),
+            ("Get-Content -LiteralPath:lien", Shell::PowerShell),
+            ("gc -lp:lien", Shell::PowerShell),
+            // Relecture sécurité : joker développé par `-Path`, `git -C`,
+            // fichier de motifs collé à `-f`.
+            ("Get-Content -Path:l*", Shell::PowerShell),
+            ("Select-String x -Path:lie?", Shell::PowerShell),
+            ("git -C sub --git-dir=depot log -p", Shell::Bash),
+            ("grep -flien x", Shell::Bash),
+            ("grep -iflien x", Shell::Bash),
+            ("rg -flien x", Shell::Bash),
+            ("grep -Tflien x", Shell::Bash),
+            ("grep -jflien x", Shell::Bash),
+            ("git --git-dir=lien show HEAD:x", Shell::Bash),
+        ] {
+            assert_ne!(analyser(l, sh, &x).classe, Classe::Lecture, "{l}");
+        }
+        for (l, sh) in [
+            ("diff --from-file=x x", Shell::Bash),
+            ("grep --file=motifs x", Shell::Bash),
+            ("grep -r --include=*.rs motif .", Shell::Bash),
+            ("git log --format=oneline", Shell::Bash),
+            ("Get-Content -Path:x", Shell::PowerShell),
+            ("Get-Content -Encoding:utf8 x", Shell::PowerShell),
+            ("grep -fmotifs x", Shell::Bash),
+            ("grep -A2 motif x", Shell::Bash),
+            ("rg -g*.rs motif", Shell::Bash),
+            ("rg -tpy motif", Shell::Bash),
+            ("git -C sub log", Shell::Bash),
+        ] {
+            assert_eq!(analyser(l, sh, &x).classe, Classe::Lecture, "{l}");
         }
     }
 
