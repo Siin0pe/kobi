@@ -2922,14 +2922,17 @@ impl<R: Runtime> Chef<R> {
         }
     }
 
-    /// Cartes MCP restées sans clic au-delà de l'échéance de kobi-perms (qui
-    /// les a refusées) : fermées comme un refus (KOB-72).
+    /// Cartes MCP restées sans clic jusqu'à l'échéance de kobi-perms (qui
+    /// les a refusées) : fermées comme un refus (KOB-72). Pas plus tard :
+    /// encore affichée, la carte prenait un clic ou un « oui » perdus. Elle
+    /// est ouverte ici après l'avoir été chez kobi-perms, qui l'a donc déjà
+    /// refusée à ce moment (KOB-446).
     fn cartes_expirees(&mut self) {
-        let echeance = kobi_perms::DEFAULT_TIMEOUT + Duration::from_secs(5);
+        let echeance = kobi_perms::DEFAULT_TIMEOUT;
         let mut expirees: Vec<u64> = self
             .cartes_ouvertes
             .iter()
-            .filter(|(_, ouverte)| ouverte.elapsed() > echeance)
+            .filter(|(_, ouverte)| ouverte.elapsed() >= echeance)
             .map(|(carte, _)| *carte)
             .collect();
         // Dans l'ordre d'ouverture, pas celui de la table : l'ordre des
@@ -6772,6 +6775,41 @@ mod tests {
                 );
             });
         }
+    }
+
+    /// KOB-446 : une carte MCP se ferme à l'échéance de kobi-perms (60 s),
+    /// pas 5 s plus tard : passée l'échéance, elle n'est plus affichée, et
+    /// « oui » ne part pas comme une question pendant qu'elle se voit encore.
+    #[test]
+    fn carte_mcp_fermee_a_l_echeance_de_kobi_perms() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.question("crée le ticket".into(), false);
+            let tour = c.tour;
+            c.recevoir(Message::Cerveau(Retour::Carte {
+                tour,
+                carte: 7,
+                outil: "mcp__carnet__ecrire_note".into(),
+                entree: serde_json::json!({ "title": "Ticket" }),
+            }));
+            // Juste avant l'échéance : encore ouverte, et c'est elle que
+            // « oui » vise.
+            let ouverte = Instant::now()
+                .checked_sub(kobi_perms::DEFAULT_TIMEOUT - Duration::from_secs(1))
+                .unwrap();
+            c.cartes_ouvertes.insert(7, ouverte);
+            c.tick();
+            assert!(c.cartes.contains_key(&7));
+            assert_eq!(c.carte_affichee(), Some(7));
+            // Une seconde après l'échéance : fermée comme un refus.
+            let echue = Instant::now()
+                .checked_sub(kobi_perms::DEFAULT_TIMEOUT + Duration::from_secs(1))
+                .unwrap();
+            c.cartes_ouvertes.insert(7, echue);
+            c.tick();
+            assert!(!c.cartes.contains_key(&7), "fermée à l'échéance");
+            assert_ne!(c.activite(), Some("propose"));
+        });
     }
 
     /// KOB-331 : une action des notes acceptée juste avant « Terminer »
