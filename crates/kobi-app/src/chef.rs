@@ -550,9 +550,10 @@ pub struct Chef<R: Runtime> {
     /// La question en cours est différée (KOB-307) : elle part sur une
     /// session sans pilotage.
     differee: bool,
-    /// Tour d'une telle question : sa réponse n'est montrée qu'une fois
-    /// finie, et une réponse « rien » le laisse silencieux (KOB-168).
-    tour_peut_etre: Option<u64>,
+    /// Tours de telles questions : leur réponse n'est montrée qu'une fois
+    /// finie, et une réponse « rien » les laisse silencieux (KOB-168). Plusieurs
+    /// peuvent tourner à la fois, partis en tâche (KOB-435).
+    tours_peut_etre: HashSet<u64>,
     /// Compte rendu remis à l'écrivain, pas encore sur le disque : quitter
     /// l'attend encore (KOB-226).
     compte_rendu_a_ecrire: bool,
@@ -936,7 +937,7 @@ impl<R: Runtime> Chef<R> {
             peut_etre: false,
             question_dite_a: None,
             differee: false,
-            tour_peut_etre: None,
+            tours_peut_etre: HashSet::new(),
             compte_rendu_a_ecrire: false,
             comptes_rendus_abandonnes: 0,
             questions_differees: Vec::new(),
@@ -1345,7 +1346,7 @@ impl<R: Runtime> Chef<R> {
             .unwrap_or_default();
         if self.peut_etre && consigne.is_none() {
             consigne = Some(format!("{CONSIGNE_PEUT_ETRE}{texte}"));
-            self.tour_peut_etre = Some(self.tour);
+            self.tours_peut_etre.insert(self.tour);
         }
         if let Some(r) = &mut self.reunion {
             r.latences.question(self.tour, Instant::now());
@@ -2369,6 +2370,20 @@ impl<R: Runtime> Chef<R> {
         }
     }
 
+    /// Une tâche tourne pour Kobi : pas une phrase peut-être pas pour lui,
+    /// partie en tâche (KOB-435).
+    fn tache_de_kobi(&self) -> bool {
+        self.taches
+            .keys()
+            .any(|t| !self.tours_peut_etre.contains(t))
+    }
+
+    /// La dernière question attend sa réponse, et ce n'est pas une phrase
+    /// peut-être pas pour Kobi (KOB-435).
+    fn question_de_kobi_en_cours(&self) -> bool {
+        self.question_en_cours() && !self.tours_peut_etre.contains(&self.dernier)
+    }
+
     /// La dernière question posée attend-elle encore sa réponse (en cours,
     /// partie en tâche, ou en attente du réseau) ?
     fn question_en_cours(&self) -> bool {
@@ -2541,13 +2556,16 @@ impl<R: Runtime> Chef<R> {
                 crate::activite::noter(&self.app, crate::activite::Genre::Reunion, &texte, None);
             }
             // Phrase peut-être pas pour Kobi : rien ne s'affiche avant la fin.
-            Retour::Texte { tour, .. } if self.tour_peut_etre == Some(tour) => {}
-            Retour::Fin { tour, texte }
-                if self.tour_peut_etre == Some(tour) && est_silence(&texte) =>
+            Retour::Texte { tour, .. } if self.tours_peut_etre.contains(&tour) => {}
+            // Le silence peut aussi venir en résultat : la réponse a tardé et
+            // le cerveau a détaché le tour (KOB-435).
+            Retour::Fin { tour, texte } | Retour::Resultat { tour, texte }
+                if self.tours_peut_etre.contains(&tour) && est_silence(&texte) =>
             {
                 tracing::info!(tour, "phrase qui ne s'adressait pas à Kobi : silence");
-                self.tour_peut_etre = None;
+                self.tours_peut_etre.remove(&tour);
                 self.rangement.remove(&tour);
+                self.taches.remove(&tour);
                 if let Some(r) = &mut self.reunion {
                     r.latences.abandon(tour);
                 }
@@ -2589,9 +2607,7 @@ impl<R: Runtime> Chef<R> {
                 if let Some(r) = &mut self.reunion {
                     r.latences.fin(tour, Instant::now());
                 }
-                if self.tour_peut_etre == Some(tour) {
-                    self.tour_peut_etre = None;
-                }
+                self.tours_peut_etre.remove(&tour);
                 self.retenir(tour, &texte);
                 self.ranger(tour, Qui::Kobi, &texte, false);
                 if let Some(b) = self.bulle(tour) {
@@ -2650,8 +2666,12 @@ impl<R: Runtime> Chef<R> {
                     // Rien n'est dit ni écrit ici : Kobi au travail se voit,
                     // et la plupart des tâches finissent vite. Seule une
                     // tâche qui tarde est annoncée, une fois (`Patience`,
-                    // KOB-215).
-                    if tour == self.dernier {
+                    // KOB-215). Phrase peut-être pas pour Kobi (KOB-276) :
+                    // tâche annulable comme les autres, mais rien ne se voit
+                    // tant qu'on ne sait pas qu'elle lui était adressée ; son
+                    // résultat dira s'il faut la montrer ou se taire
+                    // (KOB-435).
+                    if tour == self.dernier && !self.tours_peut_etre.contains(&tour) {
                         // Kobi reste « je m'en occupe » jusqu'au résultat
                         // (KOB-152), sans retour au calme après l'annonce.
                         self.calme_a = None;
@@ -2667,6 +2687,7 @@ impl<R: Runtime> Chef<R> {
                 if let Some(r) = &mut self.reunion {
                     r.latences.fin(tour, Instant::now());
                 }
+                self.tours_peut_etre.remove(&tour);
                 self.taches.remove(&tour);
                 self.retenir(tour, &texte);
                 self.ranger(tour, Qui::Kobi, &texte, false);
@@ -2696,6 +2717,7 @@ impl<R: Runtime> Chef<R> {
                     self.voix_reportee = None;
                 }
                 self.taches.remove(&tour);
+                self.tours_peut_etre.remove(&tour);
                 // La cause en une phrase et la marche à suivre (KOB-68).
                 let (titre, explication) = crate::pannes::pour_l_utilisateur(&message);
                 if let Some(b) = self.bulle(tour) {
@@ -3225,6 +3247,11 @@ impl<R: Runtime> Chef<R> {
     /// si c'est la question en cours (KOB-68).
     fn patienter(&mut self, tour: u64, phrase: &str, longue: bool) {
         tracing::info!(tour, phrase, "tour : patience");
+        // Phrase peut-être pas pour Kobi : il ne s'en occupe pas encore
+        // (KOB-435).
+        if self.tours_peut_etre.contains(&tour) {
+            return;
+        }
         // Discret : la tâche longue ne s'annonce pas, Kobi au travail se voit.
         if longue && crate::voix::verbosite(&self.app) == kobi_session::config::Verbosite::Discret {
             return;
@@ -3549,9 +3576,9 @@ impl<R: Runtime> Chef<R> {
         // cours (la tâche d'une question plus ancienne a fini en erreur) :
         // rien ne l'en sortirait, retour au calme (KOB-417).
         if self.activite() == Some("occupe")
-            && self.taches.is_empty()
+            && !self.tache_de_kobi()
             && self.a_livrer.is_empty()
-            && !self.question_en_cours()
+            && !self.question_de_kobi_en_cours()
             && self.calme_a.is_none()
         {
             self.transition(&[Evenement::ReponseTerminee]);
@@ -3559,7 +3586,8 @@ impl<R: Runtime> Chef<R> {
         // Revenu au calme alors qu'une tâche, ou la question en cours, tourne
         // encore (Oups acquitté pendant l'attente du réseau, reprise après la
         // pause…) : Kobi s'en occupe, au lieu de paraître au repos (KOB-418).
-        if (!self.taches.is_empty() || self.question_en_cours())
+        // Une phrase peut-être pas pour lui ne compte pas (KOB-435).
+        if (self.tache_de_kobi() || self.question_de_kobi_en_cours())
             && self.calme_a.is_none()
             && matches!(self.activite(), Some("calme") | None)
             && matches!(etat(&self.app).etat, "veille" | "reunion")
@@ -3572,7 +3600,8 @@ impl<R: Runtime> Chef<R> {
         // (KOB-338), ni une carte MCP déjà refusée à l'échéance ; un
         // résultat à livrer passe d'abord, et la question en cours, partie en
         // tâche, livrera le sien sans attendre la carte (pas celle de la
-        // carte elle-même, partie en tâche pour la demander).
+        // carte elle-même, partie en tâche pour la demander ; ni une phrase
+        // peut-être pas pour Kobi, KOB-435).
         let carte_mcp = self.cartes.keys().any(|k| {
             !self.cartes_des_notes.contains_key(k)
                 && self
@@ -3581,7 +3610,7 @@ impl<R: Runtime> Chef<R> {
                     .is_some_and(|o| o.elapsed() < kobi_perms::DEFAULT_TIMEOUT)
         });
         if (!self.validations.est_vide() || carte_mcp)
-            && !(self.question_en_cours() && self.dernier != self.question_a_la_carte)
+            && !(self.question_de_kobi_en_cours() && self.dernier != self.question_a_la_carte)
             && self.calme_a.is_none()
             && self.a_livrer.is_empty()
             && matches!(self.activite(), Some("calme" | "occupe") | None)
@@ -6500,6 +6529,173 @@ mod tests {
             });
             c.tick();
             assert_eq!(c.activite(), Some("occupe"));
+        });
+    }
+
+    /// KOB-435 : une phrase peut-être pour Kobi (KOB-276) ne le montre pas
+    /// au travail, ni aussitôt ni partie en tâche chez le cerveau (réponse
+    /// lente), et sa patience ne se dit pas. Un « — » en résultat est un
+    /// silence ; une vraie réponse se livre. Le tour reste une tâche
+    /// annulable.
+    #[test]
+    fn phrase_peut_etre_partie_en_tache() {
+        for (reunion, silence) in [(false, true), (false, false), (true, true), (true, false)] {
+            let (app, _dir) = chef_en_essai();
+            avec_chef(&app, |c| {
+                if reunion {
+                    c.commande(Intention::DemarrerReunion);
+                }
+                let avant = c.activite();
+                c.recevoir(Message::QuestionPeutEtre(
+                    "Kobi, la revue est demain".into(),
+                    Instant::now(),
+                ));
+                let tour = c.tour;
+                c.tick();
+                assert_eq!(c.activite(), avant, "réunion {reunion} : pas au travail");
+                c.recevoir(Message::Cerveau(Retour::Detache {
+                    tour,
+                    annonce: true,
+                }));
+                c.recevoir(Message::Cerveau(Retour::Patience { tour }));
+                c.tick();
+                assert_eq!(
+                    c.activite(),
+                    avant,
+                    "réunion {reunion} : pas de « je m'en occupe »"
+                );
+                assert!(c.taches.contains_key(&tour), "annulable comme une tâche");
+                assert!(c.bulle(tour).is_some_and(|b| b.reponse.is_empty()));
+                let texte = if silence {
+                    "—"
+                } else {
+                    "Noté, je te le rappelle."
+                };
+                c.recevoir(Message::Cerveau(Retour::Resultat {
+                    tour,
+                    texte: texte.into(),
+                }));
+                for _ in 0..5 {
+                    c.livrable_a = None;
+                    if let Some((_, e)) = c.calme_a {
+                        c.calme_a = Some((Instant::now(), e));
+                    }
+                    c.tick();
+                }
+                assert!(c.a_livrer.is_empty());
+                assert!(c.taches.is_empty());
+                assert!(c.tours_peut_etre.is_empty());
+                if silence {
+                    assert!(c.historique.iter().all(|b| b.tour != tour));
+                    assert_eq!(c.activite(), avant);
+                } else {
+                    assert!(c
+                        .historique
+                        .iter()
+                        .any(|b| b.tour == tour && b.reponse == texte));
+                }
+            });
+        }
+    }
+
+    /// KOB-435 : une tâche lancée avant une phrase peut-être partie en tâche
+    /// livre son résultat sans attendre celle-ci (KOB-422).
+    #[test]
+    fn phrase_peut_etre_en_tache_ne_retient_pas_les_autres() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.question("fais le compte rendu".into(), false);
+            let tache = c.tour;
+            c.recevoir(Message::Cerveau(Retour::Detache {
+                tour: tache,
+                annonce: true,
+            }));
+            c.recevoir(Message::QuestionPeutEtre(
+                "Kobi, la revue est demain".into(),
+                Instant::now(),
+            ));
+            let peut_etre = c.tour;
+            c.recevoir(Message::Cerveau(Retour::Detache {
+                tour: peut_etre,
+                annonce: true,
+            }));
+            c.recevoir(Message::Cerveau(Retour::Resultat {
+                tour: tache,
+                texte: "Compte rendu prêt.".into(),
+            }));
+            for _ in 0..5 {
+                c.livrable_a = None;
+                if let Some((_, e)) = c.calme_a {
+                    c.calme_a = Some((Instant::now(), e));
+                }
+                c.tick();
+            }
+            assert!(c.a_livrer.is_empty(), "le résultat de la tâche est livré");
+        });
+    }
+
+    /// KOB-435 : une phrase peut-être pendant qu'une carte attend ne cache
+    /// pas la carte (la reproposition KOB-384 ne l'attend pas). Trouvé par le
+    /// test de propriété : `[CarteKobi, PeutEtre, Echeance(1)]`.
+    #[test]
+    fn phrase_peut_etre_ne_cache_pas_la_carte() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            // En veille, la carte se propose au tic suivant (KOB-384).
+            c.validation_ouverte("v1".into(), "Écrire la note");
+            c.recevoir(Message::QuestionPeutEtre(
+                "Kobi, la revue est demain".into(),
+                Instant::now(),
+            ));
+            c.livrable_a = None;
+            c.tick();
+            assert_eq!(c.activite(), Some("propose"));
+        });
+    }
+
+    /// KOB-435 : deux phrases peut-être en même temps gardent chacune leur
+    /// marque (la première, partie en tâche, se tait encore à son « — ») ; une
+    /// autre tâche finie en erreur ne laisse pas Kobi au travail pour elles.
+    #[test]
+    fn phrases_peut_etre_qui_se_chevauchent() {
+        let (app, _dir) = chef_en_essai();
+        avec_chef(&app, |c| {
+            c.commande(Intention::DemarrerReunion);
+            c.question("fais le compte rendu".into(), false);
+            let tache = c.tour;
+            c.recevoir(Message::Cerveau(Retour::Detache {
+                tour: tache,
+                annonce: true,
+            }));
+            assert_eq!(c.activite(), Some("occupe"));
+            let mut peut_etre = vec![];
+            for phrase in ["Kobi, la revue est demain", "Kobi aussi, je crois"] {
+                c.recevoir(Message::QuestionPeutEtre(phrase.into(), Instant::now()));
+                peut_etre.push(c.tour);
+                c.recevoir(Message::Cerveau(Retour::Detache {
+                    tour: c.tour,
+                    annonce: true,
+                }));
+            }
+            // La première se tait, alors que la seconde est la dernière.
+            c.recevoir(Message::Cerveau(Retour::Resultat {
+                tour: peut_etre[0],
+                texte: "—".into(),
+            }));
+            assert!(c.historique.iter().all(|b| b.tour != peut_etre[0]));
+            assert!(c.a_livrer.is_empty());
+            // La tâche finit en erreur : seule la seconde phrase tourne.
+            c.recevoir(Message::Cerveau(Retour::Erreur {
+                tour: tache,
+                message: "erreur d'essai".into(),
+            }));
+            for _ in 0..3 {
+                if let Some((_, e)) = c.calme_a {
+                    c.calme_a = Some((Instant::now(), e));
+                }
+                c.tick();
+            }
+            assert_eq!(c.activite(), Some("calme"));
         });
     }
 
