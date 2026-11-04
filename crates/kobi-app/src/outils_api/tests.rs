@@ -473,6 +473,62 @@ fn point_point_d_une_cible_reduit_sur_le_texte() {
     assert_eq!(l.lire(&json!({ "file_path": "u" })).map(|_| ()), Ok(()));
 }
 
+/// KOB-425 : sous Windows, une cible de lien avec `/`, verbatim `…\x\../y`
+/// ou relative `x\../y`,
+/// où `x` vise le réseau et `y` est ordinaire. `PathBuf` la réduisait en
+/// `…\y` (jugé local) alors que NT traverse `x` : tentative SMB (erreur 67,
+/// sonde #381). Un nom à `/` est refusé, dans la cible comme dans le chemin.
+#[cfg(windows)]
+#[test]
+fn nom_a_barre_d_une_cible_verbatim_refuse() {
+    use std::os::windows::fs::{symlink_dir, symlink_file};
+    let dir = codebase();
+    let racine = dir.path().to_path_buf();
+    if symlink_dir(r"\\attaquant\p", racine.join("x")).is_err() {
+        assert!(std::env::var_os("CI").is_none(), "liens impossibles en CI");
+        return;
+    }
+    fs::write(racine.join("y"), "ordinaire").unwrap();
+    let fabrique = format!(r"\\?\{}\x\../y", racine.display());
+    symlink_file(&fabrique, racine.join("t")).unwrap();
+    assert_eq!(
+        fs::read_link(racine.join("t")).unwrap(),
+        PathBuf::from(&fabrique),
+        "cible relue telle qu'écrite"
+    );
+    assert!(lien_vers_le_reseau(&racine.join("t"), true), "{fabrique}");
+    let e = lecteur(&dir)
+        .lire(&json!({ "file_path": "t" }))
+        .unwrap_err();
+    assert!(e.contains("chemin réseau"), "{e}");
+    let donne = PathBuf::from(&fabrique);
+    assert!(lien_vers_le_reseau(&donne, true), "{}", donne.display());
+    // Cibles relatives : `x\../y` fait traverser `x` à NT (erreur 67, sonde
+    // #383) ; `x/../y` est un nom invalide pour NT. Refusées toutes deux.
+    for (nom, cible) in [("t1", r"x\../y"), ("t2", "x/../y")] {
+        symlink_file(cible, racine.join(nom)).unwrap();
+        assert!(lien_vers_le_reseau(&racine.join(nom), true), "{cible}");
+    }
+    // Sans `/`, `x\..\y` mène au `y` voisin, ordinaire : il se lit.
+    symlink_file(r"x\..\y", racine.join("t3")).unwrap();
+    assert!(!lien_vers_le_reseau(&racine.join("t3"), true));
+    // `y` lui-même se lit toujours.
+    assert!(!lien_vers_le_reseau(&racine.join("y"), true));
+}
+
+/// Un nom à `/` n'existe que dans un chemin verbatim : ailleurs, rien ne
+/// change (KOB-425).
+#[test]
+fn nom_a_barre_seulement_en_verbatim() {
+    assert!(!nom_a_barre(Path::new("a/../y")));
+    // Dans le texte d'une cible, quelle que soit sa forme, sous Windows
+    // seulement : ailleurs, c'est le séparateur (`/var` → `private/var`).
+    assert_eq!(cible_a_barre(Path::new("x/../y")), cfg!(windows));
+    assert!(!cible_a_barre(Path::new(r"x\..\y")));
+    #[cfg(windows)]
+    assert!(nom_a_barre(Path::new(r"\\?\C:\x\../y")));
+}
+
 /// Rien ne se lit hors des dossiers permis : chemin absolu, `..`, lien
 /// symbolique qui sort.
 #[test]

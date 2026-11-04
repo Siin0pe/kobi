@@ -974,7 +974,7 @@ fn lien_vers_le_reseau(chemin: &Path, peripheriques: bool) -> bool {
     // seul, ce nom passerait pour un lecteur (`Y:`) et le parcours ne
     // jugerait plus rien, alors que NT ouvre le flux de `y` en suivant son
     // lien (KOB-398). Pareil dans chaque cible de lien, plus bas.
-    if peripheriques && a_deux_points(chemin) {
+    if peripheriques && (a_deux_points(chemin) || nom_a_barre(chemin)) {
         return true;
     }
     let mut a_lire: VecDeque<PathBuf> = chemin
@@ -1030,7 +1030,8 @@ fn lien_vers_le_reseau(chemin: &Path, peripheriques: bool) -> bool {
         if chemin_reseau(&cible.to_string_lossy())
             || !prefixe_local(&cible)
             || racine_sans_disque(&cible)
-            || (peripheriques && (a_deux_points(&cible) || lecteur_sans_racine(&cible)))
+            || (peripheriques
+                && (a_deux_points(&cible) || cible_a_barre(&cible) || lecteur_sans_racine(&cible)))
         {
             return true;
         }
@@ -1164,6 +1165,28 @@ fn a_deux_points(chemin: &Path) -> bool {
     chemin.components().any(
         |c| matches!(c, std::path::Component::Normal(nom) if nom.to_string_lossy().contains(':')),
     )
+}
+
+/// Un nom du chemin contient un `/` : seul un chemin verbatim en garde (ailleurs
+/// c'est un séparateur), et NT ne l'ouvre pas comme nom. Mais joint ou réduit
+/// sur une base verbatim, `PathBuf` le redécoupe et applique son `..` :
+/// `\\?\C:\d\x\../y` devenait `\\?\C:\d\y`, jugé sans voir `x`, que NT
+/// traverse (lien vers le réseau, KOB-425). Refusé d'emblée, comme `:`.
+fn nom_a_barre(chemin: &Path) -> bool {
+    chemin.components().any(
+        |c| matches!(c, std::path::Component::Normal(nom) if nom.to_string_lossy().contains('/')),
+    )
+}
+
+/// Une cible de lien dont le texte contient un `/`, quelle que soit sa forme.
+/// Rust y voit un séparateur (cible relative) ou le garde dans un nom
+/// (verbatim), mais NT, en substituant le lien, ne coupe que sur `\` : une
+/// cible relative `x\../y` lui fait traverser `x` (lien vers le réseau,
+/// erreur 67 sur windows-latest, sonde #383) quand le parcours juge `y`.
+/// Une cible légitime n'en a pas besoin : refusée (KOB-425). Ailleurs, `/`
+/// est le séparateur de toute cible : rien à juger.
+fn cible_a_barre(cible: &Path) -> bool {
+    cfg!(windows) && cible.as_os_str().to_string_lossy().contains('/')
 }
 
 /// Un nom à point ou espace final (`x.`, `d `) : Win32 les retire d'un
