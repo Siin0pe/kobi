@@ -2440,6 +2440,25 @@ mod tests {
         }
     }
 
+    /// Jonction Windows `lien` → `cible` ; la sortie de `mklink` en cas d'échec.
+    #[cfg(windows)]
+    fn jonction(lien: &Path, cible: &Path) {
+        let sortie = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(lien)
+            .arg(cible)
+            .output()
+            .unwrap();
+        assert!(
+            sortie.status.success(),
+            "mklink /J {} {} : {}{}",
+            lien.display(),
+            cible.display(),
+            String::from_utf8_lossy(&sortie.stdout),
+            String::from_utf8_lossy(&sortie.stderr)
+        );
+    }
+
     /// KOB-438 : `gci src | gc` lit les fichiers que `gci` a listés (par
     /// `PSPath`), liens compris : un lien qui sort, même au fond de l'arbre
     /// (`gci src | gci | gc`), passe par la carte.
@@ -2483,18 +2502,12 @@ mod tests {
             analyser("Get-Content src/*.rs", Shell::PowerShell, &x).classe,
             Classe::Lecture
         );
-        let lien = c.join("src/sous/lien");
+        // Composant par composant : `mklink` refuse un chemin à `/`.
+        let lien = c.join("src").join("sous").join("lien");
         #[cfg(unix)]
         std::os::unix::fs::symlink(dehors.path(), &lien).unwrap();
         #[cfg(windows)]
-        assert!(std::process::Command::new("cmd")
-            .args(["/C", "mklink", "/J"])
-            .arg(&lien)
-            .arg(dehors.path())
-            .output()
-            .unwrap()
-            .status
-            .success());
+        jonction(&lien, dehors.path());
         for l in profondes {
             assert_ne!(
                 analyser(l, Shell::PowerShell, &x).classe,
@@ -2517,18 +2530,11 @@ mod tests {
             analyser("gci src/* | gc", Shell::PowerShell, &x).classe,
             Classe::Lecture
         );
-        let lien_haut = c.join("src/haut");
+        let lien_haut = c.join("src").join("haut");
         #[cfg(unix)]
         std::os::unix::fs::symlink(dehors.path(), &lien_haut).unwrap();
         #[cfg(windows)]
-        assert!(std::process::Command::new("cmd")
-            .args(["/C", "mklink", "/J"])
-            .arg(&lien_haut)
-            .arg(dehors.path())
-            .output()
-            .unwrap()
-            .status
-            .success());
+        jonction(&lien_haut, dehors.path());
         for l in plates {
             assert_ne!(
                 analyser(l, Shell::PowerShell, &x).classe,
