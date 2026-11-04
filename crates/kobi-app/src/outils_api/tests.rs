@@ -515,6 +515,32 @@ fn nom_a_barre_seulement_en_verbatim() {
     assert!(nom_a_barre(Path::new(r"\\?\C:\x\../y")));
 }
 
+/// SONDE (ne pas merger) : cible RELATIVE `x\../y` et `x/../y`, où `x` vise
+/// `\\127.0.0.1\p` et `y` est ordinaire.
+#[cfg(windows)]
+#[test]
+fn sonde_barre_dans_une_cible_relative() {
+    use std::os::windows::fs::{symlink_dir, symlink_file};
+    let dir = codebase();
+    let racine = dir.path().to_path_buf();
+    if symlink_dir(r"\\127.0.0.1\p", racine.join("x")).is_err() {
+        panic!("SONDE liens impossibles");
+    }
+    fs::write(racine.join("y"), "ordinaire").unwrap();
+    let mut out = Vec::new();
+    for (nom, cible) in [("t1", r"x\../y"), ("t2", "x/../y"), ("t3", r"x\..\y")] {
+        let cree = symlink_file(cible, racine.join(nom)).map_err(|e| e.to_string());
+        let relue = fs::read_link(racine.join(nom)).map(|c| format!("{:?}", c.as_os_str()));
+        let juge = lien_vers_le_reseau(&racine.join(nom), true);
+        let t0 = std::time::Instant::now();
+        let nt = fs::read(racine.join(nom)).map(|c| format!("lu {} octets", c.len())).unwrap_or_else(|e| format!("{:?} {e}", e.raw_os_error()));
+        let ms = t0.elapsed().as_millis();
+        let lu = lecteur(&dir).lire(&json!({ "file_path": nom })).map(|_| "lu".to_string()).unwrap_or_else(|e| e);
+        out.push(format!("{nom} cible={cible:?} cree={cree:?} relue={relue:?} juge={juge} nt={nt} ({ms} ms) lire={lu}"));
+    }
+    panic!("SONDE\n{}", out.join("\n"));
+}
+
 /// Rien ne se lit hors des dossiers permis : chemin absolu, `..`, lien
 /// symbolique qui sort.
 #[test]
