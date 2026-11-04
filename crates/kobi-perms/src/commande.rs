@@ -403,12 +403,9 @@ fn redirection(r: &str, cible: Option<&str>, ctx: &Contexte, cwd: &Path) -> Resu
     };
     if r.contains('<') {
         // Lecture d'un fichier sur l'entrée : permise dans les dossiers.
-        return if ctx.contient(Path::new(cible), Some(cwd)) {
-            Ok(1)
-        } else {
-            Err(Avis::refus(format!(
-                "{cible} est hors des dossiers de code déclarés"
-            )))
+        return match juger_chemin(ctx, cible, cwd) {
+            None => Ok(1),
+            Some(avis) => Err(avis),
         };
     }
     let poubelle = matches!(
@@ -911,8 +908,11 @@ fn commande(mots: &[String], shell: Shell, ctx: &Contexte, cwd: &mut PathBuf) ->
         let Some(cible) = args.iter().find(|a| !a.starts_with('-')) else {
             return Avis::refus("`cd` sans dossier mène hors des dossiers de code");
         };
-        if !ctx.contient(Path::new(cible), Some(cwd)) {
-            return Avis::refus(format!("{cible} est hors des dossiers de code déclarés"));
+        if let Some(avis) = juger_chemin(ctx, cible, cwd) {
+            return avis;
+        }
+        if a_des_jokers(cible) {
+            return Avis::ecriture(Genre::Commande, "`cd` vers un motif : vérifié sur la carte");
         }
         if let Some(nouveau) = crate::classement::absolu(Path::new(cible), Some(cwd)) {
             *cwd = nouveau;
@@ -950,6 +950,28 @@ fn options_interdites(nom: &str, args: &[String]) -> Option<Avis> {
     let a = |s: &str| args.iter().any(|x| x == s);
     let commence = |p: &str| args.iter().any(|x| x.starts_with(p));
     let ecrit = |raison: String| Some(Avis::ecriture(Genre::Commande, raison));
+    // Suivre les liens en parcourant un dossier : un lien qui sort y serait
+    // lu sans être jugé (KOB-432). Validé sur la carte.
+    let court = |c: char| {
+        args.iter()
+            .any(|x| x.starts_with('-') && !x.starts_with("--") && x[1..].contains(c))
+    };
+    let longue = |o: &str| args.iter().any(|x| abrege(x, o));
+    let suit_les_liens = match nom {
+        "grep" | "egrep" | "fgrep" => court('R') || longue("--dereference-recursive"),
+        "rg" | "fd" => court('L') || longue("--follow"),
+        "find" => a("-L") || a("-follow"),
+        "tree" => court('l'),
+        "ls" | "du" => court('L') || longue("--dereference"),
+        // `diff -r` compare les cibles des liens qu'il trouve.
+        "diff" => court('r') || longue("--recursive"),
+        _ => args
+            .iter()
+            .any(|x| x.eq_ignore_ascii_case("-followsymlink")),
+    };
+    if suit_les_liens {
+        return ecrit(format!("`{nom}` suit les liens en parcourant les dossiers"));
+    }
     match nom {
         "find" => {
             if a("-delete") {
@@ -1415,14 +1437,16 @@ fn chemins(nom: &str, args: &[String], shell: Shell, ctx: &Contexte, cwd: &Path)
                 .split_once('=')
                 .or_else(|| if ps { x.split_once(':') } else { None });
             if let Some((_, v)) = valeur {
-                if ressemble_a_un_chemin(v) && !ctx.contient(Path::new(v), Some(cwd)) {
-                    return Avis::refus(format!("{v} est hors des dossiers de code déclarés"));
+                if ressemble_a_un_chemin(v) {
+                    if let Some(avis) = juger_chemin(ctx, v, cwd) {
+                        return avis;
+                    }
                 }
             }
             if nom == "git" && x == "-C" {
                 if let Some(d) = args.get(i + 1) {
-                    if !ctx.contient(Path::new(d), Some(cwd)) {
-                        return Avis::refus(format!("{d} est hors des dossiers de code déclarés"));
+                    if let Some(avis) = juger_chemin(ctx, d, cwd) {
+                        return avis;
                     }
                 }
                 i += 2;
@@ -1459,12 +1483,143 @@ fn chemins(nom: &str, args: &[String], shell: Shell, ctx: &Contexte, cwd: &Path)
             i += 1;
             continue;
         }
-        if !ctx.contient(Path::new(x), Some(cwd)) {
-            return Avis::refus(format!("{x} est hors des dossiers de code déclarés"));
+        if let Some(avis) = juger_chemin(ctx, x, cwd) {
+            return avis;
         }
         i += 1;
     }
     Avis::lecture()
+}
+
+/// Un chemin donné à une commande est-il permis ? `None` s'il l'est. Un
+/// motif (`*`, `?`, `[…]`) est développé comme le ferait le shell ou la
+/// cmdlet, sans rien suivre, et chaque fichier qu'il désigne est jugé : sinon
+/// `cat sorti?/secret`, absent tel quel, passait pour un chemin du dossier
+/// avant que le shell le change en `sortie/secret` (KOB-432). Les accolades,
+/// ou un motif trop large, se font valider sur la carte.
+fn juger_chemin(ctx: &Contexte, x: &str, cwd: &Path) -> Option<Avis> {
+    let hors = |p: &str| {
+        Some(Avis::refus(format!(
+            "{p} est hors des dossiers de code déclarés"
+        )))
+    };
+    if !ctx.contient(Path::new(x), Some(cwd)) {
+        return hors(x);
+    }
+    // Accolades développées par Bash : `{a,b}` ou `{1..3}` (pas `{}`).
+    let accolades = x
+        .split_once('{')
+        .and_then(|(_, r)| r.split_once('}'))
+        .is_some_and(|(dedans, _)| dedans.contains(',') || dedans.contains(".."));
+    if accolades {
+        return Some(Avis::ecriture(
+            Genre::Commande,
+            format!("motif `{x}` : vérifié sur la carte"),
+        ));
+    }
+    if !a_des_jokers(x) {
+        return None;
+    }
+    match developper(ctx, x, cwd) {
+        Ok(chemins) => chemins
+            .iter()
+            .find(|p| !ctx.contient(p, Some(cwd)))
+            .and_then(|p| hors(&p.display().to_string())),
+        Err(avis) => Some(avis),
+    }
+}
+
+/// `*`, `?` ou `[` : un motif que le shell développe.
+fn a_des_jokers(x: &str) -> bool {
+    x.contains(['*', '?', '['])
+}
+
+/// Fichiers désignés par un motif, composant par composant depuis sa partie
+/// fixe. Chaque dossier est jugé avant d'être listé : `read_dir` suivrait un
+/// lien qui sort (sous Windows, vers un partage réseau). Les noms cachés sont
+/// comptés aussi : plus large que le shell, jamais moins.
+fn developper(ctx: &Contexte, motif: &str, cwd: &Path) -> Result<Vec<PathBuf>, Avis> {
+    const MAX: usize = 256;
+    let texte = motif.replace('\\', "/");
+    let (mut courants, reste) = if let Some(r) = texte.strip_prefix('/') {
+        (vec![PathBuf::from("/")], r.to_owned())
+    } else if texte.len() >= 2 && texte.as_bytes()[1] == b':' {
+        let (lecteur, r) = texte.split_at(2);
+        (
+            vec![PathBuf::from(format!("{lecteur}/"))],
+            r.trim_start_matches('/').to_owned(),
+        )
+    } else {
+        (vec![cwd.to_path_buf()], texte)
+    };
+    for morceau in reste.split('/').filter(|m| !m.is_empty()) {
+        if !a_des_jokers(morceau) {
+            courants = courants.into_iter().map(|c| c.join(morceau)).collect();
+            continue;
+        }
+        let mut suivants = Vec::new();
+        for dossier in &courants {
+            if !ctx.contient(dossier, Some(cwd)) {
+                return Err(Avis::refus(format!(
+                    "{} est hors des dossiers de code déclarés",
+                    dossier.display()
+                )));
+            }
+            let Ok(entrees) = std::fs::read_dir(dossier) else {
+                continue;
+            };
+            for e in entrees.flatten() {
+                if correspond(morceau, &e.file_name().to_string_lossy()) {
+                    suivants.push(dossier.join(e.file_name()));
+                    if suivants.len() > MAX {
+                        return Err(Avis::ecriture(
+                            Genre::Commande,
+                            format!("motif `{motif}` trop large : vérifié sur la carte"),
+                        ));
+                    }
+                }
+            }
+        }
+        courants = suivants;
+    }
+    Ok(courants)
+}
+
+/// Un nom correspond-il au motif d'un composant (`*`, `?`, `[a-z]`, `[!x]`) ?
+fn correspond(motif: &str, nom: &str) -> bool {
+    fn suite(m: &[char], n: &[char]) -> bool {
+        match m.first() {
+            None => n.is_empty(),
+            Some('*') => (0..=n.len()).any(|i| suite(&m[1..], &n[i..])),
+            Some('?') => !n.is_empty() && suite(&m[1..], &n[1..]),
+            Some('[') => {
+                let Some(fin) = m.iter().skip(2).position(|c| *c == ']').map(|p| p + 2) else {
+                    return n.first() == Some(&'[') && suite(&m[1..], &n[1..]);
+                };
+                let Some(c) = n.first() else { return false };
+                let (negatif, classe) = match m[1] {
+                    '!' | '^' => (true, &m[2..fin]),
+                    _ => (false, &m[1..fin]),
+                };
+                let mut dedans = false;
+                let mut i = 0;
+                while i < classe.len() {
+                    if i + 2 < classe.len() && classe[i + 1] == '-' {
+                        dedans |= classe[i] <= *c && *c <= classe[i + 2];
+                        i += 3;
+                    } else {
+                        dedans |= classe[i] == *c;
+                        i += 1;
+                    }
+                }
+                dedans != negatif && suite(&m[fin + 1..], &n[1..])
+            }
+            Some(x) => n.first() == Some(x) && suite(&m[1..], &n[1..]),
+        }
+    }
+    let m: Vec<char> = motif.chars().collect();
+    let n: Vec<char> = nom.chars().collect();
+    suite(&m, &n)
 }
 
 /// Le motif est-il donné par une option (`-e`, `-ne`, `--regexp=`, `-f`) ?

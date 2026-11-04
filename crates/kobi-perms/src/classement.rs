@@ -84,13 +84,14 @@ impl Contexte {
                 &chemin.to_string_lossy().replace('\\', "/"),
             )),
         };
-        let Some(reel) = resolu(&brut) else {
-            return false;
-        };
-        self.dossiers
+        // Deux lectures de `..` : physique (le système, `cat`) et sur le
+        // texte (Claude Code, Win32, PowerShell, Git Bash le réduisent avant
+        // d'ouvrir). Les deux doivent rester dans les dossiers : sinon
+        // `s1/../y`, où `s1` reste dedans et `y` sort, passait.
+        let dossiers: Vec<PathBuf> = self.dossiers.iter().filter_map(|d| resolu(d)).collect();
+        [brut, cible]
             .iter()
-            .filter_map(|d| resolu(d))
-            .any(|d| sous(&reel, &d))
+            .all(|p| resolu(p).is_some_and(|reel| dossiers.iter().any(|d| sous(&reel, d))))
     }
 }
 
@@ -116,12 +117,17 @@ pub fn resolu(chemin: &Path) -> Option<PathBuf> {
         .collect();
     let mut actuel = PathBuf::new();
     let mut liens = 0;
-    let mut absent = false;
+    // Composants absents au bout du chemin (fichier ou dossier à créer).
+    let mut absents = 0usize;
     while let Some(morceau) = a_lire.pop_front() {
         match morceau.components().next() {
             None | Some(Component::CurDir) => continue,
+            // Après un composant absent, `..` le retire, comme un outil qui
+            // réduit sur le texte ; revenu sur ce qui existe, la suite est de
+            // nouveau lue sur le disque, pas ajoutée sans être vue (KOB-432).
             Some(Component::ParentDir) => {
                 actuel.pop();
+                absents = absents.saturating_sub(1);
                 continue;
             }
             Some(Component::Prefix(_) | Component::RootDir) => {
@@ -131,8 +137,9 @@ pub fn resolu(chemin: &Path) -> Option<PathBuf> {
             Some(Component::Normal(_)) => {}
         }
         let candidat = actuel.join(&morceau);
-        if absent {
+        if absents > 0 {
             actuel = candidat;
+            absents += 1;
             continue;
         }
         match std::fs::symlink_metadata(&candidat) {
@@ -150,7 +157,7 @@ pub fn resolu(chemin: &Path) -> Option<PathBuf> {
             }
             Ok(_) => actuel = candidat,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                absent = true;
+                absents = 1;
                 actuel = candidat;
             }
             Err(_) => return None,
@@ -176,7 +183,16 @@ fn cible_locale(lien: &Path, dossier_du_lien: &Path) -> Option<PathBuf> {
     let texte = lien.to_string_lossy().replace('/', "\\");
     if let Some(reste) = texte.strip_prefix("\\\\?\\") {
         let b = reste.as_bytes();
-        return (b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && b[2] == b'\\')
+        // Sans son préfixe, un nom à point ou espace final (`b.`) serait lu
+        // par Win32 comme `b` : NT, lui, ouvre `b.` (KOB-398).
+        let fin_ambigue = reste
+            .split('\\')
+            .any(|n| n.ends_with('.') && n != "." && n != ".." || n.ends_with(' '));
+        return (b.len() >= 3
+            && b[0].is_ascii_alphabetic()
+            && b[1] == b':'
+            && b[2] == b'\\'
+            && !fin_ambigue)
             .then(|| PathBuf::from(reste));
     }
     if texte.starts_with("\\\\") || texte.starts_with("\\??\\") {
@@ -328,11 +344,16 @@ fn git_bash_vers_windows(texte: &str) -> String {
     texte.to_owned()
 }
 
-/// Forme comparable : `/` partout, sans `/` final, minuscules (Windows et
-/// macOS ignorent la casse ; sous Linux, deux dossiers qui ne diffèrent que
-/// par la casse restent rares dans des dossiers de code).
+/// Forme comparable : `/` partout, sans `/` final, en minuscules sous
+/// Windows et macOS, qui ignorent la casse. Sous Linux, `Code` et `code`
+/// sont deux dossiers (KOB-432).
 fn cle_de_chemin(chemin: &Path) -> String {
-    let mut s = chemin.to_string_lossy().replace('\\', "/").to_lowercase();
+    let s = chemin.to_string_lossy().replace('\\', "/");
+    let mut s = if cfg!(any(windows, target_os = "macos")) {
+        s.to_lowercase()
+    } else {
+        s
+    };
     while s.len() > 1 && s.ends_with('/') && !s.ends_with(":/") {
         s.pop();
     }
@@ -381,6 +402,13 @@ mod tests {
         symlink(d.join("absent"), c.join("casse_dehors")).unwrap();
         symlink(c.join("boucle"), c.join("boucle")).unwrap();
         symlink(d.join("ssl"), c.join("ssl")).unwrap();
+        // `s1` reste dedans (`sous/profond`), `sous/y` est ordinaire, `y` sort :
+        // `s1/../y` mène à `sous/y` pour le système, à `y` pour un outil qui
+        // réduit `..` sur le texte (relecture sécurité de KOB-432).
+        std::fs::create_dir_all(c.join("sous/profond")).unwrap();
+        std::fs::write(c.join("sous/y"), "x").unwrap();
+        symlink(c.join("sous/profond"), c.join("s1")).unwrap();
+        symlink(d.join("secret"), c.join("y")).unwrap();
         let mut x = Contexte::new(vec![c.to_path_buf()]);
         x.cwd = Some(c.to_path_buf());
         let lire = |p: &str| classer(&Action::LireFichier { chemin: c.join(p) }, &x).cle();
@@ -408,6 +436,9 @@ mod tests {
             "boucle",
             // `..` après un lien remonte depuis sa cible, pas depuis le lien.
             "ssl/../secret",
+            // Réduits sur le texte par l'outil qui ouvre : `y`, qui sort.
+            "s1/../y",
+            "absent/../y",
         ] {
             assert_eq!(lire(dehors), "refus", "lecture {dehors}");
             assert_eq!(ecrire(dehors), "refus", "écriture {dehors}");
@@ -422,6 +453,40 @@ mod tests {
             assert_eq!(lire(dedans), "lecture", "lecture {dedans}");
             assert_eq!(ecrire(dedans), "ecriture", "écriture {dedans}");
             assert_eq!(cat(dedans), "lecture", "commande {dedans}");
+        }
+        // Motifs que le shell développe vers le lien qui sort, et options qui
+        // suivent les liens en parcourant : jamais une lecture sans carte.
+        for ligne in [
+            "cat sorti?/secret",
+            "cat */secret",
+            "cat {sortie,x}/secret",
+            "cat [s]ortie/secret",
+            "grep -R motif .",
+            "rg -L motif",
+            "find -L .",
+            "ls -L sous",
+            "du -L .",
+            "tree -l",
+            "diff -r sous dedans",
+        ] {
+            assert_ne!(
+                commande::analyser(ligne, crate::Shell::Bash, &x)
+                    .classe
+                    .cle(),
+                "lecture",
+                "{ligne}"
+            );
+        }
+        // Un motif qui ne désigne que des fichiers du dossier reste une lecture.
+        assert_eq!(cat("sous/*"), "lecture");
+        // Sous Linux, la casse compte : `projet` n'est pas `Projet`.
+        #[cfg(target_os = "linux")]
+        {
+            std::fs::create_dir_all(c.join("Projet")).unwrap();
+            std::fs::create_dir_all(c.join("projet")).unwrap();
+            let p = Contexte::new(vec![c.join("Projet")]);
+            assert!(p.contient(&c.join("Projet/f"), None));
+            assert!(!p.contient(&c.join("projet/f"), None));
         }
         // Le dossier de la commande lui-même, par un lien qui sort.
         let mut par_lien = x.clone();
@@ -453,6 +518,11 @@ mod tests {
         let debut = std::time::Instant::now();
         assert!(!x.contient(&c.join(r"reseau\fichier"), None));
         assert!(!x.contient(&c.join("barre"), None));
+        // Cible verbatim à point final : NT ouvre `b.`, Win32 lirait `b`.
+        let point = format!(r"\\?\{}\b.", c.display());
+        std::fs::create_dir_all(&point).unwrap();
+        symlink_dir(&point, c.join("point")).unwrap();
+        assert!(!x.contient(&c.join(r"point\f"), None), "{point}");
         // Sans tentative de connexion : la réponse est immédiate.
         assert!(
             debut.elapsed() < std::time::Duration::from_secs(2),
@@ -474,6 +544,8 @@ mod tests {
         let c = ctx();
         let k = Path::new("C:/Users/moi/Desktop/kobi");
         assert!(c.contient(Path::new("C:/Users/moi/Desktop/kobi/src/main.rs"), None));
+        // Casse ignorée là où le système l'ignore (Windows, macOS).
+        #[cfg(any(windows, target_os = "macos"))]
         assert!(c.contient(Path::new(r"c:\users\moi\desktop\KOBI\Cargo.toml"), None));
         assert!(c.contient(Path::new("/c/Users/moi/Desktop/kobi/README.md"), None));
         assert!(c.contient(Path::new("src/lib.rs"), Some(k)));
