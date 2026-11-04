@@ -1560,9 +1560,16 @@ fn options_interdites(nom: &str, args: &[String]) -> Option<Avis> {
     }
     // `--files0-from=F` : la liste des fichiers lus est dans `F`, jamais
     // jugée ici (KOB-442).
+    // De même pour `strings @F` (arguments pris dans `F`), `file -f F` et
+    // `sha256sum -c F` (fichiers listés dans `F`, ouverts pour vérification).
     let liste_dans_un_fichier = match nom {
         "sort" | "wc" | "du" => longue("--files0-from"),
         "find" => a("-files0-from"),
+        "strings" => commence("@"),
+        "file" => court('f') || longue("--files-from"),
+        "md5sum" | "sha1sum" | "sha256sum" | "sha512sum" | "b2sum" | "cksum" => {
+            court('c') || longue("--check")
+        }
         _ => false,
     };
     if liste_dans_un_fichier {
@@ -2953,6 +2960,14 @@ mod tests {
             "wc --f=liste",
             "du --files0-from=liste",
             "find -files0-from liste",
+            // Même famille (relecture sécurité de KOB-442).
+            "strings @liste",
+            "strings -a @liste",
+            "sha256sum -c sommes",
+            "md5sum --check sommes",
+            "cksum -c sommes",
+            "file -f liste",
+            "file --files-from liste",
         ] {
             assert_ne!(bash(l).classe, Classe::Lecture, "{l}");
         }
@@ -2962,6 +2977,9 @@ mod tests {
             "wc -l Cargo.toml",
             "du -sh src",
             "rg --files",
+            "strings Cargo.toml",
+            "sha256sum Cargo.toml",
+            "file Cargo.toml",
         ] {
             assert_eq!(bash(l).classe, Classe::Lecture, "{l}");
         }
