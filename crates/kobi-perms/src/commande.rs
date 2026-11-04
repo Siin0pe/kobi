@@ -2344,6 +2344,29 @@ fn chemins(nom: &str, args: &[String], shell: Shell, ctx: &Contexte, cwd: &Path)
                 i += 1;
                 continue;
             }
+            // jq : `--arg NOM VALEUR`, `--argjson NOM JSON` prennent deux mots
+            // qui ne sont pas des chemins ; `--rawfile NOM FICHIER`,
+            // `--slurpfile` et `--argfile` lisent le second, jugé même à
+            // tiret (`--rawfile a -lien/x`, KOB-460). Le filtre reste le
+            // premier opérande.
+            if nom == "jq" {
+                match x.as_str() {
+                    "--arg" | "--argjson" => {
+                        i += 3;
+                        continue;
+                    }
+                    "--rawfile" | "--slurpfile" | "--argfile" => {
+                        if let Some(f) = args.get(i + 2) {
+                            if let Some(avis) = juge(f) {
+                                return avis;
+                            }
+                        }
+                        i += 3;
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
             if nom == "git" && x == "-C" {
                 if let Some(d) = args.get(i + 1) {
                     if let Some(avis) = juge(d) {
@@ -3559,6 +3582,38 @@ mod tests {
                 Classe::Lecture,
                 "{l}"
             );
+        }
+    }
+
+    /// KOB-460 : `jq --rawfile NOM FICHIER` lit le fichier (sonde : `jq -n
+    /// --rawfile a -lien/secret.txt -f prog` l'affichait) ; il est jugé, le
+    /// nom ne passe pas pour le filtre.
+    #[cfg(unix)]
+    #[test]
+    fn jq_fichiers_nommes() {
+        let code = tempfile::tempdir().unwrap();
+        let dehors = tempfile::tempdir().unwrap();
+        let c = code.path();
+        std::os::unix::fs::symlink(dehors.path(), c.join("-lien")).unwrap();
+        std::fs::write(c.join("prog"), "$a").unwrap();
+        std::fs::write(c.join("f.json"), "{}").unwrap();
+        let mut x = Contexte::new(vec![c.to_path_buf()]);
+        x.cwd = Some(c.to_path_buf());
+        for l in [
+            "jq -n --rawfile a -lien/secret.txt -f prog",
+            "jq -n --slurpfile a -lien/s.json --from-file prog",
+            "jq -n --argfile a -lien/s.json -f prog",
+            "jq --rawfile a ../../x . f.json",
+        ] {
+            assert_ne!(analyser(l, Shell::Bash, &x).classe, Classe::Lecture, "{l}");
+        }
+        for l in [
+            "jq -n --rawfile a f.json -f prog",
+            "jq --arg x -y . f.json",
+            "jq --argjson n 3 . f.json",
+            "jq . f.json",
+        ] {
+            assert_eq!(analyser(l, Shell::Bash, &x).classe, Classe::Lecture, "{l}");
         }
     }
 
