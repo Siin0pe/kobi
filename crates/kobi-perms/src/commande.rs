@@ -881,15 +881,8 @@ const LECTURE_SIMPLE: &[&str] = &[
     "less",
     "more",
     "git",
-    "cargo",
-    "npm",
-    "pnpm",
-    "yarn",
     "gh",
-    "rustc",
-    "rustup",
     "go",
-    "dotnet",
     "java",
     "tsc",
 ];
@@ -1001,10 +994,7 @@ const SANS_CHEMIN_PS: &[&str] = &[
     "true",
     "false",
     "tr",
-    "rustc",
-    "rustup",
     "go",
-    "dotnet",
     "java",
     "tsc",
     "which",
@@ -1155,20 +1145,6 @@ fn options_a_valeur(nom: &str) -> &'static [&'static str] {
             "--workflow",
             "-w",
             "--status",
-        ],
-        "npm" | "pnpm" | "yarn" => &["--depth"],
-        "cargo" => &[
-            "-p",
-            "--package",
-            "--format-version",
-            "--depth",
-            "--prefix",
-            "-e",
-            "--edges",
-            "-i",
-            "--invert",
-            "--target",
-            "--charset",
         ],
         "get-childitem" | "gci" | "ls" | "dir" => {
             &["-filter", "-include", "-exclude", "-depth", "-attributes"]
@@ -1964,47 +1940,6 @@ fn options_interdites(nom: &str, args: &[String]) -> Option<Avis> {
             ecrit("option de `less` qui écrit ou exécute".into())
         }
         "git" => git(args),
-        "cargo" => {
-            if commence("--config") || commence("-Z") {
-                return ecrit(
-                    "`cargo --config`/`-Z` change la configuration (et peut lancer un programme)"
-                        .into(),
-                );
-            }
-            // La sous-commande est le premier mot : une option globale à
-            // valeur (`-C metadata build`) la cacherait (KOB-465).
-            let sous = args
-                .first()
-                .filter(|x| !x.starts_with('-'))
-                .map(String::as_str);
-            match sous {
-                None if args.len() == 1 && (a("--version") || a("-V") || a("--list")) => None,
-                Some(
-                    "metadata" | "tree" | "version" | "locate-project" | "pkgid" | "verify-project",
-                ) => None,
-                _ => ecrit(
-                    "seuls `cargo metadata`, `cargo tree` et `cargo --version` sont en lecture"
-                        .into(),
-                ),
-            }
-        }
-        "npm" | "pnpm" | "yarn" => {
-            // La sous-commande est le premier mot : `npm --prefix ls install`
-            // prenait `ls` pour elle et lançait le script `install` (KOB-465).
-            let sous = args
-                .first()
-                .filter(|x| !x.starts_with('-'))
-                .map(String::as_str);
-            match sous {
-                None if args.len() == 1 && (a("--version") || a("-v")) => None,
-                Some(
-                    "ls" | "list" | "ll" | "la" | "view" | "info" | "outdated" | "why" | "explain",
-                ) => None,
-                _ => ecrit(format!(
-                    "seuls `{nom} ls`, `{nom} view` et `{nom} --version` sont en lecture"
-                )),
-            }
-        }
         "gh" => {
             if a("--web") || a("-w") {
                 return ecrit("`gh --web` ouvre le navigateur".into());
@@ -2025,28 +1960,18 @@ fn options_interdites(nom: &str, args: &[String]) -> Option<Avis> {
             }
         }
         // Un seul argument, la version : `go run -v x.go` n'en est pas une.
-        "rustc" | "go" | "dotnet" | "java" | "tsc"
+        // npm, yarn, pnpm, cargo, rustc, rustup et dotnet (`global.json`
+        // peut désigner un SDK du dossier) ne sont pas des lectures :
+        // ils exécutent du code venu du dossier (scripts homonymes,
+        // `.yarnrc` yarn-path, `.npmrc` prefix sous Windows, `rustc-wrapper`,
+        // `rust-toolchain` path, KOB-467).
+        "go" | "java" | "tsc"
             if !matches!(
                 args,
                 [x] if matches!(x.as_str(), "--version" | "-V" | "version" | "-v")
             ) =>
         {
             ecrit(format!("seul `{nom} --version` est en lecture"))
-        }
-        "rustup" => {
-            let pos: Vec<&str> = args
-                .iter()
-                .filter(|x| !x.starts_with('-'))
-                .map(String::as_str)
-                .collect();
-            match pos.as_slice() {
-                [] if a("--version") || a("-V") => None,
-                ["show", ..]
-                | ["toolchain", "list"]
-                | ["target", "list"]
-                | ["component", "list"] => None,
-                _ => ecrit("seuls `rustup show` et les listes sont en lecture".into()),
-            }
         }
         _ => {
             // PowerShell : rien qui écrive ou supprime, quelle que soit la cmdlet.
@@ -4067,19 +3992,35 @@ mod tests {
         ] {
             assert_ne!(bash(l).classe, Classe::Lecture, "{l}");
         }
+    }
+
+    /// KOB-467 : npm, yarn, pnpm, cargo, rustc et rustup exécutent du code
+    /// venu du dossier (script yarn homonyme de `ls`, `.yarnrc` yarn-path,
+    /// `.npmrc` prefix sous Windows, `rustc-wrapper` lancé par `cargo tree`,
+    /// `rust-toolchain` path) : jamais en lecture.
+    #[test]
+    fn yarn_pnpm_cargo_sur_la_carte() {
         for l in [
-            "npm ls",
-            "npm ls --depth 0",
-            "npm view react version",
-            "npm --version",
+            "yarn ls",
+            "yarn view",
             "yarn why react",
+            "yarn --version",
+            "pnpm why x",
+            "pnpm ls",
             "cargo tree",
             "cargo metadata --format-version 1",
             "cargo --version",
-            "cargo --list",
+            "npm ls",
+            "npm view react version",
+            "npm --version",
+            "rustc --version",
+            "rustup --version",
+            "rustup show",
+            "dotnet --version",
         ] {
-            assert_eq!(bash(l).classe, Classe::Lecture, "{l}");
+            assert_ne!(bash(l).classe, Classe::Lecture, "{l}");
         }
+        assert_eq!(bash("go version").classe, Classe::Lecture);
     }
 
     const KOBI: &str = "C:/Users/moi/Desktop/kobi";
@@ -4161,9 +4102,6 @@ mod tests {
             "cd /c/Users/moi/Desktop/site && git status",
             "ls; git status",
             "git status && git log -1 || echo rien",
-            "cargo metadata --format-version 1 --no-deps",
-            "cargo tree -p kobi-app",
-            "npm ls --depth 0",
             "gh pr view 103",
             "gh pr list --state open",
             "gh issue view 12 --json title",
@@ -4172,7 +4110,6 @@ mod tests {
             "echo bonjour",
             "pwd",
             "du -sh crates",
-            "rustc --version",
             "go version",
             "xxd -l 64 Cargo.toml",
             "fd -e rs motif crates",
@@ -4736,9 +4673,6 @@ mod tests {
                 "git config --get remote.origin.url",
                 "git stash list",
                 "git worktree list",
-                "cargo metadata --format-version 1",
-                "cargo tree -p kobi-app",
-                "npm ls --depth 0",
                 "gh pr view 108",
                 "gh pr list --state open",
                 "gh issue list",
@@ -4751,7 +4685,6 @@ mod tests {
                 "rg foo 2>&1 | head",
                 "pwd; ls",
                 "echo bonjour",
-                "rustc --version",
                 "diff Cargo.toml Cargo.lock",
             ] {
                 lecture(bash(ligne), ligne);
@@ -4787,6 +4720,9 @@ mod tests {
                 "git -c core.pager=sh log",
                 "cargo build",
                 "cargo test",
+                // KOB-467 : cargo exécute du code du dossier (`rustc-wrapper`).
+                "cargo metadata --format-version 1",
+                "cargo tree -p kobi-app",
                 "npm install",
                 "gh pr merge 108",
                 "gh issue create",
