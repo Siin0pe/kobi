@@ -1814,12 +1814,42 @@ fn options_interdites(nom: &str, args: &[String]) -> Option<Avis> {
             }) {
                 return ecrit("`sed -e`/`sed -f` : script non vérifié".into());
             }
-            let scripts: Vec<&String> = args
-                .iter()
-                .filter(|x| !x.starts_with('-'))
-                .take(1)
-                .collect();
-            let sur = scripts.iter().all(|s| script_sed_sur(s)) && a("-n");
+            // Seules les options sans valeur connues : une option à valeur
+            // (`-l N`, `--line-length N`) prendrait le mot suivant, et le vrai
+            // script passerait pour un fichier (`sed -n -l 1p '1e …'`,
+            // KOB-464). Le script est le premier opérande, `--` compris.
+            let mut options = true;
+            let mut script = None;
+            let mut muet = false;
+            for x in args {
+                if options && x == "--" {
+                    options = false;
+                } else if options && x.starts_with('-') && x != "-" {
+                    muet |= matches!(x.as_str(), "--quiet" | "--silent")
+                        || (!x.starts_with("--") && x.contains('n'));
+                    let sure = match x.strip_prefix("--") {
+                        Some(longue) => matches!(
+                            longue,
+                            "quiet"
+                                | "silent"
+                                | "regexp-extended"
+                                | "separate"
+                                | "unbuffered"
+                                | "null-data"
+                                | "posix"
+                                | "sandbox"
+                        ),
+                        None => x[1..].chars().all(|c| "nErsuz".contains(c)),
+                    };
+                    if !sure {
+                        return ecrit(format!("`sed {x}` : option non vérifiée"));
+                    }
+                } else {
+                    script = Some(x);
+                    break;
+                }
+            }
+            let sur = script.is_some_and(|s| script_sed_sur(s)) && muet;
             if sur {
                 None
             } else {
@@ -2024,6 +2054,11 @@ fn positionnels_xxd(args: &[String]) -> usize {
 /// `sed -n` : seulement `p` sur des numéros de lignes ou un motif.
 fn script_sed_sur(script: &str) -> bool {
     let s = script.trim();
+    // Un `\` échappe le `/` d'une adresse : `/^\|x\/,/e cmd #/p` cache une
+    // commande `e` après une adresse qui paraît fermée (relecture de KOB-464).
+    if s.contains('\\') {
+        return false;
+    }
     let Some(adresse) = s.strip_suffix('p') else {
         return false;
     };
@@ -3751,6 +3786,38 @@ mod tests {
             "jq . f.json",
         ] {
             assert_eq!(analyser(l, Shell::Bash, &x).classe, Classe::Lecture, "{l}");
+        }
+    }
+
+    /// KOB-464 : `sed -l N` prend le mot suivant pour sa valeur ; le vrai
+    /// script passait pour un fichier et s'exécutait (`sed -n -l 1p '1e …'`
+    /// a créé un fichier). Seules les options sans valeur connues passent.
+    #[test]
+    fn sed_option_a_valeur() {
+        for l in [
+            "sed -n -l 1p '1e touch PWNED' in",
+            "sed -n -l 1p 'w out' in",
+            "sed -n --line-length 1p '1e touch PWNED' in",
+            "sed -n --line-length=1 '1e touch PWNED' in",
+            "sed -n -b 1p in",
+            "sed -n --follow-symlinks 1p in",
+            "sed -n -- '1e touch PWNED' in",
+            // `\/` échappé : la commande `e` se cache après l'adresse.
+            r"sed -n '/^\|x\/,/e touch PWNED #/p' in",
+            r"sed -nE '/^|x\/,/e touch PWNED #/p' in",
+            r"sed -n '/^\|x\/,/w sortie/p' in",
+        ] {
+            assert_ne!(bash(l).classe, Classe::Lecture, "{l}");
+        }
+        for l in [
+            "sed -n '1,20p' Cargo.toml",
+            "sed -n -E '/a/p' Cargo.toml",
+            "sed -n -s 1p a b",
+            "sed --quiet 1p Cargo.toml",
+            "sed -n -- 1p Cargo.toml",
+            "sed -nE '/a/p' Cargo.toml",
+        ] {
+            assert_eq!(bash(l).classe, Classe::Lecture, "{l}");
         }
     }
 
