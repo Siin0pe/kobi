@@ -2328,9 +2328,10 @@ impl<R: Runtime> Chef<R> {
             return;
         }
         let notes_du_calme = self.cartes_des_notes.values().any(|&calme| calme);
+        let en_attente = self.acceptee_en_attente.take();
         // Pendant l'écoute ouverte par le nom, seule une réponse fait
         // repartir le tour : une carte échue laisse venir la question.
-        let tour_continue = self.acceptee_en_attente.take().is_some_and(|t| {
+        let tour_continue = en_attente.is_some_and(|t| {
             t == self.dernier
                 && self
                     .historique
@@ -2339,6 +2340,22 @@ impl<R: Runtime> Chef<R> {
         }) && (explicite || self.activite() == Some("propose"));
         if acceptee || tour_continue {
             self.transition(&[Evenement::PermissionAccordee]);
+            // La carte d'une tâche annoncée : la tâche reprend en arrière-plan,
+            // Kobi redevient « je m'en occupe », pas « réfléchit », sauf si une
+            // question au premier plan attend sa réponse (KOB-431).
+            let repris = if acceptee {
+                tour.or(en_attente)
+            } else {
+                en_attente
+            };
+            if repris.is_some_and(|t| self.taches.contains_key(&t))
+                && !self
+                    .historique
+                    .iter()
+                    .any(|b| b.tour == self.dernier && matches!(b.statut, "attente" | "reponse"))
+            {
+                self.transition(&[Evenement::TacheLongue]);
+            }
         } else if !notes_du_calme {
             self.transition(&[Evenement::PermissionRefusee]);
         }
@@ -6359,6 +6376,63 @@ mod tests {
                     assert_eq!(c.activite(), Some("reflechit"), "resté en proposition");
                 }
                 assert!(c.cartes.is_empty());
+            });
+        }
+    }
+
+    /// KOB-431 : la carte d'une tâche annoncée, acceptée à la voix ou au
+    /// clic, rend Kobi à « je m'en occupe » ; une question posée depuis, au
+    /// premier plan, le garde à « réfléchit ».
+    #[test]
+    fn carte_d_une_tache_acceptee_rend_kobi_occupe() {
+        for (voix, autre_question) in [(true, false), (false, false), (false, true)] {
+            let (app, _dir) = chef_en_essai();
+            avec_chef(&app, |c| {
+                c.question("et la revue ?".into(), false);
+                let tache = c.tour;
+                c.recevoir(Message::Cerveau(Retour::Detache {
+                    tour: tache,
+                    annonce: true,
+                }));
+                assert_eq!(c.activite(), Some("occupe"));
+                if autre_question {
+                    c.question("résume le projet".into(), false);
+                }
+                c.recevoir(Message::Cerveau(Retour::Carte {
+                    tour: tache,
+                    carte: 7,
+                    outil: "mcp__carnet__ecrire_note".into(),
+                    entree: serde_json::json!({ "title": "Note" }),
+                }));
+                assert_eq!(c.activite(), Some("propose"));
+                if voix {
+                    c.recevoir(Message::Interpelle);
+                    c.recevoir(Message::Question {
+                        texte: "oui".into(),
+                        voix: true,
+                        dit_a: None,
+                    });
+                } else {
+                    c.recevoir(Message::Decision {
+                        carte: 7,
+                        accepte: true,
+                    });
+                }
+                c.recevoir(Message::Cerveau(Retour::CarteFermee {
+                    carte: 7,
+                    accepte: Some(true),
+                }));
+                c.tick();
+                let attendu = if autre_question {
+                    "reflechit"
+                } else {
+                    "occupe"
+                };
+                assert_eq!(
+                    c.activite(),
+                    Some(attendu),
+                    "voix {voix}, autre question {autre_question}"
+                );
             });
         }
     }
