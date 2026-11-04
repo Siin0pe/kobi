@@ -942,7 +942,95 @@ fn commande(mots: &[String], shell: Shell, ctx: &Contexte, cwd: &mut PathBuf) ->
     if let Some(a) = options_interdites(&nom, args) {
         return a;
     }
-    chemins(&nom, args, shell, ctx, cwd)
+    let avis = chemins(&nom, args, shell, ctx, cwd);
+    // Sous Windows, les parcours récursifs entrent dans les jonctions et les
+    // liens de dossier, même ceux qui sortent (sonde #392, KOB-434) : le
+    // départ est jugé, puis tout l'arbre, sans rien suivre.
+    if cfg!(windows) && avis.classe == Classe::Lecture && parcours_recursif(&nom, args, shell) {
+        if let Err(a) = arbre_sans_lien_qui_sort(ctx, &racines_du_parcours(args, cwd), cwd) {
+            return a;
+        }
+    }
+    avis
+}
+
+/// Commande qui parcourt des dossiers récursivement : `Get-ChildItem`,
+/// `gci`, `ls` ou `dir` avec `-Recurse` (PowerShell), `dir /S`, `tree`,
+/// `where /R` (cmd).
+fn parcours_recursif(nom: &str, args: &[String], shell: Shell) -> bool {
+    let recurse = || args.iter().any(|x| abrege_ps(x, "-recurse"));
+    let interrupteur = |c: &str| args.iter().any(|x| x.eq_ignore_ascii_case(c));
+    match nom {
+        "get-childitem" | "gci" => recurse(),
+        "ls" | "dir" if shell == Shell::PowerShell => recurse(),
+        "dir" => interrupteur("/s"),
+        "tree" => true,
+        "where" => interrupteur("/r"),
+        _ => false,
+    }
+}
+
+/// Paramètre PowerShell ou son abréviation (`-r`, `-rec` pour `-Recurse`).
+fn abrege_ps(x: &str, nom: &str) -> bool {
+    let x = x.split(':').next().unwrap_or(x).to_lowercase();
+    x.len() >= 2 && x.starts_with('-') && !x.starts_with("--") && nom.starts_with(&x)
+}
+
+/// Dossiers où commence le parcours : les arguments qui sont des dossiers
+/// existants, le dossier de la commande sinon.
+fn racines_du_parcours(args: &[String], cwd: &Path) -> Vec<PathBuf> {
+    let racines: Vec<PathBuf> = args
+        .iter()
+        .filter(|x| !x.starts_with('-') && !(x.starts_with('/') && x.len() == 2))
+        .map(|x| cwd.join(x))
+        .filter(|p| p.is_dir())
+        .collect();
+    if racines.is_empty() {
+        vec![cwd.to_path_buf()]
+    } else {
+        racines
+    }
+}
+
+/// L'arbre sous `racines` ne contient-il aucun lien qui sort des dossiers ?
+/// Parcouru sans rien suivre : `read_dir` sur les vrais dossiers seulement,
+/// chaque lien (jonction comprise) jugé par `contient` sans y entrer. Au-delà
+/// de [`ENTREES_MAX`] entrées, ou à un lien qui sort : validé sur la carte.
+fn arbre_sans_lien_qui_sort(ctx: &Contexte, racines: &[PathBuf], cwd: &Path) -> Result<(), Avis> {
+    const ENTREES_MAX: usize = 10_000;
+    let mut a_voir: Vec<PathBuf> = racines.to_vec();
+    let mut vues = 0usize;
+    while let Some(dossier) = a_voir.pop() {
+        let Ok(entrees) = std::fs::read_dir(&dossier) else {
+            continue;
+        };
+        for e in entrees.flatten() {
+            vues += 1;
+            if vues > ENTREES_MAX {
+                return Err(Avis::ecriture(
+                    Genre::Commande,
+                    "parcours récursif trop grand pour être vérifié : sur la carte",
+                ));
+            }
+            let chemin = e.path();
+            match std::fs::symlink_metadata(&chemin) {
+                Ok(m) if m.file_type().is_symlink() => {
+                    if !ctx.contient(&chemin, Some(cwd)) {
+                        return Err(Avis::ecriture(
+                            Genre::Commande,
+                            format!(
+                                "le parcours récursif suivrait {}, qui sort des dossiers : sur la carte",
+                                chemin.display()
+                            ),
+                        ));
+                    }
+                }
+                Ok(m) if m.is_dir() => a_voir.push(chemin),
+                _ => {}
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Options ou sous-commandes qui écrivent, par commande.
@@ -1697,6 +1785,97 @@ fn ressemble_a_un_chemin(v: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// KOB-434 : les parcours récursifs reconnus, et l'arbre vérifié sans
+    /// rien suivre (les liens sont jugés, pas traversés).
+    #[test]
+    fn parcours_recursifs_reconnus() {
+        let v = |l: &str| l.split(' ').map(str::to_owned).collect::<Vec<_>>();
+        assert!(parcours_recursif(
+            "get-childitem",
+            &v("-Recurse -Filter *.rs"),
+            Shell::PowerShell
+        ));
+        assert!(parcours_recursif(
+            "gci",
+            &v("crates -rec"),
+            Shell::PowerShell
+        ));
+        assert!(parcours_recursif("ls", &v("-r"), Shell::PowerShell));
+        assert!(parcours_recursif("dir", &v("/S /B"), Shell::Bash));
+        assert!(parcours_recursif("tree", &v("/F"), Shell::Bash));
+        assert!(parcours_recursif("where", &v("/R . *.rs"), Shell::Bash));
+        assert!(!parcours_recursif("gci", &v("crates"), Shell::PowerShell));
+        assert!(!parcours_recursif("ls", &v("-r"), Shell::Bash));
+        assert!(!parcours_recursif("dir", &v("/B"), Shell::Bash));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn arbre_verifie_sans_suivre_les_liens() {
+        use std::os::unix::fs::symlink;
+        let code = tempfile::tempdir().unwrap();
+        let dehors = tempfile::tempdir().unwrap();
+        let c = code.path();
+        std::fs::create_dir_all(c.join("a/b")).unwrap();
+        std::fs::write(c.join("a/b/f.rs"), "").unwrap();
+        symlink(c.join("a"), c.join("a/b/vers_a")).unwrap();
+        let x = Contexte::new(vec![c.to_path_buf()]);
+        // Un lien qui reste dedans : rien à redire, et il n'est pas traversé
+        // (sinon la boucle `vers_a` ne finirait pas).
+        assert!(arbre_sans_lien_qui_sort(&x, &[c.to_path_buf()], c).is_ok());
+        // Un lien qui sort, au fond de l'arbre : sur la carte.
+        symlink(dehors.path(), c.join("a/b/sortie")).unwrap();
+        let avis = arbre_sans_lien_qui_sort(&x, &[c.to_path_buf()], c).unwrap_err();
+        assert_eq!(avis.classe.cle(), "ecriture", "{}", avis.raison);
+        // Les racines : les dossiers existants donnés, sinon le dossier courant.
+        let args = vec!["a".to_owned(), "-Filter".to_owned(), "*.rs".to_owned()];
+        assert_eq!(racines_du_parcours(&args, c), vec![c.join("a")]);
+        assert_eq!(racines_du_parcours(&[], c), vec![c.to_path_buf()]);
+    }
+
+    /// KOB-434, sous Windows : un parcours récursif qui passerait par une
+    /// jonction ou un lien de dossier qui sort n'est jamais une lecture sans
+    /// carte ; sans lien qui sort, il reste une lecture.
+    #[cfg(windows)]
+    #[test]
+    fn parcours_recursif_et_jonction_qui_sort() {
+        let code = tempfile::tempdir().unwrap();
+        let dehors = tempfile::tempdir().unwrap();
+        let c = code.path();
+        std::fs::create_dir_all(c.join("src")).unwrap();
+        std::fs::write(c.join("src/a.rs"), "").unwrap();
+        let mut x = Contexte::new(vec![c.to_path_buf()]);
+        x.cwd = Some(c.to_path_buf());
+        // Formes réelles sous Windows (PowerShell) ; `dir /S` ou `tree /F`
+        // y prendraient `/S` pour un chemin, déjà refusé hors des dossiers.
+        let lignes = [
+            ("Get-ChildItem -Recurse", Shell::PowerShell),
+            ("gci src -rec", Shell::PowerShell),
+            ("tree", Shell::PowerShell),
+        ];
+        for (l, sh) in lignes {
+            assert_eq!(
+                analyser(l, sh, &x).classe,
+                Classe::Lecture,
+                "{l} sans lien qui sort"
+            );
+        }
+        let j = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(c.join("src").join("jonction"))
+            .arg(dehors.path())
+            .output()
+            .unwrap();
+        assert!(j.status.success(), "mklink /J");
+        for (l, sh) in lignes {
+            assert_ne!(
+                analyser(l, sh, &x).classe,
+                Classe::Lecture,
+                "{l} par une jonction qui sort"
+            );
+        }
+    }
 
     const KOBI: &str = "C:/Users/moi/Desktop/kobi";
 
