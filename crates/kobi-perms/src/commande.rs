@@ -1375,6 +1375,14 @@ fn commande(
         if let Some(a) = where_exe(args, ctx, cwd) {
             return a;
         }
+    } else if nom == "where" && args.iter().any(|x| est_r_de_where(x)) {
+        // L'alias `Where-Object`, sauf s'il a été retiré (`Remove-Item
+        // alias:where`, profil) : `/R` serait alors l'option de where.exe
+        // (KOB-455). Ni lecture, ni refus.
+        return Avis::ecriture(
+            Genre::Commande,
+            "`where … /R` : `Where-Object` ou where.exe ? Vérifié sur la carte",
+        );
     }
     let avis = chemins(&nom, args, shell, ctx, cwd);
     // Sous Windows, les parcours récursifs entrent dans les jonctions et les
@@ -2297,18 +2305,6 @@ fn est_r_de_where(x: &str) -> bool {
 
 /// Tous les chemins des arguments doivent rester dans les dossiers déclarés.
 fn chemins(nom: &str, args: &[String], shell: Shell, ctx: &Contexte, cwd: &Path) -> Avis {
-    // `where.exe /R dossier motif` parcourt `dossier` : il est jugé comme un
-    // chemin, quel que soit le shell (`where` est aussi `Where-Object`).
-    if nom == "where" {
-        if let Some(i) = args.iter().position(|x| x.eq_ignore_ascii_case("/r")) {
-            let Some(d) = args.get(i + 1) else {
-                return Avis::refus("`where /R` sans dossier");
-            };
-            if let Some(avis) = juger_chemin(ctx, d, cwd) {
-                return avis;
-            }
-        }
-    }
     if SANS_CHEMIN_PS.contains(&nom) {
         return Avis::lecture();
     }
@@ -3438,6 +3434,32 @@ mod tests {
             &v_mots("-R . *.rs"),
             Shell::Bash
         ));
+    }
+
+    /// KOB-455 : sous PowerShell, `where` sans `.exe` est l'alias
+    /// `Where-Object`, où un `/r` est une valeur : pas de refus. Il passe par
+    /// la carte, car l'alias peut avoir été retiré (where.exe).
+    #[test]
+    fn where_object_et_slash_r() {
+        let x = ctx();
+        let cle = |l: &str, s| analyser(l, s, &x).classe.cle();
+        for l in [
+            "Get-ChildItem | where Name -eq /r",
+            "Get-ChildItem | where Name -eq /R",
+            "Get-ChildItem | where Name -eq -r",
+            "Get-ChildItem | where Name -eq /r | select Name",
+            r"Get-ChildItem | where Name -eq /r C:\Windows",
+            r"where /R C:\Users\moi\.ssh *",
+        ] {
+            assert_eq!(cle(l, Shell::PowerShell), "ecriture", "{l}");
+        }
+        assert_eq!(
+            cle("Get-ChildItem | where Name -eq src", Shell::PowerShell),
+            "lecture"
+        );
+        // where.exe, lui, garde son contrôle.
+        assert_eq!(cle("where.exe /r", Shell::PowerShell), "refus");
+        assert_eq!(cle("where /r", Shell::Bash), "refus");
     }
 
     /// KOB-449 : sous Git Bash, `//R` est le `/R` de where.exe (MSYS le
