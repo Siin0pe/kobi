@@ -1754,7 +1754,10 @@ impl<R: Runtime> Chef<R> {
     /// finit sans retenir le compte rendu. Si la fin est ensuite annulée, la
     /// proposition ne revient pas : les notes suivantes pourront la refaire.
     fn refuser_cartes_des_notes(&mut self) {
-        let cartes: Vec<u64> = self.cartes_des_notes.keys().copied().collect();
+        let mut cartes: Vec<u64> = self.cartes_des_notes.keys().copied().collect();
+        // Dans l'ordre d'ouverture, pas celui de la table : l'ordre des
+        // fermetures ne doit pas changer d'une fois à l'autre (KOB-426).
+        cartes.sort_unstable();
         for carte in cartes {
             // Déjà acceptée, sa fermeture pas encore revenue : l'action est
             // faite, sa trace va au compte rendu (KOB-331).
@@ -8297,18 +8300,9 @@ mod tests {
         #[test]
         fn kobi_ne_reste_jamais_fige() {
             // Réglables pour explorer : KOBI_GRAINE, KOBI_SUITES, KOBI_LONGUEUR.
-            let graine = std::env::var("KOBI_GRAINE")
-                .ok()
-                .and_then(|g| g.parse().ok())
-                .unwrap_or(GRAINE);
-            let suites = std::env::var("KOBI_SUITES")
-                .ok()
-                .and_then(|g| g.parse().ok())
-                .unwrap_or(SUITES);
-            let longueur = std::env::var("KOBI_LONGUEUR")
-                .ok()
-                .and_then(|g| g.parse().ok())
-                .unwrap_or(LONGUEUR);
+            let graine = reglage("KOBI_GRAINE", GRAINE, lire_graine);
+            let suites = reglage("KOBI_SUITES", SUITES, |v| v.parse().ok());
+            let longueur = reglage("KOBI_LONGUEUR", LONGUEUR, |v| v.parse().ok());
             let mut h = Hasard(graine);
             // Un premier cas, pour que les fils durables du processus (pool
             // de tests, runtime) existent déjà avant la mesure.
@@ -8318,7 +8312,12 @@ mod tests {
                 let suite: Vec<Ev> = (0..longueur).map(|_| tirer(&mut h)).collect();
                 if verifier(&suite).is_err() {
                     let (minimale, raison) = reduire(suite);
-                    panic!("suite n° {numero} : {raison}\nsuite minimale : {minimale:#?}");
+                    panic!(
+                        "suite n° {numero} : {raison}\n\
+                         rejouer : KOBI_GRAINE={graine:#x} KOBI_SUITES={suites} \
+                         KOBI_LONGUEUR={longueur}\n\
+                         suite minimale : {minimale:#?}"
+                    );
                 }
             }
             // Chaque cas joint ses fils : leur nombre ne grossit pas avec le
@@ -8331,6 +8330,40 @@ mod tests {
                     "{suites} cas : {avant} fils avant, {apres} après"
                 );
             }
+        }
+
+        /// Valeur d'un réglage d'exploration : absente, celle par défaut ;
+        /// illisible, le test s'arrête plutôt que d'explorer autre chose
+        /// que ce qui était demandé (KOB-426).
+        fn reglage<T>(nom: &str, defaut: T, lire: impl Fn(&str) -> Option<T>) -> T {
+            match std::env::var(nom) {
+                Ok(v) => lire(v.trim()).unwrap_or_else(|| panic!("{nom}={v:?} illisible")),
+                Err(_) => defaut,
+            }
+        }
+
+        /// Graine en décimal ou en hexadécimal (`0x…`, comme l'affiche un
+        /// échec). Zéro est refusé : le xorshift n'en sort jamais, toutes les
+        /// suites seraient identiques.
+        fn lire_graine(v: &str) -> Option<u64> {
+            let v = v.replace('_', "");
+            match v.strip_prefix("0x").or_else(|| v.strip_prefix("0X")) {
+                Some(hexa) => u64::from_str_radix(hexa, 16).ok(),
+                None => v.parse().ok(),
+            }
+            .filter(|&g| g != 0)
+        }
+
+        #[test]
+        fn graine_lue_en_decimal_ou_en_hexadecimal() {
+            assert_eq!(lire_graine("12"), Some(12));
+            assert_eq!(lire_graine("0x1f"), Some(31));
+            assert_eq!(lire_graine("0X4b4f_4249_0395"), Some(GRAINE));
+            assert_eq!(lire_graine(&format!("{GRAINE:#x}")), Some(GRAINE));
+            assert_eq!(lire_graine("0"), None);
+            assert_eq!(lire_graine("0x0"), None);
+            assert_eq!(lire_graine("douze"), None);
+            assert_eq!(lire_graine("-3"), None);
         }
 
         /// Nombre de fils du processus (Linux, `/proc/self/status`).
