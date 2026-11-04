@@ -8118,7 +8118,11 @@ mod tests {
                 }
                 Ev::EcheanceMcp => {
                     for o in c.cartes_ouvertes.values_mut() {
-                        *o -= kobi_perms::DEFAULT_TIMEOUT + Duration::from_secs(6);
+                        if let Some(echue) =
+                            o.checked_sub(kobi_perms::DEFAULT_TIMEOUT + Duration::from_secs(6))
+                        {
+                            *o = echue;
+                        }
                     }
                     c.tick();
                 }
