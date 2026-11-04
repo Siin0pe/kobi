@@ -658,6 +658,27 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
         &mut apres_virgule,
         false,
     );
+    // `--%` (arrêt de l'analyse) : PowerShell passe le reste tel quel à un
+    // programme natif, après avoir remplacé `%VAR%` par sa valeur
+    // (`which --% %CLE%` l'affiche, KOB-471). Comme `$` : non analysable.
+    // C'est la valeur de l'argument qui compte : `'--%'` entre guillemets
+    // (`./--%` ici) et `-x:--%` aussi.
+    let arret = |m: &str| {
+        let m = m.replace(['\u{2013}', '\u{2014}', '\u{2015}'], "-");
+        let valeur = m.strip_prefix("./").unwrap_or(&m);
+        let apres_param = (valeur.starts_with('-') && !valeur.starts_with("--%"))
+            .then(|| valeur.split_once(':').map(|(_, v)| v))
+            .flatten()
+            .unwrap_or(valeur);
+        valeur.starts_with("--%") || apres_param.trim_start_matches("./").starts_with("--%")
+    };
+    if ps
+        && jetons
+            .iter()
+            .any(|j| matches!(j, Jeton::Mot(m) | Jeton::Cite(m) if arret(m)))
+    {
+        return Err("arrêt de l'analyse PowerShell `--%` non analysable".into());
+    }
     Ok(jetons)
 }
 
@@ -3378,6 +3399,44 @@ mod tests {
         }
         // Sous Bash, `@x` n'est qu'un mot.
         assert_eq!(analyser("echo @x", Shell::Bash, &x).classe.cle(), "lecture");
+    }
+
+    /// KOB-471 : `--%` (arrêt de l'analyse) fait remplacer `%VAR%` par sa
+    /// valeur pour un programme natif : `which --% %ANTHROPIC_API_KEY%`
+    /// affichait la clé (sonde #427). Traité comme `$` : jamais une lecture.
+    #[test]
+    fn arret_de_l_analyse_powershell() {
+        let x = ctx();
+        for l in [
+            "which --% %ANTHROPIC_API_KEY%",
+            "rg --% %ANTHROPIC_API_KEY% .",
+            "echo --% %X%",
+            "git log --% %X%",
+            "which \u{2013}-% %X%",
+            "which --%%X%",
+            "Get-ChildItem | which --% %X%",
+            "which '--%' %ANTHROPIC_API_KEY%",
+            "which \"--%\" %ANTHROPIC_API_KEY%",
+            "rg x '--%' %X%",
+            "which -x:--% %X%",
+            "which -x:'--%' %X%",
+            "which `--% %X%",
+        ] {
+            assert_ne!(
+                analyser(l, Shell::PowerShell, &x).classe.cle(),
+                "lecture",
+                "{l}"
+            );
+        }
+        assert_eq!(
+            analyser("which --% %X%", Shell::PowerShell, &x).classe,
+            analyser("which $env:X", Shell::PowerShell, &x).classe
+        );
+        // Sous Bash, `--%` n'est qu'un mot.
+        assert_eq!(
+            analyser("echo --%", Shell::Bash, &x).classe.cle(),
+            "lecture"
+        );
     }
 
     /// KOB-439 : `where.exe` juge le dossier de `-R` comme celui de `/R`, et
