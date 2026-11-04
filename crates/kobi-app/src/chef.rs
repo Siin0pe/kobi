@@ -8068,7 +8068,8 @@ mod tests {
             Fin(usize),
             Resultat(usize),
             Detache(usize, bool),
-            ErreurTour(usize),
+            /// Erreur du tour de rang `.0`, message n° `.1`.
+            ErreurTour(usize, usize),
             EnAttente(usize),
             ErreurAutre,
             CarteKobi,
@@ -8076,17 +8077,47 @@ mod tests {
             DecisionKobi(usize, u8),
             /// Carte MCP : du tour, ou des notes (tour 0).
             CarteMcp(usize, bool),
-            /// Carte MCP tranchée au clic ou échue (`None`).
-            FermeeMcp(usize, Option<bool>),
-            EcheanceMcp,
+            /// Clic sur une carte MCP (`Message::Decision`, comme l'interface).
+            Clic(usize, bool),
+            /// Le cerveau renvoie la fermeture d'une carte cliquée : elle peut
+            /// arriver après d'autres événements (KOB-331).
+            Echo(usize),
+            /// Les `.0 + 1` cartes MCP les plus anciennes arrivent à échéance
+            /// (toutes ont le même délai), pas les autres.
+            EcheanceMcp(usize),
             Demarrer,
             Pause,
             Reprendre,
+            /// Fin de la réunion (à la voix ou au clic), puis « reprends »
+            /// dans le délai d'« Annuler » si `annuler`.
+            Terminer(bool),
+            /// « Stop » direct (Échap, raccourci) dans n'importe quel état.
+            Stop,
+            /// « Kobi… » puis rien : l'écoute abandonne l'appel.
+            AppelSansQuestion,
+            /// Phrase qui cite Kobi, peut-être pour lui (KOB-276).
+            PeutEtre(usize),
+            /// Sa réponse : un silence (« — »), la phrase n'était pas pour lui.
+            FinSilence(usize),
+            /// Oups posé par l'écoute elle-même (micro perdu), hors du chef :
+            /// elle l'acquitte d'elle-même après `ERREUR_AFFICHEE`.
+            OupsEcoute,
+            /// Le tour tarde : « je cherche encore » (KOB-385).
+            Patience(usize),
+            /// Claude a planté : session relancée, question renvoyée.
+            Relance(usize),
+            /// Un seul délai échoit : 0 retour au calme, 1 livraison d'un
+            /// résultat, 2 délais de la fin de réunion, 3 patience reportée,
+            /// 4 Oups de l'écoute acquitté.
+            Echeance(u8),
+            /// Tous les délais échoient à la fois, puis un tic.
+            Avance,
+            /// Un tic sans que le temps passe.
             Tic,
         }
 
         fn tirer(h: &mut Hasard) -> Ev {
-            match h.sous(22) {
+            match h.sous(35) {
                 0..=2 => Ev::Question {
                     voix: h.sous(3) != 0,
                     texte: h.sous(TEXTES.len()),
@@ -8099,36 +8130,78 @@ mod tests {
                 5 => Ev::Fin(h.sous(3)),
                 6 => Ev::Resultat(h.sous(3)),
                 7 => Ev::Detache(h.sous(3), h.sous(2) == 0),
-                8 => Ev::ErreurTour(h.sous(3)),
+                8 => Ev::ErreurTour(h.sous(3), h.sous(4)),
                 9 => Ev::EnAttente(h.sous(3)),
                 10 => Ev::ErreurAutre,
                 11 => Ev::CarteKobi,
                 12 => Ev::DecisionKobi(h.sous(2), h.sous(3) as u8),
                 13 => Ev::CarteMcp(h.sous(3), h.sous(4) == 0),
-                14 => Ev::FermeeMcp(h.sous(2), [Some(true), Some(false), None][h.sous(3)]),
-                15 => Ev::EcheanceMcp,
+                14 => Ev::Clic(h.sous(2), h.sous(2) == 0),
+                15 => Ev::EcheanceMcp(h.sous(2)),
                 16 => Ev::Demarrer,
                 17 => Ev::Pause,
                 18 => Ev::Reprendre,
+                19 => Ev::Terminer(h.sous(2) == 0),
+                20 => Ev::Stop,
+                21 => Ev::AppelSansQuestion,
+                22 => Ev::PeutEtre(h.sous(TEXTES.len())),
+                23 => Ev::FinSilence(h.sous(3)),
+                24 => Ev::OupsEcoute,
+                25 => Ev::Patience(h.sous(3)),
+                26 => Ev::Relance(h.sous(3)),
+                27 => Ev::Echeance(h.sous(5) as u8),
+                28 => Ev::Avance,
+                29 => Ev::Echo(h.sous(2)),
                 _ => Ev::Tic,
             }
         }
 
         /// Le temps passe : délais du chef échus, puis un tic.
-        fn avancer(c: &mut Chef<tauri::test::MockRuntime>) {
-            if let Some((_, e)) = c.calme_a {
-                let echu = Instant::now()
-                    .checked_sub(Duration::from_millis(1))
-                    .unwrap_or_else(Instant::now);
-                c.calme_a = Some((echu, e));
-            }
-            c.livrable_a = None;
-            if let Some((t, Some(_))) = c.patience_reportee {
-                if let Some(depuis) = Instant::now().checked_sub(cerveau::PATIENCE) {
-                    c.patience_reportee = Some((t, Some(depuis)));
-                }
+        fn avancer(c: &mut Chef<tauri::test::MockRuntime>, jeu: &mut Jeu) {
+            for delai in 0..5 {
+                echoir(c, jeu, delai);
             }
             c.tick();
+        }
+
+        /// Un délai du chef échoit (voir [`Ev::Echeance`]).
+        fn echoir(c: &mut Chef<tauri::test::MockRuntime>, jeu: &mut Jeu, delai: u8) {
+            match delai {
+                0 => {
+                    if let Some((_, e)) = c.calme_a {
+                        let echu = Instant::now()
+                            .checked_sub(Duration::from_millis(1))
+                            .unwrap_or_else(Instant::now);
+                        c.calme_a = Some((echu, e));
+                    }
+                }
+                1 => c.livrable_a = None,
+                // Fin de réunion : le délai d'« Annuler » et l'attente de la
+                // transcription en retard sont passés.
+                2 => {
+                    if let Some(r) = &mut c.reunion {
+                        let passe =
+                            |quand: Instant| quand.checked_sub(VIDANGE_SANS_PAROLE + VIDANGE);
+                        r.annulable_jusqu = r.annulable_jusqu.and_then(passe).or(r.annulable_jusqu);
+                        r.vidange = r.vidange.and_then(passe).or(r.vidange);
+                        r.arret = r.arret.and_then(passe).or(r.arret);
+                    }
+                }
+                3 => {
+                    if let Some((t, Some(_))) = c.patience_reportee {
+                        if let Some(depuis) = Instant::now().checked_sub(cerveau::PATIENCE) {
+                            c.patience_reportee = Some((t, Some(depuis)));
+                        }
+                    }
+                }
+                // Comme `interpellation::erreur`, après son attente.
+                _ => {
+                    if jeu.oups_ecoute > 0 {
+                        jeu.oups_ecoute -= 1;
+                        c.transition(&[Evenement::Acquitter]);
+                    }
+                }
+            }
         }
 
         /// Tours créés par les questions, le plus récent d'abord.
@@ -8179,12 +8252,134 @@ mod tests {
             derniere: Option<u64>,
             /// 4. Réponse montrée : violations relevées en cours de jeu.
             violations: Vec<String>,
+            /// Tour de chaque carte MCP de la conversation.
+            tour_des_cartes: HashMap<u64, u64>,
+            /// Question en cours à l'ouverture de chaque carte de Kobi : son
+            /// outil a été appelé dans ce tour.
+            tour_des_validations: HashMap<String, u64>,
+            /// Cartes cliquées dont le cerveau n'a pas encore renvoyé la
+            /// fermeture, et la réponse donnée.
+            cliquees: BTreeMap<u64, bool>,
+            /// Oups de l'écoute pas encore acquittés par elle.
+            oups_ecoute: u32,
+            /// Tours qui ont déjà eu leur patience, ou leur relance : le
+            /// cerveau n'en envoie qu'une par tour.
+            patientes: HashSet<u64>,
+            relances: HashSet<u64>,
+            /// Tours que le cerveau a finis (fin, résultat ou erreur).
+            finis: HashSet<u64>,
+            /// Tours détachés avec l'annonce « je m'en occupe » : des tâches.
+            /// Détaché sans annonce (carte), le tour reste la question en
+            /// cours pour l'utilisateur.
+            annonces: HashSet<u64>,
+        }
+
+        /// Propriété 3, carte visible : une carte attend (hors pause et
+        /// fin), Kobi ne dort pas.
+        fn carte_cachee(c: &Chef<tauri::test::MockRuntime>) -> Option<String> {
+            (carte_attend(c)
+                && !matches!(etat(&c.app).etat, "pause" | "fin")
+                && matches!(c.activite(), Some("calme") | None))
+            .then(|| {
+                format!(
+                    "carte qui attend, mais activité {:?} (état {})",
+                    c.activite(),
+                    etat(&c.app).etat
+                )
+            })
+        }
+
+        /// Un tour attend encore le cerveau (question, réponse, tâche).
+        fn en_cours(c: &Chef<tauri::test::MockRuntime>, tour: u64) -> bool {
+            c.historique
+                .iter()
+                .any(|b| b.tour == tour && matches!(b.statut, "attente" | "reponse" | "tache"))
+                && !c.interrompus.contains(&tour)
+        }
+
+        /// Une carte de la conversation encore ouverte pour ce tour : le
+        /// cerveau attend sa réponse avant de finir le tour.
+        fn carte_du_tour_ouverte(c: &Chef<tauri::test::MockRuntime>, jeu: &Jeu, tour: u64) -> bool {
+            jeu.tour_des_cartes
+                .iter()
+                .any(|(carte, t)| *t == tour && c.cartes.contains_key(carte))
+                || jeu
+                    .tour_des_validations
+                    .iter()
+                    .any(|(id, t)| *t == tour && c.validations.ids().contains(id))
+        }
+
+        /// Propriété 1, jamais figé, à chaque tic : chaque activité a sa
+        /// raison d'être (une carte pour proposer, une question au premier
+        /// plan pour réfléchir…), ou un délai qui la fera finir.
+        fn fige(c: &Chef<tauri::test::MockRuntime>, jeu: &Jeu) -> Option<String> {
+            // Toute carte ouverte compte, celles des notes comprises : Kobi
+            // peut les proposer.
+            let carte = !c.cartes.is_empty() || !c.validations.est_vide();
+            let en_cours = |b: &&Bulle| {
+                matches!(b.statut, "attente" | "reponse" | "tache")
+                    && !c.interrompus.contains(&b.tour)
+            };
+            let premier_plan = c
+                .historique
+                .iter()
+                .filter(en_cours)
+                .any(|b| !jeu.annonces.contains(&b.tour));
+            let tache = !c.taches.is_empty()
+                || !c.a_livrer.is_empty()
+                || c.historique
+                    .iter()
+                    .filter(en_cours)
+                    .any(|b| jeu.detaches.contains(&b.tour));
+            let sortie = c.calme_a.is_some() || jeu.oups_ecoute > 0;
+            let raison = match c.activite() {
+                Some("calme" | "note") | None => true,
+                // Chaque appel du jeu est suivi, dans le même événement, de
+                // sa question ou de son abandon.
+                Some("ecoute") => false,
+                Some("reflechit") => premier_plan,
+                Some("repond") => premier_plan || c.livrable_a.is_some(),
+                Some("propose") => carte,
+                Some("occupe") => tache || premier_plan,
+                _ => false,
+            };
+            (!raison && !sortie).then(|| {
+                format!(
+                    "figé en {:?} (état {}) : carte {carte}, premier plan {premier_plan}, \
+                     tâche {tache}",
+                    c.activite(),
+                    etat(&c.app).etat
+                )
+            })
+        }
+
+        /// Les propriétés vérifiées à chaque tic.
+        fn verifier_le_tic(c: &Chef<tauri::test::MockRuntime>, jeu: &mut Jeu) {
+            if c.calme_a.is_none() && c.a_livrer.is_empty() {
+                if let Some(e) = carte_cachee(c) {
+                    jeu.violations.push(e);
+                }
+            }
+            if let Some(e) = fige(c, jeu) {
+                jeu.violations.push(e);
+            }
         }
 
         fn jouer(c: &mut Chef<tauri::test::MockRuntime>, ev: &Ev, jeu: &mut Jeu) {
             match *ev {
                 Ev::Question { voix, texte } => {
                     let texte = TEXTES[texte];
+                    // L'écho d'un clic arrive en quelques millisecondes : avant
+                    // que l'utilisateur ait parlé.
+                    let affichee = c.carte_affichee();
+                    if let Some((carte, accepte)) =
+                        affichee.and_then(|carte| Some((carte, jeu.cliquees.remove(&carte)?)))
+                    {
+                        c.recevoir(Message::Cerveau(Retour::CarteFermee {
+                            carte,
+                            accepte: Some(accepte),
+                        }));
+                    }
                     // Comme le cerveau et la validation : « oui » ou « non »
                     // à une carte reviennent comme sa fermeture.
                     let cible = c.validations.cible().map(str::to_owned);
@@ -8215,9 +8410,12 @@ mod tests {
                                 crate::validation::Reponse::Refuse
                             },
                         });
-                    } else if let (Some(carte), Some(accepte)) =
-                        (mcp, crate::intentions::reponse_carte_mcp(texte))
-                    {
+                    } else if let (Some(carte), Some(accepte)) = (
+                        mcp.filter(|carte| !jeu.cliquees.contains_key(carte)),
+                        crate::intentions::reponse_carte_mcp(texte),
+                    ) {
+                        // Déjà cliquée, le cerveau a sa réponse : celle de la
+                        // voix lui revient sans effet.
                         c.recevoir(Message::Cerveau(Retour::CarteFermee {
                             carte,
                             accepte: Some(accepte),
@@ -8228,7 +8426,7 @@ mod tests {
                 | Ev::Fin(k)
                 | Ev::Resultat(k)
                 | Ev::Detache(k, _)
-                | Ev::ErreurTour(k)
+                | Ev::ErreurTour(k, _)
                 | Ev::EnAttente(k) => {
                     let Some(tour) = rang(&tours(c), k) else {
                         return;
@@ -8241,6 +8439,13 @@ mod tests {
                     if !matches!(statut, Some("attente" | "reponse" | "tache")) {
                         return;
                     }
+                    // Le cerveau attend la réponse à la carte de ce tour
+                    // avant de le finir, même par une erreur.
+                    if matches!(ev, Ev::Fin(_) | Ev::Resultat(_) | Ev::ErreurTour(..))
+                        && carte_du_tour_ouverte(c, jeu, tour)
+                    {
+                        return;
+                    }
                     let texte = "Réponse d'essai.".to_string();
                     let r = match *ev {
                         Ev::Texte(_) | Ev::Detache(..) | Ev::EnAttente(_) if detache => return,
@@ -8249,11 +8454,20 @@ mod tests {
                         Ev::Fin(_) | Ev::Resultat(_) => Retour::Fin { tour, texte },
                         Ev::Detache(_, annonce) => {
                             jeu.detaches.insert(tour);
+                            if annonce {
+                                jeu.annonces.insert(tour);
+                            }
                             Retour::Detache { tour, annonce }
                         }
-                        Ev::ErreurTour(_) => Retour::Erreur {
+                        Ev::ErreurTour(_, m) => Retour::Erreur {
                             tour,
-                            message: "erreur d'essai".into(),
+                            message: [
+                                "erreur d'essai",
+                                "claude s'est arrêté",
+                                "rate_limit_error : trop de requêtes",
+                                "http 401 : clé refusée",
+                            ][m]
+                                .into(),
                         },
                         _ => Retour::EnAttente { tour, nombre: 1 },
                     };
@@ -8262,6 +8476,12 @@ mod tests {
                         && jeu.derniere == Some(tour)
                         && !c.interrompus.contains(&tour)
                         && !matches!(etat(&c.app).etat, "pause" | "fin");
+                    if matches!(
+                        r,
+                        Retour::Fin { .. } | Retour::Resultat { .. } | Retour::Erreur { .. }
+                    ) {
+                        jeu.finis.insert(tour);
+                    }
                     c.recevoir(Message::Cerveau(r));
                     // 4. Réponse montrée : la réponse de la dernière question
                     // posée est celle que Kobi montre.
@@ -8275,7 +8495,11 @@ mod tests {
                 Ev::ErreurAutre => c.erreur("Disque", "plein"),
                 Ev::CarteKobi => {
                     jeu.n += 1;
-                    c.validation_ouverte(format!("v{}", jeu.n), "Écrire la note");
+                    let id = format!("v{}", jeu.n);
+                    if en_cours(c, c.dernier) {
+                        jeu.tour_des_validations.insert(id.clone(), c.dernier);
+                    }
+                    c.validation_ouverte(id, "Écrire la note");
                 }
                 Ev::DecisionKobi(k, d) => {
                     let Some(id) = rang(&validations(c), k) else {
@@ -8292,9 +8516,24 @@ mod tests {
                     let tour = if notes {
                         0
                     } else {
+                        // Une carte ne vient que d'un tour que le cerveau n'a
+                        // pas fini, même interrompu : elle peut croiser le
+                        // « stop ».
                         match rang(&tours(c), k) {
-                            Some(t) => t,
-                            None => return,
+                            Some(t)
+                                if !jeu.finis.contains(&t)
+                                    && (c.interrompus.contains(&t)
+                                        || c.historique.iter().any(|b| {
+                                            b.tour == t
+                                                && matches!(
+                                                    b.statut,
+                                                    "attente" | "reponse" | "tache"
+                                                )
+                                        })) =>
+                            {
+                                t
+                            }
+                            _ => return,
                         }
                     };
                     jeu.n += 1;
@@ -8304,22 +8543,58 @@ mod tests {
                         outil: "mcp__carnet__ecrire_note".into(),
                         entree: serde_json::json!({ "title": "Note d'essai" }),
                     }));
+                    // Comme le cerveau : la carte d'un tour le détache, il
+                    // finira par son résultat.
+                    if tour != 0 {
+                        jeu.tour_des_cartes.insert(jeu.n, tour);
+                        if jeu.detaches.insert(tour) {
+                            c.recevoir(Message::Cerveau(Retour::Detache {
+                                tour,
+                                annonce: false,
+                            }));
+                        }
+                    }
                 }
-                Ev::FermeeMcp(k, accepte) => {
+                Ev::Clic(k, accepte) => {
                     let Some(carte) = rang(&cartes_mcp(c), k) else {
                         return;
                     };
-                    c.recevoir(Message::Cerveau(Retour::CarteFermee { carte, accepte }));
+                    if jeu.cliquees.contains_key(&carte) {
+                        return;
+                    }
+                    c.recevoir(Message::Decision { carte, accepte });
+                    jeu.cliquees.insert(carte, accepte);
                 }
-                Ev::EcheanceMcp => {
-                    for o in c.cartes_ouvertes.values_mut() {
-                        if let Some(echue) =
-                            o.checked_sub(kobi_perms::DEFAULT_TIMEOUT + Duration::from_secs(6))
-                        {
-                            *o = echue;
+                Ev::Echo(k) => {
+                    let cliquees: Vec<(u64, bool)> =
+                        jeu.cliquees.iter().map(|(c, a)| (*c, *a)).collect();
+                    let Some((carte, accepte)) = rang(&cliquees, k) else {
+                        return;
+                    };
+                    jeu.cliquees.remove(&carte);
+                    c.recevoir(Message::Cerveau(Retour::CarteFermee {
+                        carte,
+                        accepte: Some(accepte),
+                    }));
+                }
+                Ev::EcheanceMcp(k) => {
+                    // Cliquée, une carte n'échoit plus : le cerveau a sa réponse.
+                    let mut anciennes: Vec<u64> = cartes_mcp(c)
+                        .into_iter()
+                        .filter(|carte| !jeu.cliquees.contains_key(carte))
+                        .collect();
+                    anciennes.reverse();
+                    for carte in anciennes.into_iter().take(k + 1) {
+                        if let Some(o) = c.cartes_ouvertes.get_mut(&carte) {
+                            if let Some(echue) =
+                                o.checked_sub(kobi_perms::DEFAULT_TIMEOUT + Duration::from_secs(6))
+                            {
+                                *o = echue;
+                            }
                         }
                     }
                     c.tick();
+                    verifier_le_tic(c, jeu);
                 }
                 Ev::Demarrer => {
                     c.commande(Intention::DemarrerReunion);
@@ -8330,7 +8605,90 @@ mod tests {
                 Ev::Reprendre => {
                     c.commande(Intention::Reprendre);
                 }
-                Ev::Tic => avancer(c),
+                Ev::Terminer(annuler) => {
+                    c.commande(Intention::TerminerReunion);
+                    if annuler {
+                        c.recevoir(Message::Interpelle);
+                        c.recevoir(Message::Question {
+                            texte: "reprends la réunion".into(),
+                            voix: true,
+                            dit_a: None,
+                        });
+                    }
+                }
+                Ev::Stop => c.interrompre(),
+                Ev::AppelSansQuestion => {
+                    c.recevoir(Message::Interpelle);
+                    c.recevoir(Message::SansQuestion);
+                }
+                Ev::PeutEtre(texte) => {
+                    c.recevoir(Message::QuestionPeutEtre(
+                        format!("Kobi {}", TEXTES[texte]),
+                        Instant::now(),
+                    ));
+                    if c.bulle(c.tour).is_some_and(|b| b.statut == "attente") {
+                        jeu.derniere = Some(c.tour);
+                    }
+                }
+                Ev::FinSilence(k) => {
+                    let Some(tour) = rang(&tours(c), k) else {
+                        return;
+                    };
+                    if c.bulle(tour)
+                        .is_some_and(|b| matches!(b.statut, "attente" | "reponse"))
+                        && !jeu.detaches.contains(&tour)
+                        && !carte_du_tour_ouverte(c, jeu, tour)
+                    {
+                        jeu.finis.insert(tour);
+                        c.recevoir(Message::Cerveau(Retour::Fin {
+                            tour,
+                            texte: "—".into(),
+                        }));
+                    }
+                }
+                Ev::OupsEcoute => {
+                    c.transition(&[Evenement::Erreur]);
+                    jeu.oups_ecoute += 1;
+                }
+                // Une seule par tour. La patience ne vient que d'une tâche
+                // (tour détaché) ; la relance, de tout tour en cours.
+                Ev::Patience(k) => {
+                    let Some(tour) =
+                        rang(&tours(c), k).filter(|&t| en_cours(c, t) && jeu.detaches.contains(&t))
+                    else {
+                        return;
+                    };
+                    if jeu.patientes.insert(tour) {
+                        c.recevoir(Message::Cerveau(Retour::Patience { tour }));
+                    }
+                }
+                Ev::Relance(k) => {
+                    let Some(tour) = rang(&tours(c), k).filter(|&t| en_cours(c, t)) else {
+                        return;
+                    };
+                    if jeu.relances.insert(tour) {
+                        c.recevoir(Message::Cerveau(Retour::Relance { tour }));
+                    }
+                }
+                Ev::Echeance(delai) => {
+                    echoir(c, jeu, delai);
+                    // Un tic de plus, comme pour `Avance`.
+                    c.tick();
+                    c.tick();
+                    verifier_le_tic(c, jeu);
+                }
+                Ev::Avance => {
+                    avancer(c, jeu);
+                    // Un tic de plus : un changement fait en fin de tic (fin
+                    // de réunion confirmée) n'est repris par les règles qu'au
+                    // tic suivant.
+                    c.tick();
+                    verifier_le_tic(c, jeu);
+                }
+                Ev::Tic => {
+                    c.tick();
+                    verifier_le_tic(c, jeu);
+                }
             }
         }
 
@@ -8346,18 +8704,11 @@ mod tests {
                     return Err(v.clone());
                 }
                 for _ in 0..5 {
-                    avancer(c);
+                    avancer(c, &mut jeu);
                 }
-                // 3. Carte visible : une carte attend, Kobi ne dort pas.
-                if carte_attend(c)
-                    && !matches!(etat(&c.app).etat, "pause" | "fin")
-                    && matches!(c.activite(), Some("calme") | None)
-                {
-                    return Err(format!(
-                        "carte qui attend, mais activité {:?} (état {})",
-                        c.activite(),
-                        etat(&c.app).etat
-                    ));
+                // Propriété 3, carte visible : une carte attend, Kobi ne dort pas.
+                if let Some(e) = carte_cachee(c) {
+                    return Err(e);
                 }
                 // Tout se termine : cartes tranchées, tours finis.
                 for id in validations(c) {
@@ -8367,10 +8718,8 @@ mod tests {
                     });
                 }
                 for carte in cartes_mcp(c) {
-                    c.recevoir(Message::Cerveau(Retour::CarteFermee {
-                        carte,
-                        accepte: None,
-                    }));
+                    let accepte = jeu.cliquees.remove(&carte);
+                    c.recevoir(Message::Cerveau(Retour::CarteFermee { carte, accepte }));
                 }
                 // Les tâches aussi, même sorties de l'historique (12 bulles) :
                 // le cerveau finit toujours par livrer leur résultat.
@@ -8392,7 +8741,7 @@ mod tests {
                 // Un résultat livré par tic ou presque : assez de tics pour
                 // tous, avec leur lecture.
                 for _ in 0..60 {
-                    avancer(c);
+                    avancer(c, &mut jeu);
                 }
                 // 2. Rien de perdu.
                 if !c.a_livrer.is_empty() {
@@ -8454,9 +8803,10 @@ mod tests {
                     let (minimale, raison) = reduire(suite);
                     panic!(
                         "suite n° {numero} : {raison}\n\
-                         rejouer : KOBI_GRAINE={graine:#x} KOBI_SUITES={suites} \
+                         rejouer : KOBI_GRAINE={graine:#x} KOBI_SUITES={} \
                          KOBI_LONGUEUR={longueur}\n\
-                         suite minimale : {minimale:#?}"
+                         suite minimale : {minimale:#?}",
+                        numero + 1
                     );
                 }
             }
