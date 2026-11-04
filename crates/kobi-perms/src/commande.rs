@@ -1511,7 +1511,14 @@ fn juger_chemin(ctx: &Contexte, x: &str, cwd: &Path) -> Option<Avis> {
     // motifs étendus (`extglob` : `@(…)`, `+(…)`…), ou un motif à
     // backtracking coûteux : validés sur la carte plutôt que devinés.
     let accolades = x.contains('{') && x.contains('}') && (x.contains(',') || x.contains(".."));
-    let etendu = ["@(", "+(", "!(", "*(", "?("].iter().any(|o| x.contains(o));
+    // zsh `EXTENDED_GLOB` (`^x/…`, `(#i)x`, `a~b/…`) quand l'argument
+    // désigne un chemin : pas une révision git (`HEAD~1`, `HEAD^`). Un `#`
+    // collé à un nom reste un nom (KOB-298) ; un `~` en tête est le dossier
+    // personnel, refusé plus haut.
+    let zsh = (x.contains('/') && (x.contains('^') || x[1..].contains('~')))
+        || x.starts_with('^')
+        || x.starts_with("(#");
+    let etendu = ["@(", "+(", "!(", "*(", "?("].iter().any(|o| x.contains(o)) || zsh;
     if accolades || etendu || x.contains("**") || x.matches('*').count() > 6 {
         return Some(Avis::ecriture(
             Genre::Commande,

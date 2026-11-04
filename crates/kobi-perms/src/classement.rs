@@ -468,6 +468,9 @@ mod tests {
             "cat {x}/{sortie,q}/secret",
             "cat **/secret",
             "cat +(sortie)/secret",
+            // zsh avec EXTENDED_GLOB.
+            "cat ^x/secret",
+            "cat (#i)SORTIE/secret",
             "grep -R motif .",
             "rg -L motif",
             "find -L .",
