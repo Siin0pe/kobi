@@ -166,6 +166,23 @@ pub fn resolu(chemin: &Path) -> Option<PathBuf> {
                 }
             }
             Ok(_) => actuel = candidat,
+            // Sous Windows, un nom à joker (`src\*`) est refusé par Win32
+            // (ERROR_INVALID_NAME) : il n'existe pas, ce n'est pas un lien ;
+            // lu comme un absent, et ce que le joker désigne est jugé un à un
+            // (KOB-438). Tout autre nom invalide (`<`, `|`, valides sous Git
+            // Bash, même à côté d'un joker ; chemin trop long sous Linux, qui cacherait un lien au-delà
+            // de PATH_MAX) reste refusé.
+            Err(e)
+                if cfg!(windows)
+                    && e.kind() == std::io::ErrorKind::InvalidFilename
+                    && morceau.to_string_lossy().contains(['*', '?'])
+                    && !morceau
+                        .to_string_lossy()
+                        .contains(['<', '>', '"', '|', ':']) =>
+            {
+                absents = 1;
+                actuel = candidat;
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 absents = 1;
                 actuel = candidat;
@@ -377,6 +394,30 @@ fn cle_de_chemin(chemin: &Path) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// KOB-438 : sous Windows, un nom à joker (`src\*`) que Win32 refuse est
+    /// lu comme un absent ; un `..` qui suit revient sur le disque. Tout autre
+    /// nom refusé par le système (trop long sous Linux, qui cacherait un lien
+    /// au-delà de PATH_MAX) reste hors des dossiers.
+    #[test]
+    fn nom_invalide() {
+        let code = tempfile::tempdir().unwrap();
+        let c = code.path();
+        std::fs::create_dir_all(c.join("src")).unwrap();
+        let x = Contexte::new(vec![c.to_path_buf()]);
+        let long = c.join("src").join("a".repeat(300));
+        assert_eq!(resolu(&long), None);
+        assert!(!x.contient(&long, None));
+        if cfg!(windows) {
+            let joker = c.join("src").join("*");
+            assert_eq!(resolu(&joker), Some(joker.clone()));
+            assert!(x.contient(&joker, None));
+            assert!(x.contient(&joker.join("..").join("..").join("src"), None));
+            assert!(!x.contient(&joker.join("..").join("..").join(".."), None));
+            // `a*<` : Git Bash ouvre un vrai nom (caractères privés MSYS).
+            assert_eq!(resolu(&c.join("src").join("a*<")), None);
+        }
+    }
 
     /// KOB-432 : un lien sous un dossier déclaré est suivi sans être ouvert :
     /// ce qui sort par un lien est hors des dossiers, pour la lecture,

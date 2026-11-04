@@ -92,6 +92,13 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
     let mut mots: Vec<String> = Vec::new();
     // La commande en cours reçoit-elle l'entrée d'un `|` ?
     let mut apres_pipe = false;
+    // Nom de la commande précédente, celle dont la sortie arrive par le `|`.
+    let mut amont = String::new();
+    // Dans le pipeline en cours (PowerShell) : un amont qui donne des objets
+    // aux propriétés libres (`Path`, `PSPath`…), et les listes de fichiers
+    // (`gci src`) avec leurs dossiers courants (KOB-438).
+    let mut source_libre = false;
+    let mut listes: Vec<(String, Vec<String>, Vec<PathBuf>)> = Vec::new();
     let mut i = 0;
     while i <= jetons.len() {
         let jeton = jetons.get(i);
@@ -126,6 +133,64 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
                             "parcours récursif sur des chemins venus d'un `|` : sur la carte",
                         ));
                     }
+                    // PowerShell : une cmdlet qui change en fichier une chaîne
+                    // reçue par le `|` (`echo C:\x | Get-Item | Get-Content`)
+                    // lit un chemin qu'on n'a pas jugé, sauf si l'amont ne
+                    // donne que des chemins déjà jugés (KOB-438).
+                    if shell == Shell::PowerShell
+                        && apres_pipe
+                        && CHEMIN_PAR_LE_PIPE.contains(&nom)
+                        && !AMONT_SUR.contains(&amont.as_str())
+                    {
+                        avis = avis.pire(Avis::ecriture(
+                            Genre::Commande,
+                            format!("`{nom}` prend ses chemins d'un `|` : sur la carte"),
+                        ));
+                    }
+                    // Une cmdlet qui lit un chemin prend aussi `Path`,
+                    // `LiteralPath` ou `PSPath` des objets reçus (ByPropertyName) :
+                    // venus de `ConvertFrom-Json`, ils sont quelconques ; venus de
+                    // `gci src`, ce sont ses fichiers, liens compris, qu'elle
+                    // suivrait (`gci src | gc`) : l'arbre est vérifié (KOB-438).
+                    if !apres_pipe {
+                        source_libre = false;
+                        listes.clear();
+                    }
+                    if shell == Shell::PowerShell && apres_pipe && LIT_PAR_LE_PIPE.contains(&nom) {
+                        if source_libre {
+                            avis = avis.pire(Avis::ecriture(
+                                Genre::Commande,
+                                format!("`{nom}` lit les chemins d'objets venus d'un `|` : sur la carte"),
+                            ));
+                        }
+                        // Un seul niveau suffit pour un `gci` sans `-Recurse`
+                        // lu par une cmdlet qui ne liste pas ; tout l'arbre si
+                        // une autre liste descend dedans (`gci src | gci | gc`).
+                        let enchaine = listes.len() > 1 || AMONT_SUR.contains(&nom);
+                        for (liste, args, dossiers) in &listes {
+                            let profond = enchaine || parcours_recursif(liste, args, shell);
+                            for c in dossiers {
+                                let verdict =
+                                    racines_du_parcours(liste, args, ctx, c).and_then(|r| {
+                                        if profond {
+                                            arbre_sans_lien_qui_sort(ctx, &r, c)
+                                        } else {
+                                            liste_sans_lien_qui_sort(ctx, args, &r, c)
+                                        }
+                                    });
+                                if let Err(a) = verdict {
+                                    avis = avis.pire(a);
+                                }
+                            }
+                        }
+                    }
+                    if shell == Shell::PowerShell {
+                        source_libre |= SOURCE_LIBRE.contains(&nom);
+                        if AMONT_SUR.contains(&nom) {
+                            listes.push((nom.to_owned(), mots[1..].to_vec(), cwds.clone()));
+                        }
+                    }
+                    amont = nom.to_owned();
                     let mut suivants = Vec::new();
                     for c in &cwds {
                         let mut nouveau = c.clone();
@@ -1253,15 +1318,64 @@ fn racines_du_parcours(
 /// À un lien qui sort, à une erreur de lecture (autre qu'« absent »), ou
 /// au-delà de [`ENTREES_MAX`] entrées : validé sur la carte.
 fn arbre_sans_lien_qui_sort(ctx: &Contexte, racines: &[PathBuf], cwd: &Path) -> Result<(), Avis> {
+    sans_lien_qui_sort(ctx, racines, cwd, None)
+}
+
+/// Comme [`arbre_sans_lien_qui_sort`], mais sur ce que liste un `gci` sans
+/// `-Recurse` : les enfants de ses racines, et un niveau sous chaque joker
+/// (`gci src/*` liste aussi le contenu des dossiers trouvés), lus ensuite
+/// par une cmdlet qui ne liste pas (`gci *.rs | sls motif`, KOB-438).
+fn liste_sans_lien_qui_sort(
+    ctx: &Contexte,
+    args: &[String],
+    racines: &[PathBuf],
+    cwd: &Path,
+) -> Result<(), Avis> {
+    let niveaux = args
+        .iter()
+        .map(|x| {
+            let v = match x.strip_prefix('-') {
+                Some(o) => o.split_once([':', '=']).map_or("", |(_, v)| v),
+                None => x,
+            };
+            let elements: Vec<String> = Path::new(v)
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect();
+            elements
+                .iter()
+                .position(|e| a_des_jokers(e))
+                .map_or(0, |i| elements.len() - i)
+        })
+        .max()
+        .unwrap_or(0);
+    sans_lien_qui_sort(ctx, racines, cwd, Some(niveaux + 1))
+}
+
+/// Parcours commun, limité à `niveaux` sous les racines s'il est donné.
+fn sans_lien_qui_sort(
+    ctx: &Contexte,
+    racines: &[PathBuf],
+    cwd: &Path,
+    niveaux: Option<usize>,
+) -> Result<(), Avis> {
     const ENTREES_MAX: usize = 10_000;
     let carte = |raison: String| Err(Avis::ecriture(Genre::Commande, raison));
-    let mut a_voir: Vec<PathBuf> = racines.to_vec();
-    let mut vus = std::collections::HashSet::new();
+    let mut a_voir: Vec<(PathBuf, usize)> = racines.iter().map(|r| (r.clone(), 0)).collect();
+    // Profondeur la plus faible où chaque dossier a été vu : revu plus haut,
+    // il est parcouru plus loin.
+    let mut vus = std::collections::HashMap::new();
     let mut entrees_vues = 0usize;
-    while let Some(dossier) = a_voir.pop() {
-        if !vus.insert(dossier.clone()) {
+    while let Some((dossier, profondeur)) = a_voir.pop() {
+        if vus.get(&dossier).is_some_and(|&p| p <= profondeur) {
             continue;
         }
+        vus.insert(dossier.clone(), profondeur);
+        // Une racine fichier (`gci Cargo.toml`) : jugée, rien dessous.
+        if profondeur == 0 && dossier.is_file() {
+            continue;
+        }
+        let descendre = niveaux.is_none_or(|n| profondeur + 1 < n);
         let entrees = match std::fs::read_dir(&dossier) {
             Ok(e) => e,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
@@ -1296,18 +1410,84 @@ fn arbre_sans_lien_qui_sort(ctx: &Contexte, racines: &[PathBuf], cwd: &Path) -> 
                         chemin.display()
                     ));
                 }
+                if !descendre {
+                    continue;
+                }
                 if let Some(cible) = crate::classement::resolu(&chemin) {
                     if cible.is_dir() {
-                        a_voir.push(cible);
+                        a_voir.push((cible, profondeur + 1));
                     }
                 }
-            } else if genre.is_dir() {
-                a_voir.push(chemin);
+            } else if genre.is_dir() && descendre {
+                a_voir.push((chemin, profondeur + 1));
             }
         }
     }
     Ok(())
 }
+
+/// Cmdlets dont `-Path` accepte une chaîne venue du `|` (ByValue) : elles
+/// changent du texte en fichiers, que la suite du pipeline lit (KOB-438).
+const CHEMIN_PAR_LE_PIPE: &[&str] = &[
+    "get-item",
+    "gi",
+    "get-childitem",
+    "gci",
+    "ls",
+    "dir",
+    "resolve-path",
+    "rvpa",
+    "test-path",
+    "convert-path",
+    "cvpa",
+    "get-itemproperty",
+    "gp",
+    "get-filehash",
+    "get-acl",
+];
+
+/// Amont dont la sortie n'est faite que des chemins de leurs arguments, déjà
+/// jugés, et de ce qu'ils contiennent, vérifié quand une cmdlet en aval le
+/// lit (KOB-438).
+const AMONT_SUR: &[&str] = &["get-childitem", "gci", "ls", "dir", "get-item", "gi"];
+
+/// Cmdlets qui lisent un chemin pris aux objets du `|` (`Path`,
+/// `LiteralPath`, `PSPath`, ByPropertyName), en plus de celles qui le
+/// prennent d'une chaîne (KOB-438).
+const LIT_PAR_LE_PIPE: &[&str] = &[
+    "get-item",
+    "gi",
+    "get-childitem",
+    "gci",
+    "ls",
+    "dir",
+    "resolve-path",
+    "rvpa",
+    "test-path",
+    "convert-path",
+    "cvpa",
+    "get-itemproperty",
+    "gp",
+    "get-filehash",
+    "get-acl",
+    "get-content",
+    "gc",
+    "cat",
+    "type",
+    "select-string",
+    "sls",
+];
+
+/// Cmdlets de lecture dont la sortie porte des chemins qu'on n'a pas jugés :
+/// propriétés quelconques (`ConvertFrom-Json`), exécutables trouvés dans le
+/// PATH (`Get-Command`), racines des lecteurs (KOB-438).
+const SOURCE_LIBRE: &[&str] = &[
+    "convertfrom-json",
+    "get-command",
+    "gcm",
+    "get-psdrive",
+    "gdr",
+];
 
 /// Options ou sous-commandes qui écrivent, par commande.
 fn options_interdites(nom: &str, args: &[String]) -> Option<Avis> {
@@ -2219,6 +2399,157 @@ mod tests {
         // Sous Bash, la virgule n'est qu'un caractère du nom.
         assert_eq!(
             analyser("cat a,b.txt", Shell::Bash, &x).classe,
+            Classe::Lecture
+        );
+    }
+
+    /// KOB-438 : sous PowerShell, une chaîne passée par le `|` à une cmdlet
+    /// qui en fait un fichier (sonde #396 : `echo <dehors> | gi | gc` lit le
+    /// fichier) n'est jamais une lecture sans carte ; un amont de chemins
+    /// déjà jugés, ou du texte cherché par Select-String, reste une lecture.
+    #[test]
+    fn chemins_par_le_pipe_powershell() {
+        let x = ctx();
+        for ligne in [
+            r"echo C:\Windows\win.ini | Get-Item | Get-Content",
+            "Write-Output C:/Users/moi/.ssh/id_rsa | gi | gc",
+            "echo C:/Windows | Resolve-Path",
+            "echo C:/Windows/win.ini | Test-Path",
+            r#"ConvertFrom-Json '{"Path":"C:/Windows/win.ini"}' | Get-Content"#,
+            r#"echo '{"PSPath":"C:/Windows/win.ini"}' | ConvertFrom-Json | Select-Object PSPath | gc"#,
+            "gcm notepad | gc",
+            r"echo \\hote\partage | gci",
+        ] {
+            assert_ne!(
+                analyser(ligne, Shell::PowerShell, &x).classe,
+                Classe::Lecture,
+                "{ligne}"
+            );
+        }
+        for ligne in [
+            "gci src | gc",
+            "Get-Item Cargo.toml | Get-Content",
+            "cat Cargo.toml | Select-String motif",
+            "gci src | Select-Object Name",
+        ] {
+            assert_eq!(
+                analyser(ligne, Shell::PowerShell, &x).classe,
+                Classe::Lecture,
+                "{ligne}"
+            );
+        }
+    }
+
+    /// Jonction Windows `lien` → `cible` ; la sortie de `mklink` en cas d'échec.
+    #[cfg(windows)]
+    fn jonction(lien: &Path, cible: &Path) {
+        let sortie = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(lien)
+            .arg(cible)
+            .output()
+            .unwrap();
+        assert!(
+            sortie.status.success(),
+            "mklink /J {} {} : {}{}",
+            lien.display(),
+            cible.display(),
+            String::from_utf8_lossy(&sortie.stdout),
+            String::from_utf8_lossy(&sortie.stderr)
+        );
+    }
+
+    /// KOB-438 : `gci src | gc` lit les fichiers que `gci` a listés (par
+    /// `PSPath`), liens compris : un lien qui sort, même au fond de l'arbre
+    /// (`gci src | gci | gc`), passe par la carte.
+    #[test]
+    fn liste_par_le_pipe_et_lien_qui_sort() {
+        let code = tempfile::tempdir().unwrap();
+        let dehors = tempfile::tempdir().unwrap();
+        let c = code.path();
+        std::fs::create_dir_all(c.join("src/sous")).unwrap();
+        std::fs::write(c.join("src/a.rs"), "").unwrap();
+        let mut x = Contexte::new(vec![c.to_path_buf()]);
+        x.cwd = Some(c.to_path_buf());
+        // Listes qui descendent dans l'arbre, et listes d'un seul niveau.
+        let profondes = [
+            "gci src | gci | Get-Content",
+            "Get-Item src | gci | Select-String motif",
+            "gci -Recurse src | gc",
+            // Joker au milieu : ses chemins sont jugés un à un (`src/sous/lien`).
+            "gci src/*/* | gc",
+            // Un joker descend d'un niveau : par excès, un dossier `x.rs`
+            // serait listé.
+            "gci src/*.rs | sls motif",
+            // Deux racines (KOB-437) : `src/sous` est vérifié aussi.
+            "gci src,src/sous | gc",
+        ];
+        let plates = ["gci src | gc", "gci src | Sort-Object Name | gc"];
+        for l in profondes.iter().chain(&plates) {
+            assert_eq!(
+                analyser(l, Shell::PowerShell, &x).classe,
+                Classe::Lecture,
+                "{l} sans lien qui sort"
+            );
+        }
+        // Un joker sur des dossiers qui existent reste une lecture (sous
+        // Windows, `src\*` n'est pas un nom valide : il est lu comme absent).
+        assert_eq!(
+            analyser("cat src/*.rs", Shell::Bash, &x).classe,
+            Classe::Lecture
+        );
+        assert_eq!(
+            analyser("Get-Content src/*.rs", Shell::PowerShell, &x).classe,
+            Classe::Lecture
+        );
+        // Composant par composant : `mklink` refuse un chemin à `/`.
+        let lien = c.join("src").join("sous").join("lien");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(dehors.path(), &lien).unwrap();
+        #[cfg(windows)]
+        jonction(&lien, dehors.path());
+        for l in profondes {
+            assert_ne!(
+                analyser(l, Shell::PowerShell, &x).classe,
+                Classe::Lecture,
+                "{l} par un lien qui sort"
+            );
+        }
+        // Un `gci` sans `-Recurse` lu par une cmdlet qui ne liste pas : un
+        // seul niveau, le lien au fond de `src/sous` n'est pas lu.
+        for l in plates {
+            assert_eq!(
+                analyser(l, Shell::PowerShell, &x).classe,
+                Classe::Lecture,
+                "{l} : lien hors de portée"
+            );
+        }
+        // `gci src/*` liste aussi le contenu des dossiers trouvés : le lien
+        // dans `src/sous` est lu (relecture sécurité de KOB-438).
+        assert_ne!(
+            analyser("gci src/* | gc", Shell::PowerShell, &x).classe,
+            Classe::Lecture
+        );
+        let lien_haut = c.join("src").join("haut");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(dehors.path(), &lien_haut).unwrap();
+        #[cfg(windows)]
+        jonction(&lien_haut, dehors.path());
+        for l in plates {
+            assert_ne!(
+                analyser(l, Shell::PowerShell, &x).classe,
+                Classe::Lecture,
+                "{l} par un lien qui sort, au premier niveau"
+            );
+        }
+        // Une racine fichier : rien dessous, même à côté d'un lien.
+        assert_eq!(
+            analyser("gci src/a.rs | gc", Shell::PowerShell, &x).classe,
+            Classe::Lecture
+        );
+        // Sans cmdlet qui lise en aval, la liste reste une lecture.
+        assert_eq!(
+            analyser("gci src | Select-Object Name", Shell::PowerShell, &x).classe,
             Classe::Lecture
         );
     }
