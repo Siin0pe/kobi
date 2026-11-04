@@ -201,6 +201,13 @@ fn commence_par_un_tiret(mot: &str) -> bool {
     mot.starts_with(['-', '\u{2013}', '\u{2014}', '\u{2015}'])
 }
 
+/// Paramètre dont le nom n'est pas fermé par `:` ou `=` (`-Recurse`, et non
+/// `--format=%h` ni `-Path:a.txt`) : des guillemets qui le suivent rendraient
+/// son sens ambigu (KOB-437).
+fn parametre_ouvert(mot: &str) -> bool {
+    commence_par_un_tiret(mot) && !mot.contains([':', '='])
+}
+
 /// Découpe la ligne en jetons. Refuse ce qui demanderait d'exécuter du code
 /// pour connaître la commande : substitutions, variables, blocs.
 fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
@@ -261,7 +268,10 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
                 // virgule ? Un mot à tiret hors guillemets qui touche une
                 // virgule sans en suivre une est ambigu : sur la carte plutôt
                 // que deviné (un vrai `-Recurse` y serait caché).
-                if dans_mot && !cite && !apres_virgule && commence_par_un_tiret(&mot) {
+                // Une valeur collée (`--format=%h,%s`, `-Path:a,b`) ferme le
+                // nom : le mot reste un paramètre, la suite est sa valeur.
+                let parametre = dans_mot && !cite && !apres_virgule && commence_par_un_tiret(&mot);
+                if parametre && (parametre_ouvert(&mot) || mot.ends_with([':', '='])) {
                     return Err(format!("`{mot},` : paramètre ou valeur ? À valider"));
                 }
                 fin_mot(
@@ -270,20 +280,22 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
                     &mut dans_mot,
                     &mut cite,
                     &mut apres_virgule,
-                    true,
+                    !parametre,
                 );
                 apres_virgule = true;
             }
             '\'' => {
                 // Un mot à tiret hors guillemets qui se poursuit entre
                 // guillemets (`-Recurse''`) : paramètre ou chaîne ? Ambigu.
-                if ps && dans_mot && !cite && !apres_virgule && commence_par_un_tiret(&mot) {
+                if ps && dans_mot && !cite && !apres_virgule && parametre_ouvert(&mot) {
                     return Err(format!(
                         "`{mot}` suivi de guillemets : paramètre ou valeur ? À valider"
                     ));
                 }
+                // Après une valeur collée (`--format='%h %s'`), le mot reste
+                // un paramètre.
+                cite |= !(dans_mot && commence_par_un_tiret(&mot));
                 dans_mot = true;
-                cite = true;
                 i += 1;
                 loop {
                     match c.get(i) {
@@ -302,13 +314,13 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
             '"' => {
                 // Un mot à tiret hors guillemets qui se poursuit entre
                 // guillemets (`-Recurse''`) : paramètre ou chaîne ? Ambigu.
-                if ps && dans_mot && !cite && !apres_virgule && commence_par_un_tiret(&mot) {
+                if ps && dans_mot && !cite && !apres_virgule && parametre_ouvert(&mot) {
                     return Err(format!(
                         "`{mot}` suivi de guillemets : paramètre ou valeur ? À valider"
                     ));
                 }
+                cite |= !(dans_mot && commence_par_un_tiret(&mot));
                 dans_mot = true;
-                cite = true;
                 i += 1;
                 loop {
                     match c.get(i) {
@@ -2092,6 +2104,8 @@ mod tests {
             "gci -Recurse,src",
             "gci -Recurse, src",
             "gci -Recurse'' src",
+            "gci -Recurse:,src",
+            "gc -Path:Cargo.toml,C:/Windows/win.ini",
             r"gci -Recurse src,'-Filter',C:\Windows",
             // Espaces autour de la virgule, virgule unaire, tableau mixte.
             r"gc Cargo.toml , C:\Windows\win.ini",
@@ -2114,6 +2128,9 @@ mod tests {
             "gci src | Select-Object Name,Length",
             // Un vrai paramètre reste un paramètre.
             "Get-Content -Encoding utf8 Cargo.toml",
+            // Une valeur collée ferme le nom du paramètre : pas d'ambiguïté.
+            "git log -5 --format='%h %s'",
+            "gc -Path:Cargo.toml,README.md",
         ] {
             assert_eq!(
                 analyser(ligne, Shell::PowerShell, &x).classe,
