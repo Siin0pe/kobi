@@ -2322,8 +2322,28 @@ impl<R: Runtime> Chef<R> {
             } else {
                 en_attente
             };
+            // Le tour de la carte ne tourne plus, ou n'est pas connu (carte
+            // de Kobi ouverte pendant une tâche, après une question arrêtée) :
+            // si une tâche tourne, c'est d'elle que Kobi s'occupe (KOB-433).
+            // Une question détachée par sa carte, elle, reprend.
+            let reprise_en_cours = repris.is_some_and(|t| {
+                !self.interrompus.contains(&t)
+                    && self
+                        .historique
+                        .iter()
+                        .any(|b| b.tour == t && matches!(b.statut, "attente" | "reponse" | "tache"))
+            });
             if accordee
-                && repris.is_some_and(|t| self.taches.contains_key(&t))
+                && (repris.is_some_and(|t| self.taches.contains_key(&t))
+                    || (!reprise_en_cours
+                        && !self.taches.is_empty()
+                        // La réponse du tour repris, ou de la dernière
+                        // question, attend d'être livrée : elle passe d'abord,
+                        // depuis la réflexion (KOB-387).
+                        && !self
+                            .a_livrer
+                            .iter()
+                            .any(|(t, ..)| Some(*t) == repris || *t == self.dernier)))
                 && !self
                     .historique
                     .iter()
@@ -6647,6 +6667,113 @@ mod tests {
         });
     }
 
+    /// KOB-433 : une carte de Kobi acceptée pendant qu'une tâche tourne,
+    /// sans question au premier plan, rend Kobi à « je m'en occupe », même
+    /// si sa question d'ouverture n'est pas la tâche (question arrêtée) ou
+    /// s'il n'y en avait pas. Séquences du test de propriété (graines 6 et 7).
+    #[test]
+    fn validation_acceptee_pendant_une_tache_rend_kobi_occupe() {
+        for avant_la_question in [false, true] {
+            let (app, _dir) = chef_en_essai();
+            avec_chef(&app, |c| {
+                if avant_la_question {
+                    c.validation_ouverte("v1".into(), "Écrire la note");
+                }
+                c.question("et la revue ?".into(), false);
+                let tache = c.tour;
+                c.recevoir(Message::Cerveau(Retour::Detache {
+                    tour: tache,
+                    annonce: true,
+                }));
+                if !avant_la_question {
+                    // Une autre question, arrêtée, puis la carte.
+                    c.question("résume le projet".into(), false);
+                    c.interrompre();
+                    c.validation_ouverte("v1".into(), "Écrire la note");
+                }
+                c.livrable_a = None;
+                c.tick();
+                c.recevoir(Message::ValidationFermee {
+                    id: "v1".into(),
+                    reponse: crate::validation::Reponse::Accepte,
+                });
+                for _ in 0..3 {
+                    if let Some((_, e)) = c.calme_a {
+                        c.calme_a = Some((Instant::now(), e));
+                    }
+                    c.tick();
+                }
+                assert_eq!(
+                    c.activite(),
+                    Some("occupe"),
+                    "carte ouverte avant la question : {avant_la_question}"
+                );
+            });
+        }
+    }
+
+    /// KOB-433 : une carte dont la question, détachée par elle sans annonce,
+    /// tourne encore, laisse Kobi réfléchir à cette question même si une
+    /// tâche tourne ; une carte MCP d'une question finie, acceptée pendant
+    /// une tâche, le rend à « je m'en occupe ».
+    #[test]
+    fn carte_acceptee_pendant_une_tache_selon_sa_question() {
+        for question_en_cours in [true, false] {
+            let (app, _dir) = chef_en_essai();
+            avec_chef(&app, |c| {
+                c.question("fais le compte rendu".into(), false);
+                let tache = c.tour;
+                c.recevoir(Message::Cerveau(Retour::Detache {
+                    tour: tache,
+                    annonce: true,
+                }));
+                c.question("crée le ticket".into(), false);
+                let tour = c.tour;
+                if !question_en_cours {
+                    c.recevoir(Message::Cerveau(Retour::Fin {
+                        tour,
+                        texte: "Fait.".into(),
+                    }));
+                }
+                c.recevoir(Message::Cerveau(Retour::Carte {
+                    tour,
+                    carte: 7,
+                    outil: "mcp__carnet__ecrire_note".into(),
+                    entree: serde_json::json!({ "title": "Ticket" }),
+                }));
+                if question_en_cours {
+                    c.recevoir(Message::Cerveau(Retour::Detache {
+                        tour,
+                        annonce: false,
+                    }));
+                }
+                if let Some((_, e)) = c.calme_a {
+                    c.calme_a = Some((Instant::now(), e));
+                }
+                c.tick();
+                assert_eq!(c.activite(), Some("propose"));
+                c.recevoir(Message::Decision {
+                    carte: 7,
+                    accepte: true,
+                });
+                c.recevoir(Message::Cerveau(Retour::CarteFermee {
+                    carte: 7,
+                    accepte: Some(true),
+                }));
+                let attendu = if question_en_cours {
+                    "reflechit"
+                } else {
+                    "occupe"
+                };
+                assert_eq!(
+                    c.activite(),
+                    Some(attendu),
+                    "question en cours : {question_en_cours}"
+                );
+            });
+        }
+    }
+
     /// KOB-331 : une action des notes acceptée juste avant « Terminer »
     /// (fermeture pas encore revenue) garde sa trace pour le compte rendu ;
     /// un titre sur plusieurs lignes reste sur une ligne.
@@ -8465,7 +8592,11 @@ mod tests {
                     .iter()
                     .filter(en_cours)
                     .any(|b| jeu.detaches.contains(&b.tour));
-            let sortie = c.calme_a.is_some() || jeu.oups_ecoute > 0;
+            // Un délai armé en fera sortir : retour au calme, Oups de
+            // l'écoute, ou résultat à livrer après sa transition.
+            let sortie = c.calme_a.is_some()
+                || jeu.oups_ecoute > 0
+                || (c.livrable_a.is_some() && !c.a_livrer.is_empty());
             let raison = match c.activite() {
                 Some("calme" | "note") | None => true,
                 // Chaque appel du jeu est suivi, dans le même événement, de
