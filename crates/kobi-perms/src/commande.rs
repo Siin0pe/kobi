@@ -526,7 +526,16 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
                 i += 1;
                 match c.get(i) {
                     // Une continuation disparaît et ne commence pas de mot : le
-                    // `#` qui la suit ouvre un commentaire (KOB-474).
+                    // `#` qui la suit ouvre un commentaire (KOB-474). Au milieu
+                    // d'un mot (`src`⏎--pre=./p`), PowerShell pourrait couper
+                    // là où on recolle : seulement entre deux mots (KOB-479).
+                    Some('\n')
+                        if dans_mot
+                            && !mot.is_empty()
+                            && !c.get(i + 1).is_none_or(|n| n.is_whitespace()) =>
+                    {
+                        return Err("continuation de ligne au milieu d'un mot".into())
+                    }
                     Some('\n') => {}
                     // PowerShell finit aussi une ligne sur `\r` : `-x` serait
                     // collé à la suite sans qu'on le voie (KOB-474).
@@ -3755,6 +3764,13 @@ mod tests {
                 a.raison
             );
         }
+        // Continuation au milieu d'un mot : carte (`--pre` y serait recollé).
+        assert_ne!(
+            analyser("rg x src`\n--pre=./p a", Shell::PowerShell, &x)
+                .classe
+                .cle(),
+            "lecture"
+        );
         // La continuation de fin de ligne ne change pas (KOB-474).
         assert_eq!(
             analyser("Get-ChildItem `\nsrc", Shell::PowerShell, &x)
@@ -3762,6 +3778,20 @@ mod tests {
                 .cle(),
             "lecture"
         );
+        // Après un mot, suivie d'un blanc : deux mots, comme pour pwsh.
+        for (avec, sans) in [
+            ("Get-ChildItem src`\n -Name", "Get-ChildItem src -Name"),
+            (
+                "Get-ChildItem src `\n -Recurse",
+                "Get-ChildItem src -Recurse",
+            ),
+        ] {
+            assert_eq!(
+                analyser(avec, Shell::PowerShell, &x).classe,
+                analyser(sans, Shell::PowerShell, &x).classe,
+                "{avec}"
+            );
+        }
         // Sous Bash, `\` reste l'échappement.
         assert_eq!(
             analyser("cat src/a\\ b.rs", Shell::Bash, &x).classe.cle(),
