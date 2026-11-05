@@ -425,6 +425,27 @@ mod tests {
         assert!(!lecture("ls *.md"));
     }
 
+    /// KOB-496 : avec `commande = sans_demander`, un mot à trois tirets ne
+    /// fait plus passer une suppression ni une lecture hors des dossiers.
+    #[test]
+    fn trois_tirets_ne_contournent_pas_le_hook() {
+        let d = [kobi()];
+        let libre = PermissionsConfig {
+            commande: Politique::SansDemander,
+            ..PermissionsConfig::default()
+        };
+        let demander = |_: &'static str, _: String, _: Value| Some("refuse".to_owned());
+        for l in [
+            "rm -rf -- ---x target",
+            "rm -rf target",
+            "cat -- ---x /etc/passwd",
+            "cat /etc/passwd",
+        ] {
+            let v = decider_avec(&appel("Bash", l, &kobi()), &d, &libre, &demander);
+            assert_eq!(decision(&v), "deny", "{l}");
+        }
+    }
+
     /// Écritures (KOB-156) : la carte est demandée, et la réponse décide.
     #[test]
     fn ecritures_validees_par_la_carte() {

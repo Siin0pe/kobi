@@ -1483,7 +1483,112 @@ fn option_de_motif(nom: &str, x: &str) -> Option<bool> {
 }
 
 /// Une commande simple : nom et arguments.
+/// Classe une commande, puis applique le plancher des trois tirets (KOB-476,
+/// KOB-496) : `rg ---pre=x` lit `---pre` comme `--pre`. Ce n'est qu'un
+/// plancher : une lecture devient une carte, mais une suppression, un refus
+/// ou une autre écriture, calculés avant, gardent leur priorité.
 fn commande(
+    mots: &[String],
+    cites: &[bool],
+    shell: Shell,
+    ctx: &Contexte,
+    cwd: &mut PathBuf,
+) -> Avis {
+    let avis = commande_sans_plancher(mots, cites, shell, ctx, cwd);
+    if avis.classe != Classe::Lecture {
+        return avis;
+    }
+    let (nom, args) = nom_et_arguments(mots, cites, shell);
+    match trois_tirets(&nom, &args, shell) {
+        Some(x) => Avis::ecriture(
+            Genre::Commande,
+            format!(
+                "`{x}` : certains programmes lisent trois tirets comme une option à deux tirets"
+            ),
+        ),
+        None => avis,
+    }
+}
+
+/// Nom de la commande (minuscules, sans `.exe`) et ses arguments tels qu'il
+/// les reçoit (un exécutable natif sous PowerShell perd le `./` de `decouper`).
+fn nom_et_arguments(mots: &[String], cites: &[bool], shell: Shell) -> (String, Vec<String>) {
+    let premier = &mots[0];
+    let nom = premier.to_lowercase();
+    let exe = nom.ends_with(".exe");
+    let nom = nom.strip_suffix(".exe").unwrap_or(&nom).to_owned();
+    // Sous PowerShell, un exécutable reçoit `'--x'` tel quel : une option,
+    // pas une valeur. Le `./` que `decouper` met devant (pour les cmdlets,
+    // KOB-437) est retiré, sinon les contrôles d'options ne le voyaient plus
+    // (`rg '--pre=calc.exe'`, KOB-447).
+    // Seul le `./` mis par `decouper` est retiré : un `./-e` écrit tel quel
+    // est un fichier pour l'exécutable aussi. `cd` et ses alias sont des
+    // cmdlets.
+    let natif = shell == Shell::PowerShell
+        && (exe
+            || !(LECTURE_PS.contains(&nom.as_str())
+                || ALIAS_PS.contains(&nom.as_str())
+                || CD.contains(&nom.as_str())));
+    let args = if natif {
+        mots[1..]
+            .iter()
+            .zip(cites.iter().skip(1).chain(std::iter::repeat(&false)))
+            .map(|(x, &cite)| {
+                if cite {
+                    arg_d_executable(x).to_owned()
+                } else {
+                    x.clone()
+                }
+            })
+            .collect()
+    } else {
+        mots[1..].to_vec()
+    };
+    (nom, args)
+}
+
+/// Premier mot de trois tirets ou plus qui peut être lu comme une option
+/// (KOB-476). Sauf `echo` et `printf`, qui l'affichent. Pour les programmes à
+/// getopt seulement : ni après `--` (sous Bash ; PowerShell retire le premier
+/// `--` devant un exécutable), ni, pour grep et sed, en valeur de `-e` /
+/// `--regexp` (`grep -- '---' f`, KOB-496). Aucune exception pour rg, qui
+/// lit `---pre` comme `--pre` : son `-e` ou son `--` peuvent être la valeur
+/// d'une autre option (`rg -g -e ---pre=./p`, relecture de KOB-496).
+fn trois_tirets<'a>(nom: &str, args: &'a [String], shell: Shell) -> Option<&'a String> {
+    if matches!(nom, "echo" | "printf") {
+        return None;
+    }
+    let motif = matches!(nom, "grep" | "egrep" | "fgrep" | "sed");
+    // Programmes à getopt, qui rejettent `---` : pour eux seuls, `--` clôt les
+    // options. rg et fd (clap 2) lisent `---x` comme `--x`, et leur `--` peut
+    // être la valeur d'une autre option (relecture de KOB-496).
+    let getopt = motif
+        || matches!(
+            nom,
+            "head" | "tail" | "cat" | "wc" | "ls" | "diff" | "sort" | "uniq" | "cut" | "tr" | "nl"
+        );
+    let mut i = 0;
+    while let Some(x) = args.get(i) {
+        if getopt && x == "--" && shell == Shell::Bash {
+            return None;
+        }
+        if motif && (x == "-e" || x == "--regexp") {
+            i += 2;
+            continue;
+        }
+        if motif && x.starts_with("--regexp=") {
+            i += 1;
+            continue;
+        }
+        if x.starts_with("---") {
+            return Some(x);
+        }
+        i += 1;
+    }
+    None
+}
+
+fn commande_sans_plancher(
     mots: &[String],
     cites: &[bool],
     shell: Shell,
@@ -1503,51 +1608,8 @@ fn commande(
             format!("commande appelée par un chemin (`{premier}`)"),
         );
     }
-    let nom = premier.to_lowercase();
-    let exe = nom.ends_with(".exe");
-    let nom = nom.strip_suffix(".exe").unwrap_or(&nom).to_owned();
-    // Sous PowerShell, un exécutable reçoit `'--x'` tel quel : une option,
-    // pas une valeur. Le `./` que `decouper` met devant (pour les cmdlets,
-    // KOB-437) est retiré, sinon les contrôles d'options ne le voyaient plus
-    // (`rg '--pre=calc.exe'`, KOB-447).
-    // Seul le `./` mis par `decouper` est retiré : un `./-e` écrit tel quel
-    // est un fichier pour l'exécutable aussi. `cd` et ses alias sont des
-    // cmdlets.
-    let natif = shell == Shell::PowerShell
-        && (exe
-            || !(LECTURE_PS.contains(&nom.as_str())
-                || ALIAS_PS.contains(&nom.as_str())
-                || CD.contains(&nom.as_str())));
-    let recus: Vec<String>;
-    let args: &[String] = if natif {
-        recus = mots[1..]
-            .iter()
-            .zip(cites.iter().skip(1).chain(std::iter::repeat(&false)))
-            .map(|(x, &cite)| {
-                if cite {
-                    arg_d_executable(x).to_owned()
-                } else {
-                    x.clone()
-                }
-            })
-            .collect();
-        &recus
-    } else {
-        &mots[1..]
-    };
-    // ripgrep lit `---pre=x` comme `--pre=x` et lance le programme : les filtres
-    // d'options, écrits pour `--`, ne le voient pas (KOB-476). On ne connaît pas
-    // le parseur de chaque commande : trois tirets ou plus, sur la carte. Sauf
-    // `echo` et `printf`, qui les affichent (`echo "---"` sert de séparateur).
-    let affiche = matches!(nom.as_str(), "echo" | "printf");
-    if let Some(x) = args.iter().find(|x| !affiche && x.starts_with("---")) {
-        return Avis::ecriture(
-            Genre::Commande,
-            format!(
-                "`{x}` : certains programmes lisent trois tirets comme une option à deux tirets"
-            ),
-        );
-    }
+    let (nom, recus) = nom_et_arguments(mots, cites, shell);
+    let args: &[String] = &recus;
     if CD.contains(&nom.as_str()) {
         // PowerShell : un paramètre qui prend une valeur (`-ea 0`,
         // `-StackName .`) ferait prendre cette valeur pour le dossier visé ;
@@ -3946,6 +4008,57 @@ mod tests {
             &v_mots("-R . *.rs"),
             Shell::Bash
         ));
+    }
+
+    /// KOB-496 : les trois tirets ne sont qu'un plancher. Une suppression ou
+    /// un refus, calculés avant, gardent leur priorité ; après `--` et en
+    /// valeur de `-e`, `---` est un opérande ou un motif.
+    #[test]
+    fn trois_tirets_plancher() {
+        let x = ctx();
+        let classe = |l: &str| analyser(l, Shell::Bash, &x).classe;
+        assert_eq!(
+            classe("rm -rf -- ---x target"),
+            Classe::Ecriture(Genre::Suppression)
+        );
+        assert_eq!(
+            classe("find src -delete -name ---x"),
+            Classe::Ecriture(Genre::Suppression)
+        );
+        assert_eq!(classe("cat -- ---x /etc/passwd").cle(), "refus");
+        assert_eq!(classe("cat ---x /etc/passwd").cle(), "refus");
+        // Le plancher reste : une lecture devient une carte. Pour rg, aucune
+        // exception : `-e` ou `--` peuvent être la valeur d'une autre option
+        // (relecture, prouvé avec le vrai rg 13).
+        for l in [
+            "rg ---pre=./p src",
+            "rg x ----pre=./p src",
+            "cat ---x",
+            "rg -g -e ---pre=./p x src",
+            "rg -r -e ---pre=./p x src",
+            "rg --iglob -e ---pre=./p x src",
+            "rg -g --regexp ---pre=./p x src",
+            "rg -g -- ---pre=./p x src",
+            "rg -- ---pre=./p x src",
+            "fd -e -- ---exec=./p",
+            "fd -E -- ---exec ./p",
+        ] {
+            assert_eq!(classe(l), Classe::Ecriture(Genre::Commande), "{l}");
+        }
+        // PowerShell retire le premier `--` devant un exécutable.
+        assert_ne!(
+            analyser("grep -- ---x src/a.rs", Shell::PowerShell, &x).classe,
+            Classe::Lecture
+        );
+        // Motif ou opérande : lecture.
+        for l in [
+            "grep -n -- '---' src/a.rs",
+            "grep -e '---' src/a.rs",
+            "head -- ---.md",
+            "echo ---",
+        ] {
+            assert_eq!(classe(l), Classe::Lecture, "{l}");
+        }
     }
 
     /// KOB-482 : sous Bash, un `$` juste avant le guillemet fermant est
