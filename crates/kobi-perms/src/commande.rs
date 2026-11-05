@@ -110,16 +110,32 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
     // Un tiret Unicode : `decouper` le lit `-`, mais un programme natif le
     // reçoit tel quel (`grep x –e ../dehors` lisait le fichier extérieur,
     // sonde #457). Plancher, comme le joker : un refus reste un refus (KOB-498).
-    if let Ok((_, _, Some(mot))) = &decoupe {
+    if let Ok(Decoupage {
+        tiret_unicode: Some(mot),
+        ..
+    }) = &decoupe
+    {
         return avis.pire(Avis::ecriture(
             Genre::Indetermine,
             format!("`{mot}` : un programme reçoit ce tiret Unicode tel quel, pas `-`"),
         ));
     }
+    if let Ok(Decoupage {
+        joker_zsh: Some(motif),
+        ..
+    }) = &decoupe
+    {
+        return avis.pire(Avis::ecriture(
+            Genre::Indetermine,
+            format!("`{motif}` : zsh l'étend en noms de fichiers numériques, en nombre inconnu"),
+        ));
+    }
     let joker = match decoupe {
-        Ok((_, Some(mot), _)) => Some(mot),
-        Ok((jetons, None, _)) if shell == Shell::PowerShell && !cfg!(windows) => {
-            joker_pour_un_natif_pwsh(&jetons)
+        Ok(Decoupage {
+            joker: Some(mot), ..
+        }) => Some(mot),
+        Ok(d) if shell == Shell::PowerShell && !cfg!(windows) => {
+            joker_pour_un_natif_pwsh(&d.jetons)
         }
         _ => None,
     };
@@ -142,10 +158,18 @@ fn analyser_sans_joker(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
             cwd.display()
         ));
     }
-    let jetons = match decouper(ligne, shell) {
-        Ok(j) => j,
+    let Decoupage {
+        jetons, a_joker, ..
+    } = match decouper_en_notant(ligne, shell) {
+        Ok(d) => d,
         // Ce qu'on ne sait pas découper peut cacher une suppression (KOB-493).
         Err(raison) => return Avis::ecriture(Genre::Indetermine, raison),
+    };
+    // `pwsh` hors Windows étend aussi les jokers pour un exécutable natif, et
+    // les guillemets ne se voient plus dans les jetons : tout joker compte.
+    let a_un_joker = |i: usize, m: &str| {
+        a_joker.contains(&i)
+            || (shell == Shell::PowerShell && !cfg!(windows) && m.contains(['*', '?', '[']))
     };
     let mut avis = Avis::lecture();
     // Dossiers courants possibles (KOB-227) : un `cd` qui peut échouer
@@ -157,6 +181,8 @@ fn analyser_sans_joker(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
     let mut cites: Vec<bool> = Vec::new();
     // La commande en cours a-t-elle une redirection, même sans mot ?
     let mut redirection_vue = false;
+    // Mots qui portent un joker que le shell étend (KOB-491).
+    let mut jokers: Vec<bool> = Vec::new();
     // La commande en cours reçoit-elle l'entrée d'un `|` ?
     let mut apres_pipe = false;
     // Nom de la commande précédente, celle dont la sortie arrive par le `|`.
@@ -276,7 +302,8 @@ fn analyser_sans_joker(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
                     let mut suivants = Vec::new();
                     for c in &cwds {
                         let mut nouveau = c.clone();
-                        avis = avis.pire(commande(&mots, &cites, shell, ctx, &mut nouveau));
+                        avis =
+                            avis.pire(commande(&mots, &cites, &jokers, shell, ctx, &mut nouveau));
                         // Seul `&&` garantit que le `cd` a réussi ; `|` le lance
                         // dans un sous-shell.
                         if op != "&&" && !suivants.contains(c) {
@@ -295,6 +322,7 @@ fn analyser_sans_joker(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
                     cwds = suivants;
                     mots.clear();
                     cites.clear();
+                    jokers.clear();
                     apres_pipe = op == "|";
                 } else if matches!(op, "|" | "&&" | "||") && !redirection_vue {
                     // `| ls`, `ls && && x` : rien avant l'opérateur. Une
@@ -344,11 +372,13 @@ fn analyser_sans_joker(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
             Some(Jeton::Mot(m)) => {
                 mots.push(m.clone());
                 cites.push(false);
+                jokers.push(a_un_joker(i, m));
                 i += 1;
             }
             Some(Jeton::Cite(m)) => {
                 mots.push(m.clone());
                 cites.push(true);
+                jokers.push(a_un_joker(i, m));
                 i += 1;
             }
         }
@@ -393,24 +423,36 @@ fn suite_collee(c: &[char], i: usize) -> bool {
     c.get(i + 1).is_some_and(|x| !" \t\n\r,;|&<>)".contains(*x))
 }
 
-/// Découpe la ligne en jetons. Refuse ce qui demanderait d'exécuter du code
-/// pour connaître la commande : substitutions, variables, blocs.
+/// Les jetons seuls de `decouper_en_notant`.
+#[cfg(test)]
 fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
-    decouper_en_notant(ligne, shell).map(|(jetons, _, _)| jetons)
+    decouper_en_notant(ligne, shell).map(|d| d.jetons)
 }
 
-/// `decouper`, plus le premier mot Bash dont un joker non cité peut donner une
-/// option (`joker_peut_donner_une_option`). Seul ce découpage voit les guillemets.
-/// Découpage noté : les jetons, le premier joker qui peut donner une option
-/// (KOB-489), le premier mot PowerShell à tiret Unicode (KOB-498).
-type Decoupage = (Vec<Jeton>, Option<String>, Option<String>);
+/// Les jetons de `decouper_en_notant`, plus ce que seul ce découpage voit :
+/// les guillemets.
+struct Decoupage {
+    jetons: Vec<Jeton>,
+    /// Premier mot Bash dont un joker non cité peut donner une option
+    /// (`joker_peut_donner_une_option`, KOB-489).
+    joker: Option<String>,
+    /// Premier mot PowerShell non cité qui commence par un tiret Unicode (KOB-498).
+    tiret_unicode: Option<String>,
+    /// Rangs dans `jetons` des mots Bash qui portent un joker non cité : bash
+    /// les remplace par un nombre inconnu de noms (KOB-491).
+    a_joker: Vec<usize>,
+    /// Premier joker numérique de zsh (`<->`, `<1-9>`), découpé en
+    /// redirections comme le fait bash (KOB-491).
+    joker_zsh: Option<String>,
+}
 
-/// Note aussi le premier mot PowerShell non cité qui commence par un tiret
-/// Unicode (KOB-498).
+/// Découpe la ligne en jetons. Refuse ce qui demanderait d'exécuter du code
+/// pour connaître la commande : substitutions, variables, blocs.
 fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
     let ps = shell == Shell::PowerShell;
     let echap = if ps { '`' } else { '\\' };
     let mut joker = None;
+    let mut joker_zsh = None;
     let mut jetons = Vec::new();
     let mut mot = String::new();
     let mut dans_mot = false;
@@ -434,6 +476,9 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
     // Premier mot non cité qui commence par un tiret Unicode, noté pour le
     // plancher d'`analyser` (KOB-498).
     let tiret_unicode = std::cell::Cell::new(None::<String>);
+    // Le mot en cours porte-t-il un joker non cité (KOB-491) ?
+    let joker_dans_mot = std::cell::Cell::new(false);
+    let a_joker = std::cell::RefCell::new(Vec::new());
     let fin_mot = |jetons: &mut Vec<Jeton>,
                    mot: &mut String,
                    dans_mot: &mut bool,
@@ -471,6 +516,9 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
             // par un tiret est une valeur pour PowerShell, pas un paramètre :
             // `./` le garde chemin relatif, jugé comme tel, sans qu'il prenne
             // pour valeur l'élément suivant (`gc a,'-Encoding',..\x`).
+            if joker_dans_mot.take() {
+                a_joker.borrow_mut().push(jetons.len());
+            }
             if ps && litteral && m.starts_with('-') {
                 m.insert_str(0, "./");
                 jetons.push(Jeton::Cite(m));
@@ -775,6 +823,12 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
                 if !ps && dans_mot && mot.len() > 2 && mot.starts_with('{') && mot.ends_with('}') {
                     return Err(format!("descripteur nommé `{mot}{ch}` non analysable"));
                 }
+                // zsh étend `<x-y>` en noms de fichiers numériques (`uniq <->`
+                // écrit dans le second) ; bash y voit des redirections. Les
+                // jetons gardent la lecture de bash, et la ligne est notée.
+                if !ps && ch == '<' && joker_zsh.is_none() {
+                    joker_zsh = joker_numerique_zsh(&c[i..]).map(|n| c[i..i + n].iter().collect());
+                }
                 // `2>`, `1>>`, `*>` : le numéro collé fait partie de la redirection.
                 let mut r = String::new();
                 // PowerShell ne redirige que les flux 1 à 6 : `7>` y est un mot
@@ -854,9 +908,13 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
             x if ps && x.is_whitespace() => {
                 return Err(format!("blanc inhabituel U+{:04X} : à valider", x as u32))
             }
-            // Bash étend ce joker non cité : noté, puis jugé par `analyser` (KOB-489).
-            x if !ps && matches!(x, '*' | '?' | '[') && joker_peut_donner_une_option(&mot) => {
-                joker.get_or_insert_with(|| format!("{mot}{x}"));
+            // Bash étend ce joker non cité : noté, puis jugé par `analyser`
+            // (KOB-489) et par `commande` (KOB-491).
+            x if !ps && matches!(x, '*' | '?' | '[') => {
+                if joker_peut_donner_une_option(&mot) {
+                    joker.get_or_insert_with(|| format!("{mot}{x}"));
+                }
+                joker_dans_mot.set(true);
                 dans_mot = true;
                 mot.push(x);
             }
@@ -896,7 +954,13 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
     {
         return Err("arrêt de l'analyse PowerShell `--%` non analysable".into());
     }
-    Ok((jetons, joker, tiret_unicode.take()))
+    Ok(Decoupage {
+        jetons,
+        joker,
+        tiret_unicode: tiret_unicode.take(),
+        a_joker: a_joker.take(),
+        joker_zsh,
+    })
 }
 
 /// `pwsh` hors Windows étend les jokers pour un exécutable natif, comme bash. `ls`,
@@ -970,6 +1034,21 @@ fn accolades_developpees(suite: &[char]) -> bool {
         i += 1;
     }
     false
+}
+
+/// Longueur du joker numérique de zsh `<x-y>` (bornes facultatives) en tête
+/// de `suite`, s'il y est.
+fn joker_numerique_zsh(suite: &[char]) -> Option<usize> {
+    let chiffres = |j: usize| j + suite[j..].iter().take_while(|d| d.is_ascii_digit()).count();
+    if suite.first() != Some(&'<') {
+        return None;
+    }
+    let j = chiffres(1);
+    if suite.get(j) != Some(&'-') {
+        return None;
+    }
+    let j = chiffres(j + 1);
+    (suite.get(j) == Some(&'>')).then_some(j + 1)
 }
 
 /// Un joker qui suit `debut`, le début du mot, peut-il donner une option ? Oui
@@ -1630,6 +1709,7 @@ fn option_de_motif(nom: &str, x: &str) -> Option<bool> {
 fn commande(
     mots: &[String],
     cites: &[bool],
+    jokers: &[bool],
     shell: Shell,
     ctx: &Contexte,
     cwd: &mut PathBuf,
@@ -1639,15 +1719,50 @@ fn commande(
         return avis;
     }
     let (nom, args) = nom_et_arguments(mots, cites, shell);
-    match trois_tirets(&nom, &args, shell) {
-        Some(x) => Avis::ecriture(
+    if let Some(x) = trois_tirets(&nom, &args, shell) {
+        return Avis::ecriture(
             Genre::Indetermine,
             format!(
                 "`{x}` : certains programmes lisent trois tirets comme une option à deux tirets"
             ),
+        );
+    }
+    match joker_qui_compte(mots, jokers) {
+        Some((nom, x)) => Avis::ecriture(
+            Genre::Indetermine,
+            format!("`{nom} {x}` : le joker donne un nombre inconnu de fichiers, et `{nom}` écrit dans le second"),
         ),
         None => avis,
     }
+}
+
+/// Programmes dont le nombre d'opérandes décide d'une écriture : `uniq a b`
+/// et `xxd a b` écrivent dans `b`.
+const ECRIT_SELON_LES_OPERANDES: &[&str] = &["uniq", "xxd"];
+
+/// Un joker que le shell étend donne un nombre inconnu d'opérandes : `uniq
+/// src/*` écrit dans `src/b` (KOB-491), et le compte fait sur le mot écrit
+/// (KOB-461) n'en voit qu'un. Seul le nom de la commande compte : les
+/// enveloppes (`env`, `nice`, `xargs`…) sont déjà sur la carte, et `grep uniq
+/// src/*` reste une lecture. Sans lire le disque : la même ligne peut créer
+/// les fichiers.
+fn joker_qui_compte<'a>(mots: &'a [String], jokers: &[bool]) -> Option<(&'a str, &'a String)> {
+    let premier = mots.first()?;
+    let base = premier
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(premier)
+        .to_lowercase();
+    let base = base.strip_suffix(".exe").unwrap_or(&base);
+    let nom = ECRIT_SELON_LES_OPERANDES
+        .iter()
+        .copied()
+        .find(|n| *n == base)?;
+    mots.iter()
+        .zip(jokers)
+        .skip(1)
+        .find(|(_, &j)| j)
+        .map(|(m, _)| (nom, m))
 }
 
 /// Nom de la commande (minuscules, sans `.exe`) et ses arguments tels qu'il
@@ -6388,6 +6503,57 @@ mod tests {
         assert_eq!(bash(r#"grep "a\.b" Cargo.toml"#).classe, Classe::Lecture);
         assert_eq!(bash(r#"rg "fn main\(" src"#).classe, Classe::Lecture);
         assert_eq!(bash(r#"echo "a\nb""#).classe, Classe::Lecture);
+    }
+
+    /// KOB-491 : un joker non cité cache le nombre d'opérandes de `uniq` et
+    /// de `xxd`, qui écrivent dans le second (vu avec le vrai bash dans
+    /// `tests/joker_operandes.rs`).
+    #[test]
+    fn joker_qui_compte_les_operandes_sur_la_carte() {
+        for ligne in [
+            "uniq src/*",
+            "uniq f*",
+            "uniq ./*",
+            "uniq -c src/*.txt",
+            "uniq a b*",
+            "uniq \\-c src/*",
+            "xxd f*",
+            "xxd -r src/?",
+            "/usr/bin/uniq src/*",
+            "env uniq src/*",
+            "nice -n 5 uniq src/[ab]",
+            "cat x; uniq src/*",
+            "\\uniq src/*",
+            "UNIQ src/*",
+            // zsh : joker numérique, découpé en redirections comme bash.
+            "uniq <->>/dev/null",
+            "uniq <->&2",
+            "uniq src/<1-9>>/dev/null",
+            "xxd <10->",
+        ] {
+            assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+    }
+
+    /// Le joker est cité, échappé, ou dans une autre commande.
+    #[test]
+    fn joker_qui_ne_compte_pas_en_lecture() {
+        for ligne in [
+            "uniq a",
+            "uniq 'src/*'",
+            "uniq \"src/*\"",
+            "uniq src/\\*",
+            "xxd 'f*'",
+            "cat src/* | uniq",
+            "ls src/*; uniq a",
+            "uniq -c a | grep x*",
+            "grep -n uniq src/*.rs",
+            "rg xxd src/*.rs",
+            "uniq '<->'",
+            "sort <a >/dev/null",
+        ] {
+            assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+        }
     }
 
     /// KOB-480 : sous PowerShell, `$null` non cité après une redirection de
