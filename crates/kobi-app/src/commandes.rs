@@ -221,7 +221,13 @@ pub fn decider_avec(
     let resume = resume(&action, &ctx);
     // La raison de kobi-perms part avec l'appel : la carte dit pourquoi Kobi
     // demande (« modifie un alias », « git peut lancer… », KOB-483).
-    let appel = json!({ "tool": outil, "input": entree, "reason": raison });
+    // Pour un fichier, le titre de la carte dit déjà tout : pas de raison.
+    let motif = if OUTILS_COMMANDE.contains(&outil) {
+        raison.as_str()
+    } else {
+        ""
+    };
+    let appel = json!({ "tool": outil, "input": entree, "reason": motif });
     match demander(genre, resume, appel).as_deref() {
         Some("accepte") => reponse(true, "validé par l'utilisateur sur la carte de Kobi"),
         Some("delai") => reponse(
@@ -359,6 +365,18 @@ mod tests {
             let raison = appel["reason"].as_str().unwrap_or_default();
             assert!(raison.contains(attendu), "{l} : {raison:?}");
         }
+        // Une écriture de fichier : le titre suffit, pas de raison.
+        let vu: RefCell<Option<Value>> = RefCell::default();
+        let demander = |_: &'static str, _: String, appel: Value| {
+            *vu.borrow_mut() = Some(appel);
+            Some("refuse".to_owned())
+        };
+        let write = json!({"hook_event_name": "PreToolUse", "tool_name": "Write",
+            "tool_input": {"file_path": kobi().join("notes.md").display().to_string(), "content": "x"},
+            "cwd": kobi().display().to_string()})
+        .to_string();
+        decider_avec(&write, &d, &defaut, &demander);
+        assert_eq!(vu.borrow().as_ref().expect("carte demandée")["reason"], "");
     }
 
     #[test]

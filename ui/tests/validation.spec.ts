@@ -336,6 +336,10 @@ test('la carte dit pourquoi Kobi demande (raison du classement), sous la command
   });
   await expect(page.locator('.kval-cible')).toHaveText('$ git status');
   await expect(page.locator('.kval-raison')).toHaveText(/git peut lancer des programmes configurés dans ce dépôt/);
+  // Coupée à l'écran, jamais cachée : le texte entier au survol, et déplié au clic.
+  await expect(page.locator('.kval-raison')).toHaveAttribute('title', /git peut lancer des programmes/);
+  await page.locator('.kval-raison').click();
+  await expect(page.locator('.kval-raison')).toHaveClass(/deplie/);
   await page.keyboard.press('Escape');
   // Sans raison : pas de ligne vide.
   await carte(page, COMMANDE);

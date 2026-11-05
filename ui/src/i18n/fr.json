@@ -1206,6 +1206,7 @@
   "ctl.commandes.validationAsk.tool": "Outil appelé (Write, Edit, Bash…).",
   "ctl.commandes.validationAsk.input": "Entrée de l'outil, telle que l'agent l'a envoyée.",
   "ctl.commandes.validationAsk.summary": "Résumé en une phrase, à la place de celui de Kobi.",
+  "ctl.commandes.validationAsk.reason": "Pourquoi Kobi demande (raison du classement), montré sur la carte.",
   "ctl.commandes.effetLecture": "[lecture]",
   "ctl.commandes.effetAffichage": "[affichage]",
   "ctl.commandes.effetEcriture": "[écriture]",
