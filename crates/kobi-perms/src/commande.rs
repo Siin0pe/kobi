@@ -1424,6 +1424,23 @@ fn commande(
         );
     }
     let avis = chemins(&nom, args, shell, ctx, cwd);
+    // Garde-fou en attendant KOB-469 (KOB-473) : une lecture git peut lancer
+    // un programme configuré dans le dépôt (`core.fsmonitor` sur status et
+    // diff, même d'un sous-dépôt caché dans l'index ; `diff.external` et
+    // textconv sur diff, show, log -p, blame, grep ; `gpg.program` sur log
+    // --show-signature et verify-commit ; les filtres…). Ce qui reste une
+    // lecture après le jugement des chemins passe donc par la carte, sans
+    // examen de la config ni de l'index. Seul `git version` ne lit pas le
+    // dépôt (`git -C version status` : `version` y est un dossier).
+    if nom == "git" && avis.classe == Classe::Lecture {
+        let mots: Vec<&String> = args.iter().filter(|x| !x.starts_with('-')).collect();
+        if !mots.is_empty() && mots != ["version"] {
+            return Avis::ecriture(
+                Genre::Commande,
+                "git peut lancer des programmes configurés dans ce dépôt (fsmonitor, diff externe, textconv, gpg) : vérifié sur la carte",
+            );
+        }
+    }
     // Sous Windows, les parcours récursifs entrent dans les jonctions et les
     // liens de dossier, même ceux qui sortent (sonde #392, KOB-434) : le
     // départ est jugé, puis tout l'arbre, sans rien suivre.
@@ -2813,11 +2830,7 @@ mod tests {
             // Apostrophe typographique dans une chaîne double : un caractère.
             "git log --grep \"l\u{2019}appli\"",
         ] {
-            assert_eq!(
-                analyser(ligne, Shell::PowerShell, &x).classe,
-                Classe::Lecture,
-                "{ligne}"
-            );
+            assert!(lu(&analyser(ligne, Shell::PowerShell, &x)), "{ligne}");
         }
         // Bash colle les morceaux : un seul mot, comme le voit Kobi.
         assert_eq!(
@@ -2876,11 +2889,7 @@ mod tests {
             "git log -5 --format='%h %s'",
             "gc -Path:Cargo.toml,README.md",
         ] {
-            assert_eq!(
-                analyser(ligne, Shell::PowerShell, &x).classe,
-                Classe::Lecture,
-                "{ligne}"
-            );
+            assert!(lu(&analyser(ligne, Shell::PowerShell, &x)), "{ligne}");
         }
         // Sous Bash, la virgule n'est qu'un caractère du nom.
         assert_eq!(
@@ -3197,11 +3206,7 @@ mod tests {
             "git log '--format=%h %s'",
             r#"git log "--pretty=format:%h %s""#,
         ] {
-            assert_eq!(
-                analyser(l, Shell::PowerShell, &x).classe.cle(),
-                "lecture",
-                "{l}"
-            );
+            assert!(lu(&analyser(l, Shell::PowerShell, &x)), "{l}");
         }
     }
 
@@ -3351,11 +3356,7 @@ mod tests {
             "echo '@env:X'",
             "echo @",
         ] {
-            assert_eq!(
-                analyser(l, Shell::PowerShell, &x).classe.cle(),
-                "lecture",
-                "{l}"
-            );
+            assert!(lu(&analyser(l, Shell::PowerShell, &x)), "{l}");
         }
         // Sous Bash, `@x` n'est qu'un mot.
         assert_eq!(analyser("echo @x", Shell::Bash, &x).classe.cle(), "lecture");
@@ -3530,6 +3531,57 @@ mod tests {
             &v_mots("-R . *.rs"),
             Shell::Bash
         ));
+    }
+
+    /// KOB-473 : garde-fou en attendant KOB-469. Une lecture git peut lancer
+    /// un programme configuré dans le dépôt (core.fsmonitor sur status et
+    /// diff, diff.external d'un dépôt nu intégré sur diff et show, gpg sur
+    /// log --show-signature…) : toujours sur la carte.
+    #[test]
+    fn lectures_git_sur_la_carte() {
+        let x = ctx();
+        for l in [
+            "git status",
+            "git diff",
+            "git show",
+            "git log",
+            "git log -p",
+            "git diff HEAD~1 HEAD",
+            "cd src && git diff HEAD~1 HEAD",
+            "git -C src status",
+            "git --no-pager log",
+            "git ls-files",
+            "git grep motif",
+            "git blame a.rs",
+            "git verify-commit HEAD",
+            "git config --get user.name",
+            "git branch --list",
+            "git -C version status",
+            // `git status --help` devient `git help status`, qui lance le
+            // `man.<outil>.cmd` de la config du dépôt (relecture de KOB-473).
+            "git status --help",
+            "git log --help",
+        ] {
+            let a = analyser(l, Shell::Bash, &x);
+            assert_ne!(a.classe.cle(), "lecture", "{l}");
+            assert_ne!(
+                analyser(l, Shell::PowerShell, &x).classe.cle(),
+                "lecture",
+                "{l} (PowerShell)"
+            );
+        }
+        let raison = analyser("git status", Shell::Bash, &x).raison;
+        assert!(raison.contains("programmes configurés"), "{raison}");
+        // Sans dépôt lu : comme avant.
+        assert_eq!(
+            analyser("git version", Shell::Bash, &x).classe.cle(),
+            "lecture"
+        );
+        // Les suppressions gardent leur genre.
+        assert_eq!(
+            analyser("git branch -d x", Shell::Bash, &x).classe,
+            Classe::Ecriture(Genre::Suppression)
+        );
     }
 
     /// KOB-455 : sous PowerShell, `where` sans `.exe` est l'alias
@@ -3925,7 +3977,7 @@ mod tests {
             ("rg -tpy motif", Shell::Bash),
             ("git -C sub log", Shell::Bash),
         ] {
-            assert_eq!(analyser(l, sh, &x).classe, Classe::Lecture, "{l}");
+            assert!(lu(&analyser(l, sh, &x)), "{l}");
         }
     }
 
@@ -3983,7 +4035,7 @@ mod tests {
             "git log --format=%h x",
             "git branch --contains abc",
         ] {
-            assert_eq!(analyser(l, Shell::Bash, &x).classe, Classe::Lecture, "{l}");
+            assert!(lu(&analyser(l, Shell::Bash, &x)), "{l}");
         }
     }
 
@@ -4160,10 +4212,16 @@ mod tests {
         analyser(ligne, Shell::PowerShell, &ctx())
     }
 
+    /// Lecture, ou lecture git que le garde-fou de KOB-473 met sur la carte
+    /// (la ligne a passé tous les autres contrôles).
+    fn lu(avis: &Avis) -> bool {
+        avis.est_lecture() || avis.raison.starts_with("git peut lancer des programmes")
+    }
+
     #[track_caller]
     fn lecture(avis: Avis, ligne: &str) {
         assert!(
-            avis.est_lecture(),
+            lu(&avis),
             "« {ligne} » devrait être une lecture : {}",
             avis.raison
         );
@@ -4736,9 +4794,14 @@ mod tests {
             juger(ligne, Interprete::PowerShell, &[racine()], None)
         }
 
+        /// Une lecture git passe par la carte (garde-fou de KOB-473).
         #[track_caller]
         fn lecture(v: Verdict, ligne: &str) {
-            assert_eq!(v, Verdict::Lecture, "{ligne}");
+            if ligne.starts_with("git ") {
+                assert!(matches!(v, Verdict::Ecriture { .. }), "{ligne} : {v:?}");
+            } else {
+                assert_eq!(v, Verdict::Lecture, "{ligne}");
+            }
         }
 
         /// Écrit (ou supprime : la suppression est une écriture plus grave).

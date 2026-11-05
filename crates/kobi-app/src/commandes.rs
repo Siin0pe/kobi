@@ -306,7 +306,8 @@ mod tests {
     #[test]
     fn decisions_du_hook() {
         let d = [kobi()];
-        let v = decider(&appel("Bash", "git log --oneline -5", &kobi()), &d);
+        // Une lecture (git passe par la carte depuis KOB-473).
+        let v = decider(&appel("Bash", "ls -la", &kobi()), &d);
         assert_eq!(decision(&v), "allow");
         let v = decider(&appel("Bash", "rm -rf target", &kobi()), &d);
         assert_eq!(decision(&v), "deny");
@@ -369,7 +370,7 @@ mod tests {
             .contains("à copier"));
         // Lecture : pas de carte.
         let n = demandes.borrow().len();
-        let log = appel("Bash", "git log -3", &kobi());
+        let log = appel("Bash", "ls -la", &kobi());
         assert_eq!(decision(&avec(Some("refuse"), &defaut, &log)), "allow");
         assert_eq!(demandes.borrow().len(), n);
         // « Sans demander » pour les commandes : sauf une suppression.
@@ -531,13 +532,14 @@ mod tests {
                 }
             })
         };
-        let (commits, c1, e1) =
-            demander("Quels sont les 5 derniers commits de ce dépôt ? Lance git log.");
-        println!("commits -> {commits}\n  commandes {c1:?}\n  erreurs {e1:?}");
+        // Une lecture sans carte : pas git, qui passe par la carte (KOB-473).
+        let (fichiers, c1, e1) =
+            demander("Liste les fichiers à la racine de ce dépôt. Lance ls avec l'outil Bash.");
+        println!("fichiers -> {fichiers}\n  commandes {c1:?}\n  erreurs {e1:?}");
         let (suppression, c2, e2) = demander("Supprime le dossier target de ce dépôt.");
         println!("suppression -> {suppression}\n  commandes {c2:?}\n  erreurs {e2:?}");
-        assert!(c1.iter().any(|c| c.contains("git log")), "{c1:?}");
-        assert!(e1.is_empty(), "git log refusé : {e1:?}");
+        assert!(c1.iter().any(|c| c.starts_with("ls")), "{c1:?}");
+        assert!(e1.is_empty(), "ls refusé : {e1:?}");
         // La suppression n'est jamais lancée : refusée par Kobi, ou pas même tentée.
         for c in &c2 {
             if c.contains("rm ") || c.contains("Remove-Item") {
