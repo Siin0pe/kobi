@@ -1727,13 +1727,94 @@ fn commande(
             ),
         );
     }
-    match joker_qui_compte(mots, jokers) {
-        Some((nom, x)) => Avis::ecriture(
+    if let Some((nom, x)) = joker_qui_compte(mots, jokers) {
+        return Avis::ecriture(
             Genre::Indetermine,
             format!("`{nom} {x}` : le joker donne un nombre inconnu de fichiers, et `{nom}` écrit dans le second"),
+        );
+    }
+    match joker_dans_le_filtre(mots, &args, jokers) {
+        Some(x) => Avis::ecriture(
+            Genre::Indetermine,
+            format!(
+                "`jq {x}` : selon les noms de fichiers, le joker peut devenir le filtre de `jq`"
+            ),
         ),
         None => avis,
     }
+}
+
+/// Nom de la commande dans `mots[0]` : sans chemin, en minuscules, sans `.exe`.
+fn nom_de_base(premier: &str) -> String {
+    let base = premier
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(premier)
+        .to_lowercase();
+    base.strip_suffix(".exe").map(str::to_owned).unwrap_or(base)
+}
+
+/// Options de `jq` sans valeur : courtes (groupables), puis longues écrites
+/// en entier. Seules celles-là peuvent précéder le filtre sans en cacher la place.
+const JQ_COURTES_SANS_VALEUR: &str = "nrjascCMSRe";
+const JQ_LONGUES_SANS_VALEUR: &[&str] = &[
+    "--null-input",
+    "--raw-input",
+    "--raw-output",
+    "--join-output",
+    "--ascii-output",
+    "--slurp",
+    "--compact-output",
+    "--color-output",
+    "--monochrome-output",
+    "--sort-keys",
+    "--exit-status",
+    "--tab",
+    "--seq",
+    "--stream",
+];
+
+/// Le premier positionnel de `jq` est son filtre, du code : un joker qui le
+/// précède ou le forme le remplace par un nom de fichier (`jq -n e*` avec un
+/// fichier `env` affiche l'environnement, KOB-492). Un joker après un filtre
+/// écrit en clair ne nomme que des fichiers lus (`jq . src/*.json`). Devant
+/// une option qui n'est pas connue sans valeur (`--arg`, `-f`, `--`…), la
+/// place du filtre n'est pas sûre : tout joker passe par la carte. `sed` n'en
+/// a pas besoin : son script n'est permis qu'en affichage, jugé tel qu'il est
+/// écrit, et un joker l'en fait sortir.
+///
+/// `args` sont les arguments tels que jq les reçoit (`nom_et_arguments`) :
+/// sous pwsh, `'-n'` lui arrive comme `-n`, pas comme le `./-n` de `decouper`
+/// (relecture de KOB-492). `jokers` suit `mots`, nom compris.
+fn joker_dans_le_filtre<'a>(
+    mots: &[String],
+    args: &'a [String],
+    jokers: &[bool],
+) -> Option<&'a String> {
+    if nom_de_base(mots.first()?) != "jq" {
+        return None;
+    }
+    let jokers = jokers.get(1..).unwrap_or_default();
+    let premier_joker = args.iter().zip(jokers).find(|(_, &j)| j).map(|(m, _)| m)?;
+    for (m, &joker) in args.iter().zip(jokers) {
+        if joker {
+            return Some(m);
+        }
+        let connue = JQ_LONGUES_SANS_VALEUR.contains(&m.as_str())
+            || (m.len() > 1
+                && m.starts_with('-')
+                && !m.starts_with("--")
+                && m[1..].chars().all(|c| JQ_COURTES_SANS_VALEUR.contains(c)));
+        if connue {
+            continue;
+        }
+        if m.starts_with('-') {
+            return Some(premier_joker);
+        }
+        // Le filtre, écrit en clair : les jokers qui suivent nomment des fichiers.
+        return None;
+    }
+    None
 }
 
 /// Programmes dont le nombre d'opérandes décide d'une écriture : `uniq a b`
@@ -1747,13 +1828,7 @@ const ECRIT_SELON_LES_OPERANDES: &[&str] = &["uniq", "xxd"];
 /// src/*` reste une lecture. Sans lire le disque : la même ligne peut créer
 /// les fichiers.
 fn joker_qui_compte<'a>(mots: &'a [String], jokers: &[bool]) -> Option<(&'a str, &'a String)> {
-    let premier = mots.first()?;
-    let base = premier
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(premier)
-        .to_lowercase();
-    let base = base.strip_suffix(".exe").unwrap_or(&base);
+    let base = nom_de_base(mots.first()?);
     let nom = ECRIT_SELON_LES_OPERANDES
         .iter()
         .copied()
@@ -6551,6 +6626,70 @@ mod tests {
             "rg xxd src/*.rs",
             "uniq '<->'",
             "sort <a >/dev/null",
+        ] {
+            assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+    }
+
+    /// KOB-492 : un joker qui forme ou précède le filtre de `jq` peut le
+    /// remplacer par un nom de fichier (vu avec le vrai bash dans
+    /// `tests/joker_operandes.rs`). `sed` y est déjà : son script n'est permis
+    /// qu'en affichage, jugé tel qu'il est écrit.
+    #[test]
+    fn joker_dans_le_filtre_jq_sur_la_carte() {
+        for ligne in [
+            "jq -n e*",
+            "jq e* f.json",
+            "jq -rn e?v",
+            "jq --null-input [e]nv",
+            "jq --arg a * . f.json",
+            "jq --arg a b e*",
+            "jq -- e*",
+            "jq -f p f*.json",
+            "sed e* f",
+            "sed -n e* f",
+            "sed -e p f*",
+            "sed --expression=p f*",
+            "sed -- e* f",
+            "/usr/bin/jq -n e*",
+            "JQ -n e*",
+            "sed x* f",
+        ] {
+            assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+    }
+
+    /// Sous pwsh hors Windows, jq reçoit `'-n'` comme `-n`, et pwsh étend `e*`
+    /// pour un exécutable natif : `jq '-n' e*` est `jq -n env` (relecture de
+    /// KOB-492). Sous Windows, pwsh n'étend rien pour un natif.
+    #[cfg(unix)]
+    #[test]
+    fn joker_dans_le_filtre_jq_sous_pwsh() {
+        for ligne in [
+            "jq '-n' e*",
+            "jq \"--null-input\" e*",
+            "jq '-r' e* f.json",
+            "jq -n e*",
+        ] {
+            assert_ne!(ps(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+    }
+
+    /// Le code est écrit en clair, et les jokers qui suivent nomment des
+    /// fichiers lus ; ou le joker est cité.
+    #[test]
+    fn joker_apres_le_filtre_en_lecture() {
+        for ligne in [
+            "sed -n 1p src/*.rs",
+            "sed -n '1,20p' src/*.rs",
+            "sed -E -n 1,5p src/*.rs",
+            "sed -nE 1p src/*.rs",
+            "jq . src/*.json",
+            "jq -r .x src/*.json",
+            "jq -c --slurp . a*.json",
+            "jq 'e*' f.json",
+            "grep jq src/*.rs",
+            "rg sed src/*.rs",
         ] {
             assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne}");
         }

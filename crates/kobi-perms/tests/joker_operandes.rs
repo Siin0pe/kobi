@@ -71,3 +71,47 @@ fn zsh_uniq_avec_le_joker_numerique_ecrase_le_second_fichier() {
     );
     assert_ne!(classe(ligne, d.path()), Classe::Lecture);
 }
+
+/// KOB-492 : avec un seul fichier `env`, bash fait de `jq -n e*` un `jq -n env`,
+/// qui affiche l'environnement (ici une variable factice).
+#[cfg(unix)]
+#[test]
+fn bash_jq_avec_un_joker_affiche_l_environnement() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("env"), "").unwrap();
+    let ligne = "jq -n e*";
+    let Ok(sortie) = Command::new("bash")
+        .args(["-c", ligne])
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin")
+        .env("KOBI_FAUX", "valeur-factice")
+        .current_dir(d.path())
+        .output()
+    else {
+        panic!("bash absent");
+    };
+    // `jq` peut manquer sur la machine : le classement reste vérifié.
+    if sortie.status.code() != Some(127) {
+        let texte = String::from_utf8_lossy(&sortie.stdout);
+        assert!(texte.contains("valeur-factice"), "{sortie:?}");
+    }
+    assert_ne!(classe(ligne, d.path()), Classe::Lecture);
+}
+
+/// KOB-492 : avec un fichier `e`, bash fait de `sed e* f` un `sed e f`, et la
+/// commande `e` de sed exécute chaque ligne de `f`.
+#[cfg(target_os = "linux")]
+#[test]
+fn bash_sed_avec_un_joker_execute_les_lignes() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("e"), "").unwrap();
+    std::fs::write(d.path().join("f"), "touch execute\n").unwrap();
+    let ligne = "sed e* f";
+    let sortie = Command::new("bash")
+        .args(["-c", ligne])
+        .current_dir(d.path())
+        .output()
+        .unwrap();
+    assert!(d.path().join("execute").exists(), "{sortie:?}");
+    assert_ne!(classe(ligne, d.path()), Classe::Lecture);
+}

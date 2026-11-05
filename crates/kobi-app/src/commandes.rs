@@ -448,6 +448,8 @@ mod tests {
             // KOB-491 : un joker cache le nombre d'opérandes de `uniq`.
             "uniq src/*",
             "uniq <->>/dev/null",
+            // KOB-492 : un joker peut devenir le filtre de `jq`.
+            "jq -n e*",
         ] {
             let v = decider_avec(&appel("Bash", l, &kobi()), &d, &libre, &demander);
             assert_eq!(decision(&v), "deny", "{l}");
