@@ -1450,6 +1450,19 @@ fn commande(
     } else {
         &mots[1..]
     };
+    // ripgrep lit `---pre=x` comme `--pre=x` et lance le programme : les filtres
+    // d'options, écrits pour `--`, ne le voient pas (KOB-476). On ne connaît pas
+    // le parseur de chaque commande : trois tirets ou plus, sur la carte. Sauf
+    // `echo` et `printf`, qui les affichent (`echo "---"` sert de séparateur).
+    let affiche = matches!(nom.as_str(), "echo" | "printf");
+    if let Some(x) = args.iter().find(|x| !affiche && x.starts_with("---")) {
+        return Avis::ecriture(
+            Genre::Commande,
+            format!(
+                "`{x}` : certains programmes lisent trois tirets comme une option à deux tirets"
+            ),
+        );
+    }
     if CD.contains(&nom.as_str()) {
         // PowerShell : un paramètre qui prend une valeur (`-ea 0`,
         // `-StackName .`) ferait prendre cette valeur pour le dossier visé ;
@@ -5369,6 +5382,81 @@ mod tests {
         ] {
             assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne}");
         }
+    }
+
+    /// KOB-476 : le parseur de ripgrep accepte trois tirets ou plus : `rg
+    /// ---pre=./p` lance le programme, et le filtre ne voyait que `--pre`.
+    #[test]
+    fn trois_tirets_rg_pre_colle() {
+        assert_ne!(bash("rg ---pre=./p a f").classe, Classe::Lecture);
+        assert_ne!(ps("rg ---pre=./p a f").classe, Classe::Lecture);
+    }
+
+    #[test]
+    fn trois_tirets_rg_pre_separe() {
+        assert_ne!(bash("rg ---pre ./p a f").classe, Classe::Lecture);
+        assert_ne!(ps("rg ---pre ./p a f").classe, Classe::Lecture);
+    }
+
+    #[test]
+    fn quatre_tirets_et_plus() {
+        for ligne in ["rg ----pre=./p a f", "rg -------pre=./p a f"] {
+            assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+            assert_ne!(ps(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+    }
+
+    #[test]
+    fn trois_tirets_cites() {
+        for ligne in ["rg '---pre=./p' a f", "rg \"---pre=./p\" a f"] {
+            assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+            assert_ne!(ps(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+        assert_ne!(bash("rg \\---pre=./p a f").classe, Classe::Lecture);
+    }
+
+    /// Quelle que soit la commande : on ne connaît pas le parseur de chacune.
+    #[test]
+    fn trois_tirets_autres_commandes() {
+        for ligne in [
+            "sort ---output=m f",
+            "grep ---file=x a f",
+            "cat ---x",
+            "ls ---",
+        ] {
+            assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+            assert_ne!(ps(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+    }
+
+    /// `echo` et `printf` affichent du texte : `echo "---"` sert de séparateur.
+    #[test]
+    fn trois_tirets_affichage_en_lecture() {
+        for ligne in [
+            "echo ---",
+            "echo \"---\"",
+            "echo \"--- fin ---\"",
+            "echo a ---",
+            "ls; echo ---; pwd",
+        ] {
+            assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+        assert_eq!(bash("printf '%s\\n' ---").classe, Classe::Lecture);
+    }
+
+    /// Un ou deux tirets ne changent pas.
+    #[test]
+    fn deux_tirets_temoins_en_lecture() {
+        for ligne in [
+            "rg -n a",
+            "rg --files",
+            "grep -n a Cargo.toml",
+            "grep -- a Cargo.toml",
+            "ls -la",
+        ] {
+            assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+        assert_ne!(bash("rg --pre=./p a f").classe, Classe::Lecture);
     }
 
     /// KOB-480 : sous PowerShell, `$null` non cité après une redirection de
