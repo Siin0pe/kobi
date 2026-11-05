@@ -2385,6 +2385,11 @@ fn jq_lit_hors(args: &[String]) -> bool {
 /// `git` : options globales et sous-commandes en lecture.
 fn git(args: &[String]) -> Option<Avis> {
     let ecrit = |raison: String| Some(Avis::ecriture(Genre::Commande, raison));
+    // `git --version`, seul, n'exécute rien du dépôt, comme `git version`
+    // (essayé sur un dépôt avec fsmonitor, pager, alias et hook, KOB-481).
+    if matches!(args, [seul] if seul == "--version") {
+        return None;
+    }
     let mut i = 0;
     // Options globales avant la sous-commande.
     while let Some(x) = args.get(i) {
@@ -5424,6 +5429,34 @@ mod tests {
     fn dollar_null_bash_sur_la_carte() {
         for ligne in ["ls 2>$null", "ls > $null", "ls >> $null"] {
             assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+    }
+
+    /// KOB-481 : `git --version`, seul, ne lit pas le dépôt, comme `git version`.
+    #[test]
+    fn git_version_en_option_seule_en_lecture() {
+        for ligne in ["git --version", "git version"] {
+            assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+            assert_eq!(ps(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+    }
+
+    /// Rien d'autre ne l'accompagne : ces formes restent sur la carte.
+    #[test]
+    fn git_version_en_option_accompagnee_sur_la_carte() {
+        for ligne in [
+            "git --version status",
+            "git --version --build-options",
+            "git --version -c core.pager=x",
+            "git -C src --version",
+            "git --no-pager --version",
+            "git --vers",
+            "git --versionx",
+            "git -c core.pager=x --version",
+            "git --version x",
+        ] {
+            assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+            assert_ne!(ps(ligne).classe, Classe::Lecture, "{ligne}");
         }
     }
 
