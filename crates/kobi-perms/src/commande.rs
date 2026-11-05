@@ -1405,7 +1405,7 @@ fn commande(
             },
         );
     }
-    if let Some(a) = options_interdites(&nom, args) {
+    if let Some(a) = options_interdites(&nom, args, shell) {
         return a;
     }
     // `where` est le programme `where.exe` sauf sous PowerShell, où seul le
@@ -1795,7 +1795,7 @@ const SOURCE_LIBRE: &[&str] = &[
 ];
 
 /// Options ou sous-commandes qui écrivent, par commande.
-fn options_interdites(nom: &str, args: &[String]) -> Option<Avis> {
+fn options_interdites(nom: &str, args: &[String], shell: Shell) -> Option<Avis> {
     let a = |s: &str| args.iter().any(|x| x == s);
     let commence = |p: &str| args.iter().any(|x| x.starts_with(p));
     let ecrit = |raison: String| Some(Avis::ecriture(Genre::Commande, raison));
@@ -1806,6 +1806,12 @@ fn options_interdites(nom: &str, args: &[String]) -> Option<Avis> {
             .any(|x| x.starts_with('-') && !x.starts_with("--") && x[1..].contains(c))
     };
     let longue = |o: &str| args.iter().any(|x| abrege(x, o));
+    // PowerShell accepte un paramètre abrégé (`-Follow`, `-Fol`) : pwsh hors
+    // de Windows suit alors les liens (KOB-456). `ls` et `dir` y sont
+    // `Get-ChildItem`.
+    let suit_ps = shell == Shell::PowerShell
+        && matches!(nom, "gci" | "get-childitem" | "ls" | "dir")
+        && args.iter().any(|x| abrege_ps(x, "-followsymlink"));
     let suit_les_liens = match nom {
         // `-S` : le grep BSD de macOS suit tous les liens (KOB-454).
         "grep" | "egrep" | "fgrep" => court('R') || court('S') || longue("--dereference-recursive"),
@@ -1819,6 +1825,7 @@ fn options_interdites(nom: &str, args: &[String]) -> Option<Avis> {
             .iter()
             .any(|x| x.eq_ignore_ascii_case("-followsymlink")),
     };
+    let suit_les_liens = suit_les_liens || suit_ps;
     if suit_les_liens {
         return ecrit(format!("`{nom}` suit les liens en parcourant les dossiers"));
     }
@@ -3608,6 +3615,42 @@ mod tests {
         // where.exe, lui, garde son contrôle.
         assert_eq!(cle("where.exe /r", Shell::PowerShell), "refus");
         assert_eq!(cle("where /r", Shell::Bash), "refus");
+    }
+
+    /// KOB-456 : `-FollowSymlink` abrégé (`-Follow`, `-Fol`) suit aussi les
+    /// liens (pwsh hors de Windows) : sur la carte, comme la forme entière.
+    #[test]
+    fn followsymlink_abrege() {
+        let x = ctx();
+        for l in [
+            "Get-ChildItem -Recurse -Follow",
+            "gci -Recurse -Fol",
+            "gci -r -FollowSymlink",
+            "ls -Recurse -FollowSymlink",
+            "dir -Recurse -follows",
+            "gci -Recurse -Follow:true",
+        ] {
+            assert_ne!(
+                analyser(l, Shell::PowerShell, &x).classe.cle(),
+                "lecture",
+                "{l}"
+            );
+        }
+        // Sans lien suivi, ou sous Bash (`sort -f`), rien ne change.
+        assert_eq!(
+            analyser("gci -Recurse -Filter *.rs", Shell::PowerShell, &x)
+                .classe
+                .cle(),
+            "lecture"
+        );
+        assert_eq!(
+            analyser("gci -Force", Shell::PowerShell, &x).classe.cle(),
+            "lecture"
+        );
+        assert_eq!(
+            analyser("sort -f a.txt", Shell::Bash, &x).classe.cle(),
+            "lecture"
+        );
     }
 
     /// KOB-449 : sous Git Bash, `//R` est le `/R` de where.exe (MSYS le
