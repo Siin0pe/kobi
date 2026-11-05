@@ -3574,7 +3574,7 @@ fn juger_chemin(ctx: &Contexte, x: &str, cwd: &Path) -> Option<Avis> {
     // désigne un chemin : pas une révision git (`HEAD~1`, `HEAD^`). Un `#`
     // collé à un nom reste un nom (KOB-298) ; un `~` en tête est le dossier
     // personnel, refusé plus haut.
-    let zsh = (x.contains('/') && (x.contains('^') || x[1..].contains('~')))
+    let zsh = (x.contains('/') && (x.contains('^') || x.chars().skip(1).any(|c| c == '~')))
         || x.starts_with('^')
         || x.starts_with("(#");
     let etendu = ["@(", "+(", "!(", "*(", "?("].iter().any(|o| x.contains(o)) || zsh;
