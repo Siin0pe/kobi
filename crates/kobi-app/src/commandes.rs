@@ -445,6 +445,9 @@ mod tests {
             "cat /etc/passwd",
             "rg ---pre=./p x",
             "rg a *",
+            // KOB-491 : un joker cache le nombre d'opérandes de `uniq`.
+            "uniq src/*",
+            "uniq <->>/dev/null",
         ] {
             let v = decider_avec(&appel("Bash", l, &kobi()), &d, &libre, &demander);
             assert_eq!(decision(&v), "deny", "{l}");
