@@ -1364,11 +1364,22 @@ fn options_a_valeur(nom: &str) -> &'static [&'static str] {
 fn option_de_motif(nom: &str, x: &str) -> Option<bool> {
     let bas = x.to_lowercase();
     match bas.as_str() {
+        // Le `-e` de jq est le code de sortie, pas un motif (KOB-487).
+        "-e" if nom == "jq" => {}
         "-e" | "--regexp" | "-pattern" | "-simplematch" => return Some(true),
         "-f" | "--file" if matches!(nom, "grep" | "egrep" | "fgrep" | "rg" | "sed" | "jq") => {
             return Some(false)
         }
+        // `--from-file` est le `-f` de jq (KOB-487). Ni l'un ni l'autre ne
+        // prend de valeur : le programme est le premier positionnel. Répondre
+        // ici fait juger tous les positionnels comme des chemins.
+        "--from-file" if nom == "jq" => return Some(false),
         _ => {}
+    }
+    // jq groupe ses options courtes (`-nf`, `-fn`, `-nfr`) : un `f` n'importe
+    // où dans le groupe vaut `-f`.
+    if nom == "jq" && x.len() > 2 && x.starts_with('-') && !x.starts_with("--") && x.contains('f') {
+        return Some(false);
     }
     // Options courtes groupées (`-rne motif`, `-rf motifs.txt`).
     if matches!(nom, "grep" | "egrep" | "fgrep" | "rg")
@@ -5010,6 +5021,34 @@ mod tests {
             "jq --arg x y . f.json",
         ] {
             assert_eq!(analyser(l, Shell::Bash, &x).classe, Classe::Lecture, "{l}");
+        }
+    }
+
+    /// KOB-487 : `--from-file` est le `-f` de jq : son fichier est jugé comme
+    /// un chemin, et un chemin hors des dossiers est un refus, pas une carte.
+    #[test]
+    fn jq_from_file_juge_comme_f() {
+        let x = ctx();
+        for l in [
+            "jq -f ../../secret.json",
+            "jq --from-file ../../secret.json",
+            "jq --from-file=../../secret.json",
+            "jq -nf ../../secret.json",
+            "jq -rf ../../secret.json f.json",
+        ] {
+            assert_eq!(analyser(l, Shell::Bash, &x).classe.cle(), "refus", "{l}");
+        }
+        // `f` ailleurs dans le groupe (relecture) : jq le lit comme `-nf`.
+        for l in ["jq -fn ../../secret.json", "jq -nfr ../../secret.json"] {
+            assert_eq!(analyser(l, Shell::Bash, &x).classe.cle(), "refus", "{l}");
+        }
+        // `-e` de jq est le code de sortie : le mot suivant n'est pas un motif
+        // sauté, il est jugé (`jq -e ../../s -f` lit `../../s`).
+        for l in [
+            "jq -e ../../secret.json -f",
+            "jq -e ../../secret.json --from-file",
+        ] {
+            assert_eq!(analyser(l, Shell::Bash, &x).classe.cle(), "refus", "{l}");
         }
     }
 
