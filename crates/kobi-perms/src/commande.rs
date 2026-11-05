@@ -57,9 +57,10 @@ impl Avis {
         let rang = |a: &Avis| match a.classe {
             Classe::Lecture => 0,
             Classe::Ecriture(Genre::Fichier) => 1,
-            Classe::Ecriture(Genre::Suppression) => 3,
+            Classe::Ecriture(Genre::Suppression) => 4,
+            Classe::Ecriture(Genre::Indetermine) => 3,
             Classe::Ecriture(_) => 2,
-            Classe::Refus(_) => 4,
+            Classe::Refus(_) => 5,
         };
         // Deux écritures : la classe la plus grave, et les deux raisons, la
         // plus grave en tête, pour que la carte ne montre pas seulement la
@@ -97,7 +98,7 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
     // et `fichier = sans_demander` ne couvre pas ça (KOB-490).
     if !matches!(
         avis.classe,
-        Classe::Lecture | Classe::Ecriture(Genre::Fichier)
+        Classe::Lecture | Classe::Ecriture(Genre::Fichier | Genre::Commande)
     ) {
         return avis;
     }
@@ -110,10 +111,10 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
     // reçoit tel quel (`grep x –e ../dehors` lisait le fichier extérieur,
     // sonde #457). Plancher, comme le joker : un refus reste un refus (KOB-498).
     if let Ok((_, _, Some(mot))) = &decoupe {
-        return Avis::ecriture(
-            Genre::Commande,
+        return avis.pire(Avis::ecriture(
+            Genre::Indetermine,
             format!("`{mot}` : un programme reçoit ce tiret Unicode tel quel, pas `-`"),
-        );
+        ));
     }
     let joker = match decoupe {
         Ok((_, Some(mot), _)) => Some(mot),
@@ -124,7 +125,7 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
     };
     match joker {
         Some(mot) => avis.pire(Avis::ecriture(
-            Genre::Commande,
+            Genre::Indetermine,
             format!("le joker `{mot}` peut devenir une option selon les noms de fichiers"),
         )),
         None => avis,
@@ -143,7 +144,8 @@ fn analyser_sans_joker(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
     }
     let jetons = match decouper(ligne, shell) {
         Ok(j) => j,
-        Err(raison) => return Avis::ecriture(Genre::Commande, raison),
+        // Ce qu'on ne sait pas découper peut cacher une suppression (KOB-493).
+        Err(raison) => return Avis::ecriture(Genre::Indetermine, raison),
     };
     let mut avis = Avis::lecture();
     // Dossiers courants possibles (KOB-227) : un `cd` qui peut échouer
@@ -175,13 +177,13 @@ fn analyser_sans_joker(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
                 };
                 if op == "&" {
                     return avis.pire(Avis::ecriture(
-                        Genre::Commande,
+                        Genre::Indetermine,
                         "commande lancée en arrière-plan (`&`)",
                     ));
                 }
                 if op == "(" || op == ")" {
                     return avis.pire(Avis::ecriture(
-                        Genre::Commande,
+                        Genre::Indetermine,
                         "sous-shell `( )` non analysable",
                     ));
                 }
@@ -286,7 +288,7 @@ fn analyser_sans_joker(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
                     }
                     if suivants.len() > DOSSIERS_POSSIBLES {
                         return avis.pire(Avis::ecriture(
-                            Genre::Commande,
+                            Genre::Indetermine,
                             "trop de `cd` enchaînés pour suivre le dossier courant",
                         ));
                     }
@@ -297,13 +299,13 @@ fn analyser_sans_joker(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
                 } else if matches!(op, "|" | "&&" | "||") && !redirection_vue {
                     // `| ls`, `ls && && x` : rien avant l'opérateur. Une
                     // redirection seule (`> f && x`) est une commande.
-                    return avis.pire(Avis::ecriture(Genre::Commande, "enchaînement incomplet"));
+                    return avis.pire(Avis::ecriture(Genre::Indetermine, "enchaînement incomplet"));
                 }
                 if jeton.is_none()
                     && matches!(jetons.last(), Some(Jeton::Op(o)) if matches!(o.as_str(), "|" | "&&" | "||"))
                 {
                     // `ls |` : la commande qui suit manque.
-                    return avis.pire(Avis::ecriture(Genre::Commande, "enchaînement incomplet"));
+                    return avis.pire(Avis::ecriture(Genre::Indetermine, "enchaînement incomplet"));
                 }
                 redirection_vue = false;
                 i += 1;
@@ -1027,12 +1029,12 @@ fn redirection(
     }
     if r.starts_with("<<") {
         return Err(Avis::ecriture(
-            Genre::Commande,
+            Genre::Indetermine,
             "document en ligne `<<` non analysable",
         ));
     }
     let Some(cible) = cible else {
-        return Err(Avis::ecriture(Genre::Commande, "redirection sans cible"));
+        return Err(Avis::ecriture(Genre::Indetermine, "redirection sans cible"));
     };
     if r.contains('<') {
         // `< /dev/null` : une entrée vide, rien n'est lu.
@@ -1110,6 +1112,51 @@ fn touche_un_alias(x: &str) -> bool {
 
 /// Shells et interpréteurs : ils lancent n'importe quoi.
 const SHELLS: &[&str] = &[
+    // Structures du shell : la commande qu'elles contiennent n'est pas analysée.
+    "if",
+    "then",
+    "elif",
+    "else",
+    "for",
+    "while",
+    "until",
+    "do",
+    "case",
+    "select",
+    "function",
+    "coproc",
+    "{",
+    "!",
+    "[[",
+    // Lanceurs et programmes qui exécutent ce qu'on leur donne (KOB-493).
+    "command",
+    "builtin",
+    "setsid",
+    "flock",
+    "script",
+    "parallel",
+    "stdbuf",
+    "ionice",
+    "chroot",
+    "doas",
+    "unshare",
+    "nsenter",
+    "taskset",
+    "chrt",
+    "ksh",
+    "csh",
+    "tcsh",
+    "mksh",
+    "ash",
+    "vim",
+    "vi",
+    "nvim",
+    "ex",
+    "ed",
+    "emacs",
+    "gdb",
+    "lldb",
+    "tar",
     "bash",
     "sh",
     "zsh",
@@ -1587,7 +1634,7 @@ fn commande(
     let (nom, args) = nom_et_arguments(mots, cites, shell);
     match trois_tirets(&nom, &args, shell) {
         Some(x) => Avis::ecriture(
-            Genre::Commande,
+            Genre::Indetermine,
             format!(
                 "`{x}` : certains programmes lisent trois tirets comme une option à deux tirets"
             ),
@@ -1684,13 +1731,13 @@ fn commande_sans_plancher(
     let premier = &mots[0];
     if !premier.starts_with('-') && premier.contains('=') && shell == Shell::Bash {
         return Avis::ecriture(
-            Genre::Commande,
+            Genre::Indetermine,
             format!("variable d'environnement posée avant la commande (`{premier}`)"),
         );
     }
     if premier.contains('/') || premier.contains('\\') {
         return Avis::ecriture(
-            Genre::Commande,
+            Genre::Indetermine,
             format!("commande appelée par un chemin (`{premier}`)"),
         );
     }
@@ -1816,7 +1863,7 @@ fn commande_sans_plancher(
     }
     if SHELLS.contains(&nom.as_str()) {
         return Avis::ecriture(
-            Genre::Commande,
+            Genre::Indetermine,
             format!("`{premier}` peut lancer n'importe quelle commande"),
         );
     }
@@ -2313,7 +2360,10 @@ fn options_interdites(nom: &str, args: &[String], shell: Shell) -> Option<Avis> 
             }
             for o in ["-exec", "-execdir", "-ok", "-okdir"] {
                 if a(o) {
-                    return ecrit(format!("`find {o}` lance une commande"));
+                    return Some(Avis::ecriture(
+                        Genre::Indetermine,
+                        format!("`find {o}` lance une commande"),
+                    ));
                 }
             }
             for o in ["-fprint", "-fprint0", "-fprintf", "-fls"] {
@@ -2334,7 +2384,10 @@ fn options_interdites(nom: &str, args: &[String], shell: Shell) -> Option<Avis> 
                     || x.starts_with("--list-details")
             });
             if lance {
-                ecrit("`fd -x`/`-X`/`-l` lance une commande".into())
+                Some(Avis::ecriture(
+                    Genre::Indetermine,
+                    "`fd -x`/`-X`/`-l` lance une commande",
+                ))
             } else {
                 None
             }
@@ -2397,12 +2450,19 @@ fn options_interdites(nom: &str, args: &[String], shell: Shell) -> Option<Avis> 
             if sur {
                 None
             } else {
-                ecrit("`sed` n'est permis qu'en affichage (`sed -n '1,20p'`)".into())
+                Some(Avis::ecriture(
+                    Genre::Indetermine,
+                    "`sed` n'est permis qu'en affichage (`sed -n '1,20p'`)",
+                ))
             }
         }
         // `-o` seul, collé (`-o/x`) ou groupé (`-uo`), ou `--output` abrégé ;
         // `-T` / `--temporary-directory` écrit ailleurs, et
         // `--compress-program` lance un programme (KOB-258).
+        "sort" if args.iter().any(|x| abrege(x, "--compress-program")) => Some(Avis::ecriture(
+            Genre::Indetermine,
+            "`sort --compress-program` lance un programme",
+        )),
         "sort"
             if args.iter().any(|x| {
                 (x.starts_with('-') && !x.starts_with("--") && (x.contains('o') || x.contains('T')))
@@ -2420,10 +2480,14 @@ fn options_interdites(nom: &str, args: &[String], shell: Shell) -> Option<Avis> 
             Genre::Fichier,
             "`uniq` avec deux fichiers écrit dans le second",
         )),
-        "rg" if commence("--pre") => ecrit("`rg --pre` lance une commande".into()),
-        "rg" if commence("--hostname-bin") => {
-            ecrit("`rg --hostname-bin` lance une commande".into())
-        }
+        "rg" if commence("--pre") => Some(Avis::ecriture(
+            Genre::Indetermine,
+            "`rg --pre` lance une commande",
+        )),
+        "rg" if commence("--hostname-bin") => Some(Avis::ecriture(
+            Genre::Indetermine,
+            "`rg --hostname-bin` lance une commande",
+        )),
         // Suit le fichier sans jamais rendre la main.
         "tail" if a("-f") || a("-F") || commence("--follow") => {
             ecrit("`tail -f` ne s'arrête jamais".into())
@@ -2457,7 +2521,10 @@ fn options_interdites(nom: &str, args: &[String], shell: Shell) -> Option<Avis> 
                 .iter()
                 .any(|x| x.starts_with('+') || x == "-o" || commence("--log-file")) =>
         {
-            ecrit("option de `less` qui écrit ou exécute".into())
+            Some(Avis::ecriture(
+                Genre::Indetermine,
+                "option de `less` qui écrit ou exécute",
+            ))
         }
         "git" => git(args),
         "gh" => {
@@ -2652,9 +2719,10 @@ fn git(args: &[String]) -> Option<Avis> {
     while let Some(x) = args.get(i) {
         match x.as_str() {
             "-c" | "--config-env" => {
-                return ecrit(
-                    "`git -c` change la configuration (et peut lancer un programme)".into(),
-                )
+                return Some(Avis::ecriture(
+                    Genre::Indetermine,
+                    "`git -c` change la configuration (et peut lancer un programme)",
+                ))
             }
             "-C" => i += 2,
             "--no-pager" | "-P" | "--no-optional-locks" | "--literal-pathspecs" | "--bare" => {
@@ -2686,8 +2754,12 @@ fn git(args: &[String]) -> Option<Avis> {
             || o_groupe
             || abrege(x, "--open-files-in-pager")
             || x.starts_with("--exec")
+            || (sous == "rebase" && x == "-x")
         {
-            return ecrit(format!("`git {sous} {x}` écrit ou lance un programme"));
+            return Some(Avis::ecriture(
+                Genre::Indetermine,
+                format!("`git {sous} {x}` écrit ou lance un programme"),
+            ));
         }
     }
     let positionnels = || reste.iter().filter(|x| !x.starts_with('-')).count();
@@ -4129,7 +4201,7 @@ mod tests {
             "fd -e -- ---exec=./p",
             "fd -E -- ---exec ./p",
         ] {
-            assert_eq!(classe(l), Classe::Ecriture(Genre::Commande), "{l}");
+            assert_eq!(classe(l), Classe::Ecriture(Genre::Indetermine), "{l}");
         }
         // PowerShell retire le premier `--` devant un exécutable.
         assert_ne!(
@@ -6024,11 +6096,90 @@ mod tests {
         );
     }
 
+    /// KOB-493 : les planchers disent « on ne sait pas lire ce mot » : ils ne sont
+    /// pas couverts par `commande = sans_demander`.
+    #[test]
+    fn planchers_en_genre_indetermine() {
+        for ligne in [
+            "rg ---pre=./p a f",
+            "cat ---x",
+            "rg a *",
+            "rg a -*",
+            "rg --pr[e]=x a f",
+        ] {
+            assert_eq!(
+                bash(ligne).classe,
+                Classe::Ecriture(Genre::Indetermine),
+                "{ligne:?}"
+            );
+        }
+        // Un plancher n'affaiblit ni une suppression ni un refus.
+        assert_eq!(
+            bash("rm -rf -- ---x target").classe,
+            Classe::Ecriture(Genre::Suppression)
+        );
+        assert_eq!(bash("rm *").classe, Classe::Ecriture(Genre::Suppression));
+        assert!(matches!(bash("cat * /etc/passwd").classe, Classe::Refus(_)));
+    }
+
+    /// KOB-493 : ce qu'on ne sait pas analyser en entier peut cacher une
+    /// suppression. Ce qu'on a compris garde son genre.
+    #[test]
+    fn genre_indetermine_ou_compris() {
+        for ligne in [
+            "ls &",
+            "(ls)",
+            "ls $X",
+            "ls `x`",
+            "bash -c ls",
+            "eval ls",
+            "xargs ls",
+            "env ls",
+            "find . -exec ls {} ;",
+            "fd -x ls",
+            "rg --pre=x a f",
+            "sort --compress-program=x f",
+            "cat << E\nx\nE",
+            "rg a *",
+        ] {
+            assert_eq!(
+                bash(ligne).classe,
+                Classe::Ecriture(Genre::Indetermine),
+                "{ligne:?}"
+            );
+        }
+        for ligne in [
+            "cargo build",
+            "mkdir x",
+            "touch x",
+            "curl http://x",
+            "git status",
+        ] {
+            assert_eq!(
+                bash(ligne).classe,
+                Classe::Ecriture(Genre::Commande),
+                "{ligne:?}"
+            );
+        }
+        // Une suppression vue reste une suppression, même à côté.
+        assert_eq!(
+            bash("rm -rf x; ls &").classe,
+            Classe::Ecriture(Genre::Suppression)
+        );
+        assert!(matches!(
+            bash("cat /etc/passwd; ls &").classe,
+            Classe::Refus(_)
+        ));
+    }
+
     /// Un joker qui peut devenir une option n'est pas qu'une écriture de fichier :
     /// `rg a * > f` peut lancer un programme (KOB-489 et KOB-490 ensemble).
     #[test]
     fn redirection_avec_joker_en_tete_n_est_pas_qu_un_fichier() {
-        assert_eq!(bash("rg a * > f").classe, Classe::Ecriture(Genre::Commande));
+        assert_eq!(
+            bash("rg a * > f").classe,
+            Classe::Ecriture(Genre::Indetermine)
+        );
         assert_eq!(
             bash("rg a ./* > f").classe,
             Classe::Ecriture(Genre::Fichier)
@@ -6394,10 +6545,10 @@ mod tests {
             ("git tag v2", Genre::Commande),
             ("git config user.name moi", Genre::Commande),
             ("git stash", Genre::Commande),
-            ("git -c core.pager=calc log", Genre::Commande),
-            ("git log --output=log.txt", Genre::Commande),
-            ("git diff --ext-diff", Genre::Commande),
-            ("find . -exec rm {} ;", Genre::Commande),
+            ("git -c core.pager=calc log", Genre::Indetermine),
+            ("git log --output=log.txt", Genre::Indetermine),
+            ("git diff --ext-diff", Genre::Indetermine),
+            ("find . -exec rm {} ;", Genre::Indetermine),
             ("cargo build", Genre::Commande),
             ("cargo test", Genre::Commande),
             ("npm install", Genre::Commande),
@@ -6411,16 +6562,16 @@ mod tests {
             ("chmod +x a", Genre::Commande),
             ("curl https://exemple.org", Genre::Commande),
             ("sed -i 's/a/b/' Cargo.toml", Genre::Fichier),
-            ("sed 's/a/b/w out' Cargo.toml", Genre::Commande),
+            ("sed 's/a/b/w out' Cargo.toml", Genre::Indetermine),
             ("sort -o trie.txt Cargo.toml", Genre::Fichier),
-            ("rg --pre ./script fabrique", Genre::Commande),
-            ("awk 'BEGIN{system(\"rm x\")}'", Genre::Commande),
-            ("xargs rm < liste", Genre::Commande),
-            ("fd -x rm", Genre::Commande),
-            ("fd -HX rm", Genre::Commande),
-            ("fd --exec=rm motif", Genre::Commande),
-            ("fd --exec-batch rm", Genre::Commande),
-            ("fd -l", Genre::Commande),
+            ("rg --pre ./script fabrique", Genre::Indetermine),
+            ("awk 'BEGIN{system(\"rm x\")}'", Genre::Indetermine),
+            ("xargs rm < liste", Genre::Indetermine),
+            ("fd -x rm", Genre::Indetermine),
+            ("fd -HX rm", Genre::Indetermine),
+            ("fd --exec=rm motif", Genre::Indetermine),
+            ("fd --exec-batch rm", Genre::Indetermine),
+            ("fd -l", Genre::Indetermine),
             ("sed -n 1p -e 'w sortie' Cargo.toml", Genre::Commande),
             ("sed -ne 'w sortie' Cargo.toml", Genre::Commande),
             (
@@ -6430,9 +6581,9 @@ mod tests {
             ("sed -n 1p --exp='w sortie' Cargo.toml", Genre::Commande),
             ("sed -n 1p -f script.sed Cargo.toml", Genre::Commande),
             ("sed -n 1p --file=script.sed Cargo.toml", Genre::Commande),
-            ("git grep -Ocalc motif", Genre::Commande),
-            ("git grep -iOcalc motif", Genre::Commande),
-            ("git grep --open motif", Genre::Commande),
+            ("git grep -Ocalc motif", Genre::Indetermine),
+            ("git grep -iOcalc motif", Genre::Indetermine),
+            ("git grep --open motif", Genre::Indetermine),
             ("go run -v main.go", Genre::Commande),
             ("rustc -V main.rs", Genre::Commande),
             ("printf -v PATH x", Genre::Commande),
@@ -6446,10 +6597,10 @@ mod tests {
             ("cargo --config alias.tree=build tree", Genre::Commande),
             ("cargo --config=alias.tree=build tree", Genre::Commande),
             ("cargo tree -Zunstable-options", Genre::Commande),
-            ("rg --hostname-bin=./script motif", Genre::Commande),
+            ("rg --hostname-bin=./script motif", Genre::Indetermine),
             ("sed --in-pl=.bak 's/a/b/' Cargo.toml", Genre::Fichier),
-            ("git log --outp=log.txt", Genre::Commande),
-            ("git diff --ext", Genre::Commande),
+            ("git log --outp=log.txt", Genre::Indetermine),
+            ("git diff --ext", Genre::Indetermine),
             ("tree -R -H . -L 1", Genre::Fichier),
         ] {
             let avis = bash(ligne);

@@ -16,6 +16,10 @@ pub enum Genre {
     Mcp,
     Reglage,
     Suppression,
+    /// Écriture qu'on ne sait pas analyser en entier (sous-shell, `$X`, `bash -c`,
+    /// `find -exec`…) : elle peut cacher une suppression, donc elle demande
+    /// toujours, quel que soit le réglage (contrat des permissions, §3, KOB-493).
+    Indetermine,
 }
 
 /// Classe d'une action.
