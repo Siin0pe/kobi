@@ -1815,7 +1815,7 @@ fn commande(
     ctx: &Contexte,
     cwd: &mut PathBuf,
 ) -> Avis {
-    let avis = commande_sans_plancher(mots, cites, shell, ctx, cwd);
+    let avis = commande_sans_plancher(mots, cites, jokers, shell, ctx, cwd);
     if avis.classe != Classe::Lecture {
         return avis;
     }
@@ -2022,6 +2022,7 @@ fn trois_tirets<'a>(nom: &str, args: &'a [String], shell: Shell) -> Option<&'a S
 fn commande_sans_plancher(
     mots: &[String],
     cites: &[bool],
+    jokers: &[bool],
     shell: Shell,
     ctx: &Contexte,
     cwd: &mut PathBuf,
@@ -2198,7 +2199,14 @@ fn commande_sans_plancher(
             "`where … /R` : `Where-Object` ou where.exe ? Vérifié sur la carte",
         );
     }
-    let avis = chemins(&nom, args, shell, ctx, cwd);
+    let avis = chemins(
+        &nom,
+        args,
+        jokers.get(1..).unwrap_or_default(),
+        shell,
+        ctx,
+        cwd,
+    );
     // jq : après le jugement des chemins, pour qu'un chemin hors des
     // dossiers reste un refus (`jq -f prog ../../secret`, KOB-463).
     if nom == "jq" && avis.classe == Classe::Lecture && jq_lit_hors(args) {
@@ -3352,7 +3360,15 @@ fn est_r_de_where(x: &str) -> bool {
 }
 
 /// Tous les chemins des arguments doivent rester dans les dossiers déclarés.
-fn chemins(nom: &str, args: &[String], shell: Shell, ctx: &Contexte, cwd: &Path) -> Avis {
+/// `jokers` suit `args` : un argument qui porte un joker que le shell étend.
+fn chemins(
+    nom: &str,
+    args: &[String],
+    jokers: &[bool],
+    shell: Shell,
+    ctx: &Contexte,
+    cwd: &Path,
+) -> Avis {
     if SANS_CHEMIN_PS.contains(&nom) {
         return Avis::lecture();
     }
@@ -3387,6 +3403,22 @@ fn chemins(nom: &str, args: &[String], shell: Shell, ctx: &Contexte, cwd: &Path)
     // Après `--`, plus d'options : chaque mot est un opérande, jugé même
     // s'il commence par un tiret (`cat -- -lien/x`, KOB-452).
     let mut fin_des_options = false;
+    // Le shell remplace un mot à joker par des chemins sous son début fixe, et
+    // le premier devient le motif, les suivants des fichiers lus : `grep -v
+    // /root/.ssh/*` lisait `/root/.ssh/secret` (KOB-503). Chaque mot à joker
+    // est donc jugé comme un chemin, avant la boucle qui saute le motif et les
+    // valeurs d'options (`grep -e /root/.ssh/*`). Un mot qui commence par un
+    // tiret (`--include=*.rs`, `-e/x*`) s'étend sous un premier dossier nommé
+    // tel quel dans le dossier courant : il n'en sort pas.
+    for (x, _) in args
+        .iter()
+        .zip(jokers)
+        .filter(|(x, &joker)| joker && !x.starts_with('-'))
+    {
+        if let Some(avis) = juge(x) {
+            return avis;
+        }
+    }
     let mut i = 0;
     while i < args.len() {
         let x = &args[i];
@@ -6774,6 +6806,52 @@ mod tests {
         assert_eq!(bash(r#"grep "a\.b" Cargo.toml"#).classe, Classe::Lecture);
         assert_eq!(bash(r#"rg "fn main\(" src"#).classe, Classe::Lecture);
         assert_eq!(bash(r#"echo "a\nb""#).classe, Classe::Lecture);
+    }
+
+    /// KOB-503 : le shell remplace un motif à joker par des chemins ; le
+    /// premier devient le motif, les suivants des fichiers lus (vu avec le
+    /// vrai bash dans `tests/joker_motif.rs`).
+    #[test]
+    fn joker_dans_le_motif_juge_comme_un_chemin() {
+        for ligne in [
+            "grep -v /root/.ssh/* f",
+            "grep /etc/pass?d f",
+            "grep -v ~/.ssh/* f",
+            "grep -v ../../*/x f",
+            "grep -e /root/.ssh/* f",
+            "grep -r -e /etc/[p]asswd .",
+            "rg -v /root/.ssh/* f",
+            "rg x -e /etc/* f",
+            "fd /root/*",
+            "egrep /etc/* f",
+        ] {
+            assert!(
+                matches!(bash(ligne).classe, Classe::Refus(_)),
+                "{ligne} : {:?}",
+                bash(ligne).classe
+            );
+        }
+        // Le script de `sed` est jugé avant les chemins (KOB-504) : sur la carte.
+        assert_ne!(bash("sed -n /etc/*/p f").classe, Classe::Lecture);
+    }
+
+    /// Le joker est cité, ou ses chemins restent dans les dossiers.
+    #[test]
+    fn joker_dans_le_motif_en_lecture() {
+        for ligne in [
+            "grep 'a*' f",
+            "grep \"a*\" f",
+            "rg -g '*.rs' x",
+            "rg -g \"*.rs\" x",
+            "grep a* f",
+            "grep a.*b f",
+            "grep -r x --include=*.rs .",
+            "rg x --glob=*.rs",
+            "grep -v '/root/.ssh/*' f",
+            "grep -v /root/.ssh/\\* f",
+        ] {
+            assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+        }
     }
 
     /// KOB-491 : un joker non cité cache le nombre d'opérandes de `uniq` et
