@@ -99,8 +99,19 @@ test('la fenêtre déplacée : Kobi ballotte puis revient au repos (événement 
   const errors = await openUi(page, 'backdrop=1');
   await kobiPose(page);
   const drag = page.locator('.kobi .drag');
+  // Chaque transform posé est noté : le retard du corps (translate négatif)
+  // ne dure qu'environ 0,3 s, un regard ponctuel le manque sous charge.
+  await drag.evaluate((n) => {
+    const vus: string[] = [];
+    (window as unknown as { __ballots: string[] }).__ballots = vus;
+    new MutationObserver((recs) => {
+      for (const r of recs) vus.push(r.oldValue ?? '');
+      vus.push(n.getAttribute('style') ?? '');
+    }).observe(n, { attributes: true, attributeFilter: ['style'], attributeOldValue: true });
+  });
   for (let i = 0; i <= 6; i++) await emit(page, 'tauri://move', { x: 100 + i * 25, y: 300 });
-  await expect.poll(() => drag.evaluate((n) => n.style.transform)).toMatch(/translate\(-\d/);
+  const ballots = () => page.evaluate(() => (window as unknown as { __ballots: string[] }).__ballots);
+  await expect.poll(async () => (await ballots()).some((s) => /translate\(-\d/.test(s))).toBe(true);
   // Le ressort s'amortit et la boucle s'arrête.
   await expect.poll(() => drag.evaluate((n) => n.style.transform), { timeout: 4000 }).toBe('');
   await expectNoErrors(errors);
