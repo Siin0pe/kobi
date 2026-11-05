@@ -210,6 +210,9 @@ pub fn decider_avec(
     let (genre, regle) = match genre {
         // Une suppression se demande toujours (contrat des permissions, §3).
         Genre::Suppression => ("suppression", Politique::Demander),
+        // Ce qu'on ne sait pas analyser peut en cacher une (KOB-493). La carte reste
+        // « commande » : elle n'annonce pas une suppression qu'on n'a pas vue.
+        Genre::Indetermine => ("commande", Politique::Demander),
         Genre::Fichier => ("fichier", politique.fichier),
         _ => ("commande", politique.commande),
     };
@@ -440,6 +443,8 @@ mod tests {
             "rm -rf target",
             "cat -- ---x /etc/passwd",
             "cat /etc/passwd",
+            "rg ---pre=./p x",
+            "rg a *",
         ] {
             let v = decider_avec(&appel("Bash", l, &kobi()), &d, &libre, &demander);
             assert_eq!(decision(&v), "deny", "{l}");
@@ -479,6 +484,128 @@ mod tests {
         assert_eq!(juge("rg a * > f"), ("deny".to_owned(), true));
         // Une simple redirection reste régie par le réglage des fichiers.
         assert_eq!(juge("ls > f"), ("allow".to_owned(), false));
+    }
+
+    /// KOB-493 : une suppression se demande toujours (contrat, §3). Ce qu'on ne
+    /// sait pas analyser peut en cacher une : `commande = sans_demander` ne le
+    /// couvre pas. Ce qu'on a compris garde le réglage.
+    #[test]
+    fn sans_demander_ne_couvre_pas_ce_qu_on_ne_sait_pas_analyser() {
+        let d = [kobi()];
+        let libre = PermissionsConfig {
+            commande: Politique::SansDemander,
+            ..PermissionsConfig::default()
+        };
+        let juge = |outil: &str, l: &str| {
+            let carte = std::cell::Cell::new(false);
+            let demander = |_: &'static str, _: String, _: Value| {
+                carte.set(true);
+                None
+            };
+            let v = decider_avec(&appel(outil, l, &kobi()), &d, &libre, &demander);
+            (decision(&v).to_owned(), carte.get())
+        };
+        let carte = ("deny".to_owned(), true);
+        for l in [
+            "rm -rf target",
+            "rm -rf target > f",
+            "rm -rf target &",
+            "ls & rm -rf target",
+            "(rm -rf target)",
+            "ls; (rm -rf target)",
+            "rm -rf target |",
+            "rm -rf $X",
+            "rm -rf `x`",
+            "rm -rf $(x)",
+            "ls $X; rm -rf target",
+            "bash -c 'rm -rf target'",
+            "sh -c 'rm -rf target'",
+            "eval rm -rf target",
+            "xargs rm -rf",
+            "env rm -rf target",
+            "sudo rm -rf target",
+            "timeout 5 rm -rf target",
+            "python3 -c 'x'",
+            "find . -exec rm {} ;",
+            "find . -execdir rm {} ;",
+            "fd -x rm",
+            "sort --compress-program=./p f",
+            "rg --pre=./p a f",
+            "rm -rf x << E\nE",
+            "cat << E; rm -rf x\nE",
+            "{x}> f rm -rf target",
+            "if true; then rm -rf x; fi",
+            "{ rm -rf x; }",
+            "! rm -rf x",
+            "X=1 rm -rf x",
+            "/bin/rm -rf x",
+            "command rm -rf x",
+            "setsid rm -rf x",
+            "flock f rm -rf x",
+            "script -c 'rm -rf x'",
+            "parallel rm",
+            "stdbuf -o0 rm -rf x",
+            "ksh -c 'rm -rf x'",
+            "tar --to-command=x -xf a",
+            "vim -c x",
+            "gdb -ex x",
+            "git -c a=b clean -fdx",
+            "git -c alias.x='!rm -rf y' x",
+            "git rebase --exec x",
+            "git rebase -x x",
+            "sed '1e rm x' f",
+            "touch -- --pre=./p; rg a *",
+            "rg ---pre=./p a f",
+            "rg a *",
+            "rg --pr[e]=x a f",
+            "grep ---x f",
+        ] {
+            assert_eq!(juge("Bash", l), carte, "{l:?}");
+        }
+        for l in [
+            "Invoke-Expression 'x'",
+            "Start-Process x",
+            "& x",
+            "Remove-Item x",
+            r"Microsoft.PowerShell.Management\Remove-Item x",
+            "grep contenu \u{2013}e ../dehors/secret.txt",
+        ] {
+            assert_eq!(juge("PowerShell", l), carte, "{l:?}");
+        }
+        // Compris, sans suppression : le réglage s'applique.
+        for l in [
+            "cargo build",
+            "mkdir x",
+            "touch x",
+            "npm install",
+            "curl http://x",
+            "git status",
+        ] {
+            assert_eq!(juge("Bash", l), ("allow".to_owned(), false), "{l:?}");
+        }
+        // `fichier = sans_demander` ne couvre pas non plus un programme lancé.
+        let fichiers_libres = PermissionsConfig {
+            fichier: Politique::SansDemander,
+            ..PermissionsConfig::default()
+        };
+        let carte_vue = std::cell::Cell::new(false);
+        let demander = |_: &'static str, _: String, _: Value| {
+            carte_vue.set(true);
+            None
+        };
+        let l = appel("Bash", "sort --compress-program=./p f", &kobi());
+        let v = decider_avec(&l, &d, &fichiers_libres, &demander);
+        assert_eq!((decision(&v), carte_vue.get()), ("deny", true));
+        // Le réglage par défaut demande toujours.
+        let defaut = PermissionsConfig::default();
+        let demander = |_: &'static str, _: String, _: Value| None;
+        let v = decider_avec(
+            &appel("Bash", "cargo build", &kobi()),
+            &d,
+            &defaut,
+            &demander,
+        );
+        assert_eq!(decision(&v), "deny");
     }
 
     /// Écritures (KOB-156) : la carte est demandée, et la réponse décide.
