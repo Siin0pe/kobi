@@ -52,9 +52,11 @@ avec Write et Edit. Kobi vérifie chaque appel avant qu'il parte, dans les dossi
 avec une durée et une sortie limitées. Pour les commandes et les fichiers de code, ceci remplace \
 « tu ne fais que lire ».
 
-- Ce qui ne modifie rien passe tout de suite : `git log`, `git status`, `git show`, `git diff`, \
-`git blame`, `ls`, `cat`, `head`, `tail`, `wc`, `rg`, `grep`, `find`, `tree`, \
-`gh pr view`, `gh issue list`, `Get-ChildItem`, `Get-Content`, `Select-String`…
+- Ce qui ne modifie rien passe tout de suite : `ls`, `cat`, `head`, `tail`, `wc`, `rg`, `grep`, \
+`find`, `tree`, `gh pr view`, `gh issue list`, `Get-ChildItem`, `Get-Content`, `Select-String`…
+- Les commandes git (`git log`, `git status`, `git diff`…) demandent un « oui » de l'utilisateur, \
+car elles peuvent lancer des programmes configurés dans le dépôt : regroupe-les en une seule \
+commande, et lis plutôt les fichiers quand cela suffit.
 - Une commande qui modifie, crée ou supprime, et toute écriture de fichier, attendent un « oui » de \
 l'utilisateur : Kobi lui montre une carte et attend jusqu'à une minute. Appelle simplement l'outil, \
 sans demander l'accord en texte, même pour une suppression : la carte de Kobi est la confirmation.
@@ -342,7 +344,6 @@ mod tests {
         assert_eq!(decision(&decider(&fond.to_string(), &d)), "deny");
     }
 
-    /// Écritures (KOB-156) : la carte est demandée, et la réponse décide.
     /// KOB-483 : la raison de kobi-perms part avec la demande de carte, pour
     /// que la carte dise pourquoi Kobi demande.
     #[test]
@@ -379,6 +380,40 @@ mod tests {
         assert_eq!(vu.borrow().as_ref().expect("carte demandée")["reason"], "");
     }
 
+    /// KOB-484 : chaque commande que le prompt annonce comme « passe tout de
+    /// suite » est bien une lecture pour kobi-perms (git n'y est plus depuis
+    /// KOB-473).
+    #[test]
+    fn prompt_annonce_seulement_des_lectures() {
+        let ligne = PROMPT_COMMANDES
+            .lines()
+            .skip_while(|l| !l.contains("passe tout de suite"))
+            .take_while(|l| !l.starts_with("- Les commandes git"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let commandes: Vec<&str> = ligne.split('`').skip(1).step_by(2).collect();
+        assert!(commandes.len() >= 10, "{commandes:?}");
+        let mut ctx = Contexte::new(vec![kobi()]);
+        ctx.cwd = Some(kobi());
+        for c in commandes {
+            let shell = if c.contains('-') && c.starts_with(char::is_uppercase) {
+                kobi_perms::Shell::PowerShell
+            } else {
+                kobi_perms::Shell::Bash
+            };
+            let avis = commande::analyser(c, shell, &ctx);
+            assert!(
+                avis.est_lecture(),
+                "« {c} » annoncé sans carte : {}",
+                avis.raison
+            );
+        }
+        // Et git, lui, demande un oui : le prompt le dit.
+        assert!(!commande::analyser("git status", kobi_perms::Shell::Bash, &ctx).est_lecture());
+        assert!(PROMPT_COMMANDES.contains("Les commandes git"));
+    }
+
+    /// Écritures (KOB-156) : la carte est demandée, et la réponse décide.
     #[test]
     fn ecritures_validees_par_la_carte() {
         use std::cell::RefCell;
