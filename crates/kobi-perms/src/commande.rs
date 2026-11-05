@@ -254,7 +254,7 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
                 };
                 let mut saute = 0;
                 for c in &cwds {
-                    match redirection(r, cible.as_deref(), ctx, c) {
+                    match redirection(r, cible.as_deref(), shell, ctx, c) {
                         Ok(n) => saute = n,
                         Err(a) => return avis.pire(a),
                     }
@@ -543,6 +543,10 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
                 }
                 break;
             }
+            // Sous bash, `\r` hors guillemets est un caractère ordinaire : lu
+            // comme un séparateur, il cachait des options (`rg -g x\r# --pre=p`,
+            // KOB-475). Sur la carte.
+            '\r' if !ps => return Err("retour chariot hors guillemets".into()),
             // `\r` seul finit aussi une ligne (PowerShell) : un séparateur,
             // comme `\n` (KOB-298).
             ';' | '\n' | '\r' | '(' | ')' => {
@@ -615,7 +619,7 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
             '>' | '<' => {
                 // `2>`, `1>>`, `*>` : le numéro collé fait partie de la redirection.
                 let mut r = String::new();
-                if dans_mot && (mot.chars().all(|d| d.is_ascii_digit()) || (ps && mot == "*")) {
+                if dans_mot && (numero_ecrit_tel_quel(&c, i, &mot, echap) || (ps && mot == "*")) {
                     r = std::mem::take(&mut mot);
                     dans_mot = false;
                     cite = false;
@@ -638,12 +642,25 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
                         if n == '&' {
                             // `2>&1` : la destination est un descripteur.
                             while let Some(&d) = c.get(i + 1) {
-                                if d.is_ascii_digit() || d == '-' {
+                                if d.is_ascii_digit() {
                                     r.push(d);
                                     i += 1;
                                 } else {
                                     break;
                                 }
+                            }
+                            if c.get(i + 1) == Some(&'-') {
+                                r.push('-');
+                                i += 1;
+                            }
+                            // `>&1M` n'est pas `>&1` suivi d'un mot : bash écrit
+                            // le fichier `1M` (KOB-475).
+                            if c.get(i + 1).is_some_and(|&d| {
+                                !matches!(d, ' ' | '\t' | '\n' | ';' | '|' | '&' | '(' | ')')
+                                    && !matches!(d, '<' | '>')
+                                    && !(ps && d == '\r')
+                            }) {
+                                return Err(format!("`{r}` collé à la suite : à valider"));
                             }
                             break;
                         }
@@ -735,9 +752,42 @@ fn accolades_developpees(suite: &[char]) -> bool {
     false
 }
 
+/// Le mot juste avant `c[i]` est-il un numéro de descripteur, écrit sans
+/// guillemet ni échappement, et qui tient sur un entier ? `'2'>x`, `\2>x` et
+/// `2147483648>x` donnent un mot à la commande (KOB-475).
+fn numero_ecrit_tel_quel(c: &[char], i: usize, mot: &str, echap: char) -> bool {
+    let n = mot.chars().count();
+    if n == 0
+        || i < n
+        || !mot.chars().all(|d| d.is_ascii_digit())
+        || mot.parse::<i32>().is_err()
+        || !c[i - n..i].iter().copied().eq(mot.chars())
+    {
+        return false;
+    }
+    // Le numéro commence un mot : `''2>x` donne aussi le mot `2`. Après une
+    // continuation (échappement et saut de ligne), un mot a pu commencer avant.
+    match i.checked_sub(n + 1).map(|p| (p, c[p])) {
+        None => true,
+        Some((p, '\n')) => p == 0 || c[p - 1] != echap,
+        Some((_, avant)) => {
+            matches!(
+                avant,
+                ' ' | '\t' | '\r' | ';' | '|' | '&' | '(' | ')' | '<' | '>'
+            )
+        }
+    }
+}
+
 /// Redirection : seules celles qui n'écrivent dans aucun fichier passent.
 /// Renvoie le nombre de jetons de cible consommés.
-fn redirection(r: &str, cible: Option<&str>, ctx: &Contexte, cwd: &Path) -> Result<usize, Avis> {
+fn redirection(
+    r: &str,
+    cible: Option<&str>,
+    shell: Shell,
+    ctx: &Contexte,
+    cwd: &Path,
+) -> Result<usize, Avis> {
     // `2>&1`, `>&2` : d'un descripteur vers un autre, rien n'est écrit.
     if r.contains(">&") && r.chars().last().is_some_and(|c| c.is_ascii_digit()) {
         return Ok(0);
@@ -758,10 +808,11 @@ fn redirection(r: &str, cible: Option<&str>, ctx: &Contexte, cwd: &Path) -> Resu
             Some(avis) => Err(avis),
         };
     }
-    let poubelle = matches!(
-        cible.to_ascii_lowercase().as_str(),
-        "/dev/null" | "nul" | "$null" | "null"
-    );
+    // Seul `/dev/null` jette la sortie, plus `nul` pour PowerShell sous Windows.
+    // Partout ailleurs, `null`, `nul` ou `'$null'` cité sont des fichiers ; un
+    // `$null` non cité est refusé dès le découpage (KOB-475).
+    let poubelle = cible == "/dev/null"
+        || (shell == Shell::PowerShell && cfg!(windows) && cible.eq_ignore_ascii_case("nul"));
     if poubelle {
         Ok(1)
     } else {
@@ -3565,6 +3616,175 @@ mod tests {
             &v_mots("-R . *.rs"),
             Shell::Bash
         ));
+    }
+
+    /// KOB-475 : sous bash, un retour chariot hors guillemets est un caractère
+    /// ordinaire, pas un séparateur. Lu comme un séparateur, il cachait des
+    /// options à la commande : `x␍#` n'ouvre pas de commentaire pour bash.
+    #[test]
+    fn retour_chariot_hors_guillemets_find_exec() {
+        let ligne = "find . \r echo -maxdepth 0 -exec touch m \\;";
+        assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne:?}");
+    }
+
+    #[test]
+    fn retour_chariot_hors_guillemets_rg_pre() {
+        let ligne = "rg -g x\r# --pre=./p a f";
+        assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne:?}");
+    }
+
+    #[test]
+    fn retour_chariot_hors_guillemets_git_log() {
+        let ligne = "git log --grep=x\r# --output=m";
+        assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne:?}");
+    }
+
+    #[test]
+    fn retour_chariot_en_fin_de_ligne_bash() {
+        assert_ne!(bash("grep a f\r").classe, Classe::Lecture);
+        assert_ne!(bash("grep a f\r\n").classe, Classe::Lecture);
+    }
+
+    /// Le retour chariot reste un séparateur sous PowerShell, et un caractère
+    /// ordinaire entre guillemets sous bash.
+    #[test]
+    fn retour_chariot_temoins() {
+        for ligne in ["grep 'a\rb' Cargo.toml", "grep \"a\rb\" Cargo.toml"] {
+            assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne:?}");
+        }
+        assert_eq!(ps("Get-ChildItem\rGet-ChildItem").classe, Classe::Lecture);
+    }
+
+    /// KOB-475 : `>&1M` n'est pas `>&1` suivi d'un mot : bash écrit le fichier
+    /// `1M`.
+    #[test]
+    fn redirection_descripteur_colle_a_un_mot() {
+        carte_redirection("sort f >&1m");
+    }
+
+    #[test]
+    fn redirection_descripteur_colle_a_un_diese() {
+        carte_redirection("grep a f >&1#m");
+    }
+
+    #[test]
+    fn redirection_descripteur_colle_a_des_guillemets() {
+        carte_redirection("grep a f >&1\"m\"");
+        carte_redirection("grep a f >&1'm'");
+    }
+
+    #[test]
+    fn redirection_descripteur_colle_a_un_echappement() {
+        carte_redirection("grep a f >&1\\m");
+        carte_redirection("grep a f >&1\\\nm");
+    }
+
+    #[test]
+    fn redirection_tiret_colle_a_un_mot() {
+        carte_redirection("grep a f >&-m");
+        carte_redirection("grep a f 2>&1-m");
+    }
+
+    #[track_caller]
+    fn carte_redirection(ligne: &str) {
+        assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne:?}");
+    }
+
+    /// Seuls l'espace, la tabulation et le saut de ligne séparent pour bash :
+    /// un autre blanc reste dans le nom du fichier.
+    #[test]
+    fn redirection_descripteur_colle_a_un_blanc_rare() {
+        for blanc in ['\u{a0}', '\u{c}', '\u{b}', '\r'] {
+            carte_redirection(&format!("grep a f >&1{blanc}m"));
+        }
+    }
+
+    /// `>&1-` déplace un descripteur ; `>&1-2` et `>&-2` écrivent un fichier.
+    #[test]
+    fn redirection_tiret_suivi_de_chiffres() {
+        carte_redirection("grep a f >&1-2");
+        carte_redirection("grep a f >&-2");
+    }
+
+    /// Un numéro cité ou échappé est un mot, pas un descripteur : la commande
+    /// le reçoit (`uniq f '2'>&1` écrit le fichier `2`).
+    #[test]
+    fn redirection_numero_cite_est_un_mot() {
+        let attendu = vec![
+            Jeton::Mot("x".into()),
+            Jeton::Mot("2".into()),
+            Jeton::Redir(">&1".into()),
+        ];
+        for ligne in [
+            "x '2'>&1",
+            "x \"2\">&1",
+            "x \\2>&1",
+            "x 2''>&1",
+            "x ''2>&1",
+            "x \"\"2>&1",
+            "x ''\\\n2>&1",
+        ] {
+            assert_eq!(decouper(ligne, Shell::Bash), Ok(attendu.clone()), "{ligne}");
+        }
+        assert_eq!(
+            decouper("x 2>&1", Shell::Bash),
+            Ok(vec![Jeton::Mot("x".into()), Jeton::Redir("2>&1".into())])
+        );
+        // Bash ne prend pour descripteur qu'un numéro qui tient sur 31 bits.
+        assert_eq!(
+            decouper("x 2147483648>&1", Shell::Bash),
+            Ok(vec![
+                Jeton::Mot("x".into()),
+                Jeton::Mot("2147483648".into()),
+                Jeton::Redir(">&1".into()),
+            ])
+        );
+        assert_eq!(
+            decouper("x 2147483647>&1", Shell::Bash),
+            Ok(vec![
+                Jeton::Mot("x".into()),
+                Jeton::Redir("2147483647>&1".into()),
+            ])
+        );
+    }
+
+    /// Sous bash, seul `/dev/null` jette la sortie ; `null` et `nul` sont des
+    /// fichiers. Sous PowerShell, `null` et `'$null'` aussi.
+    #[test]
+    fn redirection_vers_un_faux_nul() {
+        for ligne in [
+            "grep a f >null",
+            "grep a f >nul",
+            "grep a f >NUL",
+            "grep a f >'$null'",
+            "grep a f >/DEV/NULL",
+        ] {
+            carte_redirection(ligne);
+        }
+        for ligne in ["Get-ChildItem > null", "Get-ChildItem > '$null'"] {
+            assert_ne!(ps(ligne).classe, Classe::Lecture, "{ligne:?}");
+        }
+        assert_eq!(
+            bash("grep a Cargo.toml 2>/dev/null").classe,
+            Classe::Lecture
+        );
+        assert_eq!(bash("grep a Cargo.toml >/dev/null").classe, Classe::Lecture);
+    }
+
+    /// Les vraies copies de descripteur restent des lectures.
+    #[test]
+    fn redirection_descripteur_temoins() {
+        for ligne in [
+            "grep a Cargo.toml 2>&1",
+            "grep a Cargo.toml >&2",
+            "grep a Cargo.toml 2>&1 | head -1",
+            "grep a Cargo.toml 2>&1;ls",
+            "grep a Cargo.toml 2>&1 && ls",
+            "grep a Cargo.toml 2>&1\nls",
+            "grep a Cargo.toml 2>&1 # note",
+        ] {
+            assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne:?}");
+        }
     }
 
     /// KOB-473 : garde-fou en attendant KOB-469. Une lecture git peut lancer
