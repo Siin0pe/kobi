@@ -496,6 +496,13 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
                     ));
                 }
             }
+            // `> $null` jette le flux sous PowerShell (KOB-480) : la cible devient
+            // `/dev/null`, seule cible nulle de `redirection`. Tout autre `$`, et
+            // `'$null'` cité, qui écrit un fichier, restent à part.
+            '$' if ps && !dans_mot && dollar_null_apres_redirection(&c, i, jetons.last()) => {
+                jetons.push(Jeton::Mot("/dev/null".into()));
+                i += "null".len();
+            }
             '$' => return Err("variable ou substitution `$` non analysable".into()),
             '`' if !ps => return Err("substitution entre accents graves".into()),
             '{' | '}' if ps => return Err("bloc de script PowerShell `{ }`".into()),
@@ -644,6 +651,18 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
             '>' | '<' => {
                 // `2>`, `1>>`, `*>` : le numéro collé fait partie de la redirection.
                 let mut r = String::new();
+                // PowerShell ne redirige que les flux 1 à 6 : `7>` y est un mot
+                // entier, et ce qui suit un argument (sonde #446, KOB-480).
+                let numero = !mot.is_empty() && mot.chars().all(|d| d.is_ascii_digit());
+                if ps
+                    && dans_mot
+                    && numero
+                    && !matches!(mot.as_str(), "1" | "2" | "3" | "4" | "5" | "6")
+                {
+                    return Err(format!(
+                        "`{mot}{ch}` n'est pas une redirection de PowerShell"
+                    ));
+                }
                 if dans_mot && (numero_ecrit_tel_quel(&c, i, &mot, echap) || (ps && mot == "*")) {
                     r = std::mem::take(&mut mot);
                     dans_mot = false;
@@ -777,6 +796,20 @@ fn accolades_developpees(suite: &[char]) -> bool {
     false
 }
 
+/// `c[i]` ouvre-t-il exactement `$null` (sans casse), juste après une
+/// redirection de sortie, et suivi d'un séparateur ? `$nullx`, `$null.x`,
+/// `$null:x`, `$null[0]`, `< $null` et `2>&1 $null` ne le sont pas.
+fn dollar_null_apres_redirection(c: &[char], i: usize, avant: Option<&Jeton>) -> bool {
+    let sortie = matches!(avant, Some(Jeton::Redir(r)) if r.contains('>') && !r.contains('&'));
+    let nom = c
+        .get(i + 1..i + 5)
+        .is_some_and(|n| n.iter().collect::<String>().eq_ignore_ascii_case("null"));
+    let fin = c
+        .get(i + 5)
+        .is_none_or(|d| matches!(d, ' ' | '\t' | '\n' | '\r' | ';' | '|' | '&' | ')'));
+    sortie && nom && fin
+}
+
 /// Le mot juste avant `c[i]` est-il un numéro de descripteur, écrit sans
 /// guillemet ni échappement, et qui tient sur un entier ? `'2'>x`, `\2>x` et
 /// `2147483648>x` donnent un mot à la commande (KOB-475).
@@ -834,8 +867,8 @@ fn redirection(
         };
     }
     // Seul `/dev/null` jette la sortie, plus `nul` pour PowerShell sous Windows.
-    // Partout ailleurs, `null`, `nul` ou `'$null'` cité sont des fichiers ; un
-    // `$null` non cité est refusé dès le découpage (KOB-475).
+    // Partout ailleurs, `null`, `nul` ou `'$null'` cité sont des fichiers (KOB-475).
+    // `decouper` ramène ici un `$null` non cité de PowerShell à `/dev/null` (KOB-480).
     let poubelle = cible == "/dev/null"
         || (shell == Shell::PowerShell && cfg!(windows) && cible.eq_ignore_ascii_case("nul"));
     if poubelle {
@@ -5187,6 +5220,106 @@ mod tests {
             "hostname --version",
         ] {
             assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+    }
+
+    /// KOB-480 : sous PowerShell, `$null` non cité après une redirection de
+    /// sortie jette le flux (vu avec le vrai PowerShell dans
+    /// `tests/redirection_null_powershell.rs`).
+    #[test]
+    fn dollar_null_powershell_en_lecture() {
+        for ligne in [
+            "Get-Content Cargo.toml 2>$null",
+            "Get-Content Cargo.toml 2> $null",
+            "Get-Content Cargo.toml > $null",
+            "Get-Content Cargo.toml >$null",
+            "Get-Content Cargo.toml >> $null",
+            "Get-Content Cargo.toml 1> $null",
+            "Get-Content Cargo.toml *> $null",
+            "Get-Content Cargo.toml 3> $null",
+            "Get-Content Cargo.toml > $NULL",
+            "Get-Content Cargo.toml > $null; Get-ChildItem",
+            "Get-Content Cargo.toml 2>$null | Select-Object -First 1",
+            "Get-ChildItem > $null",
+        ] {
+            assert_eq!(ps(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+    }
+
+    /// Tout autre `$` reste sur la carte : c'est une valeur inconnue.
+    #[test]
+    fn dollar_null_autres_formes_sur_la_carte() {
+        for ligne in [
+            "Get-Content a > '$null'",
+            "Get-Content a > \"$null\"",
+            "Get-Content a > $nullx",
+            "Get-Content a > $null.txt",
+            "Get-Content a > $null:x",
+            "Get-Content a > $null[0]",
+            "Get-Content a > ${null}",
+            "Get-Content a > $env:X",
+            "Get-Content a > $x",
+            "Get-Content a > $null$x",
+            "Get-Content a > $null`x",
+            "Get-Content a > $null'x'",
+            "Get-Content a > x$null",
+            "Get-Content a < $null",
+            "Get-Content a 2>&1 $null",
+            "Get-Content a $null",
+            "Get-Content $null",
+            "$null",
+            "$null = Get-Content a",
+            "Get-Content a > null",
+        ] {
+            assert_ne!(ps(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+    }
+
+    /// Sous le vrai PowerShell, `7>` n'est pas une redirection mais un mot
+    /// entier, et ce qui suit reste un argument (prouvé par la sonde #446 et
+    /// `tests/redirection_null_powershell.rs`) : sur la carte.
+    #[test]
+    fn numero_hors_des_flux_powershell_sur_la_carte() {
+        for ligne in [
+            "x 7> $null",
+            "x 7> f",
+            "x 7>$null",
+            "x 0> $null",
+            "x 01> $null",
+            "x 9> $null",
+            "x 7>> f",
+            "x 7>&1",
+            "x 99999999999> $null",
+        ] {
+            assert!(decouper(ligne, Shell::PowerShell).is_err(), "{ligne}");
+        }
+        assert_eq!(
+            decouper("x 6> $null", Shell::PowerShell),
+            Ok(vec![
+                Jeton::Mot("x".into()),
+                Jeton::Redir("6>".into()),
+                Jeton::Mot("/dev/null".into()),
+            ])
+        );
+        // Bash garde tous ses descripteurs.
+        assert_eq!(
+            decouper("x 7> f", Shell::Bash),
+            Ok(vec![
+                Jeton::Mot("x".into()),
+                Jeton::Redir("7>".into()),
+                Jeton::Mot("f".into()),
+            ])
+        );
+        assert_ne!(ps("xxd a 7> $null").classe, Classe::Lecture);
+        assert_ne!(ps("Get-Content a 7> $null").classe, Classe::Lecture);
+    }
+
+    /// Sous bash, `$null` est une variable (vide : `> $null` échoue, et
+    /// `> $null/x` viserait la racine) : refusée comme toute autre.
+    #[test]
+    fn dollar_null_bash_sur_la_carte() {
+        for ligne in ["ls 2>$null", "ls > $null", "ls >> $null"] {
+            assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne}");
         }
     }
 
