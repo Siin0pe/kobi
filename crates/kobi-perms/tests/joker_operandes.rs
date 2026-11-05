@@ -55,7 +55,11 @@ fn zsh_uniq_avec_le_joker_numerique_ecrase_le_second_fichier() {
         .current_dir(d.path())
         .output()
     else {
-        // Pas de zsh sur cette machine : la règle reste vérifiée ci-dessous.
+        // Pas de zsh sur cette machine : seul le classement est vérifié. macOS
+        // a toujours zsh : la CI y fait la vraie preuve.
+        if cfg!(target_os = "macos") {
+            panic!("zsh absent sous macOS");
+        }
         assert_ne!(classe(ligne, d.path()), Classe::Lecture);
         return;
     };
