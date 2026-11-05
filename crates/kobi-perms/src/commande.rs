@@ -1544,6 +1544,14 @@ fn commande(
         );
     }
     let avis = chemins(&nom, args, shell, ctx, cwd);
+    // jq : après le jugement des chemins, pour qu'un chemin hors des
+    // dossiers reste un refus (`jq -f prog ../../secret`, KOB-463).
+    if nom == "jq" && avis.classe == Classe::Lecture && jq_lit_hors(args) {
+        return Avis::ecriture(
+            Genre::Commande,
+            "`jq` lit des fichiers ou l'environnement (import, env, -f, -L) : sur la carte",
+        );
+    }
     // Garde-fou en attendant KOB-469 (KOB-473) : une lecture git peut lancer
     // un programme configuré dans le dépôt (`core.fsmonitor` sur status et
     // diff, même d'un sous-dépôt caché dans l'index ; `diff.external` et
@@ -1980,32 +1988,6 @@ fn options_interdites(nom: &str, args: &[String], shell: Shell) -> Option<Avis> 
             "`{nom} -ShowCommandInfo` affiche le code des fonctions"
         ));
     }
-    // jq lit hors du dossier par son filtre (`import`, `include`), lit
-    // l'environnement (`env`, `$ENV`), et charge un filtre ou des tests d'un
-    // fichier (`-f`, `-nf`, `--run-tests`) ou des modules (`-L`) : sur la
-    // carte (KOB-463).
-    if nom == "jq" {
-        // Tous les mots : un filtre peut commencer par un tiret
-        // (`jq -n '-1|env.X'`).
-        let mot_cle = args.iter().any(|x| {
-            ["import", "include", "env", "ENV"]
-                .iter()
-                .any(|m| mot_entier(x, m))
-        });
-        let fichier = args.iter().any(|x| {
-            x == "--from-file"
-                || x == "--run-tests"
-                || x.starts_with("-L")
-                || abrege(x, "--library-path")
-                || (x.starts_with('-') && !x.starts_with("--") && x.contains('f'))
-        });
-        if mot_cle || fichier {
-            return ecrit(
-                "`jq` lit des fichiers ou l'environnement (import, env, -f, -L) : sur la carte"
-                    .into(),
-            );
-        }
-    }
     if liste_dans_un_fichier {
         return ecrit(format!(
             "`{nom}` lit des chemins pris dans un fichier (`files0-from`)"
@@ -2323,6 +2305,28 @@ fn script_sed_sur(script: &str) -> bool {
                 && a.ends_with('/')
                 && !a[1..a.len() - 1].contains('/'))
     })
+}
+
+/// jq lit hors des arguments jugés (KOB-463) : par son filtre (`import`,
+/// `include`, `modulemeta`), dans l'environnement (`env`, `$ENV`), par un
+/// filtre ou des tests chargés d'un fichier (`-f`, `-nf`, `--from-file`,
+/// `--run-tests`) ou par des modules (`-L`, groupé ou non, `--library-path`).
+/// Tous les mots comptent : un filtre peut commencer par un tiret
+/// (`jq -n '-1|env.X'`). Un mot précédé d'un `.` est un champ (`.env`).
+fn jq_lit_hors(args: &[String]) -> bool {
+    let mot_cle = args.iter().any(|x| {
+        ["import", "include", "modulemeta", "env", "ENV"]
+            .iter()
+            .any(|m| mot_entier(x, m))
+    });
+    let fichier = args.iter().any(|x| {
+        let court = x.starts_with('-') && !x.starts_with("--");
+        x == "--from-file"
+            || x == "--run-tests"
+            || abrege(x, "--library-path")
+            || (court && (x.contains('f') || x.contains('L')))
+    });
+    mot_cle || fichier
 }
 
 /// `git` : options globales et sous-commandes en lecture.
@@ -4683,9 +4687,9 @@ mod tests {
         let mut x = Contexte::new(vec![c.to_path_buf()]);
         x.cwd = Some(c.to_path_buf());
         for l in [
-            "jq -n --rawfile a -lien/secret.txt .",
-            "jq -n --slurpfile a -lien/s.json .",
-            "jq -n --argfile a -lien/s.json .",
+            "jq -n --rawfile a -lien/secret.txt -f prog",
+            "jq -n --slurpfile a -lien/s.json --from-file prog",
+            "jq -n --argfile a -lien/s.json -f prog",
             "jq --rawfile a ../../x . f.json",
         ] {
             assert_ne!(analyser(l, Shell::Bash, &x).classe, Classe::Lecture, "{l}");
@@ -4839,8 +4843,19 @@ mod tests {
             "jq --run-tests lien/t.txt",
             "jq -L lien -n x",
             "jq -Llien -n x",
+            "jq -n '\"m\" | modulemeta'",
+            "jq -nLlien x",
         ] {
             assert_ne!(analyser(l, Shell::Bash, &x).classe, Classe::Lecture, "{l}");
+        }
+        // Un chemin hors des dossiers reste un refus (relecture de #419).
+        for l in [
+            "jq -f prog ../../secret.json",
+            "jq -n env.X ../../secret",
+            "jq --from-file p ../../x",
+            "jq -L lien . ../../x",
+        ] {
+            assert_eq!(analyser(l, Shell::Bash, &x).classe.cle(), "refus", "{l}");
         }
         for l in [
             "jq . f.json",
