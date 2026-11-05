@@ -910,6 +910,32 @@ const SHELLS: &[&str] = &[
     "ssh",
 ];
 
+/// Options de `hostname` qui ne font qu'afficher.
+const OPTIONS_HOSTNAME: &[&str] = &[
+    "-a",
+    "--alias",
+    "-A",
+    "--all-fqdns",
+    "-d",
+    "--domain",
+    "-f",
+    "--fqdn",
+    "--long",
+    "-i",
+    "--ip-address",
+    "-I",
+    "--all-ip-addresses",
+    "-s",
+    "--short",
+    "-y",
+    "--yp",
+    "--nis",
+    "-h",
+    "--help",
+    "-V",
+    "--version",
+];
+
 /// Commandes de lecture sans option dangereuse connue.
 const LECTURE_SIMPLE: &[&str] = &[
     "ls",
@@ -2078,9 +2104,11 @@ fn options_interdites(nom: &str, args: &[String], shell: Shell) -> Option<Avis> 
             "`xxd entrée sortie` écrit dans un fichier",
         )),
         "date" if a("-s") || commence("--set") => ecrit("`date -s` change l'heure".into()),
-        "hostname" if args.iter().any(|x| !x.starts_with('-')) => {
-            ecrit("`hostname <nom>` change le nom".into())
-        }
+        // Liste blanche (KOB-478) : `-Ff`, `--file=f`, `--fil=f`, `-b` et un nom en
+        // argument changent le nom de la machine.
+        "hostname" if args.iter().any(|x| !OPTIONS_HOSTNAME.contains(&x.as_str())) => ecrit(
+            "`hostname` avec autre chose qu'une option d'affichage peut changer le nom".into(),
+        ),
         "less" | "more"
             if args
                 .iter()
@@ -4733,6 +4761,90 @@ mod tests {
             "ls {} | grep -n 'a..}' Cargo.toml",
         ] {
             lecture(bash(ligne), ligne);
+        }
+    }
+
+    /// KOB-478 : `hostname -F f` passait par la carte, mais pas `-Ff` ni
+    /// `--file=f`. Seules les options d'affichage restent des lectures.
+    #[track_caller]
+    fn hostname_sur_la_carte(ligne: &str) {
+        assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+        assert_ne!(ps(ligne).classe, Classe::Lecture, "{ligne}");
+    }
+
+    #[test]
+    fn hostname_fichier_colle() {
+        hostname_sur_la_carte("hostname -Ff");
+    }
+
+    #[test]
+    fn hostname_fichier_groupe() {
+        hostname_sur_la_carte("hostname -sFf");
+        hostname_sur_la_carte("hostname -fF");
+    }
+
+    #[test]
+    fn hostname_fichier_long() {
+        hostname_sur_la_carte("hostname --file=f");
+        hostname_sur_la_carte("hostname --file");
+    }
+
+    #[test]
+    fn hostname_fichier_abrege() {
+        hostname_sur_la_carte("hostname --fil=f");
+        hostname_sur_la_carte("hostname --fi=f");
+    }
+
+    #[test]
+    fn hostname_boot() {
+        hostname_sur_la_carte("hostname -b");
+        hostname_sur_la_carte("hostname --boot");
+        hostname_sur_la_carte("hostname --bo");
+    }
+
+    #[test]
+    fn hostname_nom_en_argument() {
+        hostname_sur_la_carte("hostname x");
+        hostname_sur_la_carte("hostname -F f");
+        hostname_sur_la_carte("hostname -b x");
+        hostname_sur_la_carte("hostname -s x");
+        hostname_sur_la_carte("hostname -- x");
+    }
+
+    #[test]
+    fn hostname_option_inconnue() {
+        hostname_sur_la_carte("hostname -1");
+        hostname_sur_la_carte("hostname --inconnue");
+    }
+
+    #[test]
+    fn hostname_affichage_en_lecture() {
+        for ligne in [
+            "hostname",
+            "hostname -a",
+            "hostname -A",
+            "hostname -d",
+            "hostname -f",
+            "hostname -i",
+            "hostname -I",
+            "hostname -s",
+            "hostname -y",
+            "hostname -V",
+            "hostname -h",
+            "hostname --alias",
+            "hostname --all-fqdns",
+            "hostname --domain",
+            "hostname --fqdn",
+            "hostname --long",
+            "hostname --ip-address",
+            "hostname --all-ip-addresses",
+            "hostname --short",
+            "hostname --yp",
+            "hostname --nis",
+            "hostname --help",
+            "hostname --version",
+        ] {
+            assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne}");
         }
     }
 
