@@ -88,6 +88,31 @@ impl Avis {
 
 /// Classe une ligne de commande.
 pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
+    let avis = analyser_sans_joker(ligne, shell, ctx);
+    if avis.classe != Classe::Lecture {
+        return avis;
+    }
+    // Un joker en tête de mot peut devenir une option : un fichier nommé
+    // `--pre=x` fait de `rg a *` un `rg a --pre=x` (KOB-489). Jugé après le reste,
+    // pour ne jamais affaiblir un refus, et sans lire le disque : la même ligne peut
+    // créer le fichier (`touch -- --pre=x; rg a *`).
+    let joker = match decouper_en_notant(ligne, shell) {
+        Ok((_, Some(mot))) => Some(mot),
+        Ok((jetons, None)) if shell == Shell::PowerShell && !cfg!(windows) => {
+            joker_pour_un_natif_pwsh(&jetons)
+        }
+        _ => None,
+    };
+    match joker {
+        Some(mot) => Avis::ecriture(
+            Genre::Commande,
+            format!("le joker `{mot}` peut devenir une option selon les noms de fichiers"),
+        ),
+        None => avis,
+    }
+}
+
+fn analyser_sans_joker(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
     let Some(cwd) = ctx.dossier_courant() else {
         return Avis::refus("aucun dossier de code n'est déclaré");
     };
@@ -333,8 +358,15 @@ fn suite_collee(c: &[char], i: usize) -> bool {
 /// Découpe la ligne en jetons. Refuse ce qui demanderait d'exécuter du code
 /// pour connaître la commande : substitutions, variables, blocs.
 fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
+    decouper_en_notant(ligne, shell).map(|(jetons, _)| jetons)
+}
+
+/// `decouper`, plus le premier mot Bash dont un joker non cité peut donner une
+/// option (`joker_peut_donner_une_option`). Seul ce découpage voit les guillemets.
+fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<(Vec<Jeton>, Option<String>), String> {
     let ps = shell == Shell::PowerShell;
     let echap = if ps { '`' } else { '\\' };
+    let mut joker = None;
     let mut jetons = Vec::new();
     let mut mot = String::new();
     let mut dans_mot = false;
@@ -740,6 +772,12 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
             x if ps && x.is_whitespace() => {
                 return Err(format!("blanc inhabituel U+{:04X} : à valider", x as u32))
             }
+            // Bash étend ce joker non cité : noté, puis jugé par `analyser` (KOB-489).
+            x if !ps && matches!(x, '*' | '?' | '[') && joker_peut_donner_une_option(&mot) => {
+                joker.get_or_insert_with(|| format!("{mot}{x}"));
+                dans_mot = true;
+                mot.push(x);
+            }
             x => {
                 dans_mot = true;
                 mot.push(x);
@@ -776,7 +814,42 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
     {
         return Err("arrêt de l'analyse PowerShell `--%` non analysable".into());
     }
-    Ok(jetons)
+    Ok((jetons, joker))
+}
+
+/// `pwsh` hors Windows étend les jokers pour un exécutable natif, comme bash. `ls`,
+/// `cat` ou `sort` y sont des exécutables ; seules les cmdlets et leurs alias
+/// portables reçoivent le motif sans expansion (`where.exe` n'existe que sous
+/// Windows). Les guillemets ne se voient plus dans les jetons : un motif cité
+/// compte aussi.
+fn joker_pour_un_natif_pwsh(jetons: &[Jeton]) -> Option<String> {
+    let mut en_tete = true;
+    let mut natif = false;
+    for j in jetons {
+        match j {
+            Jeton::Op(_) => en_tete = true,
+            Jeton::Redir(_) => {}
+            Jeton::Mot(m) | Jeton::Cite(m) if en_tete => {
+                let nom = m.to_lowercase();
+                natif = !nom.contains('-')
+                    && !matches!(
+                        nom.as_str(),
+                        "gci" | "gc" | "dir" | "type" | "sls" | "where.exe"
+                    );
+                en_tete = false;
+            }
+            Jeton::Mot(m) | Jeton::Cite(m) => {
+                let x = m.strip_prefix("./").unwrap_or(m);
+                let dangereux = x
+                    .find(['*', '?', '['])
+                    .is_some_and(|i| joker_peut_donner_une_option(&x[..i]));
+                if natif && dangereux {
+                    return Some(x.to_owned());
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Ce qui suit un `{` hors guillemets : bash peut-il le développer
@@ -815,6 +888,14 @@ fn accolades_developpees(suite: &[char]) -> bool {
         i += 1;
     }
     false
+}
+
+/// Un joker qui suit `debut`, le début du mot, peut-il donner une option ? Oui
+/// si le mot est encore vide (`*`, `''*`), ou s'il commence par un tiret sans
+/// `=` avant le joker (`-*`, `--pr[e]=x`). `src/*` et `--glob=*` commencent par
+/// un texte fixe : ni le mot ni le nom de l'option ne peuvent changer.
+fn joker_peut_donner_une_option(debut: &str) -> bool {
+    debut.is_empty() || (debut.starts_with('-') && !debut.contains('='))
 }
 
 /// `c[i]` ouvre-t-il exactement `$null` (sans casse), juste après une
@@ -3820,12 +3901,16 @@ mod tests {
             for l in [
                 "where.exe git",
                 "where.exe /Q git",
-                "where.exe /R C:/Users/moi/Desktop/kobi *.rs",
+                "where.exe /R C:/Users/moi/Desktop/kobi '*.rs'",
                 "where.exe C:/Users/moi/Desktop/kobi/src:*.rs",
             ] {
                 assert_eq!(cle(l, shell), "lecture", "{l} ({shell:?})");
             }
         }
+        // Non cité, le joker s'étend sous Git Bash (KOB-489), pas sous PowerShell.
+        let non_cite = "where.exe /R C:/Users/moi/Desktop/kobi *.rs";
+        assert_eq!(cle(non_cite, Shell::PowerShell), "lecture");
+        assert_ne!(cle(non_cite, Shell::Bash), "lecture");
         // Sans `.exe`, `where` est le programme sous Bash…
         assert_eq!(cle("where -R C:/Windows *.ini", Shell::Bash), "refus");
         assert_eq!(cle("where C:/Windows:*.ini", Shell::Bash), "refus");
@@ -4783,7 +4868,7 @@ mod tests {
             ("Get-Content -Encoding:utf8 x", Shell::PowerShell),
             ("grep -fmotifs x", Shell::Bash),
             ("grep -A2 motif x", Shell::Bash),
-            ("rg -g*.rs motif", Shell::Bash),
+            ("rg -g'*.rs' motif", Shell::Bash),
             ("rg -tpy motif", Shell::Bash),
             ("git -C sub log", Shell::Bash),
         ] {
@@ -5510,6 +5595,65 @@ mod tests {
             assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne}");
         }
         assert_ne!(bash("rg --pre=./p a f").classe, Classe::Lecture);
+    }
+
+    /// KOB-489 : un joker non cité en tête de mot peut donner une option.
+    #[test]
+    fn joker_en_tete_de_mot_sur_la_carte() {
+        for ligne in [
+            "rg a *",
+            "sort *",
+            "rg a ?-pre=x",
+            "rg a [-]-pre=x",
+            "cat *.md",
+            "ls *",
+            "rg a ''*",
+            "rg a \"\"*",
+            "rg a -- *",
+            "touch -- --pre=x; rg a *",
+        ] {
+            assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+    }
+
+    /// Un mot à tiret avec un joker avant le premier `=` peut changer d'option.
+    #[test]
+    fn joker_dans_un_nom_d_option_sur_la_carte() {
+        for ligne in [
+            "rg a -*",
+            "rg a --*",
+            "rg --pr[e]=x a f",
+            "rg --pr?=x a f",
+            "rg --p*=x a f",
+            "rg a \\-*",
+            "rg a '-'*",
+            "rg a \"--\"*",
+            "rg a -n*",
+        ] {
+            assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+    }
+
+    /// Le mot étendu commence par un texte fixe, ou le joker est cité.
+    #[test]
+    fn joker_apres_un_debut_fixe_en_lecture() {
+        for ligne in [
+            "ls src/*",
+            "ls src/*.rs",
+            "cat ./*",
+            "ls ./*.md",
+            "wc -l src/*.rs",
+            "grep a f*",
+            "rg a --glob=*.rs",
+            "grep -r a --include=*.rs",
+            "rg 'a*'",
+            "rg \"a?\"",
+            "find . -name '*.rs'",
+            "find . -name \\*.rs",
+            "rg '*'",
+        ] {
+            assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+        }
     }
 
     /// KOB-480 : sous PowerShell, `$null` non cité après une redirection de
