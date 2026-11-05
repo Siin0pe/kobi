@@ -1209,6 +1209,7 @@
   "ctl.commandes.validationAsk.tool": "Tool called (Write, Edit, Bash…).",
   "ctl.commandes.validationAsk.input": "Tool input, as the agent sent it.",
   "ctl.commandes.validationAsk.summary": "One-sentence summary, instead of Kobi's.",
+  "ctl.commandes.validationAsk.reason": "Why Kobi is asking (reason of the classification), shown on the card.",
   "ctl.commandes.effetLecture": "[read]",
   "ctl.commandes.effetAffichage": "[display]",
   "ctl.commandes.effetEcriture": "[write]",

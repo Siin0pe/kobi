@@ -57,10 +57,27 @@ impl Avis {
             Classe::Ecriture(_) => 1,
             Classe::Refus(_) => 3,
         };
-        if rang(&autre) > rang(&self) {
-            autre
+        // Deux écritures : la classe la plus grave, et les deux raisons, la
+        // plus grave en tête, pour que la carte ne montre pas seulement la
+        // plus anodine (`touch x; bash -c …`, `rm a; bash -c …`, relecture
+        // de KOB-483). Un refus garde sa raison seule.
+        let ecritures = matches!(self.classe, Classe::Ecriture(_))
+            && matches!(autre.classe, Classe::Ecriture(_));
+        let (grave, autre) = if rang(&autre) > rang(&self) {
+            (autre, self)
         } else {
-            self
+            (self, autre)
+        };
+        if !ecritures || autre.raison.is_empty() || grave.raison.contains(&autre.raison) {
+            return grave;
+        }
+        Self {
+            raison: if grave.raison.is_empty() {
+                autre.raison
+            } else {
+                format!("{} ; {}", grave.raison, autre.raison)
+            },
+            ..grave
         }
     }
 
@@ -3705,6 +3722,33 @@ mod tests {
         assert!(!analyser("rm alias:x", Shell::Bash, &x)
             .raison
             .contains("alias PowerShell"));
+    }
+
+    /// Relecture de KOB-483 : deux écritures de même rang gardent leurs deux
+    /// raisons ; la carte ne montre pas seulement la plus anodine.
+    #[test]
+    fn raisons_cumulees_a_rang_egal() {
+        let x = ctx();
+        let a = analyser("touch notes.md; bash -c x", Shell::Bash, &x);
+        assert!(
+            a.raison.contains("touch") && a.raison.contains("bash"),
+            "{}",
+            a.raison
+        );
+        // Une seule fois la même raison.
+        let a = analyser("touch a; touch a", Shell::Bash, &x);
+        assert_eq!(a.raison.matches("touch").count(), 1, "{}", a.raison);
+        // Rangs différents : la suppression en tête, l'autre raison gardée.
+        let a = analyser("rm a; bash -c x", Shell::Bash, &x);
+        assert_eq!(a.classe, Classe::Ecriture(Genre::Suppression));
+        assert!(
+            a.raison.starts_with("`rm`") && a.raison.contains("bash"),
+            "{}",
+            a.raison
+        );
+        // Un refus garde sa raison seule.
+        let a = analyser("touch a; cat /etc/passwd", Shell::Bash, &x);
+        assert_eq!(a.classe.cle(), "refus");
     }
 
     /// KOB-439 : `where.exe` juge le dossier de `-R` comme celui de `/R`, et

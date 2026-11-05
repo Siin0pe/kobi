@@ -162,6 +162,15 @@ export class Validations {
     root.append(head, titre);
     const ou = cible(carte.detail);
     if (ou && ou !== carte.resume) root.append(el('div', 'kval-cible', ou));
+    // Pourquoi Kobi demande (KOB-483) : sans elle, la carte ne dit pas le risque.
+    // Coupée à 3 lignes ; le texte entier au survol, et un clic la déplie : une
+    // raison grave ne peut pas rester cachée derrière l'ellipse.
+    if (carte.raison) {
+      const raison = el('div', 'kval-raison', carte.raison);
+      raison.title = carte.raison;
+      raison.addEventListener('click', () => raison.classList.toggle('deplie'));
+      root.append(raison);
+    }
 
     const temps = el('div', 'kval-timer');
     temps.id = `kval-temps-${carte.id}`;

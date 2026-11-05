@@ -322,3 +322,28 @@ test('question envoyée depuis la bulle d’écriture, puis carte : elle prend l
   await expect(champ).toBeFocused();
   await expectNoErrors(errors);
 });
+
+test('la carte dit pourquoi Kobi demande (raison du classement), sous la commande', async ({ page }) => {
+  // KOB-483 : sans la raison, la carte ne disait pas ce qui est risqué.
+  await fakeShell(page);
+  const errors = await openUi(page, '');
+  await carte(page, {
+    ...COMMANDE,
+    id: '7',
+    resume: 'Voir l’état du dépôt',
+    detail: { commande: 'git status', dossier: '/code/kobi' },
+    raison: 'git peut lancer des programmes configurés dans ce dépôt (fsmonitor, diff externe, textconv, gpg) : vérifié sur la carte',
+  });
+  await expect(page.locator('.kval-cible')).toHaveText('$ git status');
+  await expect(page.locator('.kval-raison')).toHaveText(/git peut lancer des programmes configurés dans ce dépôt/);
+  // Coupée à l'écran, jamais cachée : le texte entier au survol, et déplié au clic.
+  await expect(page.locator('.kval-raison')).toHaveAttribute('title', /git peut lancer des programmes/);
+  await page.locator('.kval-raison').click();
+  await expect(page.locator('.kval-raison')).toHaveClass(/deplie/);
+  await page.keyboard.press('Escape');
+  // Sans raison : pas de ligne vide.
+  await carte(page, COMMANDE);
+  await expect(page.locator('.kval-cible')).toHaveText('$ git push');
+  await expect(page.locator('.kval-raison')).toHaveCount(0);
+  await expectNoErrors(errors);
+});
