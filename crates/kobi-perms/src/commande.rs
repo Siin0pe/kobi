@@ -1733,7 +1733,7 @@ fn commande(
             format!("`{nom} {x}` : le joker donne un nombre inconnu de fichiers, et `{nom}` écrit dans le second"),
         );
     }
-    match joker_dans_le_filtre(mots, jokers) {
+    match joker_dans_le_filtre(mots, &args, jokers) {
         Some(x) => Avis::ecriture(
             Genre::Indetermine,
             format!(
@@ -1782,17 +1782,21 @@ const JQ_LONGUES_SANS_VALEUR: &[&str] = &[
 /// place du filtre n'est pas sûre : tout joker passe par la carte. `sed` n'en
 /// a pas besoin : son script n'est permis qu'en affichage, jugé tel qu'il est
 /// écrit, et un joker l'en fait sortir.
-fn joker_dans_le_filtre<'a>(mots: &'a [String], jokers: &[bool]) -> Option<&'a String> {
+///
+/// `args` sont les arguments tels que jq les reçoit (`nom_et_arguments`) :
+/// sous pwsh, `'-n'` lui arrive comme `-n`, pas comme le `./-n` de `decouper`
+/// (relecture de KOB-492). `jokers` suit `mots`, nom compris.
+fn joker_dans_le_filtre<'a>(
+    mots: &[String],
+    args: &'a [String],
+    jokers: &[bool],
+) -> Option<&'a String> {
     if nom_de_base(mots.first()?) != "jq" {
         return None;
     }
-    let premier_joker = mots
-        .iter()
-        .zip(jokers)
-        .skip(1)
-        .find(|(_, &j)| j)
-        .map(|(m, _)| m)?;
-    for (m, &joker) in mots.iter().zip(jokers).skip(1) {
+    let jokers = jokers.get(1..).unwrap_or_default();
+    let premier_joker = args.iter().zip(jokers).find(|(_, &j)| j).map(|(m, _)| m)?;
+    for (m, &joker) in args.iter().zip(jokers) {
         if joker {
             return Some(m);
         }
@@ -6652,6 +6656,22 @@ mod tests {
             "sed x* f",
         ] {
             assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+    }
+
+    /// Sous pwsh hors Windows, jq reçoit `'-n'` comme `-n`, et pwsh étend `e*`
+    /// pour un exécutable natif : `jq '-n' e*` est `jq -n env` (relecture de
+    /// KOB-492). Sous Windows, pwsh n'étend rien pour un natif.
+    #[cfg(unix)]
+    #[test]
+    fn joker_dans_le_filtre_jq_sous_pwsh() {
+        for ligne in [
+            "jq '-n' e*",
+            "jq \"--null-input\" e*",
+            "jq '-r' e* f.json",
+            "jq -n e*",
+        ] {
+            assert_ne!(ps(ligne).classe, Classe::Lecture, "{ligne}");
         }
     }
 
