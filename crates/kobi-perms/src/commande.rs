@@ -3408,15 +3408,21 @@ fn chemins(
     // /root/.ssh/*` lisait `/root/.ssh/secret` (KOB-503). Chaque mot à joker
     // est donc jugé comme un chemin, avant la boucle qui saute le motif et les
     // valeurs d'options (`grep -e /root/.ssh/*`). Un mot qui commence par un
-    // tiret (`--include=*.rs`, `-e/x*`) s'étend sous un premier dossier nommé
-    // tel quel dans le dossier courant : il n'en sort pas.
-    for (x, _) in args
-        .iter()
-        .zip(jokers)
-        .filter(|(x, &joker)| joker && !x.starts_with('-'))
-    {
-        if let Some(avis) = juge(x) {
-            return avis;
+    // tiret devient le nom d'un fichier du dossier courant : sans `=`, il peut
+    // devenir une autre option (plancher de KOB-489) ; avec `=`, sa valeur peut
+    // être `..` ou un lien qui sort (`diff --from-file=?.` donne
+    // `--from-file=..`, relecture de KOB-503) : sur la carte, sauf pour une
+    // option qui ne prend qu'un filtre de noms (`--include=*.rs`).
+    let mut valeur_a_joker = None;
+    for (x, _) in args.iter().zip(jokers).filter(|(_, &joker)| joker) {
+        if !x.starts_with('-') {
+            if let Some(avis) = juge(x) {
+                return avis;
+            }
+        } else if let Some((option, _)) = x.split_once('=') {
+            if !FILTRES_DE_NOMS.contains(&option) {
+                valeur_a_joker.get_or_insert(x);
+            }
         }
     }
     let mut i = 0;
@@ -3559,8 +3565,24 @@ fn chemins(
         }
         i += 1;
     }
-    Avis::lecture()
+    match valeur_a_joker {
+        Some(x) => Avis::ecriture(
+            Genre::Indetermine,
+            format!("`{x}` : le shell peut en faire le nom d'un fichier du dossier, dont la valeur sort"),
+        ),
+        None => Avis::lecture(),
+    }
 }
+
+/// Options dont la valeur n'est qu'un filtre de noms, jamais lu comme un
+/// chemin : un joker y reste un motif (`grep -r x --include=*.rs`).
+const FILTRES_DE_NOMS: &[&str] = &[
+    "--include",
+    "--exclude",
+    "--exclude-dir",
+    "--glob",
+    "--iglob",
+];
 
 /// grep, rg : dans des options courtes groupées, la première qui prend une
 /// valeur prend la suite du mot ; si c'est `-f` (fichier de motifs) et que
@@ -6833,6 +6855,25 @@ mod tests {
         }
         // Le script de `sed` est jugé avant les chemins (KOB-504) : sur la carte.
         assert_ne!(bash("sed -n /etc/*/p f").classe, Classe::Lecture);
+        // Valeur à joker : le shell en fait un fichier `--from-file=..` du dossier.
+        for ligne in [
+            "diff --from-file=?. .git-credentials",
+            "diff --from-file=* x",
+            "diff --to-file=[.]. x",
+            "grep --file=?. x",
+            "cat --x=* f",
+        ] {
+            assert_eq!(
+                bash(ligne).classe,
+                Classe::Ecriture(Genre::Indetermine),
+                "{ligne}"
+            );
+        }
+        // Un refus garde sa priorité.
+        assert!(matches!(
+            bash("diff --from-file=* /etc/passwd").classe,
+            Classe::Refus(_)
+        ));
     }
 
     /// Le joker est cité, ou ses chemins restent dans les dossiers.
@@ -6846,7 +6887,10 @@ mod tests {
             "grep a* f",
             "grep a.*b f",
             "grep -r x --include=*.rs .",
+            "grep -r x --exclude=*.lock --exclude-dir=t* .",
             "rg x --glob=*.rs",
+            "rg x --iglob=*.MD",
+            "diff --from-file='?.' x",
             "grep -v '/root/.ssh/*' f",
             "grep -v /root/.ssh/\\* f",
         ] {

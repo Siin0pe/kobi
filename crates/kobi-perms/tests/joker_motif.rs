@@ -48,3 +48,25 @@ fn la_regle_ne_depend_pas_du_disque() {
         assert!(matches!(classe(ligne, &code), Classe::Refus(_)), "{ligne}");
     }
 }
+
+/// Relecture de KOB-503 : `--from-file=?.` devient le fichier `--from-file=..`
+/// du dossier, et diff lit `../secret`. La valeur à joker passe par la carte.
+#[cfg(unix)]
+#[test]
+fn bash_valeur_d_option_a_joker_lit_hors_des_dossiers() {
+    let racine = tempfile::tempdir().unwrap();
+    let code = racine.path().join("code");
+    std::fs::create_dir_all(&code).unwrap();
+    std::fs::write(code.join("--from-file=.."), "").unwrap();
+    std::fs::write(code.join("secret"), "").unwrap();
+    std::fs::write(racine.path().join("secret"), "LIGNE-SECRETE\n").unwrap();
+    let ligne = "diff --from-file=?. secret";
+    let sortie = Command::new("bash")
+        .args(["-c", ligne])
+        .current_dir(&code)
+        .output()
+        .unwrap();
+    let texte = String::from_utf8_lossy(&sortie.stdout);
+    assert!(texte.contains("LIGNE-SECRETE"), "{sortie:?}");
+    assert_ne!(classe(ligne, &code), Classe::Lecture);
+}
