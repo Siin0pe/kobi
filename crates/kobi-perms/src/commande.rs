@@ -3361,7 +3361,41 @@ fn est_r_de_where(x: &str) -> bool {
 
 /// Tous les chemins des arguments doivent rester dans les dossiers déclarés.
 /// `jokers` suit `args` : un argument qui porte un joker que le shell étend.
+///
+/// Un mot à tiret avec `=` et un joker devient le nom d'un fichier du dossier,
+/// dont la valeur peut être `..` ou un lien qui sort (`diff --from-file=?.`
+/// donne `--from-file=..`, relecture de KOB-503) : sur la carte, sauf pour une
+/// option qui ne prend qu'un filtre de noms (`--include=*.rs`). Ajoutée au
+/// jugement des chemins, quel qu'en soit le résultat : un refus garde sa
+/// priorité, une autre carte ne l'efface pas (`diff --from-file=?. x**`).
 fn chemins(
+    nom: &str,
+    args: &[String],
+    jokers: &[bool],
+    shell: Shell,
+    ctx: &Contexte,
+    cwd: &Path,
+) -> Avis {
+    let avis = chemins_un_par_un(nom, args, jokers, shell, ctx, cwd);
+    if SANS_CHEMIN_PS.contains(&nom) {
+        return avis;
+    }
+    let valeur_a_joker = args.iter().zip(jokers).find(|(x, &joker)| {
+        joker
+            && x.starts_with('-')
+            && x.split_once('=')
+                .is_some_and(|(option, _)| !FILTRES_DE_NOMS.contains(&option))
+    });
+    match valeur_a_joker {
+        Some((x, _)) => avis.pire(Avis::ecriture(
+            Genre::Indetermine,
+            format!("`{x}` : le shell peut en faire le nom d'un fichier du dossier, dont la valeur sort"),
+        )),
+        None => avis,
+    }
+}
+
+fn chemins_un_par_un(
     nom: &str,
     args: &[String],
     jokers: &[bool],
@@ -3409,20 +3443,14 @@ fn chemins(
     // est donc jugé comme un chemin, avant la boucle qui saute le motif et les
     // valeurs d'options (`grep -e /root/.ssh/*`). Un mot qui commence par un
     // tiret devient le nom d'un fichier du dossier courant : sans `=`, il peut
-    // devenir une autre option (plancher de KOB-489) ; avec `=`, sa valeur peut
-    // être `..` ou un lien qui sort (`diff --from-file=?.` donne
-    // `--from-file=..`, relecture de KOB-503) : sur la carte, sauf pour une
-    // option qui ne prend qu'un filtre de noms (`--include=*.rs`).
-    let mut valeur_a_joker = None;
-    for (x, _) in args.iter().zip(jokers).filter(|(_, &joker)| joker) {
-        if !x.starts_with('-') {
-            if let Some(avis) = juge(x) {
-                return avis;
-            }
-        } else if let Some((option, _)) = x.split_once('=') {
-            if !FILTRES_DE_NOMS.contains(&option) {
-                valeur_a_joker.get_or_insert(x);
-            }
+    // devenir une autre option (plancher de KOB-489) ; avec `=`, voir `chemins`.
+    for (x, _) in args
+        .iter()
+        .zip(jokers)
+        .filter(|(x, &joker)| joker && !x.starts_with('-'))
+    {
+        if let Some(avis) = juge(x) {
+            return avis;
         }
     }
     let mut i = 0;
@@ -3565,13 +3593,7 @@ fn chemins(
         }
         i += 1;
     }
-    match valeur_a_joker {
-        Some(x) => Avis::ecriture(
-            Genre::Indetermine,
-            format!("`{x}` : le shell peut en faire le nom d'un fichier du dossier, dont la valeur sort"),
-        ),
-        None => Avis::lecture(),
-    }
+    Avis::lecture()
 }
 
 /// Options dont la valeur n'est qu'un filtre de noms, jamais lu comme un
@@ -3582,6 +3604,8 @@ const FILTRES_DE_NOMS: &[&str] = &[
     "--exclude-dir",
     "--glob",
     "--iglob",
+    "--ignore",
+    "--hide",
 ];
 
 /// grep, rg : dans des options courtes groupées, la première qui prend une
@@ -6869,6 +6893,17 @@ mod tests {
                 "{ligne}"
             );
         }
+        // Une autre carte, renvoyée avant la fin du jugement, ne l'efface pas.
+        for ligne in [
+            "diff --from-file=?. .git-cred**",
+            "diff --from-file=?. .git-credentials ^z",
+        ] {
+            assert_eq!(
+                bash(ligne).classe,
+                Classe::Ecriture(Genre::Indetermine),
+                "{ligne}"
+            );
+        }
         // Un refus garde sa priorité.
         assert!(matches!(
             bash("diff --from-file=* /etc/passwd").classe,
@@ -6890,6 +6925,7 @@ mod tests {
             "grep -r x --exclude=*.lock --exclude-dir=t* .",
             "rg x --glob=*.rs",
             "rg x --iglob=*.MD",
+            "ls --ignore=*.o --hide=*~",
             "diff --from-file='?.' x",
             "grep -v '/root/.ssh/*' f",
             "grep -v /root/.ssh/\\* f",
