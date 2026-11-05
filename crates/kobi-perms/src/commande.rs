@@ -463,6 +463,14 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
                             return Err("variable ou substitution `$` entre guillemets".into())
                         }
                         Some('`') if !ps => return Err("substitution entre accents graves".into()),
+                        // PowerShell : un accent grave entre guillemets doubles
+                        // change le caractère qui suit (`` `u{2E} `` vaut `.` sous
+                        // pwsh 7, `` `0 ``, `` `n ``…) : le mot reçu n'est pas celui
+                        // lu ici (KOB-477). Comme `$` : non analysable.
+                        Some('`') => return Err(
+                            "accent grave entre guillemets doubles (PowerShell) : non analysable"
+                                .into(),
+                        ),
                         Some(&x) if x == echap => {
                             i += 1;
                             match c.get(i) {
@@ -3616,6 +3624,98 @@ mod tests {
             &v_mots("-R . *.rs"),
             Shell::Bash
         ));
+    }
+
+    /// KOB-477 : sous pwsh 7, `` `u{2E} `` entre guillemets doubles vaut `.` :
+    /// `Get-Content "`u{2E}`u{2E}/x"` lisait hors du dossier et
+    /// `jq -n "`u{65}nv.X"` affichait un secret (sonde #439). Tout accent
+    /// grave entre guillemets doubles passe par la carte, comme `$`.
+    #[test]
+    fn accent_grave_entre_guillemets_doubles() {
+        let x = ctx();
+        for l in [
+            "jq -n \"`u{65}nv.ANTHROPIC_API_KEY\"",
+            "jq -n \"`u{24}ENV.HOME\"",
+            "Get-Content \"`u{2E}`u{2E}/dehors/secret.txt\"",
+            "gc \"`u{2E}`u{2E}`u{5C}dehors`u{5C}secret.txt\"",
+            "cat \"`u{2E}`u{2E}/dehors/secret.txt\"",
+            "Get-Content \"`0..`/x\"",
+            "Get-Content \"a`\"b\"",
+            "Get-Content \"`$x\"",
+            "echo \"`n\"",
+        ] {
+            let a = analyser(l, Shell::PowerShell, &x);
+            assert_ne!(a.classe.cle(), "lecture", "{l}");
+            assert_eq!(
+                a.classe,
+                analyser("echo $x", Shell::PowerShell, &x).classe,
+                "{l} : {}",
+                a.raison
+            );
+        }
+        // Entre guillemets simples, l'accent grave est littéral ; hors
+        // guillemets, il échappe un caractère (déjà géré).
+        assert_eq!(
+            analyser("Get-Content 'a`b'", Shell::PowerShell, &x)
+                .classe
+                .cle(),
+            "lecture"
+        );
+        assert_eq!(
+            analyser("Get-Content \"src/a.rs\"", Shell::PowerShell, &x)
+                .classe
+                .cle(),
+            "lecture"
+        );
+        // Sous Bash, rien ne change : l'accent grave y est une substitution,
+        // déjà sur la carte, et `"src/a.rs"` reste une lecture.
+        assert_eq!(
+            analyser("cat \"src/a.rs\"", Shell::Bash, &x).classe.cle(),
+            "lecture"
+        );
+    }
+
+    /// KOB-477, avec le vrai pwsh : une ligne que pwsh 7 exécute en lisant
+    /// hors du dossier ou en affichant une variable n'est jamais une lecture.
+    #[cfg(windows)]
+    #[test]
+    fn accent_grave_avec_le_vrai_pwsh() {
+        let racine = tempfile::tempdir().unwrap();
+        let code = racine.path().join("code");
+        std::fs::create_dir_all(&code).unwrap();
+        std::fs::create_dir_all(racine.path().join("dehors")).unwrap();
+        std::fs::write(
+            racine.path().join("dehors").join("secret.txt"),
+            "contenu-dehors",
+        )
+        .unwrap();
+        let mut x = Contexte::new(vec![code.clone()]);
+        x.cwd = Some(code.clone());
+        for l in [
+            "Get-Content \"`u{2E}`u{2E}/dehors/secret.txt\"",
+            "cat \"`u{2E}`u{2E}`u{5C}dehors`u{5C}secret.txt\"",
+            // Le vecteur de la sonde : `` `u{65} `` donne `e`, donc `env`.
+            "jq -n \"`u{65}nv.KOBI_TEST_477\"",
+        ] {
+            let Ok(o) = std::process::Command::new("pwsh")
+                .args(["-NoProfile", "-NonInteractive", "-Command", l])
+                .current_dir(&code)
+                .env("KOBI_TEST_477", "valeur-de-test")
+                .output()
+            else {
+                return; // pwsh absent : rien à vérifier ici.
+            };
+            let sortie = String::from_utf8_lossy(&o.stdout);
+            // jq affiche la valeur entre guillemets.
+            let fuite = sortie.contains("contenu-dehors") || sortie.contains("valeur-de-test");
+            if fuite {
+                assert_ne!(
+                    analyser(l, Shell::PowerShell, &x).classe.cle(),
+                    "lecture",
+                    "{l}"
+                );
+            }
+        }
     }
 
     /// KOB-475 : sous bash, un retour chariot hors guillemets est un caractère
