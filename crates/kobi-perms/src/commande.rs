@@ -96,9 +96,19 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
     // `--pre=x` fait de `rg a *` un `rg a --pre=x` (KOB-489). Jugé après le reste,
     // pour ne jamais affaiblir un refus, et sans lire le disque : la même ligne peut
     // créer le fichier (`touch -- --pre=x; rg a *`).
-    let joker = match decouper_en_notant(ligne, shell) {
-        Ok((_, Some(mot))) => Some(mot),
-        Ok((jetons, None)) if shell == Shell::PowerShell && !cfg!(windows) => {
+    let decoupe = decouper_en_notant(ligne, shell);
+    // Un tiret Unicode : `decouper` le lit `-`, mais un programme natif le
+    // reçoit tel quel (`grep x –e ../dehors` lisait le fichier extérieur,
+    // sonde #457). Plancher, comme le joker : un refus reste un refus (KOB-498).
+    if let Ok((_, _, Some(mot))) = &decoupe {
+        return Avis::ecriture(
+            Genre::Commande,
+            format!("`{mot}` : un programme reçoit ce tiret Unicode tel quel, pas `-`"),
+        );
+    }
+    let joker = match decoupe {
+        Ok((_, Some(mot), _)) => Some(mot),
+        Ok((jetons, None, _)) if shell == Shell::PowerShell && !cfg!(windows) => {
             joker_pour_un_natif_pwsh(&jetons)
         }
         _ => None,
@@ -358,12 +368,18 @@ fn suite_collee(c: &[char], i: usize) -> bool {
 /// Découpe la ligne en jetons. Refuse ce qui demanderait d'exécuter du code
 /// pour connaître la commande : substitutions, variables, blocs.
 fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
-    decouper_en_notant(ligne, shell).map(|(jetons, _)| jetons)
+    decouper_en_notant(ligne, shell).map(|(jetons, _, _)| jetons)
 }
 
 /// `decouper`, plus le premier mot Bash dont un joker non cité peut donner une
 /// option (`joker_peut_donner_une_option`). Seul ce découpage voit les guillemets.
-fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<(Vec<Jeton>, Option<String>), String> {
+/// Découpage noté : les jetons, le premier joker qui peut donner une option
+/// (KOB-489), le premier mot PowerShell à tiret Unicode (KOB-498).
+type Decoupage = (Vec<Jeton>, Option<String>, Option<String>);
+
+/// Note aussi le premier mot PowerShell non cité qui commence par un tiret
+/// Unicode (KOB-498).
+fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
     let ps = shell == Shell::PowerShell;
     let echap = if ps { '`' } else { '\\' };
     let mut joker = None;
@@ -387,6 +403,9 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<(Vec<Jeton>, Option<S
     // PowerShell) : jamais un paramètre (KOB-437).
     let mut cite = false;
     let mut apres_virgule = false;
+    // Premier mot non cité qui commence par un tiret Unicode, noté pour le
+    // plancher d'`analyser` (KOB-498).
+    let tiret_unicode = std::cell::Cell::new(None::<String>);
     let fin_mot = |jetons: &mut Vec<Jeton>,
                    mot: &mut String,
                    dans_mot: &mut bool,
@@ -401,6 +420,21 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<(Vec<Jeton>, Option<S
             // `-`, sinon le paramètre passait pour un chemin (KOB-434). Pas
             // entre guillemets ni dans un tableau : c'est une valeur, reçue
             // telle quelle (`rg . '–e' x` : un fichier `–e`, KOB-447).
+            // Un programme natif reçoit le tiret d'origine, pas `-` : `grep x
+            // –e ../dehors` lisait le fichier extérieur, que Kobi prenait pour
+            // le motif de `-e` (sonde #457). Sans distinguer cmdlet et
+            // programme, tout mot non cité qui commence par un tiret Unicode
+            // passe par la carte (KOB-498).
+            if ps
+                && !litteral
+                && m.starts_with([
+                    '\u{2010}', '\u{2011}', '\u{2012}', '\u{2013}', '\u{2014}', '\u{2015}',
+                    '\u{2212}', '\u{FE58}', '\u{FE63}', '\u{FF0D}',
+                ])
+            {
+                let vu = tiret_unicode.take();
+                tiret_unicode.set(vu.or_else(|| Some(m.clone())));
+            }
             if ps && !litteral && m.starts_with(['\u{2013}', '\u{2014}', '\u{2015}']) {
                 let premier = m.chars().next().map_or(0, char::len_utf8);
                 m.replace_range(..premier, "-");
@@ -814,7 +848,7 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<(Vec<Jeton>, Option<S
     {
         return Err("arrêt de l'analyse PowerShell `--%` non analysable".into());
     }
-    Ok((jetons, joker))
+    Ok((jetons, joker, tiret_unicode.take()))
 }
 
 /// `pwsh` hors Windows étend les jokers pour un exécutable natif, comme bash. `ls`,
@@ -4058,6 +4092,81 @@ mod tests {
             "echo ---",
         ] {
             assert_eq!(classe(l), Classe::Lecture, "{l}");
+        }
+    }
+
+    /// KOB-498 : sous PowerShell, un mot non cité qui commence par un tiret
+    /// Unicode passe par la carte : un programme natif le reçoit tel quel
+    /// (`grep contenu –e ../dehors/secret.txt` lisait le fichier extérieur,
+    /// sonde #457). Plancher : un refus reste un refus.
+    #[test]
+    fn tiret_unicode_powershell() {
+        let x = ctx();
+        let cle = |l: &str| analyser(l, Shell::PowerShell, &x).classe.cle();
+        for l in [
+            "grep contenu \u{2013}e ../dehors/secret.txt",
+            "grep contenu \u{2014}e ../dehors/secret.txt",
+            "rg x \u{2015}g ../dehors src",
+            "Get-ChildItem \u{2013}Recurse",
+            "hostname \u{2013}s",
+            "cat \u{2212}n src/a.rs",
+        ] {
+            assert_eq!(cle(l), "ecriture", "{l}");
+        }
+        // Un refus calculé avant reste un refus.
+        assert_eq!(
+            cle("Get-Content \u{2013}LiteralPath:C:/Windows/win.ini"),
+            "refus"
+        );
+        // Entre guillemets, c'est une valeur jugée comme un chemin : inchangé.
+        assert_eq!(cle("Get-Content '\u{2013}x'"), "lecture");
+        // Sous Bash, un mot comme un autre.
+        assert_eq!(
+            analyser("cat \u{2013}x", Shell::Bash, &x).classe.cle(),
+            "lecture"
+        );
+    }
+
+    /// KOB-498, avec le vrai pwsh et le grep de Git pour Windows : une ligne
+    /// qui lit vraiment le fichier extérieur n'est jamais une lecture.
+    #[cfg(windows)]
+    #[test]
+    fn tiret_unicode_avec_le_vrai_grep() {
+        let git_usr = std::path::Path::new(r"C:\Program Files\Git\usr\bin");
+        if !git_usr.join("grep.exe").is_file() {
+            return;
+        }
+        let racine = tempfile::tempdir().unwrap();
+        let code = racine.path().join("code");
+        std::fs::create_dir_all(&code).unwrap();
+        std::fs::create_dir_all(racine.path().join("dehors")).unwrap();
+        std::fs::write(
+            racine.path().join("dehors").join("secret.txt"),
+            "contenu-dehors\n",
+        )
+        .unwrap();
+        let mut x = Contexte::new(vec![code.clone()]);
+        x.cwd = Some(code.clone());
+        let chemin = format!("{};{}", git_usr.display(), std::env::var("PATH").unwrap());
+        for l in [
+            "grep contenu \u{2013}e ../dehors/secret.txt",
+            "grep contenu \u{2014}e ../dehors/secret.txt",
+        ] {
+            let Ok(o) = std::process::Command::new("pwsh")
+                .args(["-NoProfile", "-NonInteractive", "-Command", l])
+                .current_dir(&code)
+                .env("PATH", &chemin)
+                .output()
+            else {
+                return;
+            };
+            if String::from_utf8_lossy(&o.stdout).contains("contenu-dehors") {
+                assert_ne!(
+                    analyser(l, Shell::PowerShell, &x).classe.cle(),
+                    "lecture",
+                    "{l}"
+                );
+            }
         }
     }
 
