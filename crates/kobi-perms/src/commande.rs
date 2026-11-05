@@ -476,6 +476,10 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
                     match c.get(i) {
                         None => return Err("guillemet double non fermé".into()),
                         Some('"') => break,
+                        // Bash : un `$` juste avant le guillemet fermant est
+                        // littéral (`grep "foo$"`, KOB-482). Non prouvé sous
+                        // PowerShell : il y reste refusé.
+                        Some('$') if !ps && c.get(i + 1) == Some(&'"') => mot.push('$'),
                         Some('$') => {
                             return Err("variable ou substitution `$` entre guillemets".into())
                         }
@@ -3844,6 +3848,55 @@ mod tests {
             &v_mots("-R . *.rs"),
             Shell::Bash
         ));
+    }
+
+    /// KOB-482 : sous Bash, un `$` juste avant le guillemet fermant est
+    /// littéral (`printf "[%s]" "foo$"` affiche `[foo$]`) : `grep "foo$"` est
+    /// une lecture. Tout autre `$` entre guillemets doubles reste refusé.
+    #[test]
+    fn dollar_final_entre_guillemets_bash() {
+        let x = ctx();
+        for l in [
+            "grep \"foo$\" README.md",
+            "rg \"^fn.*\\{$\" src",
+            "grep -n \"TODO$\" src/main.rs",
+        ] {
+            assert_eq!(analyser(l, Shell::Bash, &x).classe.cle(), "lecture", "{l}");
+        }
+        for l in [
+            "grep \"$x\" README.md",
+            "grep \"${x}\" README.md",
+            "grep \"$(id)\" README.md",
+            "grep \"a$b\" README.md",
+            "grep \"$\"x\" README.md",
+            "grep \"$\\\"\" README.md",
+            "grep \"$\" ../../etc",
+        ] {
+            assert_ne!(analyser(l, Shell::Bash, &x).classe.cle(), "lecture", "{l}");
+        }
+        // Sous PowerShell, non prouvé : rien ne change.
+        assert_ne!(
+            analyser("Select-String \"foo$\" README.md", Shell::PowerShell, &x)
+                .classe
+                .cle(),
+            "lecture"
+        );
+    }
+
+    /// KOB-482, avec les vrais shells : Kobi classe zsh comme Bash ; là où
+    /// zsh (macos-latest) ou dash est installé, `"foo$"` y reste littéral.
+    #[cfg(unix)]
+    #[test]
+    fn dollar_final_litteral_dans_les_vrais_shells() {
+        for shell in ["bash", "zsh", "dash", "sh"] {
+            let Ok(o) = std::process::Command::new(shell)
+                .args(["-c", "printf '[%s]' \"foo$\" \"$\""])
+                .output()
+            else {
+                continue; // shell absent
+            };
+            assert_eq!(String::from_utf8_lossy(&o.stdout), "[foo$][$]", "{shell}");
+        }
     }
 
     /// KOB-477 : sous pwsh 7, `` `u{2E} `` entre guillemets doubles vaut `.` :
