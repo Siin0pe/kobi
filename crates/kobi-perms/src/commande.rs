@@ -1612,7 +1612,10 @@ fn commande(
     // dépôt (`git -C version status` : `version` y est un dossier).
     if nom == "git" && avis.classe == Classe::Lecture {
         let mots: Vec<&String> = args.iter().filter(|x| !x.starts_with('-')).collect();
-        if !mots.is_empty() && mots != ["version"] {
+        // Arguments entiers : `git version --help` lance `man.<outil>.cmd`, et une
+        // valeur de `-C` à tiret (`git -C -*`) n'est pas un mot (KOB-488).
+        let avec_mot = !mots.is_empty() || args.iter().any(|x| x == "-C");
+        if avec_mot && !matches!(args, [seul] if seul == "version") {
             return Avis::ecriture(
                 Genre::Commande,
                 "git peut lancer des programmes configurés dans ce dépôt (fsmonitor, diff externe, textconv, gpg) : vérifié sur la carte",
@@ -4144,6 +4147,63 @@ mod tests {
             "grep a Cargo.toml 2>&1 # note",
         ] {
             assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne:?}");
+        }
+    }
+
+    /// KOB-488 : le garde-fou de KOB-473 comparait sans les options : `git
+    /// version --help` restait une lecture et lançait `man.<outil>.cmd` (vu
+    /// avec le vrai git dans `tests/git_version_help.rs`).
+    #[test]
+    fn git_version_avec_autre_chose_sur_la_carte() {
+        for ligne in [
+            "git version --help",
+            "git version -h",
+            "git version --hel",
+            "git version --he",
+            "git version --build-options",
+            "git version --build-options --help",
+            "git version --help --build-options",
+            "git version -- --help",
+            "git --no-pager version --help",
+            "git -P version --help",
+            "git --bare version --help",
+            "git --no-optional-locks version --help",
+            "git --literal-pathspecs version --help",
+            "git --git-dir=x version --help",
+            "git --work-tree=x version --help",
+            "git --no-pager version",
+            "git -P version",
+            "git --bare version",
+            "git --git-dir=x version",
+            "git -C version",
+            "git \"version\" --help",
+            "git version \"--help\"",
+            "git version '--help'",
+            "git version --\\help",
+        ] {
+            assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+            assert_ne!(ps(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+        assert_ne!(bash("git ver\\sion --help").classe, Classe::Lecture);
+        assert_ne!(bash("git version \\--help").classe, Classe::Lecture);
+        assert_ne!(bash("git version \\\n--help").classe, Classe::Lecture);
+    }
+
+    /// La valeur de `-C` qui commence par un tiret échappait au garde-fou : avec
+    /// `-*`, les noms de fichiers choisissent les arguments de git.
+    #[test]
+    fn git_c_valeur_a_tiret_sur_la_carte() {
+        for ligne in ["git -C -*", "git -C -x", "git -C --help", "git -C -- "] {
+            assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+    }
+
+    /// `git version` exact, cité ou non, reste une lecture.
+    #[test]
+    fn git_version_exact_en_lecture() {
+        for ligne in ["git version", "git \"version\"", "git 'version'"] {
+            assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+            assert_eq!(ps(ligne).classe, Classe::Lecture, "{ligne}");
         }
     }
 
