@@ -51,7 +51,9 @@ fn la_regle_ne_depend_pas_du_disque() {
 
 /// Relecture de KOB-503 : `--from-file=?.` devient le fichier `--from-file=..`
 /// du dossier, et diff lit `../secret`. La valeur à joker passe par la carte.
-#[cfg(unix)]
+/// `--from-file` est propre au diff de GNU (macOS a celui de BSD) ; le
+/// classement est vérifié partout par les tests unitaires.
+#[cfg(target_os = "linux")]
 #[test]
 fn bash_valeur_d_option_a_joker_lit_hors_des_dossiers() {
     let racine = tempfile::tempdir().unwrap();
