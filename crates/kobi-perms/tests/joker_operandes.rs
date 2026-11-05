@@ -1,6 +1,7 @@
 //! KOB-491 : un joker non cité donne à `uniq` un nombre inconnu d'opérandes.
 //! Vu avec le vrai bash : `uniq src/*` écrase `src/b`, comme `uniq src/a src/b`.
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
 use std::process::Command;
 
 use kobi_perms::{commande, Classe, Contexte, Shell};
