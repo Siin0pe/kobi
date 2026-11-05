@@ -466,6 +466,14 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
                         Some(&x) if x == echap => {
                             i += 1;
                             match c.get(i) {
+                                // Bash retire `\` et saut de ligne : le mot que
+                                // la commande reçoit n'est pas celui lu ici
+                                // (`"\⏎--output=x"` est une option, KOB-474).
+                                Some('\n' | '\r') => {
+                                    return Err(
+                                        "continuation de ligne entre guillemets doubles".into()
+                                    )
+                                }
                                 Some(_) => mot.push(brut[i]),
                                 None => return Err("échappement en fin de ligne".into()),
                             }
@@ -507,11 +515,18 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
                 return Err("splatting PowerShell `@variable` non analysable".into())
             }
             x if x == echap => {
-                dans_mot = true;
                 i += 1;
                 match c.get(i) {
+                    // Une continuation disparaît et ne commence pas de mot : le
+                    // `#` qui la suit ouvre un commentaire (KOB-474).
                     Some('\n') => {}
-                    Some(_) => mot.push(brut[i]),
+                    // PowerShell finit aussi une ligne sur `\r` : `-x` serait
+                    // collé à la suite sans qu'on le voie (KOB-474).
+                    Some('\r') => return Err("continuation de ligne sur un retour chariot".into()),
+                    Some(_) => {
+                        dans_mot = true;
+                        mot.push(brut[i]);
+                    }
                     None => return Err("échappement en fin de ligne".into()),
                 }
             }
@@ -698,6 +713,9 @@ fn accolades_developpees(suite: &[char]) -> bool {
     let mut i = 0;
     while let Some(&x) = suite.get(i) {
         match x {
+            // Bash retire `\` et saut de ligne : `{o.\⏎.o}` est `{o..o}`. Au
+            // doute, une expansion (KOB-474).
+            '\\' if matches!(suite.get(i + 1), Some('\n' | '\r')) => return true,
             '\\' => i += 1,
             '"' => doubles = !doubles,
             '\'' if !doubles => {
@@ -4286,6 +4304,118 @@ mod tests {
     /// (la ligne a passé tous les autres contrôles).
     fn lu(avis: &Avis) -> bool {
         avis.est_lecture() || avis.raison.starts_with("git peut lancer des programmes")
+    }
+
+    /// KOB-474 : entre guillemets doubles, bash retire `\` et saut de ligne.
+    /// Le mot devenait une option que le filtrage ne voyait plus : un mot
+    /// avec une continuation passe par la carte.
+    #[track_caller]
+    fn carte_bash(ligne: &str) {
+        assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne:?}");
+    }
+
+    #[test]
+    fn continuation_entre_guillemets_sort_output() {
+        carte_bash("sort \"\\\n--output=m\" f");
+    }
+
+    #[test]
+    fn continuation_entre_guillemets_compress_program() {
+        carte_bash("sort -S 1K \"\\\n--compress-program=./p\" f");
+    }
+
+    #[test]
+    fn continuation_entre_guillemets_find_exec() {
+        carte_bash("find . -maxdepth 0 \"\\\n-exec\" touch m \";\"");
+    }
+
+    #[test]
+    fn continuation_entre_guillemets_rg_pre() {
+        carte_bash("rg \"\\\n--pre=./p\" a f");
+    }
+
+    #[test]
+    fn continuation_entre_guillemets_git_log() {
+        carte_bash("git log \"\\\n--output=m\"");
+    }
+
+    #[test]
+    fn continuation_au_milieu_du_nom() {
+        carte_bash("sort \"--out\\\nput=m\" f");
+    }
+
+    #[test]
+    fn continuations_multiples() {
+        carte_bash("sort \"\\\n\\\n--output=m\" f");
+    }
+
+    #[test]
+    fn continuation_apres_un_debut_hors_guillemets() {
+        carte_bash("sort --\"\\\noutput=m\" f");
+    }
+
+    #[test]
+    fn continuation_crlf_entre_guillemets() {
+        carte_bash("sort \"\\\r\n--output=m\" f");
+    }
+
+    #[test]
+    fn continuation_cr_seul_entre_guillemets() {
+        carte_bash("sort \"\\\r--output=m\" f");
+    }
+
+    /// Hors guillemets, la continuation est déjà retirée : l'option se voit.
+    #[test]
+    fn continuation_hors_guillemets_bash() {
+        carte_bash("sort --out\\\nput=m f");
+        carte_bash("sort \\\n--output=m f");
+        carte_bash("sort \\\r\n--output=m f");
+    }
+
+    /// PowerShell : accent grave et saut de ligne, sous toutes leurs formes.
+    #[test]
+    fn continuation_powershell() {
+        for ligne in [
+            "rg `\n--pre=./p a f",
+            "rg `\r\n--pre=./p a f",
+            "rg `\r--pre=./p a f",
+            "rg \"`\n--pre=./p\" a f",
+            "rg \"`\r\n--pre=./p\" a f",
+            "rg \"`\r--pre=./p\" a f",
+        ] {
+            assert_ne!(ps(ligne).classe, Classe::Lecture, "{ligne:?}");
+        }
+    }
+
+    /// Une continuation ne commence pas de mot : `#` qui la suit ouvre un
+    /// commentaire pour bash, et la ligne d'après s'exécute.
+    #[test]
+    fn continuation_puis_commentaire() {
+        carte_bash("grep a f \\\n#\\\ntouch m");
+        carte_bash("grep a f \\\n#\\\nsort --output=m f");
+    }
+
+    /// `{o.\⏎.o}` est `{o..o}` pour bash, donc une expansion.
+    #[test]
+    fn continuation_dans_des_accolades() {
+        carte_bash("sort --{o.\\\n.o}utput=m f");
+        carte_bash("find . -maxdepth 0 -{e.\\\n.e}xec touch m \\;");
+    }
+
+    /// Ce qui ne change pas : le saut de ligne reste un caractère ordinaire
+    /// entre guillemets simples et sans barre avant lui, et les autres
+    /// échappements ne vont pas sur la carte.
+    #[test]
+    fn continuation_temoins_en_lecture() {
+        for ligne in [
+            "grep '\\\na' Cargo.toml",
+            "grep \"a\nb\" Cargo.toml",
+            "grep \"a\\\"b\" Cargo.toml",
+            "grep \"a\\\\b\" Cargo.toml",
+            "grep a \\\nCargo.toml",
+        ] {
+            assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne:?}");
+        }
     }
 
     #[track_caller]
