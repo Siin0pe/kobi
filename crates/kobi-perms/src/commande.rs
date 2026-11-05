@@ -1171,7 +1171,108 @@ const SUPPRESSION: &[&str] = &[
     "remove-itemproperty",
     "clear-content",
     "clc",
+    "clear-item",
+    "cli",
+    "clear-itemproperty",
+    "clp",
+    "rimraf",
+    "del-cli",
+    "trash",
+    "trash-put",
+    "wipefs",
+    "mkfs",
 ];
+
+/// Une suppression qui ne dit pas son nom, certaine et visible dans la ligne
+/// (KOB-501) : elle se demande toujours, comme `rm` (contrat des permissions, §3).
+/// Les lanceurs de code du projet (`make clean`, `npm run clean`) n'y sont pas :
+/// on ne peut pas savoir ce qu'ils font, ils restent sous le réglage `commande`.
+fn suppression_reconnue(nom: &str, args: &[String], shell: Shell) -> Option<String> {
+    // `/dev//null`, `NUL:` : la même cible nulle.
+    let nul = |x: &String| {
+        let x = x.trim_end_matches(':');
+        x.eq_ignore_ascii_case("nul") || {
+            let morceaux: Vec<&str> = x.split('/').filter(|m| !m.is_empty()).collect();
+            x.starts_with('/') && morceaux == ["dev", "null"]
+        }
+    };
+    let positionnels: Vec<&String> = args.iter().filter(|x| !x.starts_with('-')).collect();
+    let ps = shell == Shell::PowerShell;
+    // Paquet lancé par un exécuteur : `npx rimraf@5`, `npm exec`, `pnpm dlx`, `bun x`.
+    let execute = match nom {
+        "npx" | "bunx" | "pnpx" => true,
+        "npm" | "pnpm" | "yarn" | "bun" => positionnels.first().is_some_and(|x| {
+            matches!(
+                (nom, x.as_str()),
+                ("npm", "exec" | "x")
+                    | ("pnpm", "exec" | "dlx")
+                    | ("yarn", "dlx" | "exec")
+                    | ("bun", "x")
+            )
+        }),
+        _ => false,
+    };
+    let raison = match nom {
+        "truncate" if !args.iter().all(|x| x == "--help" || x == "--version") => {
+            "`truncate` tronque des fichiers"
+        }
+        "dd" if args.iter().any(|x| x.starts_with("of=")) => "`dd of=` écrase un fichier",
+        "rsync"
+            if args.iter().any(|x| {
+                x.starts_with("--del")
+                    || abrege(x, "--remove-source-files")
+                    || abrege(x, "--remove-sent-files")
+            }) =>
+        {
+            "`rsync --delete` supprime des fichiers"
+        }
+        "mv" | "move" | "mi" | "move-item" if positionnels.iter().any(|x| nul(x)) => {
+            "déplacer vers la cible nulle supprime le fichier"
+        }
+        // La source seulement : `cp a /dev/null` ne détruit rien.
+        "cp" | "copy" | "cpi" | "copy-item" | "install"
+            if positionnels
+                .split_last()
+                .is_some_and(|(_, debut)| debut.iter().any(|x| nul(x))) =>
+        {
+            "copier la cible nulle vide le fichier"
+        }
+        "ln" if args.iter().any(|x| {
+            abrege(x, "--force") || (x.starts_with('-') && !x.starts_with("--") && x.contains('f'))
+        }) =>
+        {
+            "`ln -f` remplace le fichier existant"
+        }
+        _ if execute
+            && args.iter().any(|x| {
+                matches!(
+                    x.split('@').next().unwrap_or(x),
+                    "rimraf" | "del-cli" | "trash-cli" | "shx"
+                )
+            }) =>
+        {
+            "ce paquet supprime des fichiers"
+        }
+        "set-content" | "sc"
+            if ps
+                && args
+                    .iter()
+                    .any(|x| x.is_empty() || abrege_ps(x, "-value") && x.ends_with(':')) =>
+        {
+            "`Set-Content` avec une valeur vide vide le fichier"
+        }
+        "new-item" | "ni"
+            if ps
+                && args.iter().any(|x| abrege_ps(x, "-force"))
+                && !args.iter().any(|x| x.eq_ignore_ascii_case("directory")) =>
+        {
+            "`New-Item -Force` remplace le fichier par un fichier vide"
+        }
+        _ if nom.starts_with("mkfs.") => "`mkfs` efface un système de fichiers",
+        _ => return None,
+    };
+    Some(raison.to_owned())
+}
 
 /// Cmdlets PowerShell qui créent, changent ou retirent un alias (KOB-466).
 const ALIAS_MODIFIES: &[&str] = &[
@@ -2048,6 +2149,9 @@ fn commande_sans_plancher(
         && (ALIAS_MODIFIES.contains(&nom.as_str()) || args.iter().any(|x| touche_un_alias(x)));
     const ALIAS: &str =
         "modifie un alias PowerShell : les commandes suivantes peuvent changer de sens";
+    if let Some(raison) = suppression_reconnue(&nom, args, shell) {
+        return Avis::ecriture(Genre::Suppression, raison);
+    }
     if SUPPRESSION.contains(&nom.as_str()) {
         return Avis::ecriture(
             Genre::Suppression,
@@ -2960,6 +3064,13 @@ fn git(args: &[String]) -> Option<Avis> {
         }
     }
     let positionnels = || reste.iter().filter(|x| !x.starts_with('-')).count();
+    // `-fb`, `-qf` : une option courte, seule ou groupée.
+    let groupe = |o: char| {
+        reste
+            .iter()
+            .take_while(|x| x.as_str() != "--")
+            .any(|x| x.starts_with('-') && !x.starts_with("--") && x.contains(o))
+    };
     match sous.as_str() {
         "status" | "log" | "show" | "diff" | "blame" | "annotate" | "grep" | "ls-files"
         | "ls-tree" | "rev-parse" | "describe" | "shortlog" | "cat-file" | "show-ref"
@@ -2968,7 +3079,7 @@ fn git(args: &[String]) -> Option<Avis> {
         | "check-attr" | "var" | "diff-tree" | "diff-files" | "diff-index" | "verify-commit"
         | "verify-tag" | "fsck" => None,
         "branch" => {
-            if a("-d") || a("-D") || a("--delete") {
+            if groupe('d') || groupe('D') || a("--delete") {
                 return Some(Avis::ecriture(
                     Genre::Suppression,
                     "`git branch -d` supprime une branche",
@@ -3037,6 +3148,91 @@ fn git(args: &[String]) -> Option<Avis> {
             None | Some("show" | "get-url") => None,
             _ => ecrit("`git remote` modifie les dépôts distants".into()),
         },
+        // Ces formes détruisent des modifications non enregistrées (KOB-501).
+        "reset"
+            if reste
+                .iter()
+                .any(|x| abrege(x, "--hard") || abrege(x, "--merge") || abrege(x, "--keep")) =>
+        {
+            Some(Avis::ecriture(
+                Genre::Suppression,
+                "`git reset` efface des modifications",
+            ))
+        }
+        "restore" => Some(Avis::ecriture(
+            Genre::Suppression,
+            "`git restore` efface des modifications",
+        )),
+        "checkout"
+            if a("--")
+                || a(".")
+                || groupe('f')
+                || reste.iter().any(|x| abrege(x, "--force"))
+                // `git checkout HEAD f` : un arbre et un fichier.
+                || (positionnels() >= 2 && !a("-b") && !a("-B")) =>
+        {
+            Some(Avis::ecriture(
+                Genre::Suppression,
+                "`git checkout` efface des modifications",
+            ))
+        }
+        "switch"
+            if groupe('f')
+                || reste
+                    .iter()
+                    .any(|x| abrege(x, "--force") || abrege(x, "--discard-changes")) =>
+        {
+            Some(Avis::ecriture(
+                Genre::Suppression,
+                "`git switch` efface des modifications",
+            ))
+        }
+        "stash" if matches!(reste.first().map(String::as_str), Some("drop" | "clear")) => {
+            Some(Avis::ecriture(
+                Genre::Suppression,
+                "`git stash drop` ou `clear` efface des modifications",
+            ))
+        }
+        "update-ref" if groupe('d') => Some(Avis::ecriture(
+            Genre::Suppression,
+            "`git update-ref -d` supprime une référence",
+        )),
+        "gc" if reste.iter().any(|x| x.starts_with("--prune")) => Some(Avis::ecriture(
+            Genre::Suppression,
+            "`git gc --prune` supprime des objets",
+        )),
+        "reflog" if matches!(reste.first().map(String::as_str), Some("expire" | "delete")) => {
+            Some(Avis::ecriture(
+                Genre::Suppression,
+                "`git reflog expire` ou `delete` efface l'historique",
+            ))
+        }
+        "filter-branch" | "filter-repo" => Some(Avis::ecriture(
+            Genre::Suppression,
+            format!("`git {sous}` réécrit tout l'historique"),
+        )),
+        "push"
+            if groupe('f')
+                || groupe('d')
+                || reste.iter().any(|x| {
+                    abrege(x, "--force")
+                        || x.starts_with("--force-")
+                        || abrege(x, "--delete")
+                        || abrege(x, "--mirror")
+                        || abrege(x, "--prune")
+                        || x.starts_with('+')
+                        || x.starts_with(':')
+                }) =>
+        {
+            Some(Avis::ecriture(
+                Genre::Suppression,
+                "`git push` forcé ou avec suppression efface côté distant",
+            ))
+        }
+        "worktree" if reste.first().is_some_and(|x| x == "remove") => Some(Avis::ecriture(
+            Genre::Suppression,
+            "`git worktree remove` supprime un arbre de travail",
+        )),
         "stash" => match reste.first().map(String::as_str) {
             Some("list" | "show") => None,
             _ => ecrit("`git stash` modifie le dépôt (seuls list et show sont en lecture)".into()),
@@ -6925,9 +7121,9 @@ mod tests {
             ("git branch -D vieille", Genre::Suppression),
             ("git rm Cargo.lock", Genre::Suppression),
             ("git checkout main", Genre::Commande),
-            ("git reset --hard HEAD~1", Genre::Commande),
+            ("git reset --hard HEAD~1", Genre::Suppression),
             ("git commit -m x", Genre::Commande),
-            ("git push --force", Genre::Commande),
+            ("git push --force", Genre::Suppression),
             ("git pull", Genre::Commande),
             ("git branch nouvelle", Genre::Commande),
             ("git tag v2", Genre::Commande),

@@ -613,6 +613,165 @@ mod tests {
         assert_eq!(decision(&v), "deny");
     }
 
+    /// KOB-501 : une suppression reconnaissable se demande toujours (contrat, §3),
+    /// même avec `commande = sans_demander`. Le code du projet (`make`, `npm run`,
+    /// `cargo run`) reste sous le réglage : le texte du réglage le dit.
+    #[test]
+    fn suppressions_reconnaissables_toujours_une_carte() {
+        let d = [kobi()];
+        let libre = PermissionsConfig {
+            commande: Politique::SansDemander,
+            ..PermissionsConfig::default()
+        };
+        let juge = |outil: &str, l: &str| {
+            let genre = std::cell::RefCell::new(String::new());
+            let demander = |g: &'static str, _: String, _: Value| {
+                *genre.borrow_mut() = g.to_owned();
+                None
+            };
+            let v = decider_avec(&appel(outil, l, &kobi()), &d, &libre, &demander);
+            let g = genre.borrow().clone();
+            (decision(&v).to_owned(), g)
+        };
+        let carte = ("deny".to_owned(), "suppression".to_owned());
+        for l in [
+            "truncate -s0 x",
+            "truncate -s 0 x",
+            "truncate --size=0 x",
+            "truncate -s 10 x",
+            "dd of=x",
+            "dd if=a of=x",
+            "rsync --delete a b",
+            "rsync -a --delete-after a b",
+            "rsync --del a b",
+            "rsync --remove-source-files a b",
+            "git reset --hard",
+            "git reset --hard HEAD~1",
+            "git reset --merge",
+            "git reset --keep",
+            "git clean -f",
+            "git checkout -- x",
+            "git checkout .",
+            "git checkout -f",
+            "git checkout --force main",
+            "git checkout HEAD -- x",
+            "git restore x",
+            "git restore --staged x",
+            "git switch -f main",
+            "git switch --discard-changes main",
+            "git stash drop",
+            "git stash clear",
+            "git worktree remove x",
+            "mv x /dev/null",
+            "mv x NUL",
+            "mv x nul",
+            "mv -f x /dev/null",
+            "cp /dev/null x",
+            "npx rimraf x",
+            "npx -y rimraf x",
+            "npx del-cli x",
+            "rimraf x",
+            "del-cli x",
+            "trash x",
+            "wipefs -a x",
+            "mkfs.ext4 x",
+            "npx rimraf@5 x",
+            "npm exec rimraf x",
+            "npm exec -- rimraf x",
+            "pnpm exec rimraf x",
+            "pnpm dlx rimraf x",
+            "yarn dlx rimraf x",
+            "bun x rimraf x",
+            "bunx rimraf x",
+            "npx shx rm x",
+            "git checkout -fb x",
+            "git checkout -qf main",
+            "git checkout HEAD f",
+            "git switch -fc x",
+            "git branch -df x",
+            "git update-ref -d HEAD",
+            "git gc --prune=now",
+            "git reflog expire --all",
+            "git reflog delete x",
+            "git filter-branch x",
+            "git push --force",
+            "git push -f",
+            "git push --force-with-lease",
+            "git push --delete origin x",
+            "git push origin +main",
+            "git push origin :x",
+            "mv x /dev//null",
+            "rsync --remove-sent-files a b",
+            "install /dev/null x",
+            "ln -sf a b",
+            "ln --force a b",
+        ] {
+            assert_eq!(juge("Bash", l), carte, "{l:?}");
+        }
+        for l in [
+            "Move-Item x NUL",
+            "Move-Item x NUL:",
+            "mi x NUL",
+            "Clear-Content x",
+            "clc x",
+            "Clear-Item x",
+            "Set-Content x ''",
+            "Set-Content -Path x -Value ''",
+            "sc x ''",
+            "New-Item x -Force",
+            "ni x -Force",
+        ] {
+            assert_eq!(juge("PowerShell", l), carte, "{l:?}");
+        }
+        // Le code du projet et les formes sans perte restent sous le réglage.
+        for l in [
+            "make clean",
+            "npm run clean",
+            "cargo run",
+            "git reset",
+            "git reset HEAD~1",
+            "git reset --soft HEAD~1",
+            "git checkout main",
+            "git checkout -b x",
+            "git switch main",
+            "git stash",
+            "rsync -a a b",
+            "dd if=a",
+            "mv a b",
+            "cp a b",
+            "npx prettier x",
+            "yarn add rimraf",
+            "pnpm add rimraf",
+            "pnpm run rimraf",
+            "npm install rimraf",
+            "cp a /dev/null",
+            "truncate --help",
+            "ln -s a b",
+            "git checkout -b x main",
+            "git push",
+            "git push origin main",
+            "git gc",
+        ] {
+            assert_eq!(
+                juge("Bash", l),
+                ("allow".to_owned(), String::new()),
+                "{l:?}"
+            );
+        }
+        for l in [
+            "Set-Content x y",
+            "Move-Item a b",
+            "New-Item x",
+            "New-Item -ItemType Directory x -Force",
+        ] {
+            assert_eq!(
+                juge("PowerShell", l),
+                ("allow".to_owned(), String::new()),
+                "{l:?}"
+            );
+        }
+    }
+
     /// Écritures (KOB-156) : la carte est demandée, et la réponse décide.
     #[test]
     fn ecritures_validees_par_la_carte() {

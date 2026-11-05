@@ -164,7 +164,7 @@ pub const CLES: &[(&str, Application, &str)] = &[
     (
         "permissions.commande",
         AChaud,
-        "Commandes qui modifient : demander (défaut) ou sans_demander.",
+        "Commandes qui modifient : demander (défaut) ou sans_demander. Avec sans_demander, le code du projet (make, npm run, cargo run, scripts) s'exécute sans validation ; une suppression reconnue ou une commande non analysable demande toujours.",
     ),
     // Appliqués à chaud par toutes les fenêtres (KOB-200).
     (
