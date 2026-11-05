@@ -134,9 +134,7 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
         Ok(Decoupage {
             joker: Some(mot), ..
         }) => Some(mot),
-        Ok(d) if shell == Shell::PowerShell && !cfg!(windows) => {
-            joker_pour_un_natif_pwsh(&d.jetons)
-        }
+        Ok(d) if shell == Shell::PowerShell => joker_pour_un_natif_pwsh(&d.jetons, cfg!(windows)),
         _ => None,
     };
     match joker {
@@ -165,11 +163,11 @@ fn analyser_sans_joker(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
         // Ce qu'on ne sait pas découper peut cacher une suppression (KOB-493).
         Err(raison) => return Avis::ecriture(Genre::Indetermine, raison),
     };
-    // `pwsh` hors Windows étend aussi les jokers pour un exécutable natif, et
-    // les guillemets ne se voient plus dans les jetons : tout joker compte.
+    // Sous PowerShell, le joker d'un exécutable natif est étendu par `pwsh` hors
+    // Windows et par le programme lui-même s'il vient de MSYS (KOB-502), et les
+    // guillemets ne se voient plus dans les jetons : tout joker compte.
     let a_un_joker = |i: usize, m: &str| {
-        a_joker.contains(&i)
-            || (shell == Shell::PowerShell && !cfg!(windows) && m.contains(['*', '?', '[']))
+        a_joker.contains(&i) || (shell == Shell::PowerShell && m.contains(['*', '?', '[']))
     };
     let mut avis = Avis::lecture();
     // Dossiers courants possibles (KOB-227) : un `cd` qui peut échouer
@@ -963,12 +961,22 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
     })
 }
 
-/// `pwsh` hors Windows étend les jokers pour un exécutable natif, comme bash. `ls`,
-/// `cat` ou `sort` y sont des exécutables ; seules les cmdlets et leurs alias
-/// portables reçoivent le motif sans expansion (`where.exe` n'existe que sous
-/// Windows). Les guillemets ne se voient plus dans les jetons : un motif cité
+/// Alias de cmdlets sous PowerShell sur Windows : ils passent avant le PATH (`sort
+/// *` reste `Sort-Object`, même avec `Git\usr\bin` dans le PATH, sonde #463).
+const ALIAS_CMDLETS_WINDOWS: &[&str] = &[
+    "ls", "cat", "echo", "pwd", "sort", "diff", "where", "gdr", "gi", "gp", "rvpa", "gl",
+    "measure", "select", "ft", "fl", "fw", "gcm", "write", "group", "gu", "compare", "gm", "?",
+];
+
+/// Sous PowerShell, le joker d'un exécutable natif peut devenir une option. `pwsh` hors
+/// Windows l'étend comme bash : `ls`, `cat` ou `sort` y sont des exécutables, seules les
+/// cmdlets et leurs alias portables reçoivent le motif sans expansion (`where.exe`
+/// n'existe que sous Windows). Sous Windows, PowerShell n'étend rien, mais un programme
+/// MSYS (`Git\usr\bin`) étend lui-même le motif, même cité : `sort.exe '*'` écrit le
+/// fichier de `--output=M` (KOB-502). Ni le disque ni le PATH ne sont lus : la même ligne
+/// peut les changer. Les guillemets ne se voient plus dans les jetons : un motif cité
 /// compte aussi.
-fn joker_pour_un_natif_pwsh(jetons: &[Jeton]) -> Option<String> {
+fn joker_pour_un_natif_pwsh(jetons: &[Jeton], windows: bool) -> Option<String> {
     let mut en_tete = true;
     let mut natif = false;
     for j in jetons {
@@ -981,21 +989,83 @@ fn joker_pour_un_natif_pwsh(jetons: &[Jeton]) -> Option<String> {
                     && !matches!(
                         nom.as_str(),
                         "gci" | "gc" | "dir" | "type" | "sls" | "where.exe"
-                    );
+                    )
+                    && !(windows && ALIAS_CMDLETS_WINDOWS.contains(&nom.as_str()));
                 en_tete = false;
             }
             Jeton::Mot(m) | Jeton::Cite(m) => {
-                let x = m.strip_prefix("./").unwrap_or(m);
-                let dangereux = x
-                    .find(['*', '?', '['])
-                    .is_some_and(|i| joker_peut_donner_une_option(&x[..i]));
+                let x = if windows {
+                    // Seul le `./` mis par `decouper` sur un mot cité disparaît : sous
+                    // MSYS, `./*` écrit tel quel donne `./--x`, jamais une option.
+                    let cite = matches!(j, Jeton::Cite(_));
+                    std::borrow::Cow::Borrowed(
+                        cite.then(|| m.strip_prefix("./")).flatten().unwrap_or(m),
+                    )
+                } else {
+                    std::borrow::Cow::Owned(chemin_natif_pwsh(m))
+                };
+                let dangereux = m.contains(['*', '?', '[']) && joker_natif_donne_une_option(&x);
                 if natif && dangereux {
-                    return Some(x.to_owned());
+                    return Some(x.into_owned());
                 }
             }
         }
     }
     None
+}
+
+/// Ce mot, tiré d'un mot à joker, peut-il devenir une option ? Sans joker restant, il
+/// ne reste que le dernier segment de `s*/../--x` : `pwsh` hors Windows le passe si le
+/// joker du dossier trouve un fichier.
+fn joker_natif_donne_une_option(x: &str) -> bool {
+    match x.find(['*', '?', '[']) {
+        None => x.starts_with('-'),
+        Some(0) => !classe_sans_tiret(x),
+        Some(i) => joker_peut_donner_une_option(&x[..i]),
+    }
+}
+
+/// Ce que `pwsh` hors Windows passe au programme : il normalise le chemin avant de
+/// l'étendre (`/bin/echo ./*` et `src/../*` donnent `--piege`, relecture de KOB-502).
+/// Après un `..` ou un `\` de tête, le dossier d'arrivée est inconnu sans lire le
+/// disque : seul le dernier segment compte (`../ici/*`, `\tmp\ici\*`).
+fn chemin_natif_pwsh(mot: &str) -> String {
+    let segments: Vec<&str> = mot
+        .split(['/', '\\'])
+        .filter(|s| !s.is_empty() && *s != ".")
+        .collect();
+    if segments.contains(&"..") || mot.starts_with('\\') {
+        segments.last().copied().unwrap_or_default().to_owned()
+    } else {
+        segments.join("/")
+    }
+}
+
+/// Le motif commence-t-il par une classe qui ne peut pas contenir de tiret ? Le mot
+/// étendu ne commence alors jamais par `-` (`rg '[a-z]+' src`). Liste blanche : des
+/// lettres et chiffres ASCII, quelques signes, et des intervalles entre lettres ou
+/// chiffres. Ni classe niée, ni classe nommée (`[[:punct:]]`), ni `]` protégé (`[\]-]`),
+/// ni tiret littéral (`[+--]`, `[a-]`, `[a-c-e]`).
+fn classe_sans_tiret(motif: &str) -> bool {
+    let Some((dedans, _)) = motif.strip_prefix('[').and_then(|r| r.split_once(']')) else {
+        return false;
+    };
+    let c: Vec<char> = dedans.chars().collect();
+    let mut i = 0;
+    while i < c.len() {
+        if c.get(i + 1) == Some(&'-') {
+            let borne = |n: usize| c.get(n).is_some_and(char::is_ascii_alphanumeric);
+            if !borne(i) || !borne(i + 2) {
+                return false;
+            }
+            i += 3;
+        } else if c[i].is_ascii_alphanumeric() || matches!(c[i], '_' | ':' | '.' | ',' | ' ') {
+            i += 1;
+        } else {
+            return false;
+        }
+    }
+    !c.is_empty()
 }
 
 /// Ce qui suit un `{` hors guillemets : bash peut-il le développer
@@ -6693,6 +6763,138 @@ mod tests {
         ] {
             assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne}");
         }
+    }
+
+    /// KOB-502 : un programme natif peut étendre lui-même un joker, même cité : ceux
+    /// de MSYS le font sous Windows (`sort.exe *` et `sort.exe '*'`, sonde #463).
+    #[test]
+    fn joker_pour_un_natif_powershell_sur_tous_les_systemes() {
+        for ligne in [
+            "sort.exe *",
+            "sort.exe '*'",
+            "grep.exe x *",
+            "rg a *.rs",
+            "rg a '*'",
+            "uniq.exe src/*",
+            "uniq.exe 'src/*'",
+            "uniq src/*",
+            "uniq ./*",
+            "uniq f?",
+            "xxd src/*",
+        ] {
+            assert_ne!(ps(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+        // Un début fixe ne donne pas d'option, sauf pour `uniq` et `xxd`, où le nombre
+        // d'opérandes compte.
+        for ligne in ["sort.exe a*", "rg a src/*.rs"] {
+            assert_eq!(ps(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+        // Les cmdlets ne passent pas par un programme.
+        for ligne in [
+            "Get-ChildItem *.md",
+            "gci *.md",
+            "Get-Content *.md",
+            "gc *.md",
+        ] {
+            assert_eq!(ps(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+        // `where.exe` n'est pas un programme MSYS.
+        assert_eq!(ps("where.exe /R src '*.rs'").classe, Classe::Lecture);
+    }
+
+    /// KOB-502 : les alias de cmdlets dépendent du système, et les deux cas se
+    /// vérifient partout.
+    #[test]
+    fn alias_de_cmdlet_sous_windows_et_ailleurs() {
+        let natif = |ligne: &str, windows: bool| {
+            let d = decouper_en_notant(ligne, Shell::PowerShell).unwrap();
+            joker_pour_un_natif_pwsh(&d.jetons, windows).is_some()
+        };
+        for ligne in [
+            "sort *",
+            "ls *",
+            "cat *",
+            "gci | select *",
+            "gci | ft *",
+            "gci | fl *",
+        ] {
+            assert!(!natif(ligne, true), "{ligne}");
+            assert!(natif(ligne, false), "{ligne}");
+        }
+        for ligne in [
+            "sort.exe *",
+            "SORT.EXE '*'",
+            "C:/Git/usr/bin/sort *",
+            "./sort *",
+            "tr *",
+            "printf *",
+            "gci | sort.exe *",
+            "ls; sort.exe *",
+        ] {
+            assert!(natif(ligne, true), "{ligne}");
+            assert!(natif(ligne, false), "{ligne}");
+        }
+        for ligne in [
+            "sort.exe a*",
+            "sort.exe src/*",
+            "sort.exe ./src/*",
+            "gci *",
+            "gc *",
+            "rg '[a-z]+' src",
+            "grep -E '[0-9]+' f",
+            "tr '[a-z]' '[A-Z]'",
+            "tr -d '[:space:]'",
+        ] {
+            assert!(!natif(ligne, true), "{ligne}");
+            assert!(!natif(ligne, false), "{ligne}");
+        }
+        // Une classe qui peut contenir un tiret reste un joker.
+        for ligne in [
+            "sort.exe '[-]*'",
+            "sort.exe '[+--]*'",
+            "sort.exe '[a-]*'",
+            "sort.exe '[]-]*'",
+            "sort.exe '[^a]*'",
+            "sort.exe '[!a]*'",
+            "sort.exe '[[:punct:]]*'",
+            "sort.exe '[ -~]*'",
+            "sort.exe '[a\\-z]*'",
+            "sort.exe '-*'",
+            "sort.exe '*'",
+            "sort.exe --[o]utput=M",
+            "sort.exe '--[o]utput=M'",
+            "rg x --[p]re=calc",
+            "sort.exe -[a]*",
+            "sort.exe --[a-z]*",
+            "sort.exe '[a-c-e]*'",
+            "rg x [0-9-A]*",
+            "sort.exe '[\\]-]*'",
+            "sort.exe '[\"]-\"]*'",
+            "sort.exe '[a-z'",
+            "sort.exe '[]'",
+        ] {
+            assert!(natif(ligne, true), "{ligne}");
+            assert!(natif(ligne, false), "{ligne}");
+        }
+        // Sous MSYS, le chemin reste tel quel : `./--x` n'est pas une option. `pwsh` hors
+        // Windows le normalise : `sort ./*` écrit bien le fichier de `--output=M`.
+        for ligne in [
+            "sort.exe ./*",
+            "sort.exe ./-*",
+            "sort.exe src/../*",
+            "sort.exe .//*",
+        ] {
+            assert!(!natif(ligne, true), "{ligne}");
+            assert!(natif(ligne, false), "{ligne}");
+        }
+        assert!(natif("sort.exe ../ici/*", false));
+        assert!(natif("sort s*/../--output=M", false));
+        assert!(natif("sort ?rc/../--output=M", false));
+        assert!(natif("rg x [s]rc/../--pre=calc", false));
+        assert!(natif("sort ./--[o]utput=M", false));
+        assert!(natif("sort \\tmp\\ici\\*", false));
+        assert!(!natif("sort src/../--output=M", false), "sans joker");
+        assert!(!natif("sort.exe /tmp/*", false));
     }
 
     /// KOB-480 : sous PowerShell, `$null` non cité après une redirection de
