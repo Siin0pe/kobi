@@ -54,7 +54,12 @@ test('clic sur Valider : decider_carte accepte, issue puis départ', async ({ pa
   await expect(dialog(page)).toBeVisible();
   await expect(dialog(page)).toContainText('Écrire un fichier');
   await expect(dialog(page)).toContainText('Modifier le fichier notes.md');
-  await expect(dialog(page)).toContainText('60 s');
+  // Le compte à rebours part de l'échéance (60 s) et descend déjà : sous
+  // charge, le premier regard tombe sur 59 s ou moins. On vérifie la plage,
+  // pas un instant précis (KOB-486).
+  const secondes = Number((await page.locator('.kval-secs').textContent())?.match(/\d+/)?.[0]);
+  expect(secondes).toBeLessThanOrEqual(60);
+  expect(secondes).toBeGreaterThanOrEqual(40);
   // Sobriété : la cible sur une ligne, pas de diff à côté de Kobi.
   await expect(page.locator('.kval-cible')).toHaveText('/code/kobi/notes.md');
   await expect(page.locator('.kval .kval-diff')).toHaveCount(0);
