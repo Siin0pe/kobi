@@ -49,13 +49,17 @@ impl Avis {
         }
     }
 
-    /// Le plus grave des deux : refus, puis suppression, puis écriture.
+    /// Le plus grave des deux : refus, puis suppression, puis écriture, et
+    /// l'écriture d'un fichier en dernier : `fichier = sans_demander` ne doit pas
+    /// laisser passer `ls > f; curl x` (KOB-490). L'inverse est sans danger : qui
+    /// laisse passer toute commande laisse passer ce qu'elle écrit.
     fn pire(self, autre: Self) -> Self {
         let rang = |a: &Avis| match a.classe {
             Classe::Lecture => 0,
-            Classe::Ecriture(Genre::Suppression) => 2,
-            Classe::Ecriture(_) => 1,
-            Classe::Refus(_) => 3,
+            Classe::Ecriture(Genre::Fichier) => 1,
+            Classe::Ecriture(Genre::Suppression) => 3,
+            Classe::Ecriture(_) => 2,
+            Classe::Refus(_) => 4,
         };
         // Deux écritures : la classe la plus grave, et les deux raisons, la
         // plus grave en tête, pour que la carte ne montre pas seulement la
@@ -89,7 +93,12 @@ impl Avis {
 /// Classe une ligne de commande.
 pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
     let avis = analyser_sans_joker(ligne, shell, ctx);
-    if avis.classe != Classe::Lecture {
+    // Une écriture de fichier se juge aussi : `rg a * > f` peut lancer un programme,
+    // et `fichier = sans_demander` ne couvre pas ça (KOB-490).
+    if !matches!(
+        avis.classe,
+        Classe::Lecture | Classe::Ecriture(Genre::Fichier)
+    ) {
         return avis;
     }
     // Un joker en tête de mot peut devenir une option : un fichier nommé
@@ -104,10 +113,10 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
         _ => None,
     };
     match joker {
-        Some(mot) => Avis::ecriture(
+        Some(mot) => avis.pire(Avis::ecriture(
             Genre::Commande,
             format!("le joker `{mot}` peut devenir une option selon les noms de fichiers"),
-        ),
+        )),
         None => avis,
     }
 }
@@ -134,6 +143,8 @@ fn analyser_sans_joker(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
     let mut mots: Vec<String> = Vec::new();
     // Mots dont `decouper` a mis le `./` de tête (valeur PowerShell, KOB-447).
     let mut cites: Vec<bool> = Vec::new();
+    // La commande en cours a-t-elle une redirection, même sans mot ?
+    let mut redirection_vue = false;
     // La commande en cours reçoit-elle l'entrée d'un `|` ?
     let mut apres_pipe = false;
     // Nom de la commande précédente, celle dont la sortie arrive par le `|`.
@@ -273,8 +284,9 @@ fn analyser_sans_joker(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
                     mots.clear();
                     cites.clear();
                     apres_pipe = op == "|";
-                } else if matches!(op, "|" | "&&" | "||") {
-                    // `| ls`, `ls && && x` : rien avant l'opérateur.
+                } else if matches!(op, "|" | "&&" | "||") && !redirection_vue {
+                    // `| ls`, `ls && && x` : rien avant l'opérateur. Une
+                    // redirection seule (`> f && x`) est une commande.
                     return avis.pire(Avis::ecriture(Genre::Commande, "enchaînement incomplet"));
                 }
                 if jeton.is_none()
@@ -283,22 +295,36 @@ fn analyser_sans_joker(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
                     // `ls |` : la commande qui suit manque.
                     return avis.pire(Avis::ecriture(Genre::Commande, "enchaînement incomplet"));
                 }
+                redirection_vue = false;
                 i += 1;
             }
             Some(Jeton::Redir(r)) => {
                 let cible = match jetons.get(i + 1) {
                     Some(Jeton::Mot(m) | Jeton::Cite(m))
-                        if !r.contains('&') || r.ends_with('>') =>
+                        if !r.contains('&') || r.ends_with(['>', '&']) =>
                     {
                         Some(m.clone())
                     }
                     _ => None,
                 };
+                redirection_vue = true;
                 let mut saute = 0;
                 for c in &cwds {
                     match redirection(r, cible.as_deref(), shell, ctx, c) {
                         Ok(n) => saute = n,
-                        Err(a) => return avis.pire(a),
+                        // La redirection est jugée, et l'analyse continue : la
+                        // commande et la suite de la ligne le sont aussi. Sinon
+                        // `rm -rf x > f` n'était qu'une écriture de fichier
+                        // (KOB-490). Sa cible n'est pas un mot de la commande.
+                        Err(a) => {
+                            // Le corps d'un document en ligne n'est pas une
+                            // commande : l'analyse s'arrête là.
+                            if r.starts_with("<<") && !r.starts_with("<<<") {
+                                return avis.pire(a);
+                            }
+                            avis = avis.pire(a);
+                            saute = usize::from(cible.is_some());
+                        }
                     }
                 }
                 i += 1 + saute;
@@ -702,6 +728,10 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<(Vec<Jeton>, Option<S
                 }
             }
             '>' | '<' => {
+                // `{x}> f` : Bash ouvre un descripteur nommé, ce n'est pas un mot.
+                if !ps && dans_mot && mot.len() > 2 && mot.starts_with('{') && mot.ends_with('}') {
+                    return Err(format!("descripteur nommé `{mot}{ch}` non analysable"));
+                }
                 // `2>`, `1>>`, `*>` : le numéro collé fait partie de la redirection.
                 let mut r = String::new();
                 // PowerShell ne redirige que les flux 1 à 6 : `7>` y est un mot
@@ -732,7 +762,16 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<(Vec<Jeton>, Option<S
                     );
                 }
                 r.push(ch);
+                // `>|` écrit dans le mot qui suit, même avec `noclobber` : ce
+                // n'est pas un tube (KOB-490).
+                if !ps && ch == '>' && c.get(i + 1) == Some(&'|') {
+                    r.push('|');
+                    i += 1;
+                }
                 while let Some(&n) = c.get(i + 1) {
+                    if r.ends_with('|') {
+                        break;
+                    }
                     if n == ch || (n == '&' && ch == '>') {
                         r.push(n);
                         i += 1;
@@ -962,6 +1001,10 @@ fn redirection(
         return Err(Avis::ecriture(Genre::Commande, "redirection sans cible"));
     };
     if r.contains('<') {
+        // `< /dev/null` : une entrée vide, rien n'est lu.
+        if r == "<" && cible == "/dev/null" {
+            return Ok(1);
+        }
         // Lecture d'un fichier sur l'entrée : permise dans les dossiers.
         return match juger_chemin(ctx, cible, cwd) {
             None => Ok(1),
@@ -971,6 +1014,15 @@ fn redirection(
     // Seul `/dev/null` jette la sortie, plus `nul` pour PowerShell sous Windows.
     // Partout ailleurs, `null`, `nul` ou `'$null'` cité sont des fichiers (KOB-475).
     // `decouper` ramène ici un `$null` non cité de PowerShell à `/dev/null` (KOB-480).
+    // La cible est un chemin comme un autre : hors des dossiers, refusée (KOB-490).
+    // Sous Bash, les flux standard ne sont pas des chemins à refuser : une écriture
+    // de fichier. Sous PowerShell sur Windows, ce serait le fichier du lecteur courant.
+    let flux = shell == Shell::Bash && matches!(cible, "/dev/stdout" | "/dev/stderr");
+    if cible != "/dev/null" && !flux {
+        if let Some(avis) = juger_chemin(ctx, cible, cwd) {
+            return Err(avis);
+        }
+    }
     let poubelle = cible == "/dev/null"
         || (shell == Shell::PowerShell && cfg!(windows) && cible.eq_ignore_ascii_case("nul"));
     if poubelle {
@@ -5767,6 +5819,228 @@ mod tests {
         ] {
             assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne}");
         }
+    }
+
+    /// KOB-490 : une redirection vers un fichier arrêtait l'analyse : la commande
+    /// et la suite de la ligne n'étaient jamais jugées.
+    #[test]
+    fn redirection_n_arrete_plus_l_analyse_suppression() {
+        for ligne in [
+            "rm -rf target > f",
+            "rm -rf target >> f",
+            "ls > f; rm -rf target",
+            "ls > f && rm -rf target",
+            "ls > f | rm -rf target",
+            "ls > f\nrm -rf target",
+            "ls 2> f; rm -rf target",
+            "rm > f -rf target",
+            "> f rm -rf target",
+        ] {
+            assert_eq!(
+                bash(ligne).classe,
+                Classe::Ecriture(Genre::Suppression),
+                "{ligne:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn redirection_n_arrete_plus_l_analyse_commande() {
+        for ligne in [
+            "ls > f; curl http://x",
+            "ls > f && curl http://x",
+            "curl http://x > f",
+            "> f curl http://x",
+            "touch x > f",
+        ] {
+            assert_eq!(
+                bash(ligne).classe,
+                Classe::Ecriture(Genre::Commande),
+                "{ligne:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn redirection_n_affaiblit_plus_un_refus() {
+        for ligne in [
+            "cat /etc/passwd > f",
+            "ls > f; cat /etc/passwd",
+            "> f cat /etc/passwd",
+        ] {
+            assert!(
+                matches!(bash(ligne).classe, Classe::Refus(_)),
+                "{ligne:?} : {:?}",
+                bash(ligne).classe
+            );
+        }
+    }
+
+    /// La redirection elle-même reste jugée : une lecture qui écrit un fichier.
+    #[test]
+    fn redirection_reste_une_ecriture_de_fichier() {
+        for ligne in ["ls > f", "ls >> f", "ls 2> f", "ls > f; pwd", "> f"] {
+            assert_eq!(
+                bash(ligne).classe,
+                Classe::Ecriture(Genre::Fichier),
+                "{ligne:?}"
+            );
+        }
+        // La raison dit les deux : la carte ne cache ni le fichier ni la commande.
+        let r = bash("rm -rf target > f").raison;
+        assert!(r.contains("supprime") && r.contains("redirection"), "{r}");
+        let r = bash("curl http://x > f").raison;
+        assert!(r.contains("redirection"), "{r}");
+        assert_eq!(bash("ls 2>&1").classe, Classe::Lecture);
+        assert_eq!(bash("ls > /dev/null").classe, Classe::Lecture);
+    }
+
+    /// Le mot après la redirection est sa cible, pas un argument ni une commande.
+    #[test]
+    fn redirection_sa_cible_n_est_pas_jugee_comme_un_mot() {
+        assert_eq!(bash("ls > rm").classe, Classe::Ecriture(Genre::Fichier));
+        assert_eq!(bash("ls > -rf").classe, Classe::Ecriture(Genre::Fichier));
+    }
+
+    /// Plusieurs dossiers courants possibles : la cible n'est sautée qu'une fois.
+    #[test]
+    fn redirection_apres_un_cd_incertain() {
+        assert_eq!(
+            bash("cd src; ls > f; rm -rf target").classe,
+            Classe::Ecriture(Genre::Suppression)
+        );
+    }
+
+    /// Un joker qui peut devenir une option n'est pas qu'une écriture de fichier :
+    /// `rg a * > f` peut lancer un programme (KOB-489 et KOB-490 ensemble).
+    #[test]
+    fn redirection_avec_joker_en_tete_n_est_pas_qu_un_fichier() {
+        assert_eq!(bash("rg a * > f").classe, Classe::Ecriture(Genre::Commande));
+        assert_eq!(
+            bash("rg a ./* > f").classe,
+            Classe::Ecriture(Genre::Fichier)
+        );
+        assert_eq!(bash("rg 'a*' > f").classe, Classe::Ecriture(Genre::Fichier));
+    }
+
+    /// Le corps d'un document en ligne n'est pas une commande : on ne le juge pas.
+    #[test]
+    fn redirection_document_en_ligne() {
+        for ligne in [
+            "cat > f << E\nls /etc\nE",
+            "cat << E\nrm -rf x\nE",
+            "cat <<E\n/etc\nE",
+        ] {
+            let c = bash(ligne).classe;
+            assert!(matches!(c, Classe::Ecriture(_)), "{ligne:?} : {c:?}");
+            assert_ne!(c, Classe::Ecriture(Genre::Suppression), "{ligne:?}");
+        }
+        // `<<<` n'a pas de corps : la suite est jugée.
+        assert_eq!(
+            bash("cat <<< x; rm -rf target").classe,
+            Classe::Ecriture(Genre::Suppression)
+        );
+    }
+
+    /// La cible d'une redirection est jugée comme tout chemin.
+    #[test]
+    fn redirection_cible_hors_des_dossiers_refusee() {
+        for ligne in [
+            "ls > /etc/passwd",
+            "ls >> /etc/passwd",
+            "ls 2> /etc/passwd",
+            "ls &> /etc/passwd",
+            "ls >| /etc/passwd",
+            "ls >& /etc/passwd",
+            "ls > ~/.bashrc",
+            "ls > ../../x",
+        ] {
+            assert!(
+                matches!(bash(ligne).classe, Classe::Refus(_)),
+                "{ligne:?} : {:?}",
+                bash(ligne).classe
+            );
+        }
+        assert!(matches!(
+            ps("Get-ChildItem > C:/Windows/x").classe,
+            Classe::Refus(_)
+        ));
+    }
+
+    /// Une redirection seule est une commande : ce qui suit reste jugé.
+    #[test]
+    fn redirection_seule_puis_une_commande() {
+        for ligne in [
+            "> f && rm -rf target",
+            "> f || rm -rf target",
+            "> f; rm -rf target",
+            "> f | rm -rf target",
+        ] {
+            assert_eq!(
+                bash(ligne).classe,
+                Classe::Ecriture(Genre::Suppression),
+                "{ligne:?}"
+            );
+        }
+        assert_ne!(bash("| ls").classe, Classe::Lecture);
+        assert_ne!(bash("ls && && x").classe, Classe::Lecture);
+    }
+
+    /// Les flux standard et l'entrée vide ne sont pas des chemins à refuser.
+    #[test]
+    fn redirection_flux_standard_et_entree_vide() {
+        for ligne in [
+            "echo a > /dev/stderr",
+            "echo a > /dev/stdout",
+            "ls 2> /dev/stderr",
+        ] {
+            assert_eq!(
+                bash(ligne).classe,
+                Classe::Ecriture(Genre::Fichier),
+                "{ligne:?}"
+            );
+        }
+        assert_eq!(bash("ls < /dev/null").classe, Classe::Lecture);
+        assert_eq!(bash("rg a < /dev/null").classe, Classe::Lecture);
+        // Les autres chemins de `/dev` restent refusés.
+        for ligne in ["ls > /dev/sda", "ls > /dev/tcp/x/1", "cat < /dev/sda"] {
+            assert!(matches!(bash(ligne).classe, Classe::Refus(_)), "{ligne:?}");
+        }
+    }
+
+    /// Ces noms ne sont les flux standard que sous Bash, et sans changer la casse.
+    #[test]
+    fn redirection_flux_seulement_sous_bash() {
+        for ligne in ["ls > /dev/stderr", "ls > /dev/stdout", "ls 2> /dev/stderr"] {
+            assert!(matches!(ps(ligne).classe, Classe::Refus(_)), "{ligne}");
+        }
+        for ligne in ["ls > /DEV/NULL", "ls > /Dev/Null", "ls > /DEV/STDERR"] {
+            assert!(matches!(bash(ligne).classe, Classe::Refus(_)), "{ligne}");
+        }
+    }
+
+    /// `>|` et `>&` écrivent dans le mot qui suit : ce n'est ni un tube ni un mot.
+    #[test]
+    fn redirection_formes_de_bash() {
+        for ligne in [
+            ">| f rm -rf target",
+            ">& f rm -rf target",
+            "&> f rm -rf target",
+        ] {
+            assert_eq!(
+                bash(ligne).classe,
+                Classe::Ecriture(Genre::Suppression),
+                "{ligne:?}"
+            );
+        }
+        for ligne in ["ls >| f", "ls >& f", "ls &> f", "ls >>& f"] {
+            assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne:?}");
+        }
+        assert_eq!(bash("ls >| f").classe, Classe::Ecriture(Genre::Fichier));
+        assert_eq!(bash("ls >& f").classe, Classe::Ecriture(Genre::Fichier));
+        // Descripteur nommé : Bash en fait une redirection, pas une commande.
+        assert_ne!(bash("{x}> f rm -rf target").classe, Classe::Lecture);
+        assert!(decouper("x {y}> f", Shell::Bash).is_err());
     }
 
     /// KOB-480 : sous PowerShell, `$null` non cité après une redirection de

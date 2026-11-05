@@ -446,6 +446,41 @@ mod tests {
         }
     }
 
+    /// KOB-490 : avec `fichier = sans_demander`, une redirection faisait passer
+    /// toute la ligne sans carte, suppression comprise.
+    #[test]
+    fn redirection_ne_fait_pas_passer_la_ligne_sans_carte() {
+        let d = [kobi()];
+        let libre = PermissionsConfig {
+            fichier: Politique::SansDemander,
+            ..PermissionsConfig::default()
+        };
+        let juge = |l: &str| {
+            let carte = std::cell::Cell::new(false);
+            let demander = |_: &'static str, _: String, _: Value| {
+                carte.set(true);
+                None
+            };
+            let v = decider_avec(&appel("Bash", l, &kobi()), &d, &libre, &demander);
+            (decision(&v).to_owned(), carte.get())
+        };
+        for l in [
+            "rm -rf target > f",
+            "ls > f; rm -rf target",
+            "ls > f && curl http://x",
+            "curl http://x > f",
+        ] {
+            assert_eq!(juge(l), ("deny".to_owned(), true), "{l}");
+        }
+        // Hors des dossiers : refus, sans carte.
+        assert_eq!(juge("cat /etc/passwd > f"), ("deny".to_owned(), false));
+        assert_eq!(juge("ls > /etc/passwd"), ("deny".to_owned(), false));
+        assert_eq!(juge("> f && rm -rf target"), ("deny".to_owned(), true));
+        assert_eq!(juge("rg a * > f"), ("deny".to_owned(), true));
+        // Une simple redirection reste régie par le réglage des fichiers.
+        assert_eq!(juge("ls > f"), ("allow".to_owned(), false));
+    }
+
     /// Écritures (KOB-156) : la carte est demandée, et la réponse décide.
     #[test]
     fn ecritures_validees_par_la_carte() {
