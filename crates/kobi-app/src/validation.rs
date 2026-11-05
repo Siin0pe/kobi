@@ -129,6 +129,10 @@ pub struct CarteValidation {
     /// Une phrase : ce que Kobi va faire.
     pub resume: String,
     pub detail: Detail,
+    /// Pourquoi Kobi demande, d'après kobi-perms (« modifie un alias… »),
+    /// sous la cible de la carte (KOB-483).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raison: Option<String>,
     /// Délai avant refus, pour le compte à rebours.
     pub echeance_ms: u64,
     /// Absent tant que la carte attend ; posé quand elle est tranchée.
@@ -190,6 +194,7 @@ impl CarteValidation {
             genre,
             resume,
             detail,
+            raison: None,
             echeance_ms: echeance.as_millis() as u64,
             statut: None,
         }

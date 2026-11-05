@@ -162,6 +162,8 @@ export class Validations {
     root.append(head, titre);
     const ou = cible(carte.detail);
     if (ou && ou !== carte.resume) root.append(el('div', 'kval-cible', ou));
+    // Pourquoi Kobi demande (KOB-483) : sans elle, la carte ne dit pas le risque.
+    if (carte.raison) root.append(el('div', 'kval-raison', carte.raison));
 
     const temps = el('div', 'kval-timer');
     temps.id = `kval-temps-${carte.id}`;

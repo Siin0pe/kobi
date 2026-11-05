@@ -482,6 +482,9 @@ pub fn executer<R: Runtime>(
             if let Some(resume) = texte(&params, "summary").filter(|r| !r.trim().is_empty()) {
                 carte.resume = resume.to_owned();
             }
+            carte.raison = texte(&params, "reason")
+                .filter(|r| !r.trim().is_empty())
+                .map(str::to_owned);
             let r = crate::validation::demander(app, carte);
             Ok(json!({ "accepte": r.acceptee(), "decision": r.decision() }))
         }
@@ -1263,6 +1266,56 @@ mod tests {
             cli(&e, "validation.ask", demande).unwrap(),
             json!({"accepte": false, "decision": "delai"})
         );
+    }
+
+    /// KOB-483 : la raison envoyée par le hook arrive sur la carte publiée.
+    #[test]
+    fn raison_du_hook_sur_la_carte() {
+        use tauri::Listener;
+        let e = essai();
+        e.app
+            .manage(crate::validation::Validations::new(Duration::from_millis(
+                300,
+            )));
+        let vues = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+        let v = vues.clone();
+        e.app.listen(crate::chef::EVENEMENT_CARTE, move |ev| {
+            v.lock()
+                .unwrap()
+                .push(serde_json::from_str(ev.payload()).unwrap());
+        });
+        repondre_aux_cartes(&e, Some(true));
+        let demande = json!({"kind": "commande", "tool": "Bash", "input": {"command": "git status"},
+            "reason": "git peut lancer des programmes configurés dans ce dépôt"});
+        cli(&e, "validation.ask", demande).unwrap();
+        let vues = vues.lock().unwrap();
+        assert_eq!(
+            vues[0]["raison"],
+            "git peut lancer des programmes configurés dans ce dépôt"
+        );
+        // Sans raison (ou vide), pas de champ.
+        drop(vues);
+        let e = essai();
+        e.app
+            .manage(crate::validation::Validations::new(Duration::from_millis(
+                300,
+            )));
+        let sans = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+        let v = sans.clone();
+        e.app.listen(crate::chef::EVENEMENT_CARTE, move |ev| {
+            v.lock()
+                .unwrap()
+                .push(serde_json::from_str(ev.payload()).unwrap());
+        });
+        repondre_aux_cartes(&e, Some(true));
+        cli(
+            &e,
+            "validation.ask",
+            json!({"kind": "commande", "tool": "Bash",
+            "input": {"command": "touch x"}, "reason": " "}),
+        )
+        .unwrap();
+        assert!(sans.lock().unwrap()[0].get("raison").is_none());
     }
 
     #[test]

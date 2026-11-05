@@ -348,6 +348,7 @@ pub const COMMANDES: &[Commande] = &[
                 requis(p("tool", Texte, "Outil appelé (Write, Edit, Bash…).")),
                 requis(p("input", Json, "Entrée de l'outil, telle que l'agent l'a envoyée.")),
                 p("summary", Texte, "Résumé en une phrase, à la place de celui de Kobi."),
+                p("reason", Texte, "Pourquoi Kobi demande (raison du classement), montré sur la carte."),
             ],
         )
     },

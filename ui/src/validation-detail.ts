@@ -23,6 +23,8 @@ export interface CarteValidation {
   resume: string;
   detail?: Detail | null;
   echeance_ms?: number;
+  /** Pourquoi Kobi demande, d'après son classement (« modifie un alias… »), KOB-483. */
+  raison?: string | null;
   /** Absent tant que la carte attend ; posé quand la voix ou la coque a tranché. */
   statut?: Statut;
 }

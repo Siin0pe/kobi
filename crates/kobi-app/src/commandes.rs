@@ -156,6 +156,7 @@ fn demander_a_l_app(genre: &'static str, resume: String, appel: Value) -> Option
         "summary": resume,
         "tool": appel["tool"],
         "input": appel["input"],
+        "reason": appel["reason"],
     });
     match kobi_ctl::client::appeler(&point, "validation.ask", params, kobi_ctl::Origine::Cli) {
         Ok(v) => v["decision"].as_str().map(str::to_owned),
@@ -218,7 +219,10 @@ pub fn decider_avec(
             .or_insert_with(|| json!(cwd.display().to_string()));
     }
     let resume = resume(&action, &ctx);
-    match demander(genre, resume, json!({ "tool": outil, "input": entree })).as_deref() {
+    // La raison de kobi-perms part avec l'appel : la carte dit pourquoi Kobi
+    // demande (« modifie un alias », « git peut lancer… », KOB-483).
+    let appel = json!({ "tool": outil, "input": entree, "reason": raison });
+    match demander(genre, resume, appel).as_deref() {
         Some("accepte") => reponse(true, "validé par l'utilisateur sur la carte de Kobi"),
         Some("delai") => reponse(
             false,
@@ -333,6 +337,30 @@ mod tests {
     }
 
     /// Écritures (KOB-156) : la carte est demandée, et la réponse décide.
+    /// KOB-483 : la raison de kobi-perms part avec la demande de carte, pour
+    /// que la carte dise pourquoi Kobi demande.
+    #[test]
+    fn raison_envoyee_a_la_carte() {
+        use std::cell::RefCell;
+        let d = [kobi()];
+        let defaut = PermissionsConfig::default();
+        for (outil, l, attendu) in [
+            ("PowerShell", "Remove-Item alias:where -Force", "alias"),
+            ("Bash", "git status", "git peut lancer"),
+            ("Bash", "touch NOTES.md", "touch"),
+        ] {
+            let vu: RefCell<Option<Value>> = RefCell::default();
+            let demander = |_: &'static str, _: String, appel: Value| {
+                *vu.borrow_mut() = Some(appel);
+                Some("refuse".to_owned())
+            };
+            decider_avec(&appel(outil, l, &kobi()), &d, &defaut, &demander);
+            let appel = vu.borrow().clone().expect("carte demandée");
+            let raison = appel["reason"].as_str().unwrap_or_default();
+            assert!(raison.contains(attendu), "{l} : {raison:?}");
+        }
+    }
+
     #[test]
     fn ecritures_validees_par_la_carte() {
         use std::cell::RefCell;
