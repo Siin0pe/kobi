@@ -4885,7 +4885,6 @@ mod tests {
             ("gci src -rec", Shell::PowerShell),
             ("tree", Shell::PowerShell),
             ("gci -Depth 5", Shell::PowerShell),
-            ("gci \u{2013}Recurse", Shell::PowerShell),
         ];
         for (l, sh) in lignes {
             assert_eq!(
@@ -4894,6 +4893,11 @@ mod tests {
                 "{l} sans lien qui sort"
             );
         }
+        // Un tiret Unicode passe par la carte, même devant une cmdlet (KOB-498).
+        assert_ne!(
+            analyser("gci \u{2013}Recurse", Shell::PowerShell, &x).classe,
+            Classe::Lecture
+        );
         // Un parcours récursif qui reçoit ses chemins d'un `|` : sur la carte,
         // même sans lien qui sort.
         assert_ne!(
