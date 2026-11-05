@@ -531,6 +531,14 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
                     // PowerShell finit aussi une ligne sur `\r` : `-x` serait
                     // collé à la suite sans qu'on le voie (KOB-474).
                     Some('\r') => return Err("continuation de ligne sur un retour chariot".into()),
+                    // PowerShell, hors guillemets : `` `-Pattern `` est une valeur
+                    // (et non le paramètre), `` `t `` une tabulation… Le mot reçu
+                    // n'est pas celui lu ici (KOB-479, même règle que KOB-477).
+                    Some(_) if ps => {
+                        return Err(
+                            "accent grave hors guillemets (PowerShell) : non analysable".into()
+                        )
+                    }
                     Some(_) => {
                         dans_mot = true;
                         mot.push(brut[i]);
@@ -2973,8 +2981,7 @@ mod tests {
             "Get-Content Cargo.toml,README.md",
             "Get-Content 'a,b.txt'",
             "gc \"a,b.txt\"",
-            // Virgule échappée : un seul nom ; propriétés de Select-Object.
-            "gc a`,b.txt",
+            // Propriétés de Select-Object.
             "gci src | Select-Object Name,Length",
             // Un vrai paramètre reste un paramètre.
             "Get-Content -Encoding utf8 Cargo.toml",
@@ -2984,6 +2991,12 @@ mod tests {
         ] {
             assert!(lu(&analyser(ligne, Shell::PowerShell, &x)), "{ligne}");
         }
+        // Virgule échappée : tout accent grave hors guillemets passe par la
+        // carte sous PowerShell (KOB-479).
+        assert_ne!(
+            analyser("gc a`,b.txt", Shell::PowerShell, &x).classe,
+            Classe::Lecture
+        );
         // Sous Bash, la virgule n'est qu'un caractère du nom.
         assert_eq!(
             analyser("cat a,b.txt", Shell::Bash, &x).classe,
@@ -3716,6 +3729,44 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// KOB-479 : hors guillemets, `` `-Pattern `` est une valeur pour
+    /// PowerShell : `Select-String -NotMatch `-Pattern ../x` affichait un
+    /// fichier hors du dossier (sonde #441). Tout accent grave hors guillemets
+    /// passe par la carte, sauf la continuation de fin de ligne.
+    #[test]
+    fn accent_grave_hors_guillemets() {
+        let x = ctx();
+        for l in [
+            "Select-String -NotMatch `-Pattern ../dehors/secret.txt",
+            "Select-String -NotMatch `\u{2013}Pattern ../dehors/secret.txt",
+            "sls -NotMatch `-Pattern ..\\dehors\\secret.txt",
+            "Get-Content a`tb",
+            "Get-Content `u{2E}`u{2E}/x",
+            "g`ci -Recurse",
+        ] {
+            let a = analyser(l, Shell::PowerShell, &x);
+            assert_ne!(a.classe.cle(), "lecture", "{l}");
+            assert_eq!(
+                a.classe,
+                analyser("echo $x", Shell::PowerShell, &x).classe,
+                "{l} : {}",
+                a.raison
+            );
+        }
+        // La continuation de fin de ligne ne change pas (KOB-474).
+        assert_eq!(
+            analyser("Get-ChildItem `\nsrc", Shell::PowerShell, &x)
+                .classe
+                .cle(),
+            "lecture"
+        );
+        // Sous Bash, `\` reste l'échappement.
+        assert_eq!(
+            analyser("cat src/a\\ b.rs", Shell::Bash, &x).classe.cle(),
+            analyser("cat 'src/a b.rs'", Shell::Bash, &x).classe.cle()
+        );
     }
 
     /// KOB-475 : sous bash, un retour chariot hors guillemets est un caractère
