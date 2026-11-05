@@ -770,6 +770,29 @@ const SUPPRESSION: &[&str] = &[
     "clc",
 ];
 
+/// Cmdlets PowerShell qui créent, changent ou retirent un alias (KOB-466).
+const ALIAS_MODIFIES: &[&str] = &[
+    "set-alias",
+    "sal",
+    "new-alias",
+    "nal",
+    "remove-alias",
+    "import-alias",
+    "ipal",
+];
+
+/// Mot qui désigne le lecteur `alias:` (`alias:where`, `Alias:\where`,
+/// `-Path:alias:x`, `Microsoft.PowerShell.Core\Alias::where`).
+fn touche_un_alias(x: &str) -> bool {
+    let x = x.to_ascii_lowercase();
+    let valeur = if x.starts_with('-') {
+        x.split_once(':').map_or("", |(_, v)| v)
+    } else {
+        &x
+    };
+    valeur.starts_with("alias:") || x.contains("\\alias::") || x.contains("/alias::")
+}
+
 /// Shells et interpréteurs : ils lancent n'importe quoi.
 const SHELLS: &[&str] = &[
     "bash",
@@ -1346,10 +1369,22 @@ fn commande(
         }
         return Avis::lecture();
     }
+    // Un alias retiré ou redéfini change le sens des commandes qui suivent
+    // (`Remove-Item alias:where -Force; where C:\x:*` lance where.exe) : la
+    // carte le dit (KOB-466). Les commandes de lecture connues gardent leurs
+    // contrôles (`cat alias:x C:\secret` reste refusé).
+    let alias = shell == Shell::PowerShell
+        && (ALIAS_MODIFIES.contains(&nom.as_str()) || args.iter().any(|x| touche_un_alias(x)));
+    const ALIAS: &str =
+        "modifie un alias PowerShell : les commandes suivantes peuvent changer de sens";
     if SUPPRESSION.contains(&nom.as_str()) {
         return Avis::ecriture(
             Genre::Suppression,
-            format!("`{premier}` supprime des fichiers"),
+            if alias {
+                format!("`{premier}` supprime des fichiers ou {ALIAS}")
+            } else {
+                format!("`{premier}` supprime des fichiers")
+            },
         );
     }
     if SHELLS.contains(&nom.as_str()) {
@@ -1363,7 +1398,11 @@ fn commande(
     if !connue {
         return Avis::ecriture(
             Genre::Commande,
-            format!("`{premier}` n'est pas une commande de lecture connue de Kobi"),
+            if alias {
+                format!("`{premier}` {ALIAS}")
+            } else {
+                format!("`{premier}` n'est pas une commande de lecture connue de Kobi")
+            },
         );
     }
     if let Some(a) = options_interdites(&nom, args) {
@@ -3358,6 +3397,63 @@ mod tests {
             analyser("echo --%", Shell::Bash, &x).classe.cle(),
             "lecture"
         );
+    }
+
+    /// KOB-466 : une commande qui retire ou redéfinit un alias PowerShell
+    /// passe par une carte qui le dit (sonde #421 : la carte disait
+    /// « `Remove-Item` supprime des fichiers »).
+    #[test]
+    fn carte_qui_dit_qu_un_alias_change() {
+        let x = ctx();
+        for l in [
+            "Remove-Item alias:where -Force",
+            "del alias:where -Force",
+            r"ri alias:\where -Force",
+            "Remove-Item -Path alias:where -Force",
+            "Remove-Item -Path:Alias:where -Force",
+            r"Remove-Item 'Microsoft.PowerShell.Core\Alias::where' -Force",
+            "Remove-Item x.txt,alias:where -Force",
+            "Remove-Alias where -Force",
+            "Set-Alias where where.exe -Force",
+            "sal where where.exe",
+            "New-Alias w where.exe",
+            "nal w where.exe",
+            "Import-Alias alias.csv",
+            "Set-Item alias:where where.exe -Force",
+            "New-Item -Path alias: -Name where -Value where.exe",
+            "Rename-Item alias:where w -Force",
+            r"Remove-Item alias:where -Force; where C:\Users\moi\.ssh:*",
+        ] {
+            let a = analyser(l, Shell::PowerShell, &x);
+            assert_ne!(a.classe.cle(), "lecture", "{l}");
+            assert!(a.raison.contains("alias"), "{l} : {}", a.raison);
+        }
+        // Les commandes de lecture connues gardent leurs contrôles, et une
+        // suppression de fichiers reste une suppression.
+        assert_eq!(
+            analyser(
+                r"cat alias:x C:\Users\moi\.ssh\id_rsa",
+                Shell::PowerShell,
+                &x
+            )
+            .classe
+            .cle(),
+            "refus"
+        );
+        for l in [
+            "git clean -fdx . alias:x",
+            "Remove-Item -Recurse src,alias:x -Force",
+        ] {
+            let a = analyser(l, Shell::PowerShell, &x);
+            assert_eq!(a.classe, Classe::Ecriture(Genre::Suppression), "{l}");
+        }
+        assert!(analyser("pwsh -c x alias:x", Shell::PowerShell, &x)
+            .raison
+            .contains("n'importe quelle commande"));
+        // Sous Bash, `alias:x` n'est qu'un mot.
+        assert!(!analyser("rm alias:x", Shell::Bash, &x)
+            .raison
+            .contains("alias PowerShell"));
     }
 
     /// KOB-439 : `where.exe` juge le dossier de `-R` comme celui de `/R`, et
