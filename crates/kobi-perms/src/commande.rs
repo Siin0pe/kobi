@@ -2098,7 +2098,7 @@ fn options_interdites(nom: &str, args: &[String], shell: Shell) -> Option<Avis> 
                 "`sort -o`, `-T` ou `--compress-program` écrit ou lance un programme",
             ))
         }
-        "uniq" if args.iter().filter(|x| !x.starts_with('-')).count() > 1 => Some(Avis::ecriture(
+        "uniq" if positionnels_uniq(args) > 1 => Some(Avis::ecriture(
             Genre::Fichier,
             "`uniq` avec deux fichiers écrit dans le second",
         )),
@@ -2195,6 +2195,36 @@ fn options_interdites(nom: &str, args: &[String], shell: Shell) -> Option<Avis> 
 fn abrege(x: &str, longue: &str) -> bool {
     let nom = x.split('=').next().unwrap_or(x);
     nom.len() >= 3 && nom.starts_with("--") && (longue.starts_with(nom) || nom.starts_with(longue))
+}
+
+/// Opérandes de `uniq` (entrée, puis sortie) : après `--`, tout mot compte
+/// (`uniq -- in -sortie` écrit `-sortie`, KOB-461) ; les valeurs de `-f`,
+/// `-s`, `-w` (séparées) ne comptent pas ; `-` seul est un opérande ; après
+/// le premier opérande, tout mot compte (BSD uniq).
+fn positionnels_uniq(args: &[String]) -> usize {
+    let mut n = 0;
+    let mut options = true;
+    let mut i = 0;
+    while let Some(x) = args.get(i) {
+        if options && x == "--" {
+            options = false;
+        } else if options && x.starts_with('-') && x != "-" {
+            let a_valeur = matches!(x.as_str(), "-f" | "-s" | "-w")
+                || ["--skip-fields", "--skip-chars", "--check-chars"]
+                    .iter()
+                    .any(|o| x == o);
+            if a_valeur {
+                i += 1;
+            }
+        } else {
+            n += 1;
+            // BSD uniq (macOS) arrête les options au premier opérande, comme
+            // GNU sous `POSIXLY_CORRECT` : `uniq in -sortie` écrit `-sortie`.
+            options = false;
+        }
+        i += 1;
+    }
+    n
 }
 
 /// Positionnels de `xxd`, sans les valeurs d'options (`-l 64`, `-s -0x10`).
@@ -4708,6 +4738,36 @@ mod tests {
             assert_ne!(bash(l).classe, Classe::Lecture, "{l}");
         }
         assert_eq!(bash("go version").classe, Classe::Lecture);
+    }
+
+    /// KOB-461 : `uniq ENTRÉE SORTIE` écrit dans la sortie ; après `--`,
+    /// une sortie à tiret compte aussi (`uniq -- in -sortie` passait pour
+    /// une lecture).
+    #[test]
+    fn uniq_sortie_apres_deux_tirets() {
+        for l in [
+            "uniq -- in -sortie",
+            "uniq in sortie",
+            "uniq -c -- in -sortie",
+            "uniq -f 1 in sortie",
+            "uniq in -sortie",
+            "uniq - -x",
+            "uniq -c in -x",
+            // Sortie au nom numérique (relecture de KOB-475 par kobi-a).
+            "uniq f 2",
+            "uniq -c f 2",
+        ] {
+            assert_ne!(bash(l).classe, Classe::Lecture, "{l}");
+        }
+        for l in [
+            "uniq in",
+            "uniq -c in",
+            "uniq -- -in",
+            "uniq -f 1 in",
+            "uniq -",
+        ] {
+            assert_eq!(bash(l).classe, Classe::Lecture, "{l}");
+        }
     }
 
     const KOBI: &str = "C:/Users/moi/Desktop/kobi";
