@@ -62,6 +62,7 @@ l'utilisateur : Kobi lui montre une carte et attend jusqu'à une minute. Appelle
 sans demander l'accord en texte, même pour une suppression : la carte de Kobi est la confirmation.
 - Lance la commande depuis un dossier de code (`cd <dossier> && git log -5` si besoin), sans `$( )`, \
 variable ni redirection vers un fichier.
+- Écris `./*.md` plutôt que `*.md` : un joker en tête de mot demande une validation.
 - Si Kobi refuse (refus de l'utilisateur, pas de réponse, hors des dossiers), ne contourne pas et ne \
 réessaie pas : dis-le en une phrase et donne la commande ou le contenu prêt à copier.";
 
@@ -411,6 +412,17 @@ mod tests {
         // Et git, lui, demande un oui : le prompt le dit.
         assert!(!commande::analyser("git status", kobi_perms::Shell::Bash, &ctx).est_lecture());
         assert!(PROMPT_COMMANDES.contains("Les commandes git"));
+    }
+
+    /// KOB-489 : le conseil du prompt dit vrai : `./*.md` passe, `*.md` demande un oui.
+    #[test]
+    fn prompt_conseille_un_joker_qui_passe() {
+        assert!(PROMPT_COMMANDES.contains("`./*.md` plutôt que `*.md`"));
+        let mut ctx = Contexte::new(vec![kobi()]);
+        ctx.cwd = Some(kobi());
+        let lecture = |l: &str| commande::analyser(l, kobi_perms::Shell::Bash, &ctx).est_lecture();
+        assert!(lecture("ls ./*.md"));
+        assert!(!lecture("ls *.md"));
     }
 
     /// Écritures (KOB-156) : la carte est demandée, et la réponse décide.
