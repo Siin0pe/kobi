@@ -597,6 +597,13 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
                                         "continuation de ligne entre guillemets doubles".into()
                                     )
                                 }
+                                // Devant autre chose que `$`, l'accent grave, `"` et
+                                // `\`, bash garde la barre : `"..\x"` est `..\x`, qui
+                                // sort du dossier sous Git Bash (KOB-497).
+                                Some(&n) if !ps && !matches!(n, '$' | '`' | '"' | '\\') => {
+                                    mot.push('\\');
+                                    mot.push(brut[i]);
+                                }
                                 Some(_) => mot.push(brut[i]),
                                 None => return Err("échappement en fin de ligne".into()),
                             }
@@ -3029,7 +3036,12 @@ fn chemins(nom: &str, args: &[String], shell: Shell, ctx: &Contexte, cwd: &Path)
             // Sous PowerShell, un joker (`-Path:l*`) est développé par la
             // cmdlet : jugé aussi. Sous Bash, `--include=*.rs` est un filtre
             // de noms, pas un chemin.
-            if let Some((_, v)) = valeur {
+            // Un format de git n'est jamais un chemin (`--format="%h\\n"`, KOB-497).
+            let format_git = nom == "git"
+                && ["--format=", "--pretty=", "--date="]
+                    .iter()
+                    .any(|o| x.starts_with(o));
+            if let Some((_, v)) = valeur.filter(|_| !format_git) {
                 let existe = !v.is_empty()
                     && bases
                         .iter()
@@ -6305,6 +6317,77 @@ mod tests {
         // Descripteur nommé : Bash en fait une redirection, pas une commande.
         assert_ne!(bash("{x}> f rm -rf target").classe, Classe::Lecture);
         assert!(decouper("x {y}> f", Shell::Bash).is_err());
+    }
+
+    /// KOB-497 : entre guillemets doubles, bash garde `\` devant tout autre caractère
+    /// que `$`, accent grave, `"`, `\` et saut de ligne. Sous Git Bash, `"..\x"` sort
+    /// du dossier (sonde #463) : le mot jugé doit être celui que bash donne.
+    #[test]
+    fn barre_inverse_entre_guillemets_doubles_reste_dans_le_mot() {
+        assert_eq!(
+            decouper(r#"x "a\b" "a\$b" "a\"b" "a\\b""#, Shell::Bash),
+            Ok(vec![
+                Jeton::Mot("x".into()),
+                Jeton::Mot(r"a\b".into()),
+                Jeton::Mot("a$b".into()),
+                Jeton::Mot("a\"b".into()),
+                Jeton::Mot(r"a\b".into()),
+            ])
+        );
+        for ligne in [
+            r#"cat "..\secret.txt""#,
+            r#"cat ".\..\secret.txt""#,
+            r#"cat "..\..\x""#,
+            r#"ls "..\.." "#,
+            r#"cat "sous\..\..\x""#,
+            r#"ls > "..\x""#,
+        ] {
+            assert!(
+                matches!(bash(ligne).classe, Classe::Refus(_)),
+                "{ligne} : {:?}",
+                bash(ligne).classe
+            );
+        }
+        // Mêmes règles qu'entre guillemets simples pour un chemin qui reste dedans
+        // ou un motif de recherche.
+        for ligne in [
+            r#"grep "a\.b" Cargo.toml"#,
+            r#"grep "a\"b" Cargo.toml"#,
+            r#"rg "fn main\(" src"#,
+            r#"rg "\bfoo\b" src"#,
+            r#"grep "a\\b" Cargo.toml"#,
+            r#"cat "src\a.rs""#,
+            r#"echo "a\nb""#,
+        ] {
+            let simple = ligne.replace('"', "'");
+            assert_eq!(
+                bash(ligne).classe,
+                if ligne.contains("\\\"") || ligne.contains("\\\\") {
+                    Classe::Lecture
+                } else {
+                    bash(&simple).classe
+                },
+                "{ligne}"
+            );
+        }
+        // La valeur d'un format de git n'est jamais un chemin : ni refus ni lecture,
+        // le garde-fou de git s'applique (carte).
+        for ligne in [
+            r#"git log --format="%h\n""#,
+            r"git log --format='%h\n'",
+            r#"git log --pretty="%h\t%s""#,
+            r#"git show --format="%h\n" HEAD"#,
+            r#"git log --date="format:%H\n""#,
+        ] {
+            assert!(
+                matches!(bash(ligne).classe, Classe::Ecriture(_)),
+                "{ligne} : {:?}",
+                bash(ligne).classe
+            );
+        }
+        assert_eq!(bash(r#"grep "a\.b" Cargo.toml"#).classe, Classe::Lecture);
+        assert_eq!(bash(r#"rg "fn main\(" src"#).classe, Classe::Lecture);
+        assert_eq!(bash(r#"echo "a\nb""#).classe, Classe::Lecture);
     }
 
     /// KOB-480 : sous PowerShell, `$null` non cité après une redirection de
