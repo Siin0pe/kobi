@@ -2981,6 +2981,15 @@ fn options_interdites(nom: &str, args: &[String], shell: Shell) -> Option<Avis> 
                 .filter(|x| !x.starts_with('-'))
                 .map(String::as_str)
                 .collect();
+            // `-t` (`--show-token`) affiche le jeton GitHub, même groupé (`-at`) :
+            // pflag regroupe les options courtes (KOB-505).
+            let montre_le_jeton = args.iter().any(|x| {
+                x.starts_with("--show-token")
+                    || (x.starts_with('-') && !x.starts_with("--") && x.contains('t'))
+            });
+            if pos.starts_with(&["auth", "status"]) && montre_le_jeton {
+                return ecrit("`gh auth status -t` affiche le jeton GitHub".into());
+            }
             match pos.as_slice() {
                 [] if a("--version") => None,
                 ["pr" | "issue", "view" | "list" | "status" | "diff" | "checks", ..]
@@ -7441,6 +7450,32 @@ mod tests {
             "gh pr list --search env",
             // Après `--`, gh lit `--jq` comme un argument et s'arrête en erreur.
             "gh pr list -- --jq env",
+        ] {
+            assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+            assert_eq!(ps(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+    }
+
+    /// KOB-505 : `gh auth status -t` affiche le jeton GitHub (« Display the auth token »).
+    #[test]
+    fn gh_auth_status_qui_affiche_le_jeton() {
+        for ligne in [
+            "gh auth status -t",
+            "gh auth status --show-token",
+            "gh auth status --show-token=true",
+            "gh auth status -a -t",
+            "gh auth status -at",
+            "gh auth status -ta",
+            "gh auth status -t -h github.com",
+            "gh auth status --hostname github.com -t",
+        ] {
+            assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+            assert_ne!(ps(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+        for ligne in [
+            "gh auth status",
+            "gh auth status -a",
+            "gh auth status --active",
         ] {
             assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne}");
             assert_eq!(ps(ligne).classe, Classe::Lecture, "{ligne}");
