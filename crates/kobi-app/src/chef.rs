@@ -8544,15 +8544,46 @@ mod tests {
                 })
         }
 
+        /// La propriété qu'une suite viole. La réduction garde la même :
+        /// un retrait qui fait échouer une autre propriété est refusé.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        enum Propriete {
+            /// 1. Jamais figé.
+            Fige,
+            /// 2. Rien de perdu.
+            RienDePerdu,
+            /// 3. Carte visible.
+            CarteVisible,
+            /// 4. Réponse montrée.
+            ReponseMontree,
+            /// 5. Carte des notes visible après la réponse.
+            CarteDesNotes,
+        }
+
+        type Echec = (Propriete, String);
+
+        /// Ce que les suites ont atteint : prouve que le générateur mène
+        /// bien à la fin de réunion et à son annulation.
+        #[derive(Default)]
+        struct Couverture {
+            etats: HashSet<&'static str>,
+            fins_annulees: usize,
+        }
+
         /// Ce que le jeu retient : numéros de cartes, tours détachés.
         #[derive(Default)]
         struct Jeu {
             n: u64,
             detaches: HashSet<u64>,
             /// Dernière question posée par l'utilisateur (tour envoyé).
+            /// Elle n'est pas remise à zéro après une réponse locale (« oui »
+            /// à une carte, commande de la voix) : ces phrases n'envoient
+            /// aucun tour, et la propriété 4 porte sur la réponse de la
+            /// dernière question envoyée au cerveau.
             derniere: Option<u64>,
-            /// 4. Réponse montrée : violations relevées en cours de jeu.
-            violations: Vec<String>,
+            /// Violations relevées en cours de jeu, avec leur propriété.
+            violations: Vec<Echec>,
+            couverture: Couverture,
             /// Tour de chaque carte MCP de la conversation.
             tour_des_cartes: HashMap<u64, u64>,
             /// Question en cours à l'ouverture de chaque carte de Kobi : son
@@ -8700,23 +8731,28 @@ mod tests {
         fn verifier_le_tic(c: &Chef<tauri::test::MockRuntime>, jeu: &mut Jeu) {
             if c.calme_a.is_none() && c.a_livrer.is_empty() {
                 if let Some(e) = carte_cachee(c) {
-                    jeu.violations.push(e);
+                    jeu.violations.push((Propriete::CarteVisible, e));
                 }
             }
             // Une règle de fin de tic (retour au calme, KOB-391) n'est reprise
             // par la reproposition qu'au tic suivant : cachée deux tics de
             // suite, la carte l'est vraiment.
             match carte_des_notes_cachee(c, jeu) {
-                Some(e) if jeu.notes_cachee => jeu.violations.push(e),
+                Some(e) if jeu.notes_cachee => jeu.violations.push((Propriete::CarteDesNotes, e)),
                 Some(_) => jeu.notes_cachee = true,
                 None => jeu.notes_cachee = false,
             }
             if let Some(e) = fige(c, jeu) {
-                jeu.violations.push(e);
+                jeu.violations.push((Propriete::Fige, e));
             }
         }
 
         fn jouer(c: &mut Chef<tauri::test::MockRuntime>, ev: &Ev, jeu: &mut Jeu) {
+            jouer_sans_relever(c, ev, jeu);
+            jeu.couverture.etats.insert(etat(&c.app).etat);
+        }
+
+        fn jouer_sans_relever(c: &mut Chef<tauri::test::MockRuntime>, ev: &Ev, jeu: &mut Jeu) {
             // Propriété 5 : « deux tics de suite », sans autre événement entre
             // eux.
             if !matches!(
@@ -8845,9 +8881,12 @@ mod tests {
                     // 4. Réponse montrée : la réponse de la dernière question
                     // posée est celle que Kobi montre.
                     if montree && c.dernier != tour {
-                        jeu.violations.push(format!(
-                            "réponse du tour {tour} pas montrée (dernier = {})",
-                            c.dernier
+                        jeu.violations.push((
+                            Propriete::ReponseMontree,
+                            format!(
+                                "réponse du tour {tour} pas montrée (dernier = {})",
+                                c.dernier
+                            ),
                         ));
                     }
                 }
@@ -8966,13 +9005,18 @@ mod tests {
                 }
                 Ev::Terminer(annuler) => {
                     c.commande(Intention::TerminerReunion);
+                    jeu.couverture.etats.insert(etat(&c.app).etat);
                     if annuler {
+                        let annulable = c.fin_annulable();
                         c.recevoir(Message::Interpelle);
                         c.recevoir(Message::Question {
                             texte: "reprends la réunion".into(),
                             voix: true,
                             dit_a: None,
                         });
+                        if annulable && !c.fin_annulable() && c.reunion_ouverte() {
+                            jeu.couverture.fins_annulees += 1;
+                        }
                     }
                 }
                 Ev::Stop => c.interrompre(),
@@ -9027,7 +9071,7 @@ mod tests {
         }
 
         /// Joue `suite` sur un chef neuf et vérifie les cinq propriétés.
-        fn verifier(suite: &[Ev]) -> Result<(), String> {
+        fn verifier(suite: &[Ev]) -> Result<Couverture, Echec> {
             let (app, _dir) = chef_en_essai();
             avec_chef(&app, |c| {
                 let mut jeu = Jeu::default();
@@ -9037,12 +9081,13 @@ mod tests {
                 if let Some(v) = jeu.violations.first() {
                     return Err(v.clone());
                 }
+                let echec = |p: Propriete, e: String| Err((p, e));
                 for _ in 0..5 {
                     avancer(c, &mut jeu);
                 }
                 // Propriété 3, carte visible : une carte attend, Kobi ne dort pas.
                 if let Some(e) = carte_cachee(c) {
-                    return Err(e);
+                    return echec(Propriete::CarteVisible, e);
                 }
                 // Tout se termine : cartes tranchées, tours finis.
                 for id in validations(c) {
@@ -9079,41 +9124,93 @@ mod tests {
                 }
                 // 2. Rien de perdu.
                 if !c.a_livrer.is_empty() {
-                    return Err(format!(
-                        "{} résultat(s) jamais livré(s), activité {:?}",
-                        c.a_livrer.len(),
-                        c.activite()
-                    ));
+                    return echec(
+                        Propriete::RienDePerdu,
+                        format!(
+                            "{} résultat(s) jamais livré(s), activité {:?}",
+                            c.a_livrer.len(),
+                            c.activite()
+                        ),
+                    );
                 }
                 // 1. Jamais figé.
                 if !matches!(c.activite(), Some("calme") | None) {
-                    return Err(format!(
-                        "figé en {:?} (état {}) sans carte, question ni tâche",
-                        c.activite(),
-                        etat(&c.app).etat
-                    ));
+                    return echec(
+                        Propriete::Fige,
+                        format!(
+                            "figé en {:?} (état {}) sans carte, question ni tâche",
+                            c.activite(),
+                            etat(&c.app).etat
+                        ),
+                    );
                 }
-                Ok(())
+                Ok(std::mem::take(&mut jeu.couverture))
             })
         }
 
         /// Réduit une suite qui échoue : retire un à un les événements dont
-        /// l'échec ne dépend pas.
-        fn reduire(mut suite: Vec<Ev>) -> (Vec<Ev>, String) {
-            let mut raison = verifier(&suite).unwrap_err();
-            let mut i = 0;
-            while i < suite.len() {
-                let mut essai = suite.clone();
-                essai.remove(i);
-                match verifier(&essai) {
-                    Err(r) => {
-                        suite = essai;
-                        raison = r;
+        /// l'échec ne dépend pas, en passes répétées jusqu'à ce qu'aucun
+        /// retrait ne soit plus possible (un retrait peut en permettre un
+        /// autre, plus tôt dans la suite). Un retrait qui fait échouer une
+        /// autre propriété est refusé : la suite minimale montre le défaut
+        /// trouvé, pas un autre.
+        fn reduire<T: Clone, C>(
+            mut suite: Vec<T>,
+            verifier: impl Fn(&[T]) -> Result<C, Echec>,
+        ) -> (Vec<T>, Echec) {
+            let Err((propriete, mut raison)) = verifier(&suite) else {
+                panic!("réduction d'une suite qui n'échoue pas");
+            };
+            loop {
+                let avant = suite.len();
+                let mut i = 0;
+                while i < suite.len() {
+                    let mut essai = suite.clone();
+                    essai.remove(i);
+                    match verifier(&essai) {
+                        Err((p, r)) if p == propriete => {
+                            suite = essai;
+                            raison = r;
+                        }
+                        _ => i += 1,
                     }
-                    Ok(()) => i += 1,
+                }
+                if suite.len() == avant {
+                    return (suite, (propriete, raison));
                 }
             }
-            (suite, raison)
+        }
+
+        /// KOB-426 : la réduction refait des passes, et ne dérive pas vers
+        /// une autre propriété.
+        #[test]
+        fn reduction_en_plusieurs_passes_sur_la_meme_propriete() {
+            // 1 ne se retire qu'une fois 2 parti, plus loin dans la suite.
+            let plusieurs_passes = |s: &[u32]| {
+                let a = |x| s.contains(&x);
+                if a(5) && (a(1) || !a(2)) {
+                    Err((Propriete::Fige, format!("{s:?}")))
+                } else {
+                    Ok(())
+                }
+            };
+            let (minimale, (p, _)) = reduire(vec![1, 5, 2], plusieurs_passes);
+            assert_eq!((minimale, p), (vec![5], Propriete::Fige));
+            // Retirer 3 ou 7 ferait échouer « figé » à la place de « carte
+            // visible » : refusé.
+            let deux_proprietes = |s: &[u32]| {
+                let a = |x| s.contains(&x);
+                if a(3) && a(7) {
+                    Err((Propriete::CarteVisible, format!("{s:?}")))
+                } else if a(5) {
+                    Err((Propriete::Fige, format!("{s:?}")))
+                } else {
+                    Ok(())
+                }
+            };
+            let (minimale, (p, raison)) = reduire(vec![3, 7, 5], deux_proprietes);
+            assert_eq!((minimale, p), (vec![3, 7], Propriete::CarteVisible));
+            assert_eq!(raison, "[3, 7]");
         }
 
         const GRAINE: u64 = 0x4b4f_4249_0395;
@@ -9131,6 +9228,7 @@ mod tests {
             // de tests, runtime) existent déjà avant la mesure.
             verifier(&[Ev::Tic]).expect("cas de chauffe");
             let fils_avant = fils_du_processus();
+            let mut couverture = Couverture::default();
             for numero in 0..suites {
                 let mut suite: Vec<Ev> = (0..longueur).map(|_| tirer(&mut h)).collect();
                 // Une suite sur trois commence en réunion, avec une carte des
@@ -9139,16 +9237,34 @@ mod tests {
                 if numero % 3 == 0 {
                     suite.splice(0..0, [Ev::Demarrer, Ev::CarteMcp(0, true)]);
                 }
-                if verifier(&suite).is_err() {
-                    let (minimale, raison) = reduire(suite);
+                let Ok(vu) = verifier(&suite) else {
+                    let (minimale, (propriete, raison)) = reduire(suite, verifier);
                     panic!(
-                        "suite n° {numero} : {raison}\n\
+                        "suite n° {numero}, propriété {propriete:?} : {raison}\n\
                          rejouer : KOBI_GRAINE={graine:#x} KOBI_SUITES={} \
                          KOBI_LONGUEUR={longueur}\n\
                          suite minimale : {minimale:#?}",
                         numero + 1
                     );
+                };
+                couverture.etats.extend(vu.etats);
+                couverture.fins_annulees += vu.fins_annulees;
+            }
+            // Le générateur atteint la fin de réunion, la pause, et annule
+            // des fins dans le délai (avec les réglages par défaut).
+            if (graine, suites, longueur) == (GRAINE, SUITES, LONGUEUR) {
+                let mut vus: Vec<_> = couverture.etats.iter().copied().collect();
+                vus.sort_unstable();
+                for attendu in ["fin", "pause", "reunion"] {
+                    assert!(
+                        couverture.etats.contains(attendu),
+                        "état {attendu} jamais atteint : {vus:?}"
+                    );
                 }
+                assert!(
+                    couverture.fins_annulees > 0,
+                    "aucune fin de réunion annulée"
+                );
             }
             // Chaque cas joint ses fils : leur nombre ne grossit pas avec le
             // nombre de cas (KOB-427). Une fuite en ajoutait environ quatre
