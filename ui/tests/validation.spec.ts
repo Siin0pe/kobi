@@ -358,6 +358,24 @@ test('la carte dit pourquoi Kobi demande (raison du classement), sous la command
   await expect(page.locator('.kval-raison b')).toHaveCount(0);
   await expect(page.locator('.kval-raison')).toHaveAttribute('title', 'motif <b>x</b> ; jq lit des fichiers');
   await page.keyboard.press('Escape');
+  // KOB-529 : « Vérifié sur la carte » avec une majuscule et sans deux-points est
+  // retiré ; un accent grave isolé ne décale pas le code, rien n'est perdu.
+  await carte(page, {
+    ...COMMANDE,
+    id: '9',
+    raison: '`where … /R` : `Where-Object` ou where.exe ? Vérifié sur la carte',
+  });
+  await expect(page.locator('.kval-raison')).toHaveText('where … /R : Where-Object ou where.exe ?');
+  await page.keyboard.press('Escape');
+  await carte(page, {
+    ...COMMANDE,
+    id: '10',
+    raison: '`a`b#` : mets-le entre guillemets simples',
+  });
+  await expect(page.locator('.kval-raison')).toHaveText('`a`b#` : mets-le entre guillemets simples');
+  await expect(page.locator('.kval-raison code')).toHaveCount(0);
+  await expect(page.locator('.kval-raison')).toHaveAttribute('title', '`a`b#` : mets-le entre guillemets simples');
+  await page.keyboard.press('Escape');
   // Sans raison : pas de ligne vide.
   await carte(page, COMMANDE);
   await expect(page.locator('.kval-cible')).toHaveText('$ git push');
