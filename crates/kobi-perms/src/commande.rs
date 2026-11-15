@@ -1400,15 +1400,36 @@ fn classe_sans_tiret(motif: &str) -> bool {
 }
 
 /// Ce qui suit un `{` non cité : zsh avec `BRACE_CCL` l'étend-il en classe de
-/// caractères (`{ab}`) ? Au moins un caractère, puis `}`, sans blanc ni
-/// séparateur avant (KOB-524). `{}` seul et `{ cmd; }` non.
+/// caractères (`{ab}`) ? Au moins un caractère, puis un `}` non cité, sans blanc
+/// ni séparateur non cités avant (KOB-524). zsh retire les guillemets et les
+/// échappements à l'intérieur et garde leurs caractères dans la classe : `x{'ab'}`
+/// et `x{a\ b}` s'étendent aussi (relecture de KOB-524). `{}` seul et `{ cmd; }`
+/// non.
 fn classe_d_accolades(suite: &[char]) -> bool {
-    match suite.iter().position(|&c| c == '}') {
-        Some(n) if n > 0 => !suite[..n].iter().any(|&c| {
-            c.is_whitespace() || matches!(c, ';' | '|' | '&' | '<' | '>' | '(' | ')' | '\'' | '"')
-        }),
-        _ => false,
+    let mut vus = 0;
+    let mut i = 0;
+    while let Some(&c) = suite.get(i) {
+        match c {
+            '}' => return vus > 0,
+            '\'' | '"' => match suite[i + 1..].iter().position(|&d| d == c) {
+                Some(n) => {
+                    vus += n;
+                    i += n + 1;
+                }
+                None => return false,
+            },
+            '\\' => {
+                vus += 1;
+                i += 1;
+            }
+            c if c.is_whitespace() || matches!(c, ';' | '|' | '&' | '<' | '>' | '(' | ')') => {
+                return false
+            }
+            _ => vus += 1,
+        }
+        i += 1;
     }
+    false
 }
 
 /// Ce qui suit un `{` hors guillemets : bash peut-il le développer
@@ -7928,6 +7949,14 @@ mod tests {
             "cat x{ab}",
             "cd l{l} && cat secret",
             "sed -n 1,/x{a}/p f",
+            // Guillemets et échappements à l'intérieur (relecture de KOB-524).
+            "uniq x{'ab'}",
+            "uniq x{\"ab\"}",
+            "uniq x{a'b'}",
+            "cat x{ab'}'}",
+            "cat x{a\"}\"}",
+            "cat x{a\\ b}",
+            "cat x{a\\;b}",
         ] {
             assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne}");
         }

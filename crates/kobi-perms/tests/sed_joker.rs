@@ -146,7 +146,13 @@ fn zsh_braceccl_uniq_ecrase_le_second() {
     let d = tempfile::tempdir().unwrap();
     std::fs::write(d.path().join("xa"), "l\n").unwrap();
     std::fs::write(d.path().join("xb"), "ANCIEN\n").unwrap();
-    let ligne = "uniq x{ab}";
+    for ligne in ["uniq x{ab}", "uniq x{'ab'}"] {
+        std::fs::write(d.path().join("xb"), "ANCIEN\n").unwrap();
+        zsh_braceccl_ecrase(&d, ligne);
+    }
+}
+
+fn zsh_braceccl_ecrase(d: &tempfile::TempDir, ligne: &str) {
     match std::process::Command::new("zsh")
         .args(["-f", "-c", &format!("setopt braceccl; {ligne}")])
         .current_dir(d.path())
@@ -155,7 +161,7 @@ fn zsh_braceccl_uniq_ecrase_le_second() {
         Ok(sortie) => assert_eq!(
             std::fs::read_to_string(d.path().join("xb")).unwrap(),
             "l\n",
-            "{sortie:?}"
+            "{ligne} : {sortie:?}"
         ),
         Err(_) => {
             if cfg!(target_os = "macos") {
@@ -163,5 +169,5 @@ fn zsh_braceccl_uniq_ecrase_le_second() {
             }
         }
     }
-    assert_ne!(classe(ligne, d.path()), Classe::Lecture);
+    assert_ne!(classe(ligne, d.path()), Classe::Lecture, "{ligne}");
 }
