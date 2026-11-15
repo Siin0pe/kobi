@@ -172,3 +172,24 @@ fn zsh_braceccl_ecrase(d: &tempfile::TempDir, ligne: &str) {
     }
     assert_ne!(classe(ligne, d.path()), Classe::Lecture, "{ligne}");
 }
+
+/// KOB-528 : avec `setopt extendedglob`, zsh laisse `1,/a~b/p` tel quel quand le
+/// mot n'a pas d'autre joker : sed le reçoit intact, et la ligne reste une lecture.
+#[cfg(unix)]
+#[test]
+fn zsh_tilde_seul_laisse_le_mot() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("f"), "ligne\n").unwrap();
+    std::fs::write(d.path().join("a"), "").unwrap();
+    std::fs::write(d.path().join("b"), "").unwrap();
+    match std::process::Command::new("zsh")
+        .args(["-f", "-c", "setopt extendedglob; printf '%s' 1,/a~b/p"])
+        .current_dir(d.path())
+        .output()
+    {
+        Ok(sortie) => assert_eq!(String::from_utf8_lossy(&sortie.stdout), "1,/a~b/p"),
+        Err(_) if cfg!(target_os = "macos") => panic!("zsh absent sous macOS"),
+        Err(_) => {}
+    }
+    assert_eq!(classe("sed -n 1,/a~b/p f", d.path()), Classe::Lecture);
+}

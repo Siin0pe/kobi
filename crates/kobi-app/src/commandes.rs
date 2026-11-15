@@ -67,6 +67,8 @@ sans demander l'accord en texte, même pour une suppression : la carte de Kobi e
 - Lance la commande depuis un dossier de code (`cd <dossier> && git log -5` si besoin), sans `$( )`, \
 variable ni redirection vers un fichier.
 - Sous Bash, écris `./*.md` plutôt que `*.md` : un joker en tête de mot demande une validation. \
+Mets entre guillemets simples un motif qui contient `^` ou `#` (`grep '^fn' src/main.rs`) : non cité, \
+sous zsh, le shell peut le remplacer par des noms de fichiers, et Kobi demande un « oui ». \
 Sous PowerShell, `./` peut ne pas suffire pour un programme (hors de Windows, il reçoit les noms \
 sans lui).
 - Si Kobi refuse (refus de l'utilisateur, pas de réponse, hors des dossiers), ne contourne pas et ne \
@@ -429,6 +431,8 @@ mod tests {
     #[test]
     fn prompt_conseille_un_joker_qui_passe() {
         assert!(PROMPT_COMMANDES.contains("`./*.md` plutôt que `*.md`"));
+        // KOB-528 : citer `^` et `#`, sinon zsh peut les étendre.
+        assert!(PROMPT_COMMANDES.contains("`grep '^fn' src/main.rs`"));
         let mut ctx = Contexte::new(vec![kobi()]);
         ctx.cwd = Some(kobi());
         let lecture = |l: &str| commande::analyser(l, kobi_perms::Shell::Bash, &ctx).est_lecture();
