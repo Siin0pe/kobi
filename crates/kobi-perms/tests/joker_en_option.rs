@@ -373,3 +373,19 @@ fn point_point_seulement_si_le_motif_peut_le_former() {
         assert_eq!(classe(ligne, Shell::Bash, &ici), Classe::Lecture, "{ligne}");
     }
 }
+
+/// Test (n), suite de KOB-523 : `pwsh` hors Windows coupe aussi un argument non
+/// cité `-nom.suite` au premier point pour un programme natif (`-q../secret`
+/// devient `-q` puis `../secret`), comme Windows PowerShell 5.1 et pwsh 7 sous
+/// Windows. `--a.b` n'est pas coupé. Le classement le juge déjà ainsi partout.
+#[cfg(unix)]
+#[test]
+fn pwsh_hors_windows_coupe_tiret_point() {
+    let d = tempfile::tempdir().unwrap();
+    let Some(texte) = pwsh("/usr/bin/printf '[%s]' -q../secret -x.y --a.b", d.path()) else {
+        return;
+    };
+    assert_eq!(texte, "[-q][../secret][-x][.y][--a.b]");
+    let c = classe("head -q../secret", Shell::PowerShell, d.path());
+    assert!(matches!(c, Classe::Refus(_)), "{c:?}");
+}
