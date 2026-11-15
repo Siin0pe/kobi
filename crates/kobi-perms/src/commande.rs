@@ -307,8 +307,9 @@ fn analyser_sans_joker(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
     let mut jokers: Vec<bool> = Vec::new();
     // La commande en cours reçoit-elle l'entrée d'un `|` ?
     let mut apres_pipe = false;
-    // Nom de la commande précédente, celle dont la sortie arrive par le `|`.
-    let mut amont = String::new();
+    // La commande précédente, dont la sortie arrive par le `|`, est-elle une
+    // cmdlet de [`AMONT_SUR`] (pas un `ls` natif, KOB-538) ?
+    let mut amont_sur = false;
     // Dans le pipeline en cours (PowerShell) : un amont qui donne des objets
     // aux propriétés libres (`Path`, `PSPath`…), et les listes de fichiers
     // (`gci src`) avec leurs dossiers courants (KOB-438).
@@ -348,7 +349,14 @@ fn analyser_sans_joker(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
                     // de dossiers qu'on ne voit pas ici : sur la carte
                     // (KOB-434).
                     let nom = mots[0].to_lowercase();
+                    let exe = nom.ends_with(".exe");
                     let nom = nom.strip_suffix(".exe").unwrap_or(&nom);
+                    // Un `ls` natif (hors Windows) ou un `X.exe` imprime des noms
+                    // nus, relatifs au dossier listé, pas des objets à `PSPath` :
+                    // une cmdlet en aval les résout ailleurs (`~` est le dossier
+                    // personnel, KOB-538). Ce n'est pas un amont sûr.
+                    let amont_cmdlet =
+                        shell == Shell::PowerShell && !exe && !est_natif_pwsh(nom, cfg!(windows));
                     if cfg!(windows) && apres_pipe && parcours_recursif(nom, &mots[1..], shell) {
                         avis = avis.pire(Avis::ecriture(
                             Genre::Commande,
@@ -362,7 +370,7 @@ fn analyser_sans_joker(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
                     if shell == Shell::PowerShell
                         && apres_pipe
                         && CHEMIN_PAR_LE_PIPE.contains(&nom)
-                        && !AMONT_SUR.contains(&amont.as_str())
+                        && !amont_sur
                     {
                         avis = avis.pire(Avis::ecriture(
                             Genre::Commande,
@@ -423,11 +431,11 @@ fn analyser_sans_joker(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
                     }
                     if shell == Shell::PowerShell {
                         source_libre |= SOURCE_LIBRE.contains(&nom);
-                        if AMONT_SUR.contains(&nom) {
+                        if AMONT_SUR.contains(&nom) && amont_cmdlet {
                             listes.push((nom.to_owned(), mots[1..].to_vec(), cwds.clone()));
                         }
                     }
-                    amont = nom.to_owned();
+                    amont_sur = AMONT_SUR.contains(&nom) && amont_cmdlet;
                     let mut suivants = Vec::new();
                     for c in &cwds {
                         let mut nouveau = c.clone();
