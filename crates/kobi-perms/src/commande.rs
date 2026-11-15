@@ -7833,6 +7833,7 @@ mod tests {
             "uniq -cf 1 in.txt",
             "uniq -cw 8 in.txt",
             "uniq -cf1 in.txt",
+            "jq -n '.[{env: 1}]'",
         ] {
             assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne}");
         }
@@ -7855,6 +7856,9 @@ mod tests {
             "jq -n '# \"\nenv'",
             "jq -n '# \"\ninclude \"m\"; .'",
             "jq -n 'path(.[ # {\nenv:])'",
+            "jq -n '\"\\(1 # x\n, env)\"'",
+            "jq -n '{(env): 1}'",
+            "jq -n '{a: [env]}'",
             "uniq -c in out",
             "uniq -cf 1 in out",
         ] {
