@@ -152,6 +152,7 @@ fn zsh_braceccl_uniq_ecrase_le_second() {
     }
 }
 
+#[cfg(unix)]
 fn zsh_braceccl_ecrase(d: &tempfile::TempDir, ligne: &str) {
     match std::process::Command::new("zsh")
         .args(["-f", "-c", &format!("setopt braceccl; {ligne}")])
