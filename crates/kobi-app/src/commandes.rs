@@ -67,7 +67,8 @@ sans demander l'accord en texte, même pour une suppression : la carte de Kobi e
 - Lance la commande depuis un dossier de code (`cd <dossier> && git log -5` si besoin), sans `$( )`, \
 variable ni redirection vers un fichier.
 - Sous Bash, écris `./*.md` plutôt que `*.md` : un joker en tête de mot demande une validation. \
-Sous PowerShell, `./` ne suffit pas pour un programme, qui reçoit les noms sans lui.
+Sous PowerShell, `./` peut ne pas suffire pour un programme (hors de Windows, il reçoit les noms \
+sans lui).
 - Si Kobi refuse (refus de l'utilisateur, pas de réponse, hors des dossiers), ne contourne pas et ne \
 réessaie pas : dis-le en une phrase et donne la commande ou le contenu prêt à copier.";
 
@@ -448,7 +449,7 @@ mod tests {
             assert!(!lecture("cat ./*.md"));
         }
         assert!(lecture("Get-ChildItem *.md"));
-        assert!(PROMPT_COMMANDES.contains("Sous PowerShell, `./` ne suffit pas"));
+        assert!(PROMPT_COMMANDES.contains("Sous PowerShell, `./` peut ne pas suffire"));
     }
 
     /// KOB-496 : avec `commande = sans_demander`, un mot à trois tirets ne

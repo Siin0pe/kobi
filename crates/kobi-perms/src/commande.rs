@@ -1462,7 +1462,7 @@ fn redirection(
         Ok(1)
     } else {
         // Phrases de la carte, sans jargon (KOB-514) ; `2>` n'écrit que les erreurs.
-        let quoi = if r.starts_with('2') {
+        let quoi = if r.trim_end_matches(['>', '|']) == "2" {
             "les erreurs"
         } else {
             "le résultat"
@@ -2557,7 +2557,7 @@ fn commande_sans_plancher(
             if alias {
                 format!("`{premier}` {ALIAS}")
             } else {
-                format!("Kobi ne connaît pas `{premier}` : cette commande peut modifier des fichiers ou agir sur Internet.")
+                format!("Kobi ne connaît pas `{premier}` : cette commande peut tout faire, par exemple modifier des fichiers ou agir sur Internet.")
             },
         );
     }
@@ -7561,6 +7561,7 @@ mod tests {
             raison("ls 2> err.txt"),
             "Écrit les erreurs dans err.txt (le remplace s'il existe)."
         );
+        assert!(raison("ls 22> f").starts_with("Écrit le résultat"));
         assert!(raison("npm install").starts_with("Kobi ne connaît pas `npm`"));
         assert!(raison("grep \"$x\" f").starts_with("Utilise une valeur ($…)"));
         // Aucun chemin absolu de la machine dans une raison.
