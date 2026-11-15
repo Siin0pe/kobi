@@ -21,7 +21,7 @@ pub mod rules;
 
 pub use action::{Action, DemandeOutil, Etape, Famille, Shell};
 pub use cards::{Card, Cards};
-pub use classement::{classer, Classe, Contexte, Genre};
+pub use classement::{classer, dossiers_personnels, Classe, Contexte, Genre};
 pub use rules::{Rules, Verdict};
 
 use std::net::SocketAddr;

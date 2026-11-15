@@ -54,6 +54,28 @@ pub struct Contexte {
     pub cwd: Option<PathBuf>,
     /// Outils MCP en lecture seule (annotations des serveurs, KOB-155).
     pub mcp: Rules,
+    /// Dossiers personnels possibles de l'utilisateur (`HOME`, le profil, et
+    /// `USERPROFILE` sous Windows), là où jq charge `~/.jq` ou `~/jq/main.jq`
+    /// tout seul (KOB-525). Vide : rien n'y est cherché.
+    pub dossiers_personnels: Vec<PathBuf>,
+}
+
+/// Dossiers personnels possibles de l'utilisateur, pour `Contexte::dossiers_personnels` :
+/// la variable `HOME` (que jq lit d'abord, Windows compris), le profil
+/// (`std::env::home_dir`), et `USERPROFILE` (KOB-525). Sans doublon ni valeur vide.
+pub fn dossiers_personnels() -> Vec<PathBuf> {
+    let mut dossiers: Vec<PathBuf> = Vec::new();
+    let candidats = [
+        std::env::var_os("HOME").map(PathBuf::from),
+        std::env::home_dir(),
+        std::env::var_os("USERPROFILE").map(PathBuf::from),
+    ];
+    for d in candidats.into_iter().flatten() {
+        if !d.as_os_str().is_empty() && !dossiers.contains(&d) {
+            dossiers.push(d);
+        }
+    }
+    dossiers
 }
 
 impl Contexte {

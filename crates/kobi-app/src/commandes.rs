@@ -186,6 +186,8 @@ pub fn decider_avec(
     let params = &appel["tool_input"];
     let mut ctx = Contexte::new(dossiers.to_vec());
     ctx.cwd = appel["cwd"].as_str().map(PathBuf::from);
+    // `~/.jq`, que jq charge tout seul (KOB-525).
+    ctx.dossiers_personnels = kobi_perms::dossiers_personnels();
     if params["run_in_background"].as_bool() == Some(true) {
         return reponse(false, "Kobi ne lance pas de commande en arrière-plan.");
     }

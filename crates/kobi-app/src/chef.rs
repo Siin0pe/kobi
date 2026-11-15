@@ -2897,6 +2897,8 @@ impl<R: Runtime> Chef<R> {
             dossiers.push(st.dossier_conversations());
         }
         let mut ctx = kobi_perms::Contexte::new(dossiers);
+        // `~/.jq`, que jq charge tout seul (KOB-525).
+        ctx.dossiers_personnels = kobi_perms::dossiers_personnels();
         for outil in kobi_ctl::mcp::outils_de_lecture(crate::mcp_config::SERVEUR_KOBI) {
             ctx.mcp.add_read_only(outil);
         }
