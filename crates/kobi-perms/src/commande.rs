@@ -3566,10 +3566,28 @@ fn chemins(
             && x.split_once('=')
                 .is_some_and(|(option, _)| !FILTRES_DE_NOMS.contains(&option))
     });
-    match valeur_a_joker {
+    let avis = match valeur_a_joker {
         Some((x, _)) => avis.pire(Avis::ecriture(
             Genre::Indetermine,
             format!("`{x}` : le shell peut en faire le nom d'un fichier du dossier, dont la valeur sort"),
+        )),
+        None => avis,
+    };
+    // Joker de zsh `EXTENDED_GLOB` que `juger_chemin` n'étend pas : `s#` (zéro
+    // ou plusieurs `s`) désigne `s`, un lien qui sort (`cat s#`, relecture de
+    // KOB-504), et `^x` en tête d'un composant tout sauf `x`. Sur la carte, un
+    // refus garde sa priorité. `a~b` sans autre joker reste `a` tel quel, et un
+    // `^` au milieu n'est pas une négation : `git show HEAD~1`, `HEAD^` restent
+    // des lectures.
+    let joker_zsh = args.iter().zip(jokers).find(|(x, &joker)| {
+        joker
+            && !x.starts_with('-')
+            && (x.contains('#') || x.split('/').any(|c| c.starts_with('^')))
+    });
+    match joker_zsh {
+        Some((x, _)) => avis.pire(Avis::ecriture(
+            Genre::Indetermine,
+            format!("`{x}` : zsh (`EXTENDED_GLOB`) peut en faire d'autres chemins, non vérifiés"),
         )),
         None => avis,
     }
@@ -6427,10 +6445,12 @@ mod tests {
             "git log -3 # les trois derniers",
             "ls \"crates/kobi-app\"",
             "ls crates\\ avec\\ espace",
-            // KOB-298 : commentaire seul en fin de ligne, `#` collé à un mot,
-            // `#` entre guillemets (même avec un saut de ligne entre eux).
+            // KOB-298 : commentaire seul en fin de ligne, `#` entre guillemets
+            // (même avec un saut de ligne entre eux). `#` collé à un mot non
+            // cité est un joker de zsh `EXTENDED_GLOB` (KOB-504) : voir
+            // `jokers_de_zsh_etendu`.
             "cat Cargo.toml # commentaire",
-            "ls crates/a#b",
+            "ls 'crates/a#b'",
             "grep -n '# titre' Cargo.toml",
             "grep -n \"#\" Cargo.toml",
             "grep -n '#\nx' Cargo.toml",
@@ -7064,6 +7084,16 @@ mod tests {
         ] {
             assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne}");
         }
+        // `#` dans un chemin : zsh en fait `s`, un lien qui sort ; jamais une lecture.
+        for ligne in ["cat s#", "cat l#/secret", "cat ^x", "cat d/^x"] {
+            assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+        // `a~b` sans autre joker et `^` au milieu : pas de carte de zsh.
+        for ligne in ["git show HEAD~1 --stat", "git show HEAD^", "cat a~b"] {
+            assert!(!bash(ligne).raison.contains("EXTENDED_GLOB"), "{ligne}");
+        }
+        // Coût voulu (KOB-504) : `#` collé à un nom non cité passe par la carte.
+        assert_ne!(bash("ls crates/a#b").classe, Classe::Lecture);
         // PowerShell hors de cette règle.
         assert_eq!(
             ps("Select-String -Pattern '^fn' -Path f").classe,

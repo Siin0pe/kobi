@@ -99,3 +99,34 @@ fn zsh_extendedglob_joker_chapeau() {
         classe(grep, &code)
     );
 }
+
+/// Seconde relecture de KOB-504 : sous zsh `extendedglob`, `s#` (zéro ou
+/// plusieurs `s`) désigne `s`, un lien vers un fichier extérieur. `cat s` est
+/// refusé ; `cat s#` ne doit jamais être une lecture.
+#[cfg(unix)]
+#[test]
+fn zsh_extendedglob_diese_suit_un_lien_qui_sort() {
+    let racine = tempfile::tempdir().unwrap();
+    let code = racine.path().join("code");
+    std::fs::create_dir_all(&code).unwrap();
+    std::fs::write(racine.path().join("secret"), "LIGNE-SECRETE\n").unwrap();
+    std::os::unix::fs::symlink(racine.path().join("secret"), code.join("s")).unwrap();
+    let ligne = "cat s#";
+    match std::process::Command::new("zsh")
+        .args(["-f", "-c", &format!("setopt extendedglob; {ligne}")])
+        .current_dir(&code)
+        .output()
+    {
+        Ok(sortie) => {
+            let texte = String::from_utf8_lossy(&sortie.stdout);
+            assert!(texte.contains("LIGNE-SECRETE"), "{sortie:?}");
+        }
+        Err(_) => {
+            if cfg!(target_os = "macos") {
+                panic!("zsh absent sous macOS");
+            }
+        }
+    }
+    assert!(matches!(classe("cat s", &code), Classe::Refus(_)));
+    assert_ne!(classe(ligne, &code), Classe::Lecture);
+}
