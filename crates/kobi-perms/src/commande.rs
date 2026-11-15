@@ -213,37 +213,34 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
 }
 
 /// Premier argument d'un exécutable natif que PowerShell en mode Legacy
-/// recompose en changeant le sens de la ligne (KOB-518) :
-/// - vide (`''`, `""`) : il disparaît ;
-/// - un nombre impair de `"`, ou un `\` devant un `"` : l'état « entre
-///   guillemets » du découpage du programme déborde sur les arguments suivants
-///   (`head 'a"' 'b ../secret'` lit `../secret`, relecture de KOB-518) ;
-/// - sans ses `"`, vide, une option (`'"-n"'`) ou plusieurs mots ;
-/// - un blanc et un `\` final : Windows PowerShell 5.1 ne le double pas en
-///   ajoutant ses guillemets, qui se rouvrent.
-///
-/// Un mot à guillemets pairs qui reste le même sans eux (`'"version"'`) ne change
-/// rien. Les cmdlets reçoivent l'argument tel quel (`est_natif_pwsh`, comme KOB-512).
+/// recompose en changeant le sens de la ligne (KOB-518) : vide (`''`, `""`), il
+/// disparaît ; avec un `"`, le programme le redécoupe selon son propre runtime,
+/// et les guillemets peuvent déborder sur les arguments suivants (`head 'a"'
+/// 'b ../secret'` lit `../secret` ; un ancien `msvcrt.dll` ferme même sur `""`,
+/// relectures de KOB-518) ; avec un blanc et un `\` final, Windows PowerShell 5.1
+/// ne double pas le `\` en ajoutant ses guillemets, qui se rouvrent. Les cmdlets
+/// reçoivent l'argument tel quel (`est_natif_pwsh`, comme KOB-512, plus
+/// `where.exe`, natif ici même s'il n'étend pas de joker). La cible d'une
+/// redirection n'est pas la commande.
 fn argument_recompose_par_legacy(jetons: &[Jeton]) -> Option<String> {
     let mut en_tete = true;
+    let mut apres_redirection = false;
     let mut natif = false;
     for j in jetons {
         match j {
-            Jeton::Op(_) => en_tete = true,
-            Jeton::Redir(_) => {}
+            Jeton::Op(_) => {
+                en_tete = true;
+                apres_redirection = false;
+            }
+            Jeton::Redir(_) => apres_redirection = true,
+            Jeton::Mot(_) | Jeton::Cite(_) if apres_redirection => apres_redirection = false,
             Jeton::Mot(m) | Jeton::Cite(m) if en_tete => {
-                natif = est_natif_pwsh(m, cfg!(windows));
+                natif = est_natif_pwsh(m, cfg!(windows)) || m.eq_ignore_ascii_case("where.exe");
                 en_tete = false;
             }
             Jeton::Mot(m) | Jeton::Cite(m) => {
-                let sans = m.replace('"', "");
                 let change = m.is_empty()
-                    || m.matches('"').count() % 2 == 1
-                    || m.contains("\\\"")
-                    || (m.contains('"')
-                        && (sans.is_empty()
-                            || sans.starts_with('-')
-                            || sans.contains(char::is_whitespace)))
+                    || m.contains('"')
                     || (m.contains(char::is_whitespace) && m.ends_with('\\'));
                 if natif && change {
                     return Some(m.clone());
@@ -7654,6 +7651,9 @@ mod tests {
             "rg x 'a\"' 'b --pre=python setup.py'",
             "head 'a\\\"' 'b ../x'",
             "head 'a b\\' 'c ../secret'",
+            "jq . 'a\"\"\"\"' 'b ../secret'",
+            "rg '\"version\"' Cargo.toml",
+            "> out-x.txt head 'a\"' 'b ../x'",
             "grep '' f",
             "jq.exe -n '' f",
         ] {
@@ -7666,6 +7666,13 @@ mod tests {
         // Les cmdlets reçoivent l'argument tel quel ; Bash n'est pas concerné.
         for ligne in ["Select-String -Pattern '' -Path f", "Get-Content 'a\"b'"] {
             assert!(!ps(ligne).raison.contains("Legacy"), "{ligne}");
+        }
+        // `where.exe` est natif ici, même s'il n'étend pas de joker.
+        for ligne in [
+            "where.exe '\"C:\\Users\\moi\\.ssh:*\"'",
+            "where.exe 'a\"' 'b C:\\Users\\moi\\.ssh:*'",
+        ] {
+            assert_ne!(ps(ligne).classe, Classe::Lecture, "{ligne}");
         }
         // Hors de Windows, `cat` est un exécutable natif sous pwsh.
         if !cfg!(windows) {
@@ -8173,10 +8180,9 @@ mod tests {
             assert_ne!(ps(ligne).classe, Classe::Lecture, "{ligne}");
         }
         // Sans risque : le mot reste le même une fois les guillemets retirés, ou la
-        // commande est une cmdlet.
+        // commande est une cmdlet. Un `"` donné à un natif passe par la carte
+        // depuis KOB-518 (mode Legacy) : `rg '"version"' Cargo.toml` n'y est plus.
         for ligne in [
-            "rg '\"version\"' Cargo.toml",
-            "rg '\"x\"' 'a{b}'",
             "grep.exe \"'a b'\" src/a.rs",
             "grep.exe \"'a'\" src/a.rs",
             "Get-Content \"'x'\"",
