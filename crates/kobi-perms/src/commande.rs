@@ -2573,7 +2573,9 @@ fn commande_sans_plancher(
             },
         );
     }
-    if let Some(a) = options_interdites(&nom, args, jokers.get(1..).unwrap_or_default(), shell) {
+    let exe = mots[0].to_lowercase().ends_with(".exe");
+    if let Some(a) = options_interdites(&nom, args, jokers.get(1..).unwrap_or_default(), shell, exe)
+    {
         return a;
     }
     // `where` est le programme `where.exe` sauf sous PowerShell, où seul le
@@ -2979,7 +2981,15 @@ const SOURCE_LIBRE: &[&str] = &[
 
 /// Options ou sous-commandes qui écrivent, par commande.
 /// `jokers` suit `args` : un argument qui porte un joker que le shell étend.
-fn options_interdites(nom: &str, args: &[String], jokers: &[bool], shell: Shell) -> Option<Avis> {
+/// `exe` : le nom était écrit avec `.exe`, donc désigne le programme et non un
+/// alias PowerShell homonyme (`dir.exe`, KOB-521).
+fn options_interdites(
+    nom: &str,
+    args: &[String],
+    jokers: &[bool],
+    shell: Shell,
+    exe: bool,
+) -> Option<Avis> {
     let a = |s: &str| args.iter().any(|x| x == s);
     let commence = |p: &str| args.iter().any(|x| x.starts_with(p));
     let ecrit = |raison: String| Some(Avis::ecriture(Genre::Commande, raison));
@@ -3003,9 +3013,10 @@ fn options_interdites(nom: &str, args: &[String], jokers: &[bool], shell: Shell)
         "find" => a("-L") || a("-follow"),
         "tree" => court('l'),
         "ls" | "du" => court('L') || longue("--dereference"),
-        // GNU `dir` est `ls -C -b` (KOB-472) ; sous PowerShell, c'est
-        // `Get-ChildItem`, où `-L` abrège `-LiteralPath`.
-        "dir" if shell != Shell::PowerShell => {
+        // GNU `dir` est `ls -C -b` (KOB-472) ; sous PowerShell, `dir` est
+        // `Get-ChildItem`, où `-L` abrège `-LiteralPath`, mais `dir.exe` est le
+        // `dir` de MSYS (KOB-521).
+        "dir" if shell != Shell::PowerShell || exe => {
             court('L')
                 || longue("--dereference")
                 || args
@@ -8206,6 +8217,25 @@ mod tests {
         assert_eq!(ps("where.exe /R src x").classe, Classe::Lecture);
         // `rm.exe` reste une suppression.
         assert_eq!(ps("rm.exe x").classe, Classe::Ecriture(Genre::Suppression));
+    }
+
+    /// KOB-521 : sous PowerShell, `dir.exe` est le `dir` de MSYS, pas l'alias de
+    /// `Get-ChildItem` : `dir.exe -LR sub` suit un lien vers l'extérieur (sonde #486).
+    #[test]
+    fn dir_exe_sous_powershell_comme_le_dir_de_gnu() {
+        for ligne in [
+            "dir.exe -LR sub",
+            "dir.exe -L sub",
+            "dir.exe -R -L sub",
+            "dir.exe --dereference sub",
+            "DIR.EXE -RL sub",
+        ] {
+            assert_ne!(ps(ligne).classe, Classe::Lecture, "{ligne}");
+            assert_eq!(ps(ligne).classe, bash(ligne).classe, "{ligne}");
+        }
+        assert_eq!(ps("dir.exe -R sub").classe, Classe::Lecture);
+        // Sans `.exe`, c'est `Get-ChildItem` : inchangé.
+        assert_eq!(ps("dir -Recurse src").classe, Classe::Lecture);
     }
 
     /// KOB-480 : sous PowerShell, `$null` non cité après une redirection de

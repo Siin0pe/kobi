@@ -34,3 +34,45 @@ fn powershell_lance_le_gci_exe_du_path() {
         Classe::Lecture
     );
 }
+
+/// KOB-521 : `dir.exe -LR sub` (le `dir` de Git) suit un lien vers l'extérieur sous
+/// les deux PowerShell ; Kobi ne le classe pas en lecture.
+#[cfg(windows)]
+#[test]
+fn powershell_dir_exe_suit_un_lien() {
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    use kobi_perms::{commande, Classe, Contexte, Shell};
+
+    let chemin = format!(
+        r"C:\Program Files\Git\usr\bin;{}",
+        std::env::var("PATH").unwrap()
+    );
+    let d = tempfile::tempdir().unwrap();
+    let ici = d.path().join("ici");
+    let dehors = d.path().join("dehors");
+    std::fs::create_dir_all(ici.join("sub")).unwrap();
+    std::fs::create_dir_all(&dehors).unwrap();
+    std::fs::write(dehors.join("SECRET_DEHORS"), "x").unwrap();
+    std::os::windows::fs::symlink_dir(&dehors, ici.join("sub").join("lien")).unwrap();
+    for exe in ["powershell", "pwsh"] {
+        let o = Command::new(exe)
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "dir.exe -LR sub",
+            ])
+            .current_dir(&ici)
+            .env("PATH", &chemin)
+            .output()
+            .unwrap();
+        let texte = String::from_utf8_lossy(&o.stdout);
+        assert!(texte.contains("SECRET_DEHORS"), "{exe} : {texte:?}");
+    }
+    let mut ctx = Contexte::new(vec![PathBuf::from(&ici)]);
+    ctx.cwd = Some(PathBuf::from(&ici));
+    let c = commande::analyser("dir.exe -LR sub", Shell::PowerShell, &ctx).classe;
+    assert_ne!(c, Classe::Lecture);
+}
