@@ -108,3 +108,88 @@ fn les_vrais_motifs_restent_des_motifs() {
         );
     }
 }
+
+/// Le vrai grep et le vrai sed : une valeur collée dans un groupe d'options
+/// (`-vexyzzye` = `-v -e xyzzye`) ou l'interrupteur `-E` laissent le mot
+/// suivant être le fichier lu (relecture de KOB-541).
+#[cfg(unix)]
+#[test]
+fn le_vrai_grep_lit_le_fichier_apres_un_groupe_ou_moins_e_majuscule() {
+    let (_d, ici) = dossiers();
+    std::fs::write(ici.join("liste"), "zzz\n").unwrap();
+    for (prog, args) in [
+        ("grep", vec!["-vexyzzye", "../dehors/secret.txt"]),
+        ("grep", vec!["-ee", "../dehors/secret.txt"]),
+        ("grep", vec!["-vfliste", "../dehors/secret.txt"]),
+        ("grep", vec!["x", "-E", "../dehors/secret.txt"]),
+        ("sed", vec!["-n", "1p", "../dehors/secret.txt", "-E"]),
+    ] {
+        let o = std::process::Command::new(prog)
+            .args(&args)
+            .current_dir(&ici)
+            .output()
+            .unwrap();
+        let texte = String::from_utf8_lossy(&o.stdout);
+        assert!(
+            texte.contains("contenu-secret"),
+            "{prog} {args:?} : {texte:?}"
+        );
+    }
+}
+
+#[test]
+fn groupe_avec_valeur_collee_et_moins_e_majuscule() {
+    let (_d, ici) = dossiers();
+    std::fs::write(ici.join("liste"), "zzz\n").unwrap();
+    for ligne in [
+        "grep -vexyzzye ../dehors/secret.txt",
+        "grep -ee ../dehors/secret.txt",
+        "rg -vexyzzye ../dehors/secret.txt",
+        "egrep -vexyzzye ../dehors/secret.txt",
+        "grep -vfliste ../dehors/secret.txt",
+        "rg -vfliste ../dehors/secret.txt",
+    ] {
+        assert_ne!(classe(ligne, Shell::Bash, &ici), Classe::Lecture, "{ligne}");
+    }
+    for shell in [Shell::Bash, Shell::PowerShell] {
+        for ligne in [
+            "grep x -E ../dehors/secret.txt",
+            "egrep x -E ../dehors/secret.txt",
+            "sed -n 1p -E ../dehors/secret.txt",
+        ] {
+            assert_ne!(
+                classe(ligne, shell, &ici),
+                Classe::Lecture,
+                "{ligne} {shell:?}"
+            );
+        }
+    }
+    // Les formes ordinaires restent des lectures dans le dossier.
+    for ligne in [
+        "grep -ve x notes.txt",
+        "grep -E 'a|b' notes.txt",
+        "grep -vexyz notes.txt",
+        "rg -ie x notes.txt",
+        "sed -E -n 1p notes.txt",
+    ] {
+        assert_eq!(classe(ligne, Shell::Bash, &ici), Classe::Lecture, "{ligne}");
+    }
+}
+
+/// fd : `--search-path` et `--base-directory` donnent le dossier parcouru.
+#[test]
+fn fd_search_path_est_un_chemin() {
+    let (_d, ici) = dossiers();
+    for ligne in [
+        "fd -e txt --search-path ../dehors",
+        "fd --search-path ../dehors",
+        "fd --base-directory ../dehors",
+        "fd x --search-path ../dehors",
+    ] {
+        assert_ne!(classe(ligne, Shell::Bash, &ici), Classe::Lecture, "{ligne}");
+    }
+    assert_eq!(
+        classe("fd -e txt --search-path .", Shell::Bash, &ici),
+        Classe::Lecture
+    );
+}
