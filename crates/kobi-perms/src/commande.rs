@@ -2269,6 +2269,20 @@ const MOTIF_D_ABORD: &[&str] = &[
     "jq",
 ];
 
+/// Comme [`options_a_valeur`], mais les paramètres de `Get-ChildItem`
+/// (`-Filter`, `-Attributes`…) ne valent que pour la cmdlet : sous Bash, ou
+/// pour un `ls` natif sous PowerShell (hors Windows, ou `ls.exe`), `ls` et `dir`
+/// sont des programmes. Le ls BSD de macOS lit `-attributes` comme une suite
+/// d'options d'une lettre, toutes valides, et liste le mot suivant : ce mot est
+/// un chemin, pas une valeur (KOB-539).
+fn options_a_valeur_du_programme(nom: &str, shell: Shell, exe: bool) -> &'static [&'static str] {
+    let cmdlet = shell == Shell::PowerShell && !exe && !est_natif_pwsh(nom, cfg!(windows));
+    if matches!(nom, "get-childitem" | "gci" | "ls" | "dir") && !cmdlet {
+        return &[];
+    }
+    options_a_valeur(nom)
+}
+
 /// Options suivies d'une valeur qui n'est pas un chemin (motif, nombre…),
 /// par commande. Une option absente de la liste n'emporte pas de valeur :
 /// l'argument suivant est alors vérifié comme un chemin (au pire, un refus de
@@ -4548,7 +4562,7 @@ fn chemins_un_par_un(
                 }
                 None => {}
             }
-            if options_a_valeur(nom)
+            if options_a_valeur_du_programme(nom, shell, exe)
                 .iter()
                 .any(|o| o.eq_ignore_ascii_case(&bas))
                 && !x.contains('=')
@@ -9103,6 +9117,35 @@ mod tests {
         ] {
             assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne}");
         }
+    }
+
+    /// KOB-539 : les paramètres de `Get-ChildItem` ne valent que pour la cmdlet.
+    #[test]
+    fn options_de_get_childitem_pour_la_cmdlet_seulement() {
+        let ps = Shell::PowerShell;
+        for nom in ["get-childitem", "gci", "dir"] {
+            assert!(
+                options_a_valeur_du_programme(nom, ps, false).contains(&"-filter"),
+                "{nom}"
+            );
+        }
+        assert_eq!(
+            options_a_valeur_du_programme("ls", ps, false).contains(&"-filter"),
+            cfg!(windows)
+        );
+        for (nom, shell, exe) in [
+            ("ls", Shell::Bash, false),
+            ("dir", Shell::Bash, false),
+            ("ls", ps, true),
+            ("dir", ps, true),
+        ] {
+            assert!(
+                options_a_valeur_du_programme(nom, shell, exe).is_empty(),
+                "{nom} {shell:?} {exe}"
+            );
+        }
+        // Les autres programmes gardent leurs options.
+        assert!(options_a_valeur_du_programme("grep", Shell::Bash, false).contains(&"-e"));
     }
 
     /// KOB-480 : sous PowerShell, `$null` non cité après une redirection de
