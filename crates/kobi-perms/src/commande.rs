@@ -121,6 +121,16 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
         ));
     }
     if let Ok(Decoupage {
+        egal_zsh: Some(mot),
+        ..
+    }) = &decoupe
+    {
+        return avis.pire(Avis::ecriture(
+            Genre::Indetermine,
+            format!("`{mot}` : zsh le remplace par le chemin d'un exécutable du PATH"),
+        ));
+    }
+    if let Ok(Decoupage {
         joker_zsh: Some(motif),
         ..
     }) = &decoupe
@@ -460,6 +470,10 @@ struct Decoupage {
     /// Premier mot Bash avec un `^`, ou un `#` dans le mot, non cité : jokers
     /// de zsh `EXTENDED_GLOB` (relecture de KOB-504).
     joker_etendu: Option<String>,
+    /// Premier mot Bash qui commence par un `=` non cité suivi d'un nom : zsh
+    /// (option `EQUALS`, active par défaut) le remplace par le chemin de
+    /// l'exécutable du PATH (`cat =deploy`, KOB-509).
+    egal_zsh: Option<String>,
 }
 
 /// Découpe la ligne en jetons. Refuse ce qui demanderait d'exécuter du code
@@ -468,6 +482,7 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
     let ps = shell == Shell::PowerShell;
     let echap = if ps { '`' } else { '\\' };
     let mut joker = None;
+    let mut egal_zsh = None;
     let mut joker_zsh = None;
     let mut joker_etendu = None;
     let mut jetons = Vec::new();
@@ -945,6 +960,28 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
                 dans_mot = true;
                 mot.push(x);
             }
+            // `=nom` en tête de mot, même après des guillemets vides (`""=nom`) : zsh
+            // y met le chemin de `nom` (KOB-509). `=` seul, un mot fait de `=`
+            // (`[ a == b ]` : zsh cherche la commande `=` et échoue) et `a=b` ne
+            // changent rien.
+            '=' if !ps
+                && (!dans_mot || mot.is_empty())
+                && c[i..]
+                    .iter()
+                    .take_while(|n| {
+                        !n.is_whitespace() && !matches!(n, ';' | '|' | '&' | '<' | '>' | '(' | ')')
+                    })
+                    .any(|n| *n != '=') =>
+            {
+                egal_zsh.get_or_insert_with(|| {
+                    c[i..]
+                        .iter()
+                        .take_while(|n| !n.is_whitespace())
+                        .collect::<String>()
+                });
+                dans_mot = true;
+                mot.push('=');
+            }
             x => {
                 dans_mot = true;
                 mot.push(x);
@@ -988,6 +1025,7 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
         a_joker: a_joker.take(),
         joker_zsh,
         joker_etendu,
+        egal_zsh,
     })
 }
 

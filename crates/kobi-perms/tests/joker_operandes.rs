@@ -115,3 +115,52 @@ fn bash_sed_avec_un_joker_execute_les_lignes() {
     assert!(d.path().join("execute").exists(), "{sortie:?}");
     assert_ne!(classe(ligne, d.path()), Classe::Lecture);
 }
+
+/// KOB-509 : zsh remplace `=deploy` par le chemin de l'exécutable `deploy` du PATH,
+/// hors des dossiers. HOME isolé, script factice dans un PATH de test.
+#[cfg(unix)]
+#[test]
+fn zsh_egal_en_tete_de_mot_lit_un_executable_du_path() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    let ici = d.path().join("ici");
+    let bin = d.path().join("bin");
+    std::fs::create_dir_all(&ici).unwrap();
+    std::fs::create_dir_all(&bin).unwrap();
+    let script = bin.join("deploy");
+    std::fs::write(&script, "#!/bin/sh\nTOKEN=SECRET-SCRIPT\n").unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let chemin = format!("{}:/usr/bin:/bin", bin.display());
+    let zsh = |ligne: &str| {
+        Command::new("zsh")
+            .args(["-f", "-c", ligne])
+            .current_dir(&ici)
+            .env_clear()
+            .env("HOME", d.path())
+            .env("PATH", &chemin)
+            .output()
+    };
+    let ligne = "cat =deploy";
+    let Ok(sortie) = zsh(ligne) else {
+        // Pas de zsh sur cette machine : seul le classement est vérifié. macOS a
+        // toujours zsh : la CI y fait la vraie preuve.
+        if cfg!(target_os = "macos") {
+            panic!("zsh absent sous macOS");
+        }
+        assert_ne!(classe(ligne, &ici), Classe::Lecture);
+        return;
+    };
+    let texte = String::from_utf8_lossy(&sortie.stdout);
+    assert!(texte.contains("SECRET-SCRIPT"), "{sortie:?}");
+    assert_ne!(classe(ligne, &ici), Classe::Lecture);
+    // Des guillemets vides devant n'empêchent pas l'expansion (relecture de KOB-509).
+    for ligne in ["cat \"\"=deploy", "cat ''=deploy", "cat <=deploy"] {
+        let sortie = zsh(ligne).unwrap();
+        let texte = String::from_utf8_lossy(&sortie.stdout);
+        assert!(texte.contains("SECRET-SCRIPT"), "{ligne} {sortie:?}");
+        assert_ne!(classe(ligne, &ici), Classe::Lecture, "{ligne}");
+    }
+    // Témoin : cité, `=deploy` est un nom de fichier, absent ici.
+    let sortie = zsh("cat '=deploy'").unwrap();
+    assert!(!String::from_utf8_lossy(&sortie.stdout).contains("SECRET-SCRIPT"));
+}
