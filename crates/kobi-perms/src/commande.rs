@@ -1390,6 +1390,56 @@ const SHELLS: &[&str] = &[
     "ssh",
 ];
 
+/// `date` ne reçoit-il que des options d'affichage (KOB-507) ? `+FORMAT`,
+/// `-u`, `-R`, `-I[FMT]`, `--iso-8601[=FMT]`, `--rfc-3339=FMT`, `-d CHAÎNE` (ou
+/// collée, ou `--date=`), `--debug`, `--help`, `--version`. Pas de joker : le
+/// shell en ferait d'autres mots (`--file=..`).
+fn date_ne_fait_qu_afficher(args: &[String]) -> bool {
+    let mut i = 0;
+    while i < args.len() {
+        let x = args[i].as_str();
+        if x.contains(['*', '?', '[']) {
+            return false;
+        }
+        let affiche = x.starts_with('+')
+            || matches!(
+                x,
+                "-u" | "--utc"
+                    | "--universal"
+                    | "-R"
+                    | "--rfc-email"
+                    | "--debug"
+                    | "--help"
+                    | "--version"
+                    | "--iso-8601"
+            )
+            || matches!(
+                x.strip_prefix("-I")
+                    .or_else(|| x.strip_prefix("--iso-8601=")),
+                Some("" | "date" | "hours" | "minutes" | "seconds" | "ns")
+            )
+            || matches!(
+                x.strip_prefix("--rfc-3339="),
+                Some("date" | "seconds" | "ns")
+            )
+            || x.starts_with("--date=")
+            || (x.starts_with("-d") && x.len() > 2);
+        if x == "-d" {
+            // La valeur suit : une chaîne de date, jamais un fichier.
+            match args.get(i + 1) {
+                Some(v) if !v.contains(['*', '?', '[']) => i += 2,
+                _ => return false,
+            }
+            continue;
+        }
+        if !affiche {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
 /// Options de `hostname` qui ne font qu'afficher.
 const OPTIONS_HOSTNAME: &[&str] = &[
     "-a",
@@ -2819,7 +2869,15 @@ fn options_interdites(nom: &str, args: &[String], shell: Shell) -> Option<Avis> 
             Genre::Fichier,
             "`xxd entrée sortie` écrit dans un fichier",
         )),
-        "date" if a("-s") || commence("--set") => ecrit("`date -s` change l'heure".into()),
+        // Liste blanche (KOB-507) : `date -f f` affiche chaque ligne de `f` dans
+        // son erreur, `-r f` sa date, et un positionnel (`date 01010000`) ou
+        // `-s` change l'heure. Sous PowerShell Windows, `date` est `Get-Date`.
+        "date"
+            if (shell == Shell::Bash || !cfg!(windows))
+                && !date_ne_fait_qu_afficher(args) =>
+        {
+            ecrit("`date` avec autre chose qu'une option d'affichage peut lire un fichier (`-f`, `-r`) ou changer l'heure".into())
+        }
         // Liste blanche (KOB-478) : `-Ff`, `--file=f`, `--fil=f`, `-b` et un nom en
         // argument changent le nom de la machine.
         "hostname" if args.iter().any(|x| !OPTIONS_HOSTNAME.contains(&x.as_str())) => ecrit(
@@ -6929,6 +6987,57 @@ mod tests {
             "diff --from-file='?.' x",
             "grep -v '/root/.ssh/*' f",
             "grep -v /root/.ssh/\\* f",
+        ] {
+            assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+    }
+
+    /// KOB-507 : `date -f fichier` affiche chaque ligne du fichier dans son
+    /// erreur, `-r` sa date, et un positionnel change l'heure (vu avec le vrai
+    /// `date` dans `tests/date_fichier.rs`, sans jamais d'opérande).
+    #[test]
+    fn date_qui_lit_un_fichier_sur_la_carte() {
+        for ligne in [
+            "date -f /root/.ssh/id_rsa",
+            "date --file=/root/.ssh/id_rsa",
+            "date --fil=/root/.ssh/id_rsa",
+            "date -f ../secret",
+            "date -f../secret",
+            "date -uf ../secret",
+            "date -r /root/.ssh/id_rsa",
+            "date --reference=/etc/shadow",
+            "date --file=?.",
+            "date -d *",
+            "date 01010000",
+            "date 0101",
+            "date -s 2020-01-01",
+            "date --set=2020-01-01",
+            "date -u 01010000",
+            "date -I seconds",
+        ] {
+            assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+    }
+
+    /// Options d'affichage seulement : `date` reste une lecture.
+    #[test]
+    fn date_qui_affiche_en_lecture() {
+        for ligne in [
+            "date",
+            "date +%Y-%m-%d",
+            "date '+%H:%M'",
+            "date -u",
+            "date --utc +%s",
+            "date -R",
+            "date -I",
+            "date -Iseconds",
+            "date --iso-8601=ns",
+            "date --rfc-3339=seconds",
+            "date -d yesterday",
+            "date -d '2 days ago' +%F",
+            "date -d@1700000000",
+            "date --date=tomorrow",
+            "date --version",
         ] {
             assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne}");
         }
