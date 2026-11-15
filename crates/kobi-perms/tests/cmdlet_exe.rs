@@ -76,3 +76,41 @@ fn powershell_dir_exe_suit_un_lien() {
     let c = commande::analyser("dir.exe -LR sub", Shell::PowerShell, &ctx).classe;
     assert_ne!(c, Classe::Lecture);
 }
+
+/// KOB-522 : `echo.exe ../dehors/*` (le `echo` de Git) liste des noms hors du dossier
+/// sous les deux PowerShell ; Kobi ne le classe pas en lecture.
+#[cfg(windows)]
+#[test]
+fn powershell_echo_exe_liste_des_noms_hors_du_dossier() {
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    use kobi_perms::{commande, Classe, Contexte, Shell};
+
+    let chemin = format!(
+        r"C:\Program Files\Git\usr\bin;{}",
+        std::env::var("PATH").unwrap()
+    );
+    let d = tempfile::tempdir().unwrap();
+    let ici = d.path().join("ici");
+    let dehors = d.path().join("dehors");
+    std::fs::create_dir_all(&ici).unwrap();
+    std::fs::create_dir_all(&dehors).unwrap();
+    std::fs::write(dehors.join("SECRET_NOM"), "x").unwrap();
+    let mut ctx = Contexte::new(vec![PathBuf::from(&ici)]);
+    ctx.cwd = Some(PathBuf::from(&ici));
+    for ligne in ["echo.exe ../dehors/*", "echo.exe '../dehors/*'"] {
+        for exe in ["powershell", "pwsh"] {
+            let o = Command::new(exe)
+                .args(["-NoProfile", "-NonInteractive", "-Command", ligne])
+                .current_dir(&ici)
+                .env("PATH", &chemin)
+                .output()
+                .unwrap();
+            let texte = String::from_utf8_lossy(&o.stdout);
+            assert!(texte.contains("SECRET_NOM"), "{exe} {ligne} : {texte:?}");
+        }
+        let c = commande::analyser(ligne, Shell::PowerShell, &ctx).classe;
+        assert_ne!(c, Classe::Lecture, "{ligne}");
+    }
+}
