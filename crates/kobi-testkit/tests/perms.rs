@@ -52,6 +52,9 @@ async fn until_card(turn: &mut Turn, cards: &Cards) -> u64 {
     }
 }
 
+/// `tool_use_id` de l'écriture `write_note` dans `scenarios/permission.json`.
+const OUTIL_ECRITURE: &str = "toolu_01Px6cRrbCGK3wcNngLv1nbd";
+
 fn ask() -> Ask {
     Ask {
         question: "note qu'il faut envoyer le devis".into(),
@@ -77,9 +80,19 @@ async fn une_ecriture_attend_la_reponse() {
     );
     assert_eq!(card.input["text"], "Il faut envoyer le devis au client.");
 
-    // Personne n'a cliqué : Claude attend, rien n'est écrit.
-    let waiting = tokio::time::timeout(Duration::from_secs(1), turn.next()).await;
-    assert!(waiting.is_err(), "le tour ne doit pas avancer sans réponse");
+    // Personne n'a cliqué : Claude attend, rien n'est écrit. La carte vient du
+    // serveur de permission, le reste du flux de la sortie du programme : sous
+    // charge, la carte double les derniers événements qui la précédaient, et ils
+    // arrivent après elle (KOB-511, sonde #481 : `Vie` sous Windows). Aucun ne doit
+    // faire avancer le tour : ni fin, ni texte, ni le résultat de l'écriture.
+    let fin = tokio::time::Instant::now() + Duration::from_secs(1);
+    while let Ok(evenement) = tokio::time::timeout_at(fin, turn.next()).await {
+        match evenement {
+            Some(BrainEvent::Vie | BrainEvent::ToolCall { .. }) => {}
+            Some(BrainEvent::OutilRendu { id }) if id != OUTIL_ECRITURE => {}
+            autre => panic!("le tour ne doit pas avancer sans réponse : {autre:?}"),
+        }
+    }
     assert_eq!(journal(&dir), None);
 
     assert!(cards.answer(id, Decision::Allow));
