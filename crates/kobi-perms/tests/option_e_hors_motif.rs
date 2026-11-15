@@ -193,3 +193,66 @@ fn fd_search_path_est_un_chemin() {
         Classe::Lecture
     );
 }
+
+/// Le vrai `du -D` (GNU) ne prend pas de valeur : il liste le dossier qui suit.
+#[cfg(target_os = "linux")]
+#[test]
+fn le_vrai_du_moins_d_majuscule_liste_le_dossier() {
+    let (_d, ici) = dossiers();
+    let o = std::process::Command::new("du")
+        .args(["-D", "-a", "../dehors"])
+        .current_dir(&ici)
+        .output()
+        .unwrap();
+    let texte = String::from_utf8_lossy(&o.stdout);
+    assert!(texte.contains("secret.txt"), "{texte:?}");
+}
+
+/// La casse des options à valeur compte pour les programmes natifs : `-a`,
+/// `-c`, `-b`, `-i`, `-p`, `-D` ne prennent pas la valeur de `-A`, `-C`, `-B`,
+/// `-I`, `-P`, `-d`.
+#[test]
+fn casse_des_options_a_valeur_des_programmes_natifs() {
+    let (_d, ici) = dossiers();
+    for ligne in [
+        "grep -a x ../dehors/secret.txt",
+        "grep -c x ../dehors/secret.txt",
+        "rg -b x ../dehors/secret.txt",
+        "tree -i ../dehors",
+        "tree -p ../dehors",
+        "du -D ../dehors",
+        "du -a -D ../dehors",
+    ] {
+        assert_ne!(classe(ligne, Shell::Bash, &ici), Classe::Lecture, "{ligne}");
+    }
+    for ligne in [
+        "tree -L 2 .",
+        "tree -I target .",
+        "du -d 1 .",
+        "grep -A 2 x notes.txt",
+    ] {
+        assert_eq!(classe(ligne, Shell::Bash, &ici), Classe::Lecture, "{ligne}");
+    }
+}
+
+/// fd : `--base-directory` déplace tous les chemins relatifs, sur la carte.
+#[test]
+fn fd_base_directory_sur_la_carte() {
+    let (_d, ici) = dossiers();
+    let sous = ici.join("sous");
+    std::fs::create_dir_all(&sous).unwrap();
+    let mut ctx = Contexte::new(vec![ici.clone()]);
+    ctx.cwd = Some(sous);
+    for ligne in [
+        "fd --base-directory .. x ..",
+        "fd --base-directory .. --search-path ..",
+        "fd --base-directory=.. --search-path=..",
+        "fd --base-directory .. -e txt . ../dehors",
+    ] {
+        assert_ne!(
+            commande::analyser(ligne, Shell::Bash, &ctx).classe,
+            Classe::Lecture,
+            "{ligne}"
+        );
+    }
+}

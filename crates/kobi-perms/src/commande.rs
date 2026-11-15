@@ -4543,9 +4543,16 @@ fn chemins_un_par_un(
                     _ => {}
                 }
             }
-            // fd : `--search-path` et `--base-directory` donnent le dossier
-            // parcouru (relecture de KOB-541).
-            if nom == "fd" && matches!(x.as_str(), "--search-path" | "--base-directory") {
+            // fd : `--base-directory` change son dossier de travail, et tous ses
+            // chemins relatifs avec : sur la carte. `--search-path` donne le
+            // dossier parcouru (relecture de KOB-541).
+            if nom == "fd" && (x == "--base-directory" || x.starts_with("--base-directory=")) {
+                return Avis::ecriture(
+                    Genre::Indetermine,
+                    "`fd --base-directory` change le dossier de départ de tous ses chemins : vérifié sur la carte",
+                );
+            }
+            if nom == "fd" && x == "--search-path" {
                 if let Some(d) = args.get(i + 1) {
                     if let Some(avis) = juge(d) {
                         return avis;
@@ -4580,13 +4587,16 @@ fn chemins_un_par_un(
             }
             if options_a_valeur(nom)
                 .iter()
-                // grep, rg, sed et jq distinguent la casse (`-E` n'est pas
-                // `-e`) ; les cmdlets non (relecture de KOB-541).
+                // Les programmes natifs distinguent la casse (`grep -E`, `du -D`,
+                // `tree -i` ne prennent pas de valeur, `-e`, `-d`, `-I` si) ; seuls
+                // les cmdlets de PowerShell l'ignorent (relecture de KOB-541).
                 .any(|o| {
-                    if matches!(nom, "grep" | "egrep" | "fgrep" | "rg" | "sed" | "jq") {
-                        *o == x.as_str()
-                    } else {
+                    let cmdlet =
+                        shell == Shell::PowerShell && !exe && !est_natif_pwsh(nom, cfg!(windows));
+                    if cmdlet {
                         o.eq_ignore_ascii_case(&bas)
+                    } else {
+                        *o == x.as_str()
                     }
                 })
                 && !x.contains('=')
