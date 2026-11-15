@@ -1392,7 +1392,7 @@ const SHELLS: &[&str] = &[
 
 /// `date` ne reçoit-il que des options d'affichage (KOB-507) ? `+FORMAT`,
 /// `-u`, `-R`, `-I[FMT]`, `--iso-8601[=FMT]`, `--rfc-3339=FMT`, `-d CHAÎNE` (ou
-/// collée, ou `--date=`), `--debug`, `--help`, `--version`. Pas de joker : le
+/// collée, ou `--date CHAÎNE`, `--date=`), `--debug`, `--help`, `--version`. Pas de joker : le
 /// shell en ferait d'autres mots (`--file=..`).
 fn date_ne_fait_qu_afficher(args: &[String]) -> bool {
     let mut i = 0;
@@ -1424,7 +1424,7 @@ fn date_ne_fait_qu_afficher(args: &[String]) -> bool {
             )
             || x.starts_with("--date=")
             || (x.starts_with("-d") && x.len() > 2);
-        if x == "-d" {
+        if x == "-d" || x == "--date" {
             // La valeur suit : une chaîne de date, jamais un fichier.
             match args.get(i + 1) {
                 Some(v) if !v.contains(['*', '?', '[']) => i += 2,
@@ -2871,11 +2871,10 @@ fn options_interdites(nom: &str, args: &[String], shell: Shell) -> Option<Avis> 
         )),
         // Liste blanche (KOB-507) : `date -f f` affiche chaque ligne de `f` dans
         // son erreur, `-r f` sa date, et un positionnel (`date 01010000`) ou
-        // `-s` change l'heure. Sous PowerShell Windows, `date` est `Get-Date`.
-        "date"
-            if (shell == Shell::Bash || !cfg!(windows))
-                && !date_ne_fait_qu_afficher(args) =>
-        {
+        // `-s` change l'heure. Sous tous les shells : sous PowerShell Windows,
+        // `date.exe` (Git, MSYS) peut passer avant l'alias de `Get-Date`
+        // (relecture de KOB-507) ; `Get-Date -Format x` garde son propre nom.
+        "date" if !date_ne_fait_qu_afficher(args) => {
             ecrit("`date` avec autre chose qu'une option d'affichage peut lire un fichier (`-f`, `-r`) ou changer l'heure".into())
         }
         // Liste blanche (KOB-478) : `-Ff`, `--file=f`, `--fil=f`, `-b` et un nom en
@@ -7014,9 +7013,22 @@ mod tests {
             "date --set=2020-01-01",
             "date -u 01010000",
             "date -I seconds",
+            "date --date",
+            "date -d",
         ] {
             assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne}");
         }
+        // Sous PowerShell aussi, Windows compris : `date.exe` peut y passer
+        // avant l'alias de `Get-Date` (relecture de KOB-507).
+        for ligne in [
+            "date.exe -f $HOME/.ssh/id_rsa",
+            "date -f ../secret",
+            "date.exe -s 2020-01-01",
+            "date --set=2020-01-01",
+        ] {
+            assert_ne!(ps(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+        assert_eq!(ps("Get-Date -Format yyyy").classe, Classe::Lecture);
     }
 
     /// Options d'affichage seulement : `date` reste une lecture.
@@ -7037,6 +7049,7 @@ mod tests {
             "date -d '2 days ago' +%F",
             "date -d@1700000000",
             "date --date=tomorrow",
+            "date --date tomorrow",
             "date --version",
         ] {
             assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne}");
