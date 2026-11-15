@@ -1,6 +1,7 @@
 //! KOB-518 : PowerShell en mode Legacy (Windows PowerShell 5.1 toujours, pwsh
 //! sous Unix jusqu'à 7.2) retire un argument vide avant de lancer un
 //! exécutable natif. Vu avec le vrai shell ; sur la CI, le shell doit être là.
+#![cfg(any(target_os = "linux", windows))]
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
