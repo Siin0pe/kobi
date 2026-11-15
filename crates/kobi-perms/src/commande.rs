@@ -3403,7 +3403,14 @@ fn positionnels_uniq(args: &[String]) -> usize {
         if options && x == "--" {
             options = false;
         } else if options && x.starts_with('-') && x != "-" {
-            let a_valeur = matches!(x.as_str(), "-f" | "-s" | "-w")
+            // Dans un groupe d'options courtes (`-cf 1`), la première de `f`,
+            // `s`, `w` prend la suite du mot, ou le mot suivant (KOB-516).
+            let groupe_a_valeur = !x.starts_with("--")
+                && x[1..]
+                    .char_indices()
+                    .find(|(_, c)| matches!(c, 'f' | 's' | 'w'))
+                    .is_some_and(|(j, _)| j + 2 == x.len());
+            let a_valeur = groupe_a_valeur
                 || ["--skip-fields", "--skip-chars", "--check-chars"]
                     .iter()
                     .any(|o| x == o);
@@ -3499,20 +3506,107 @@ fn script_sed_sur(script: &str) -> bool {
 /// `--run-tests`) ou par des modules (`-L`, groupé ou non, `--library-path`).
 /// Tous les mots comptent : un filtre peut commencer par un tiret
 /// (`jq -n '-1|env.X'`). Un mot précédé d'un `.` est un champ (`.env`).
+///
+/// Le contenu d'une chaîne n'est pas du code (`select(.type == "include")`),
+/// sauf ses interpolations (`"\(env.X)"`), et `env` en clé d'objet (`{env: 1}`)
+/// n'appelle rien ; `{env}` (raccourci de `{env: env}`) l'appelle (KOB-516). La
+/// valeur d'une option à valeur (`--arg x -foo`) n'est pas une option.
 fn jq_lit_hors(args: &[String]) -> bool {
     let mot_cle = args.iter().any(|x| {
+        let code = code_jq(x);
         ["import", "include", "modulemeta", "env", "ENV"]
             .iter()
-            .any(|m| mot_entier(x, m))
+            .any(|m| mot_appele_jq(&code, m))
     });
-    let fichier = args.iter().any(|x| {
+    let mut fichier = false;
+    let mut i = 0;
+    while let Some(x) = args.get(i) {
         let court = x.starts_with('-') && !x.starts_with("--");
-        x == "--from-file"
+        fichier |= x == "--from-file"
             || x == "--run-tests"
             || abrege(x, "--library-path")
-            || (court && (x.contains('f') || x.contains('L')))
-    });
+            || (court && (x.contains('f') || x.contains('L')));
+        i += match x.as_str() {
+            "--arg" | "--argjson" | "--slurpfile" | "--rawfile" => 3,
+            "--indent" => 2,
+            _ => 1,
+        };
+    }
     mot_cle || fichier
+}
+
+/// Code d'un filtre jq, sans le contenu de ses chaînes : chaque chaîne devient
+/// `""`, mais ses interpolations `\( … )` restent, car c'est du code.
+fn code_jq(texte: &str) -> String {
+    let c: Vec<char> = texte.chars().collect();
+    let mut code = String::new();
+    let mut i = 0;
+    // Profondeur de parenthèses de chaque interpolation ouverte.
+    let mut interpolations: Vec<usize> = Vec::new();
+    let mut dans_chaine = false;
+    while i < c.len() {
+        let x = c[i];
+        if dans_chaine {
+            match x {
+                '\\' if c.get(i + 1) == Some(&'(') => {
+                    interpolations.push(0);
+                    dans_chaine = false;
+                    code.push('(');
+                    i += 1;
+                }
+                '\\' => i += 1,
+                '"' => {
+                    dans_chaine = false;
+                    code.push('"');
+                }
+                _ => {}
+            }
+        } else {
+            match x {
+                '"' => {
+                    dans_chaine = true;
+                    code.push('"');
+                }
+                '(' => {
+                    if let Some(p) = interpolations.last_mut() {
+                        *p += 1;
+                    }
+                    code.push('(');
+                }
+                ')' => {
+                    code.push(')');
+                    match interpolations.last_mut() {
+                        Some(0) => {
+                            interpolations.pop();
+                            dans_chaine = true;
+                        }
+                        Some(p) => *p -= 1,
+                        None => {}
+                    }
+                }
+                _ => code.push(x),
+            }
+        }
+        i += 1;
+    }
+    code
+}
+
+/// `mot` est-il appelé dans le code jq (`mot_entier`), hors d'une clé d'objet
+/// (`{env: 1}`, `{a: 1, include: 2}` : après `{` ou `,`, suivi de `:`) ?
+fn mot_appele_jq(code: &str, mot: &str) -> bool {
+    let ident = |c: char| c.is_alphanumeric() || c == '_';
+    code.match_indices(mot).any(|(i, _)| {
+        let avant = code[..i].trim_end();
+        let apres = code[i + mot.len()..].trim_start();
+        let entier = !code[..i]
+            .chars()
+            .next_back()
+            .is_some_and(|c| ident(c) || c == '.')
+            && !code[i + mot.len()..].chars().next().is_some_and(ident);
+        let cle = (avant.ends_with('{') || avant.ends_with(',')) && apres.starts_with(':');
+        entier && !cle
+    })
 }
 
 /// Filtres `--jq` de gh, sous toutes leurs formes : `--jq f`, `--jq=f`, `-q f`, `-qf`,
@@ -7703,6 +7797,45 @@ mod tests {
         }
         assert_eq!(bash("grep '' f").classe, Classe::Lecture);
         assert_eq!(ps("jq -n 'a b' f").classe, Classe::Lecture);
+    }
+
+    /// KOB-516 : fausses cartes de jq (un mot-clé dans une chaîne ou une clé
+    /// d'objet, la valeur de `--arg`) et de uniq (valeur d'options groupées).
+    #[test]
+    fn jq_et_uniq_fausses_cartes() {
+        for ligne in [
+            "jq '.[] | select(.type == \"include\")' in.txt",
+            "jq '{env: .environment}' in.txt",
+            "jq '.[\"env\"]' in.txt",
+            "jq '{a: 1, include: 2}' in.txt",
+            "jq --arg x -foo . in.txt",
+            "jq --argjson n 1 --arg y -Lx '.a' in.txt",
+            "uniq -cf 1 in.txt",
+            "uniq -cw 8 in.txt",
+            "uniq -cf1 in.txt",
+        ] {
+            assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+        // Les formes dangereuses restent sur la carte.
+        for ligne in [
+            "jq -n env",
+            "jq -n '$ENV.HOME'",
+            "jq -n '\"\\(env.HOME)\"'",
+            "jq -n '\"a \\(\"b\" + (env | tostring))\"'",
+            "jq -n '{env}'",
+            "jq -n '{a: env}'",
+            "jq -n '[1, env]'",
+            "jq -n 'import \"m\" as m; 1'",
+            "jq -n 'include \"m\"; 1'",
+            "jq -f prog in.txt",
+            "jq -nf prog",
+            "jq -L dir . in.txt",
+            "jq --arg x y -f prog in.txt",
+            "uniq -c in out",
+            "uniq -cf 1 in out",
+        ] {
+            assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+        }
     }
 
     /// KOB-503 : le shell remplace un motif à joker par des chemins ; le
