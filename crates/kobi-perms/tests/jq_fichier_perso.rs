@@ -11,7 +11,7 @@ use kobi_perms::{commande, Classe, Contexte, Shell};
 fn classe(ligne: &str, code: &Path, home: Option<&Path>) -> Classe {
     let mut ctx = Contexte::new(vec![code.to_path_buf()]);
     ctx.cwd = Some(code.to_path_buf());
-    ctx.home = home.map(PathBuf::from);
+    ctx.dossiers_personnels = home.map(PathBuf::from).into_iter().collect();
     commande::analyser(ligne, Shell::Bash, &ctx).classe
 }
 
@@ -39,6 +39,21 @@ fn avec_un_fichier_jq_toute_commande_jq_sur_la_carte() {
     }
     // HOME inconnu : rien n'y est cherché.
     assert_eq!(classe("jq -n ouvrir", &code, None), Classe::Lecture);
+}
+
+/// jq 1.7 et plus charge `~/jq/main.jq` quand il n'y a pas de `~/.jq` (relecture
+/// de KOB-525).
+#[test]
+fn avec_jq_main_jq_toute_commande_jq_sur_la_carte() {
+    let home = tempfile::tempdir().unwrap();
+    let code = home.path().join("code");
+    std::fs::create_dir_all(home.path().join("jq")).unwrap();
+    std::fs::create_dir_all(&code).unwrap();
+    std::fs::write(home.path().join("jq").join("main.jq"), "def ouvrir: env;\n").unwrap();
+    assert_ne!(
+        classe("jq -n ouvrir", &code, Some(home.path())),
+        Classe::Lecture
+    );
 }
 
 /// Le vrai jq charge `~/.jq` : la fonction de l'utilisateur affiche la variable.

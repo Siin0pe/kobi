@@ -2697,13 +2697,18 @@ fn commande_sans_plancher(
             "Peut lire vos variables d'environnement (secrets) ou des fichiers non vérifiés.",
         );
     }
-    // jq charge `~/.jq` tout seul : une fonction de l'utilisateur au nom anodin
-    // (`def ouvrir: env;`) peut lire l'environnement ou un fichier (KOB-525,
-    // sonde). Kobi refuse d'écrire ce fichier ; s'il existe déjà, toute commande
-    // jq passe par la carte.
+    // jq charge `~/.jq` tout seul (jq 1.7 et plus : `~/jq/main.jq` s'il n'y a pas
+    // de `~/.jq`) : une fonction de l'utilisateur au nom anodin (`def ouvrir:
+    // env;`) peut lire l'environnement ou un fichier (KOB-525, sonde). Kobi refuse
+    // d'écrire ces fichiers ; s'ils existent déjà, toute commande jq passe par la
+    // carte. Tous les dossiers personnels possibles sont regardés : sous Windows,
+    // jq lit `HOME` avant `USERPROFILE` (relecture de KOB-525).
     if nom == "jq"
         && avis.classe == Classe::Lecture
-        && ctx.home.as_ref().is_some_and(|h| h.join(".jq").exists())
+        && ctx
+            .dossiers_personnels
+            .iter()
+            .any(|h| h.join(".jq").exists() || h.join("jq").join("main.jq").exists())
     {
         return Avis::ecriture(
             Genre::Commande,
