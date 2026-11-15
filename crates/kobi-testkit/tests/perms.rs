@@ -52,8 +52,33 @@ async fn until_card(turn: &mut Turn, cards: &Cards) -> u64 {
     }
 }
 
-/// `tool_use_id` de l'écriture `write_note` dans `scenarios/permission.json`.
-const OUTIL_ECRITURE: &str = "toolu_01Px6cRrbCGK3wcNngLv1nbd";
+/// Ce que le faux `claude` écrit avant de demander la permission, lu dans le
+/// scénario jusqu'à son repère `{"fake": "permission"}` : les identifiants des
+/// appels d'outils (`tool_use`) et ceux des résultats (`tool_result`). Rien
+/// n'est recopié à la main : si le scénario change, le test suit (KOB-530).
+fn avant_la_carte(scenario: &str) -> (Vec<String>, Vec<String>) {
+    let chemin = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("scenarios")
+        .join(scenario);
+    let texte = std::fs::read_to_string(chemin).unwrap();
+    let scenario: serde_json::Value = serde_json::from_str(&texte).unwrap();
+    let (mut appels, mut rendus) = (Vec::new(), Vec::new());
+    for ligne in scenario["turns"][0]["lines"].as_array().unwrap() {
+        if ligne["fake"] == "permission" {
+            return (appels, rendus);
+        }
+        for bloc in ligne["message"]["content"].as_array().into_iter().flatten() {
+            match bloc["type"].as_str() {
+                Some("tool_use") => appels.push(bloc["id"].as_str().unwrap().to_owned()),
+                Some("tool_result") => {
+                    rendus.push(bloc["tool_use_id"].as_str().unwrap().to_owned())
+                }
+                _ => {}
+            }
+        }
+    }
+    panic!("pas de repère de permission dans le scénario");
+}
 
 fn ask() -> Ask {
     Ask {
@@ -85,11 +110,19 @@ async fn une_ecriture_attend_la_reponse() {
     // charge, la carte double les derniers événements qui la précédaient, et ils
     // arrivent après elle (KOB-511, sonde #481 : `Vie` sous Windows). Aucun ne doit
     // faire avancer le tour : ni fin, ni texte, ni le résultat de l'écriture.
+    // Seuls ceux du scénario avant la carte sont admis : l'appel de l'écriture
+    // elle-même, mais jamais son résultat ni un autre outil (KOB-530).
+    let (appels, rendus) = avant_la_carte("permission.json");
+    assert!(
+        !rendus.contains(appels.last().unwrap()),
+        "{appels:?} {rendus:?}"
+    );
     let fin = tokio::time::Instant::now() + Duration::from_secs(1);
     while let Ok(evenement) = tokio::time::timeout_at(fin, turn.next()).await {
         match evenement {
-            Some(BrainEvent::Vie | BrainEvent::ToolCall { .. }) => {}
-            Some(BrainEvent::OutilRendu { id }) if id != OUTIL_ECRITURE => {}
+            Some(BrainEvent::Vie) => {}
+            Some(BrainEvent::ToolCall { ref id, .. }) if appels.contains(id) => {}
+            Some(BrainEvent::OutilRendu { ref id }) if rendus.contains(id) => {}
             autre => panic!("le tour ne doit pas avancer sans réponse : {autre:?}"),
         }
     }
