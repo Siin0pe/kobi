@@ -177,7 +177,7 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
     {
         return avis.pire(Avis::ecriture(
             Genre::Indetermine,
-            format!("`{mot}` : zsh (options `EXTENDED_GLOB`, `BRACE_CCL`) en fait d'autres chemins, non vérifiés"),
+            format!("`{mot}` : avec zsh, ce mot non cité peut être remplacé par des noms de fichiers ; mets-le entre guillemets simples"),
         ));
     }
     // PowerShell en mode Legacy (Windows PowerShell 5.1 toujours, pwsh sous Unix
@@ -595,7 +595,10 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
     let mut joker = None;
     let mut egal_zsh = None;
     let mut joker_zsh = None;
-    let mut joker_etendu = None;
+    // Mot entier qui porte un `^` ou un `#` non cité (joker de zsh `EXTENDED_GLOB`),
+    // noté à la fin du mot pour la raison de la carte (KOB-528).
+    let joker_etendu = std::cell::RefCell::new(None::<String>);
+    let etendu_dans_mot = std::cell::Cell::new(false);
     let mut jetons = Vec::new();
     let mut mot = String::new();
     let mut dans_mot = false;
@@ -635,6 +638,9 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
                    apres_virgule: &mut bool,
                    avant_virgule: bool| {
         let mot_cite = commence_cite.take();
+        if etendu_dans_mot.take() && *dans_mot {
+            joker_etendu.borrow_mut().get_or_insert_with(|| mot.clone());
+        }
         if *dans_mot {
             if ps && !mot_cite && !*apres_virgule && !avant_virgule && mot.contains(['*', '?', '['])
             {
@@ -914,7 +920,7 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
             // (KOB-524). Un joker du mot, et la ligne passe par la carte, comme
             // `^` et `#` (KOB-504). `{}` seul et `{ ` (bloc) n'en sont pas.
             '{' if !ps && classe_d_accolades(&c[i + 1..]) => {
-                joker_etendu.get_or_insert_with(|| format!("{mot}{{"));
+                etendu_dans_mot.set(true);
                 joker_dans_mot.set(true);
                 dans_mot = true;
                 mot.push('{');
@@ -1157,12 +1163,16 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
                 && (matches!(x, '*' | '?' | '[' | '^') || (dans_mot && matches!(x, '#' | '~'))) =>
             {
                 if matches!(x, '^' | '#') {
-                    joker_etendu.get_or_insert_with(|| format!("{mot}{x}"));
+                    etendu_dans_mot.set(true);
                 }
-                if joker_peut_donner_une_option(&mot) {
-                    joker.get_or_insert_with(|| format!("{mot}{x}"));
+                // `~` seul ne fait pas un joker : zsh laisse `a~b` ou `1,/a~b/p` tels
+                // quels ; avec un autre joker du mot, celui-ci le marque (KOB-528).
+                if x != '~' {
+                    if joker_peut_donner_une_option(&mot) {
+                        joker.get_or_insert_with(|| format!("{mot}{x}"));
+                    }
+                    joker_dans_mot.set(true);
                 }
-                joker_dans_mot.set(true);
                 dans_mot = true;
                 mot.push(x);
             }
@@ -1242,7 +1252,7 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
         tiret_unicode: tiret_unicode.take(),
         a_joker: a_joker.take(),
         joker_zsh,
-        joker_etendu,
+        joker_etendu: joker_etendu.take(),
         egal_zsh,
     })
 }
@@ -3388,7 +3398,10 @@ fn options_interdites(
                         return ecrit(format!("`sed {x}` : option non vérifiée"));
                     }
                 } else {
-                    script = Some((x, jokers.get(k) == Some(&true)));
+                    // `~` seul ne fait pas un joker : zsh laisse `1,/a~b/p` tel quel,
+                    // comme `cat a~b` (KOB-528).
+                    let joker = jokers.get(k) == Some(&true) && x.contains(['*', '?', '[', '^', '#']);
+                    script = Some((x, joker));
                     break;
                 }
             }
@@ -3399,9 +3412,20 @@ fn options_interdites(
             // sa ligne : `{ }`, `'` et `"` y deviennent des expansions et des
             // guillemets que Kobi ne voit pas (relecture de KOB-504).
             let msys = shell == Shell::PowerShell && cfg!(windows);
-            let sur = !msys && script.is_some_and(|(s, joker)| !joker && script_sed_sur(s)) && muet;
+            let joker_script = script.is_some_and(|(_, joker)| joker);
+            let sur = !msys && !joker_script && script.is_some_and(|(s, _)| script_sed_sur(s)) && muet;
             if sur {
                 None
+            } else if msys {
+                Some(Avis::ecriture(
+                    Genre::Indetermine,
+                    "sous PowerShell sous Windows, le `sed` de Git relit lui-même sa ligne : vérifié sur la carte",
+                ))
+            } else if joker_script {
+                Some(Avis::ecriture(
+                    Genre::Indetermine,
+                    "le script de `sed` contient un caractère que le shell peut remplacer par des noms de fichiers : mets-le entre guillemets simples",
+                ))
             } else {
                 Some(Avis::ecriture(
                     Genre::Indetermine,
@@ -7738,7 +7762,6 @@ mod tests {
             "rg a ^x",
             "grep ^fn f",
             "sed -n 1,/x#/p f",
-            "sed -n 1,/a~b/p f",
         ] {
             assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne}");
         }
@@ -7748,6 +7771,12 @@ mod tests {
             "sed -n '/^fn/p' f",
             "rg '^use' src",
             "grep -c '^#' f",
+            // `~` seul : zsh laisse le mot tel quel (KOB-528).
+            "sed -n 1,/a~b/p f",
+            "uniq a~b",
+            "xxd a~b",
+            "grep -v ../a~b f",
+            "grep -a~b f",
         ] {
             assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne}");
         }
@@ -8835,6 +8864,38 @@ mod tests {
             "Get-Content -Path:a.txt",
         ] {
             assert_eq!(ps(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+    }
+
+    /// KOB-528 : un `~` accompagné d'un autre joker reste sur la carte.
+    #[test]
+    fn tilde_avec_un_autre_joker() {
+        for ligne in ["sed -n 1,/a~b*/p f", "uniq a~b*", "cat *~b", "grep ^a~b f"] {
+            assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+    }
+
+    /// KOB-528 : les raisons citent le mot entier et disent quoi faire.
+    #[test]
+    fn raisons_des_jokers_de_zsh_et_de_sed() {
+        for (ligne, mot) in [
+            ("grep ^foo f", "`^foo`"),
+            ("echo a^b", "`a^b`"),
+            ("cat d/^x", "`d/^x`"),
+            ("rg -n TODO#1 src", "`TODO#1`"),
+        ] {
+            let r = bash(ligne).raison;
+            assert!(r.contains(mot), "{ligne} : {r}");
+            assert!(r.contains("guillemets simples"), "{ligne} : {r}");
+            assert!(!r.contains("EXTENDED_GLOB"), "{ligne} : {r}");
+        }
+        for ligne in ["sed -n /t*/p f", "sed --quiet /t*/p f"] {
+            let r = bash(ligne).raison;
+            assert!(
+                r.contains("mets-le entre guillemets simples"),
+                "{ligne} : {r}"
+            );
+            assert!(!r.contains("qu'en affichage"), "{ligne} : {r}");
         }
     }
 
