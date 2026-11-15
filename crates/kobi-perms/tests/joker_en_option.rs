@@ -257,3 +257,106 @@ fn powershell_guillemets_retires_avant_le_programme() {
         "{ligne}"
     );
 }
+
+/// KOB-513 : sous Windows, un programme MSYS étend le motif, même cité ; une cmdlet
+/// n'étend rien. Le motif cité d'un programme natif passe par la carte, pas un refus.
+#[cfg(windows)]
+#[test]
+fn msys_etend_le_motif_cite_la_cmdlet_non() {
+    let chemin = format!(
+        r"C:\Program Files\Git\usr\bin;{}",
+        std::env::var("PATH").unwrap()
+    );
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("a"), "").unwrap();
+    std::fs::write(d.path().join("x"), "").unwrap();
+    for exe in ["powershell", "pwsh"] {
+        let sortie = |ligne: &str| {
+            let o = Command::new(exe)
+                .args(["-NoProfile", "-NonInteractive", "-Command", ligne])
+                .current_dir(d.path())
+                .env("PATH", &chemin)
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&o.stdout).trim().to_owned()
+        };
+        assert_eq!(
+            sortie("echo.exe '[ax]'"),
+            "a x",
+            "{exe} : MSYS étend le motif cité"
+        );
+        assert_eq!(
+            sortie("Write-Output '[ax]'"),
+            "[ax]",
+            "{exe} : la cmdlet n'étend rien"
+        );
+    }
+    assert_eq!(
+        classe(
+            "Select-String -Pattern '[ax]' -Path a",
+            Shell::PowerShell,
+            d.path()
+        ),
+        Classe::Lecture
+    );
+    let c = classe(r"rg '\[test\]' .", Shell::PowerShell, d.path());
+    assert!(!matches!(c, Classe::Refus(_)), "{c:?}");
+}
+
+/// KOB-513 : `pwsh` hors Windows n'étend pas un mot cité, mais étend un mot non cité
+/// et y lit `\` comme `/` (vu avec le vrai pwsh par la relecture).
+#[cfg(unix)]
+#[test]
+fn pwsh_hors_windows_cite_ou_non() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::create_dir(d.path().join("sub")).unwrap();
+    std::fs::write(d.path().join("sub").join("lien2"), "").unwrap();
+    std::fs::write(d.path().join("l1"), "").unwrap();
+    let pwsh = |ligne: &str| {
+        Command::new("pwsh")
+            .args(["-NoProfile", "-NonInteractive", "-Command", ligne])
+            .current_dir(d.path())
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+    };
+    let Ok(cite) = pwsh("/bin/echo 'l*'") else {
+        // Pas de pwsh sur cette machine : le test tourne sur la CI.
+        return;
+    };
+    assert_eq!(cite, "l*");
+    assert_eq!(pwsh(r"/bin/echo sub\*").unwrap(), "sub/lien2");
+    // Commencé hors guillemets, le mot est étendu même si le joker est cité.
+    assert_eq!(pwsh("/bin/echo sub/'*'").unwrap(), "sub/lien2");
+    assert_eq!(pwsh("/bin/echo sub\"/*\"").unwrap(), "sub/lien2");
+    let c = classe("grep -v /root/.ssh/'*' f", Shell::PowerShell, d.path());
+    assert!(matches!(c, Classe::Refus(_)), "{c:?}");
+    assert_eq!(
+        classe("rg 'l*' .", Shell::PowerShell, d.path()),
+        Classe::Lecture
+    );
+    let c = classe(r"grep -v /root/.ssh\* f", Shell::PowerShell, d.path());
+    assert!(matches!(c, Classe::Refus(_)), "{c:?}");
+}
+
+/// KOB-513 : `..` n'est ajouté à un motif qui commence par un point que s'il peut le
+/// former (`.*`, `.[.]`, classe POSIX) ; un filtre jq comme `.[]` ne le forme jamais.
+#[test]
+fn point_point_seulement_si_le_motif_peut_le_former() {
+    let d = tempfile::tempdir().unwrap();
+    let ici = d.path().join("ici");
+    std::fs::create_dir_all(&ici).unwrap();
+    std::fs::write(ici.join("a"), "").unwrap();
+    for ligne in ["cat .*", "cat .[.]", "cat .?"] {
+        let c = classe(ligne, Shell::Bash, &ici);
+        assert!(matches!(c, Classe::Refus(_)), "{ligne} : {c:?}");
+    }
+    // Une classe POSIX : jamais une lecture (carte, ou refus sous Windows où `:`
+    // désigne un lecteur).
+    assert_ne!(
+        classe("cat .[[:punct:]]", Shell::Bash, &ici),
+        Classe::Lecture
+    );
+    for ligne in ["cat .[n]", "cat .[]", "cat .items[0].name", "jq -c '.[]' a"] {
+        assert_eq!(classe(ligne, Shell::Bash, &ici), Classe::Lecture, "{ligne}");
+    }
+}
