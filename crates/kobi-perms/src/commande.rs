@@ -180,6 +180,22 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
             format!("`{mot}` : zsh (`EXTENDED_GLOB`) en fait d'autres chemins, non vérifiés"),
         ));
     }
+    // PowerShell en mode Legacy (Windows PowerShell 5.1 toujours, pwsh sous Unix
+    // jusqu'à 7.2) recompose la ligne d'un exécutable natif : un argument vide
+    // disparaît et un `"` coupe le mot. `jq -n '' e*` y devient `jq -n env`, qui
+    // affiche l'environnement (KOB-518). Sans savoir le mode, sur la carte ; un
+    // refus garde sa priorité.
+    let legacy = match &decoupe {
+        Ok(d) if shell == Shell::PowerShell => argument_recompose_par_legacy(&d.jetons),
+        _ => None,
+    };
+    let avis = match legacy {
+        Some(x) => avis.pire(Avis::ecriture(
+            Genre::Indetermine,
+            format!("`{x}` : en mode Legacy, PowerShell retire un argument vide ou coupe un mot à guillemets avant de le passer au programme"),
+        )),
+        None => avis,
+    };
     let joker = match decoupe {
         Ok(Decoupage {
             joker: Some(mot), ..
@@ -194,6 +210,52 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
         )),
         None => avis,
     }
+}
+
+/// La redirection prend-elle le mot suivant pour cible ? `2>&1` et `*>&1` non :
+/// le mot suivant reste un argument (même règle que l'analyse principale,
+/// relecture de KOB-518).
+fn redirection_a_une_cible(r: &str) -> bool {
+    !r.contains('&') || r.ends_with(['>', '&'])
+}
+
+/// Premier argument d'un exécutable natif que PowerShell en mode Legacy
+/// recompose en changeant le sens de la ligne (KOB-518) : vide (`''`, `""`), il
+/// disparaît ; avec un `"`, le programme le redécoupe selon son propre runtime,
+/// et les guillemets peuvent déborder sur les arguments suivants (`head 'a"'
+/// 'b ../secret'` lit `../secret` ; un ancien `msvcrt.dll` ferme même sur `""`,
+/// relectures de KOB-518) ; avec un blanc et un `\` final, Windows PowerShell 5.1
+/// ne double pas le `\` en ajoutant ses guillemets, qui se rouvrent. Les cmdlets
+/// reçoivent l'argument tel quel (`est_natif_pwsh`, comme KOB-512, plus
+/// `where.exe`, natif ici même s'il n'étend pas de joker). La cible d'une
+/// redirection n'est pas la commande.
+fn argument_recompose_par_legacy(jetons: &[Jeton]) -> Option<String> {
+    let mut en_tete = true;
+    let mut apres_redirection = false;
+    let mut natif = false;
+    for j in jetons {
+        match j {
+            Jeton::Op(_) => {
+                en_tete = true;
+                apres_redirection = false;
+            }
+            Jeton::Redir(r) => apres_redirection = redirection_a_une_cible(r),
+            Jeton::Mot(_) | Jeton::Cite(_) if apres_redirection => apres_redirection = false,
+            Jeton::Mot(m) | Jeton::Cite(m) if en_tete => {
+                natif = est_natif_pwsh(m, cfg!(windows)) || m.eq_ignore_ascii_case("where.exe");
+                en_tete = false;
+            }
+            Jeton::Mot(m) | Jeton::Cite(m) => {
+                let change = m.is_empty()
+                    || m.contains('"')
+                    || (m.contains(char::is_whitespace) && m.ends_with('\\'));
+                if natif && change {
+                    return Some(m.clone());
+                }
+            }
+        }
+    }
+    None
 }
 
 fn analyser_sans_joker(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
@@ -1212,7 +1274,7 @@ fn sans_guillemets_pour_un_natif_pwsh(
                 morceaux.push(o.clone());
             }
             Jeton::Redir(r) => {
-                apres_redirection = true;
+                apres_redirection = redirection_a_une_cible(r);
                 morceaux.push(r.clone());
             }
             Jeton::Mot(m) | Jeton::Cite(m) => {
@@ -2214,15 +2276,15 @@ fn commande(
             format!("`{x}` donne un nombre inconnu de fichiers : `{nom}` peut écraser l'un de ces fichiers."),
         );
     }
-    match joker_dans_le_filtre(mots, &args, jokers) {
-        Some(x) => Avis::ecriture(
+    if let Some(x) = joker_dans_le_filtre(mots, &args, jokers) {
+        return Avis::ecriture(
             Genre::Indetermine,
             format!(
                 "`jq {x}` : selon les noms de fichiers, le joker peut devenir le filtre de `jq`"
             ),
-        ),
-        None => avis,
+        );
     }
+    avis
 }
 
 /// Nom de la commande dans `mots[0]` : sans chemin, en minuscules, sans `.exe`.
@@ -7592,6 +7654,57 @@ mod tests {
         assert!(!r.contains(KOBI), "{r}");
     }
 
+    /// KOB-518 : PowerShell en mode Legacy retire un argument vide et coupe un
+    /// mot à guillemets pour un exécutable natif (vu avec le vrai pwsh et
+    /// powershell 5.1 dans `tests/powershell_legacy.rs`).
+    #[test]
+    fn argument_vide_ou_a_guillemets_pour_un_natif_sous_powershell() {
+        for ligne in [
+            "jq -n '' e*",
+            "jq -n \"\" f",
+            "jq '\"-n\"' f",
+            "rg x '\"\"' f",
+            "rg x '\"a b\"' f",
+            "head 'a\"' 'b ../secret'",
+            "rg x 'a\"' 'b --pre=python setup.py'",
+            "head 'a\\\"' 'b ../x'",
+            "head 'a b\\' 'c ../secret'",
+            "jq . 'a\"\"\"\"' 'b ../secret'",
+            "rg '\"version\"' Cargo.toml",
+            "> out-x.txt head 'a\"' 'b ../x'",
+            "head 2>&1 'a\"' 'b ../secret'",
+            "head *>&1 'a\"' 'b ../secret'",
+            "grep '' f",
+            "jq.exe -n '' f",
+        ] {
+            assert_eq!(
+                ps(ligne).classe,
+                Classe::Ecriture(Genre::Indetermine),
+                "{ligne}"
+            );
+        }
+        // Les cmdlets reçoivent l'argument tel quel ; Bash n'est pas concerné.
+        for ligne in ["Select-String -Pattern '' -Path f", "Get-Content 'a\"b'"] {
+            assert!(!ps(ligne).raison.contains("Legacy"), "{ligne}");
+        }
+        // `where.exe` est natif ici, même s'il n'étend pas de joker.
+        for ligne in [
+            "where.exe '\"C:\\Users\\moi\\.ssh:*\"'",
+            "where.exe 'a\"' 'b C:\\Users\\moi\\.ssh:*'",
+        ] {
+            assert_ne!(ps(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+        // Hors de Windows, `cat` est un exécutable natif sous pwsh.
+        if !cfg!(windows) {
+            assert_eq!(
+                ps("cat 'a\"' 'b ../x'").classe,
+                Classe::Ecriture(Genre::Indetermine)
+            );
+        }
+        assert_eq!(bash("grep '' f").classe, Classe::Lecture);
+        assert_eq!(ps("jq -n 'a b' f").classe, Classe::Lecture);
+    }
+
     /// KOB-503 : le shell remplace un motif à joker par des chemins ; le
     /// premier devient le motif, les suivants des fichiers lus (vu avec le
     /// vrai bash dans `tests/joker_motif.rs`).
@@ -8087,10 +8200,9 @@ mod tests {
             assert_ne!(ps(ligne).classe, Classe::Lecture, "{ligne}");
         }
         // Sans risque : le mot reste le même une fois les guillemets retirés, ou la
-        // commande est une cmdlet.
+        // commande est une cmdlet. Un `"` donné à un natif passe par la carte
+        // depuis KOB-518 (mode Legacy) : `rg '"version"' Cargo.toml` n'y est plus.
         for ligne in [
-            "rg '\"version\"' Cargo.toml",
-            "rg '\"x\"' 'a{b}'",
             "grep.exe \"'a b'\" src/a.rs",
             "grep.exe \"'a'\" src/a.rs",
             "Get-Content \"'x'\"",
