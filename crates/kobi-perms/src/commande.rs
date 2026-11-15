@@ -216,8 +216,17 @@ fn analyser_sans_joker(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
     // Sous PowerShell, le joker d'un exécutable natif est étendu par `pwsh` hors
     // Windows et par le programme lui-même s'il vient de MSYS (KOB-502), et les
     // guillemets ne se voient plus dans les jetons : tout joker compte.
-    let a_un_joker = |i: usize, m: &str| {
-        a_joker.contains(&i) || (shell == Shell::PowerShell && m.contains(['*', '?', '[']))
+    // Sous PowerShell, seul un programme natif reçoit un motif étendu : `pwsh` hors
+    // Windows étend un joker non cité (pas un mot cité, vu avec le vrai pwsh), et
+    // sous Windows un programme MSYS étend lui-même le motif, cité ou non. Une
+    // cmdlet le reçoit tel quel (KOB-513). `tete` est le premier mot de la
+    // commande en cours.
+    let a_un_joker = |i: usize, m: &str, tete: Option<&String>| match shell {
+        Shell::Bash => a_joker.contains(&i),
+        Shell::PowerShell => {
+            tete.is_some_and(|t| est_natif_pwsh(t, cfg!(windows)))
+                && (a_joker.contains(&i) || (cfg!(windows) && m.contains(['*', '?', '['])))
+        }
     };
     let mut avis = Avis::lecture();
     // Dossiers courants possibles (KOB-227) : un `cd` qui peut échouer
@@ -420,13 +429,13 @@ fn analyser_sans_joker(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
             Some(Jeton::Mot(m)) => {
                 mots.push(m.clone());
                 cites.push(false);
-                jokers.push(a_un_joker(i, m));
+                jokers.push(a_un_joker(i, m, mots.first()));
                 i += 1;
             }
             Some(Jeton::Cite(m)) => {
                 mots.push(m.clone());
                 cites.push(true);
-                jokers.push(a_un_joker(i, m));
+                jokers.push(a_un_joker(i, m, mots.first()));
                 i += 1;
             }
         }
@@ -545,6 +554,9 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
     let tiret_unicode = std::cell::Cell::new(None::<String>);
     // Le mot en cours porte-t-il un joker non cité (KOB-491) ?
     let joker_dans_mot = std::cell::Cell::new(false);
+    // Le mot en cours commence-t-il par un guillemet ? Sinon, `pwsh` étend tout
+    // le mot, même un joker entre guillemets (`sub/'*'`, KOB-513).
+    let commence_cite = std::cell::Cell::new(false);
     let a_joker = std::cell::RefCell::new(Vec::new());
     let fin_mot = |jetons: &mut Vec<Jeton>,
                    mot: &mut String,
@@ -552,7 +564,12 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
                    cite: &mut bool,
                    apres_virgule: &mut bool,
                    avant_virgule: bool| {
+        let mot_cite = commence_cite.take();
         if *dans_mot {
+            if ps && !mot_cite && !*apres_virgule && !avant_virgule && mot.contains(['*', '?', '['])
+            {
+                joker_dans_mot.set(true);
+            }
             let litteral = std::mem::take(cite) || std::mem::take(apres_virgule) || avant_virgule;
             let mut m = std::mem::take(mot);
             // PowerShell prend aussi `–`, `—` et `―` pour le tiret d'un
@@ -631,6 +648,9 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
                 apres_virgule = true;
             }
             '\'' => {
+                if !dans_mot {
+                    commence_cite.set(true);
+                }
                 // Un mot à tiret hors guillemets qui se poursuit entre
                 // guillemets (`-Recurse''`) : paramètre ou chaîne ? Ambigu.
                 if ps && dans_mot && !cite && !apres_virgule && parametre_ouvert(&mot) {
@@ -667,6 +687,9 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
                 }
             }
             '"' => {
+                if !dans_mot {
+                    commence_cite.set(true);
+                }
                 // Un mot à tiret hors guillemets qui se poursuit entre
                 // guillemets (`-Recurse''`) : paramètre ou chaîne ? Ambigu.
                 if ps && dans_mot && !cite && !apres_virgule && parametre_ouvert(&mot) {
@@ -1017,6 +1040,13 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
                 });
                 dans_mot = true;
                 mot.push('=');
+            }
+            // PowerShell : un joker non cité, que `pwsh` hors Windows étend pour un
+            // programme natif (KOB-513).
+            x if ps && matches!(x, '*' | '?' | '[') => {
+                joker_dans_mot.set(true);
+                dans_mot = true;
+                mot.push(x);
             }
             x => {
                 dans_mot = true;
@@ -3866,6 +3896,18 @@ fn chemins_un_par_un(
         .filter(|(x, &joker)| joker && !x.starts_with('-'))
     {
         if let Some(avis) = juge(x) {
+            // Sous Windows, le mot peut aussi bien être un motif (`rg '/[a-z]+'`) :
+            // un programme MSYS ne l'étend que s'il trouve des noms. Carte, pas
+            // refus, et les autres arguments restent jugés (KOB-513).
+            if ps && cfg!(windows) && matches!(avis.classe, Classe::Refus(_)) {
+                let sans_joker = vec![false; jokers.len()];
+                return chemins_un_par_un(nom, args, &sans_joker, shell, ctx, cwd).pire(
+                    Avis::ecriture(
+                        Genre::Indetermine,
+                        format!("`{x}` : un programme de Git pour Windows peut le remplacer par des noms de fichiers hors du dossier"),
+                    ),
+                );
+            }
             return avis;
         }
     }
@@ -4156,8 +4198,22 @@ fn developper(ctx: &Contexte, motif: &str, cwd: &Path) -> Result<Vec<(PathBuf, b
             let Ok(entrees) = std::fs::read_dir(dossier) else {
                 continue;
             };
-            let points = morceau
-                .starts_with('.')
+            // `.` et `..` seulement si le reste du composant peut les former : un
+            // `*` ou un `?` (bash avant 5.2), un `.` dans une classe, une classe
+            // POSIX. `.[]`, `.[n]` ou `.items[0].name` (filtres jq) ne désignent
+            // jamais `..` (KOB-513).
+            let apres_point: String = morceau.chars().skip(1).collect();
+            let peut_etre_point = apres_point.contains(['*', '?'])
+                || morceau.contains("[:")
+                || morceau.contains("[=")
+                || morceau.contains("[.")
+                || correspond(morceau, ".")
+                || correspond(morceau, "..")
+                || apres_point
+                    .split('[')
+                    .skip(1)
+                    .any(|c| c.split(']').next().is_some_and(|c| c.contains('.')));
+            let points = (morceau.starts_with('.') && peut_etre_point)
                 .then(|| [".", ".."].map(std::ffi::OsString::from))
                 .into_iter()
                 .flatten();
@@ -7738,7 +7794,6 @@ mod tests {
             "rg a *.rs",
             "rg a '*'",
             "uniq.exe src/*",
-            "uniq.exe 'src/*'",
             "uniq src/*",
             "uniq ./*",
             "uniq f?",
@@ -7762,6 +7817,13 @@ mod tests {
         }
         // `where.exe` n'est pas un programme MSYS.
         assert_eq!(ps("where.exe /R src '*.rs'").classe, Classe::Lecture);
+        // Cité : MSYS l'étend sous Windows ; `pwsh` hors Windows non (KOB-513).
+        let c = ps("uniq.exe 'src/*'").classe;
+        if cfg!(windows) {
+            assert_ne!(c, Classe::Lecture);
+        } else {
+            assert_eq!(c, Classe::Lecture);
+        }
     }
 
     /// KOB-502 : les alias de cmdlets dépendent du système, et les deux cas se
@@ -7967,6 +8029,83 @@ mod tests {
         ] {
             assert_eq!(ps(ligne).classe, Classe::Lecture, "{ligne}");
         }
+    }
+
+    /// KOB-513 : sous PowerShell, une cmdlet ne reçoit pas de joker étendu ; `pwsh`
+    /// hors Windows n'étend pas un mot cité ; sous Windows, un programme MSYS étend
+    /// le motif, cité ou non, mais seulement s'il trouve des noms : carte, pas refus.
+    #[test]
+    fn motif_cite_powershell_jamais_refuse() {
+        for ligne in [
+            "Select-String -Pattern '\\[x\\]' -Path src/a.rs",
+            "Select-String -Pattern '/[a-z]+' -Path src/a.rs",
+            "rg 'fn [a-z]+' src",
+        ] {
+            assert_eq!(ps(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+        for ligne in [
+            "rg '\\[test\\]' src",
+            "rg '/[a-z]+' src",
+            "rg '\\$[a-z]+' src",
+            "jq '.[$name]' in.txt",
+            "jq -c '.[]' in.txt",
+            "jq '.items[0].name' in.txt",
+            "grep.exe -v '/root/.ssh/*' f",
+        ] {
+            let c = ps(ligne).classe;
+            if cfg!(windows) {
+                assert!(matches!(c, Classe::Ecriture(_)), "{ligne} : {c:?}");
+            } else {
+                assert_eq!(c, Classe::Lecture, "{ligne}");
+            }
+        }
+        // Non cité, ou commencé hors guillemets : `pwsh` hors Windows l'étend (et lit
+        // `\` comme `/`).
+        for ligne in [
+            "grep -v /root/.ssh/'*' f",
+            "grep -v /root/.ssh\"/*\" f",
+            "grep -v /root/.ssh/‘*’ f",
+            "printf /root/.ssh/'*'",
+            "grep -v /root/.ssh/* f",
+            "grep -v /root/.ssh\\* f",
+            "rg /root/.ssh\\* f",
+            "grep -e /root\\.ssh\\* f",
+        ] {
+            let c = ps(ligne).classe;
+            // Sous Windows, carte ou refus selon la règle qui le voit (`printf` :
+            // KOB-508) ; jamais une lecture.
+            if cfg!(windows) {
+                assert_ne!(c, Classe::Lecture, "{ligne}");
+            } else {
+                assert!(matches!(c, Classe::Refus(_)), "{ligne} : {c:?}");
+            }
+        }
+        // `uniq` et `xxd` (KOB-491) : un joker commencé hors guillemets compte.
+        for ligne in ["uniq src/'*'", "uniq src\"/*\"", "xxd src/'*'"] {
+            assert_ne!(ps(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+        // Un vrai chemin hors du dossier reste refusé, même après un motif.
+        for ligne in [
+            "rg '/[a-z]+' /root/.ssh/id_rsa",
+            "grep.exe -v '/root/.ssh/*' ../x",
+        ] {
+            assert!(matches!(ps(ligne).classe, Classe::Refus(_)), "{ligne}");
+        }
+        // Une cmdlet étend elle-même les jokers de ses chemins : toujours jugés.
+        for ligne in [
+            "Get-Content /root/.ssh/*",
+            "Get-Content -Path ../*",
+            "Select-String -Pattern x -Path /root/.ssh/*",
+            "gc ../../*",
+        ] {
+            assert!(matches!(ps(ligne).classe, Classe::Refus(_)), "{ligne}");
+        }
+        // Sous Bash, le motif non cité qui sort reste refusé (KOB-503). `..` et les
+        // classes : `tests/joker_en_option.rs`, sur un vrai dossier.
+        assert!(matches!(
+            bash("grep -v /root/.ssh/* f").classe,
+            Classe::Refus(_)
+        ));
     }
 
     /// KOB-480 : sous PowerShell, `$null` non cité après une redirection de
