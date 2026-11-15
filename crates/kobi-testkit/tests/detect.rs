@@ -131,6 +131,14 @@ async fn le_premier_du_path_gagne() {
 async fn auth_status_bloque_connexion_inconnue() {
     let _serial = SERIAL.lock().await;
     let (_dir, exe) = install("auth-bloque", Some("auth-hang"));
+    // Le premier lancement d'une copie neuve est jusqu'à 40 fois plus lent sous
+    // macOS (sonde #489 : 6 à 115 ms, contre 2 à 4 ms ensuite) : un `--version`
+    // hors délai le réchauffe. Le délai de 500 ms reste celui de `auth status`,
+    // qui ne répond jamais (KOB-519).
+    std::process::Command::new(&exe)
+        .arg("--version")
+        .output()
+        .unwrap();
     let d = probe(&exe, Duration::from_millis(500)).await;
     assert!(
         matches!(
