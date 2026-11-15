@@ -114,3 +114,40 @@ fn powershell_echo_exe_liste_des_noms_hors_du_dossier() {
         assert_ne!(c, Classe::Lecture, "{ligne}");
     }
 }
+
+/// KOB-523 : sous les deux PowerShell, `head.exe -q../dehors/secret` (le `head` de
+/// Git) reçoit `-q` puis `../dehors/secret` et lit le fichier extérieur.
+#[cfg(windows)]
+#[test]
+fn powershell_coupe_tiret_point_pour_un_natif() {
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    use kobi_perms::{commande, Classe, Contexte, Shell};
+
+    let chemin = format!(
+        r"C:\Program Files\Git\usr\bin;{}",
+        std::env::var("PATH").unwrap()
+    );
+    let d = tempfile::tempdir().unwrap();
+    let ici = d.path().join("ici");
+    let dehors = d.path().join("dehors");
+    std::fs::create_dir_all(&ici).unwrap();
+    std::fs::create_dir_all(&dehors).unwrap();
+    std::fs::write(dehors.join("secret"), "SECRET_DEHORS\n").unwrap();
+    let ligne = "head.exe -q../dehors/secret";
+    for exe in ["powershell", "pwsh"] {
+        let o = Command::new(exe)
+            .args(["-NoProfile", "-NonInteractive", "-Command", ligne])
+            .current_dir(&ici)
+            .env("PATH", &chemin)
+            .output()
+            .unwrap();
+        let texte = String::from_utf8_lossy(&o.stdout);
+        assert!(texte.contains("SECRET_DEHORS"), "{exe} : {texte:?}");
+    }
+    let mut ctx = Contexte::new(vec![PathBuf::from(&ici)]);
+    ctx.cwd = Some(PathBuf::from(&ici));
+    let c = commande::analyser(ligne, Shell::PowerShell, &ctx).classe;
+    assert!(matches!(c, Classe::Refus(_)), "{c:?}");
+}
