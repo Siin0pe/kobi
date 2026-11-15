@@ -177,7 +177,7 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
     {
         return avis.pire(Avis::ecriture(
             Genre::Indetermine,
-            format!("`{mot}` : zsh (`EXTENDED_GLOB`) en fait d'autres chemins, non vérifiés"),
+            format!("`{mot}` : zsh (options `EXTENDED_GLOB`, `BRACE_CCL`) en fait d'autres chemins, non vérifiés"),
         ));
     }
     // PowerShell en mode Legacy (Windows PowerShell 5.1 toujours, pwsh sous Unix
@@ -865,6 +865,16 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
             '{' if accolades_developpees(&c[i + 1..]) => {
                 return Err("expansion d'accolades `{…}` non analysable".into())
             }
+            // zsh avec `BRACE_CCL` (option de l'utilisateur, que l'outil Bash
+            // charge) étend aussi `x{ab}` en `xa xb` : `uniq x{ab}` écrasait `xb`
+            // (KOB-524). Un joker du mot, et la ligne passe par la carte, comme
+            // `^` et `#` (KOB-504). `{}` seul et `{ ` (bloc) n'en sont pas.
+            '{' if !ps && classe_d_accolades(&c[i + 1..]) => {
+                joker_etendu.get_or_insert_with(|| format!("{mot}{{"));
+                joker_dans_mot.set(true);
+                dans_mot = true;
+                mot.push('{');
+            }
             '@' if ps && matches!(c.get(i + 1), Some('(' | '{' | '"' | '\'')) => {
                 return Err("expression PowerShell `@( )` non analysable".into())
             }
@@ -1387,6 +1397,18 @@ fn classe_sans_tiret(motif: &str) -> bool {
         }
     }
     !c.is_empty()
+}
+
+/// Ce qui suit un `{` non cité : zsh avec `BRACE_CCL` l'étend-il en classe de
+/// caractères (`{ab}`) ? Au moins un caractère, puis `}`, sans blanc ni
+/// séparateur avant (KOB-524). `{}` seul et `{ cmd; }` non.
+fn classe_d_accolades(suite: &[char]) -> bool {
+    match suite.iter().position(|&c| c == '}') {
+        Some(n) if n > 0 => !suite[..n].iter().any(|&c| {
+            c.is_whitespace() || matches!(c, ';' | '|' | '&' | '<' | '>' | '(' | ')' | '\'' | '"')
+        }),
+        _ => false,
+    }
 }
 
 /// Ce qui suit un `{` hors guillemets : bash peut-il le développer
@@ -7895,6 +7917,25 @@ mod tests {
         ] {
             assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne}");
         }
+    }
+
+    /// KOB-524 : zsh avec `BRACE_CCL` étend `x{ab}` en `xa xb` (vu avec le vrai
+    /// zsh dans `tests/sed_joker.rs`).
+    #[test]
+    fn classe_d_accolades_de_zsh() {
+        for ligne in [
+            "uniq x{ab}",
+            "cat x{ab}",
+            "cd l{l} && cat secret",
+            "sed -n 1,/x{a}/p f",
+        ] {
+            assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+        for ligne in ["uniq 'x{ab}'", "grep -E 'a{2}' f", "ls {}", "cat 'a{b}'"] {
+            assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+        // PowerShell hors de cette règle (`{ }` y est un bloc, déjà refusé).
+        assert!(!ps("Get-Content x").raison.contains("BRACE_CCL"));
     }
 
     /// KOB-503 : le shell remplace un motif à joker par des chemins ; le

@@ -137,3 +137,31 @@ fn zsh_extendedglob_suit_un_lien_qui_sort() {
     }
     assert!(matches!(classe("cat s", &code), Classe::Refus(_)));
 }
+
+/// KOB-524 : avec `setopt braceccl`, zsh fait de `uniq x{ab}` un `uniq xa xb`, qui
+/// écrase `xb`. Jamais une lecture.
+#[cfg(unix)]
+#[test]
+fn zsh_braceccl_uniq_ecrase_le_second() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("xa"), "l\n").unwrap();
+    std::fs::write(d.path().join("xb"), "ANCIEN\n").unwrap();
+    let ligne = "uniq x{ab}";
+    match std::process::Command::new("zsh")
+        .args(["-f", "-c", &format!("setopt braceccl; {ligne}")])
+        .current_dir(d.path())
+        .output()
+    {
+        Ok(sortie) => assert_eq!(
+            std::fs::read_to_string(d.path().join("xb")).unwrap(),
+            "l\n",
+            "{sortie:?}"
+        ),
+        Err(_) => {
+            if cfg!(target_os = "macos") {
+                panic!("zsh absent sous macOS");
+            }
+        }
+    }
+    assert_ne!(classe(ligne, d.path()), Classe::Lecture);
+}
