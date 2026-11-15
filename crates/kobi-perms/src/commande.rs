@@ -907,8 +907,15 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
                 return Err(format!("blanc inhabituel U+{:04X} : à valider", x as u32))
             }
             // Bash étend ce joker non cité : noté, puis jugé par `analyser`
-            // (KOB-489) et par `commande` (KOB-491).
-            x if !ps && matches!(x, '*' | '?' | '[') => {
+            // (KOB-489) et par `commande` (KOB-491). zsh avec `EXTENDED_GLOB`
+            // (option de l'utilisateur, que l'outil Bash charge) étend aussi
+            // `^x` (tout sauf x), `x#` et `a~b` : `sed -n 1,/^y/,/^y/p f` y
+            // exécutait une commande, `grep -v /root/.ssh/^x f` lisait le
+            // dossier (relecture de KOB-504). `#` et `~` en tête de mot sont
+            // le commentaire et le tilde, traités à part.
+            x if !ps
+                && (matches!(x, '*' | '?' | '[' | '^') || (dans_mot && matches!(x, '#' | '~'))) =>
+            {
                 if joker_peut_donner_une_option(&mot) {
                     joker.get_or_insert_with(|| format!("{mot}{x}"));
                 }
@@ -2879,7 +2886,11 @@ fn options_interdites(nom: &str, args: &[String], jokers: &[bool], shell: Shell)
             // Un joker non cité dans le script : le shell peut l'étendre en un
             // chemin qui cache une commande (`sed -n /t*/,/x*/,/e*/p f` donne
             // `/tmp/,/x\/,/e CMD #/p` si cet arbre existe, KOB-504).
-            let sur = script.is_some_and(|(s, joker)| !joker && script_sed_sur(s)) && muet;
+            // Sous PowerShell Windows, un sed de MSYS ou de Git relit lui-même
+            // sa ligne : `{ }`, `'` et `"` y deviennent des expansions et des
+            // guillemets que Kobi ne voit pas (relecture de KOB-504).
+            let msys = shell == Shell::PowerShell && cfg!(windows);
+            let sur = !msys && script.is_some_and(|(s, joker)| !joker && script_sed_sur(s)) && muet;
             if sur {
                 None
             } else {
@@ -7021,6 +7032,56 @@ mod tests {
         assert_eq!(bash(r#"grep "a\.b" Cargo.toml"#).classe, Classe::Lecture);
         assert_eq!(bash(r#"rg "fn main\(" src"#).classe, Classe::Lecture);
         assert_eq!(bash(r#"echo "a\nb""#).classe, Classe::Lecture);
+    }
+
+    /// Relecture de KOB-504 : sous zsh avec `EXTENDED_GLOB`, `^`, `#` et `~`
+    /// non cités sont des jokers (vu avec le vrai zsh dans
+    /// `tests/sed_joker.rs`). Coût voulu : `grep ^fn f` non cité passe par la
+    /// carte ; cité, il reste une lecture.
+    #[test]
+    fn jokers_de_zsh_etendu() {
+        assert!(matches!(
+            bash("grep -v /root/.ssh/^x f").classe,
+            Classe::Refus(_)
+        ));
+        for ligne in [
+            "sed -n 1,/^y/,/^y/p f",
+            "sed -n /^fn/p f",
+            "uniq src/^x",
+            "rg a ^x",
+            "grep ^fn f",
+            "sed -n 1,/x#/p f",
+            "sed -n 1,/a~b/p f",
+        ] {
+            assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+        for ligne in [
+            "grep '^fn' f",
+            "grep \"^fn\" f",
+            "sed -n '/^fn/p' f",
+            "rg '^use' src",
+            "grep -c '^#' f",
+        ] {
+            assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+        // PowerShell hors de cette règle.
+        assert_eq!(
+            ps("Select-String -Pattern '^fn' -Path f").classe,
+            Classe::Lecture
+        );
+    }
+
+    /// Relecture de KOB-504 : sous PowerShell Windows, un sed de MSYS relit
+    /// sa ligne (`{ }`, guillemets) : jamais une lecture. Ailleurs, inchangé.
+    #[test]
+    fn sed_sous_powershell_windows_sur_la_carte() {
+        // Cité : sans guillemets, `1,20p` serait un tableau PowerShell.
+        let c = ps("sed -n '1,20p' f").classe;
+        if cfg!(windows) {
+            assert_ne!(c, Classe::Lecture);
+        } else {
+            assert_eq!(c, Classe::Lecture);
+        }
     }
 
     /// KOB-504 : un joker non cité dans le script de `sed` peut devenir un
