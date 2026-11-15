@@ -54,6 +54,9 @@ pub struct Contexte {
     pub cwd: Option<PathBuf>,
     /// Outils MCP en lecture seule (annotations des serveurs, KOB-155).
     pub mcp: Rules,
+    /// Dossier personnel de l'utilisateur, là où jq charge `~/.jq` tout seul
+    /// (KOB-525). `None` : inconnu, rien n'y est cherché.
+    pub home: Option<PathBuf>,
 }
 
 impl Contexte {

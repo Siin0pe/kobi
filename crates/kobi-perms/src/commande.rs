@@ -2697,6 +2697,19 @@ fn commande_sans_plancher(
             "Peut lire vos variables d'environnement (secrets) ou des fichiers non vérifiés.",
         );
     }
+    // jq charge `~/.jq` tout seul : une fonction de l'utilisateur au nom anodin
+    // (`def ouvrir: env;`) peut lire l'environnement ou un fichier (KOB-525,
+    // sonde). Kobi refuse d'écrire ce fichier ; s'il existe déjà, toute commande
+    // jq passe par la carte.
+    if nom == "jq"
+        && avis.classe == Classe::Lecture
+        && ctx.home.as_ref().is_some_and(|h| h.join(".jq").exists())
+    {
+        return Avis::ecriture(
+            Genre::Commande,
+            "Vous avez un fichier ~/.jq : jq le charge, et ses fonctions peuvent lire vos variables d'environnement ou des fichiers.",
+        );
+    }
     // Garde-fou en attendant KOB-469 (KOB-473) : une lecture git peut lancer
     // un programme configuré dans le dépôt (`core.fsmonitor` sur status et
     // diff, même d'un sous-dépôt caché dans l'index ; `diff.external` et
