@@ -2708,6 +2708,8 @@ fn commande_sans_plancher(
         && ctx
             .dossiers_personnels
             .iter()
+            // Un `HOME` relatif se lit depuis le dossier de la commande, comme jq.
+            .map(|h| cwd.join(h))
             .any(|h| h.join(".jq").exists() || h.join("jq").join("main.jq").exists())
     {
         return Avis::ecriture(
