@@ -624,6 +624,9 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
     // Le mot en cours commence-t-il par un guillemet ? Sinon, `pwsh` étend tout
     // le mot, même un joker entre guillemets (`sub/'*'`, KOB-513).
     let commence_cite = std::cell::Cell::new(false);
+    // Élément de tableau non cité `-nom.suite` : PowerShell le coupe au point
+    // (`head a,-q../secret`, relecture de KOB-523).
+    let tableau_coupe = std::cell::RefCell::new(None::<String>);
     let a_joker = std::cell::RefCell::new(Vec::new());
     let fin_mot = |jetons: &mut Vec<Jeton>,
                    mot: &mut String,
@@ -636,6 +639,17 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
             if ps && !mot_cite && !*apres_virgule && !avant_virgule && mot.contains(['*', '?', '['])
             {
                 joker_dans_mot.set(true);
+            }
+            if ps
+                && !*cite
+                && (*apres_virgule || avant_virgule)
+                && mot.starts_with('-')
+                && !mot.starts_with("--")
+                && mot.contains('.')
+            {
+                tableau_coupe
+                    .borrow_mut()
+                    .get_or_insert_with(|| mot.clone());
             }
             let litteral = std::mem::take(cite) || std::mem::take(apres_virgule) || avant_virgule;
             let mut m = std::mem::take(mot);
@@ -718,6 +732,21 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
                 if !dans_mot {
                     commence_cite.set(true);
                 }
+                // PowerShell coupe un mot non cité à tiret simple au premier point, et
+                // un point collé à un guillemet devient un argument à part
+                // (`grep -e=a.'../secret' f`, relecture de KOB-523) : non analysable.
+                if ps
+                    && dans_mot
+                    && !cite
+                    && !apres_virgule
+                    && mot.starts_with('-')
+                    && !mot.starts_with("--")
+                    && mot.contains('.')
+                {
+                    return Err(format!(
+                        "`{mot}` suivi de guillemets : PowerShell le coupe au point. À valider"
+                    ));
+                }
                 // Un mot à tiret hors guillemets qui se poursuit entre
                 // guillemets (`-Recurse''`) : paramètre ou chaîne ? Ambigu.
                 if ps && dans_mot && !cite && !apres_virgule && parametre_ouvert(&mot) {
@@ -756,6 +785,21 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
             '"' => {
                 if !dans_mot {
                     commence_cite.set(true);
+                }
+                // PowerShell coupe un mot non cité à tiret simple au premier point, et
+                // un point collé à un guillemet devient un argument à part
+                // (`grep -e=a.'../secret' f`, relecture de KOB-523) : non analysable.
+                if ps
+                    && dans_mot
+                    && !cite
+                    && !apres_virgule
+                    && mot.starts_with('-')
+                    && !mot.starts_with("--")
+                    && mot.contains('.')
+                {
+                    return Err(format!(
+                        "`{mot}` suivi de guillemets : PowerShell le coupe au point. À valider"
+                    ));
                 }
                 // Un mot à tiret hors guillemets qui se poursuit entre
                 // guillemets (`-Recurse''`) : paramètre ou chaîne ? Ambigu.
@@ -1177,6 +1221,11 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
     {
         return Err("arrêt de l'analyse PowerShell `--%` non analysable".into());
     }
+    if let Some(mot) = tableau_coupe.take() {
+        return Err(format!(
+            "`{mot}` dans un tableau : PowerShell le coupe au point. À valider"
+        ));
+    }
     Ok(Decoupage {
         jetons,
         joker,
@@ -1278,7 +1327,9 @@ fn recite_pwsh(m: &str) -> String {
 /// Sous PowerShell, ce qu'un programme natif peut recevoir une fois les guillemets
 /// de ses arguments retirés (MSYS les retire lui-même, Windows PowerShell 5.1 ne
 /// protège pas les guillemets doubles d'une valeur, KOB-512) :
-/// - `None` si aucun argument de programme natif n'a de guillemet ;
+/// Un mot non cité `-nom.suite` y est aussi coupé au premier point, comme le fait
+/// PowerShell pour un programme natif (KOB-523).
+/// - `None` si aucun argument de programme natif n'a de guillemet ni n'est coupé ;
 /// - `Some(Ok(ligne))`, la ligne à juger aussi, chaque argument sans `'` ni `"` ;
 /// - `Some(Err(mot))` si un argument mêle `"` et un blanc : 5.1 le passe entre
 ///   guillemets sans échapper le `"`, et le programme le redécoupe autrement.
@@ -1316,6 +1367,21 @@ fn sans_guillemets_pour_un_natif_pwsh(
                         Jeton::Cite(_) => recite_pwsh(m),
                         _ => m.clone(),
                     });
+                } else if natif
+                    && !cible
+                    && matches!(j, Jeton::Mot(_))
+                    && m.starts_with('-')
+                    && !m.starts_with("--")
+                    && m.contains('.')
+                    && !m.contains(['\'', '"'])
+                {
+                    // PowerShell coupe un mot non cité `-nom.suite` au premier point
+                    // pour un programme natif : `head -q../secret` reçoit `-q` puis
+                    // `../secret` (sonde #481, KOB-523).
+                    let (nom, suite) = m.split_at(m.find('.').unwrap_or(m.len()));
+                    change = true;
+                    morceaux.push(recite_pwsh(nom));
+                    morceaux.push(recite_pwsh(suite));
                 } else if natif && !cible && valeur.contains(['\'', '"']) {
                     if valeur.contains('"') && valeur.contains(char::is_whitespace) {
                         return Some(Err(valeur.to_owned()));
@@ -8453,6 +8519,50 @@ mod tests {
         ] {
             assert_ne!(bash(ligne).classe, Classe::Lecture, "bash {ligne}");
             assert_ne!(ps(ligne).classe, Classe::Lecture, "ps {ligne}");
+        }
+    }
+
+    /// KOB-523 : PowerShell coupe un argument non cité `-nom.suite` au premier point
+    /// pour un programme natif : `head -q../secret` reçoit `-q` puis `../secret`
+    /// (sonde #481, 5.1 et pwsh 7). La ligne coupée est jugée aussi.
+    #[test]
+    fn tiret_point_coupe_par_powershell() {
+        for ligne in [
+            "head -q../secret",
+            "head -q..\\secret",
+            "rg x -i../secret",
+            // `cat` est l'alias de `Get-Content` sous Windows : `cat.exe` partout.
+            "cat.exe -v../secret",
+            "head.exe -q../secret",
+        ] {
+            let c = ps(ligne).classe;
+            assert!(matches!(c, Classe::Refus(_)), "{ligne} : {c:?}");
+        }
+        // Point collé à un guillemet, élément de tableau : non analysables, carte.
+        for ligne in [
+            "grep -e=a.'../secret' f",
+            "grep -e=.\"../secret\" f",
+            "head a,-q../secret",
+            "cat x,-q..\\secret",
+        ] {
+            assert_ne!(ps(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+        // La règle de KOB-512 (`"` et blanc) reste prioritaire.
+        let c = ps("grep -e=a'\" C:\\Users\\x\\secret .z' f").classe;
+        assert_ne!(c, Classe::Lecture);
+        // `grep -h../dehors/x f` : coupé, `../dehors/x` devient le motif de grep, et
+        // seul `f` est lu.
+        assert_eq!(ps("grep -h../dehors/x f").classe, Classe::Lecture);
+        // Sans risque : rien ne sort une fois coupé, `--a.b` n'est pas coupé, un mot
+        // cité non plus, et une cmdlet reçoit le mot entier.
+        for ligne in [
+            "head -n 5 a.txt",
+            "cat -v./a.txt",
+            "rg --glob=a.b x",
+            "head '-q../secret'",
+            "Get-Content -Path:a.txt",
+        ] {
+            assert_eq!(ps(ligne).classe, Classe::Lecture, "{ligne}");
         }
     }
 
