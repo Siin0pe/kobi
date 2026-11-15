@@ -30,6 +30,14 @@ sur stdout, soit une directive :
 | `{"fake":"builtin","tool":"Bash","input":{…},"tool_use_id":"…","blocked":[…],"allow":[…],"deny":[…]}` | Outil de base de Claude Code. S'il est dans `--disallowedTools` : rejoue `blocked` (`{{blocked_message}}` = « No such tool available: … »), sans permission. Sinon : permission comme ci-dessous, et l'outil n'est jamais exécuté. |
 | `{"fake":"permission","tool":"…","input":{…},"tool_use_id":"…","allow":[…],"deny":[…]}` | Appelle l'outil de `--permission-prompt-tool` (serveur « kobi ») ; si autorisé, appelle l'outil puis rejoue `allow`, sinon rejoue `deny` avec le message de refus dans `{{deny_message}}`. |
 
+`permission` accepte aussi `"pendant": […]` :
+des lignes écrites telles quelles pendant l'attente de la
+réponse, sur un autre fil, toutes avant `allow` ou `deny` ; seule la
+directive `sleep` y est comprise. Les tests s'en servent pour simuler un
+tour qui avancerait sans réponse (KOB-533). Avec `--fake-attente <fichier>`,
+le faux `claude` écrit dans ce fichier l'identifiant de l'appel juste avant
+de se bloquer dans l'attente d'une permission.
+
 Variables substituées dans toutes les lignes : `{{pid}}` (process du faux
 `claude`), `{{turn}}` (numéro du tour, dès 1), `{{tool_result}}` et
 `{{deny_message}}` (voir ci-dessus).

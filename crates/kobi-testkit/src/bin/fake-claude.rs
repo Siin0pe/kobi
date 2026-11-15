@@ -23,6 +23,10 @@
 //! pour de vrai les serveurs MCP de `--mcp-config` (stdio ou HTTP) et l'outil
 //! de `--permission-prompt-tool`, comme le ferait Claude Code. Les autres
 //! arguments de la vraie ligne de commande sont acceptés et ignorés.
+//!
+//! `--fake-attente <fichier>` (tests seulement) : juste avant de se bloquer
+//! dans l'attente d'une permission, il y écrit l'identifiant de l'appel en
+//! attente (KOB-533). Le test sait ainsi qu'il attend, sans durée fixe.
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -55,6 +59,7 @@ fn main() {
                 mcp: Mcp::new(args.mcp_config.as_deref()),
                 permission_tool: args.permission_tool.clone(),
                 disallowed: args.disallowed.clone(),
+                attente: args.attente.clone(),
                 vars: HashMap::new(),
             };
             player.run(&scenario);
@@ -116,6 +121,8 @@ struct Args {
     /// Outils de `--disallowedTools` (séparés par des espaces ou des virgules,
     /// en une ou plusieurs valeurs).
     disallowed: Vec<String>,
+    /// `--fake-attente` : fichier témoin de l'attente d'une permission.
+    attente: Option<PathBuf>,
 }
 
 impl Args {
@@ -127,6 +134,7 @@ impl Args {
                 "--scenario" => parsed.scenario = args.next().map(PathBuf::from),
                 "--mcp-config" => parsed.mcp_config = args.next(),
                 "--permission-prompt-tool" => parsed.permission_tool = args.next(),
+                "--fake-attente" => parsed.attente = args.next().map(PathBuf::from),
                 "--disallowedTools" | "--disallowed-tools" => {
                     while let Some(value) = args.next_if(|a| !a.starts_with("--")) {
                         parsed.disallowed.extend(
@@ -241,6 +249,7 @@ struct Player {
     mcp: Mcp,
     permission_tool: Option<String>,
     disallowed: Vec<String>,
+    attente: Option<PathBuf>,
     /// Valeurs substituées dans les lignes : `{{tool_result}}`, `{{deny_message}}`,
     /// `{{pid}}` (process du faux claude), `{{turn}}` (numéro du tour, dès 1).
     vars: HashMap<&'static str, String>,
@@ -351,6 +360,12 @@ impl Player {
         match &self.permission_tool {
             None => json!({"behavior":"deny","message":"aucun --permission-prompt-tool"}),
             Some(prompt_tool) => {
+                // Il va se bloquer jusqu'à la réponse : le témoin le dit.
+                if let Some(attente) = &self.attente {
+                    let id = tool_use_id.as_str().unwrap_or_default();
+                    std::fs::write(attente, id)
+                        .unwrap_or_else(|e| fail(&format!("--fake-attente : {e}")));
+                }
                 let answer = self.call_tool(
                     &prompt_tool.clone(),
                     json!({"tool_name": tool, "input": input, "tool_use_id": tool_use_id}),
@@ -363,11 +378,19 @@ impl Player {
     }
 
     /// Demande l'autorisation, appelle l'outil si elle est accordée, puis
-    /// rejoue la branche `allow` ou `deny`.
+    /// rejoue la branche `allow` ou `deny`. Les lignes de `pendant` sont
+    /// écrites pendant l'attente de la réponse, sur un autre fil, et toutes
+    /// avant la suite (KOB-533 : un tour qui avancerait sans réponse).
     fn permission(&mut self, line: &Value) {
         let tool = line["tool"].as_str().unwrap_or_default();
         let input = line["input"].clone();
+        let pendant = line["pendant"].as_array().cloned().unwrap_or_default();
+        let fil =
+            (!pendant.is_empty()).then(|| std::thread::spawn(move || jouer_pendant(&pendant)));
         let decision = self.ask_permission(tool, input.clone(), &line["tool_use_id"]);
+        if let Some(fil) = fil {
+            fil.join().unwrap_or_else(|_| fail("lignes de `pendant`"));
+        }
         if decision["behavior"] == "allow" {
             let input = decision.get("updatedInput").cloned().unwrap_or(input);
             let result = self.call_tool(tool, input);
@@ -411,6 +434,21 @@ impl Player {
             .filter_map(|c| c["text"].as_str())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+}
+
+/// Lignes écrites pendant l'attente d'une permission (`pendant`), telles
+/// quelles ; seule la directive `sleep` y est comprise.
+fn jouer_pendant(lignes: &[Value]) {
+    let mut out = Output(std::io::stdout());
+    for ligne in lignes {
+        match ligne["fake"].as_str() {
+            None => out.emit(&ligne.to_string()),
+            Some("sleep") => {
+                std::thread::sleep(Duration::from_millis(ligne["ms"].as_u64().unwrap_or(0)))
+            }
+            Some(other) => fail(&format!("directive inconnue dans `pendant` : {other}")),
+        }
     }
 }
 
