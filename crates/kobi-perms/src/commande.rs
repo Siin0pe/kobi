@@ -2311,7 +2311,19 @@ fn nom_et_arguments(mots: &[String], cites: &[bool], shell: Shell) -> (String, V
     let premier = &mots[0];
     let nom = premier.to_lowercase();
     let exe = nom.ends_with(".exe");
-    let nom = nom.strip_suffix(".exe").unwrap_or(&nom).to_owned();
+    let sans_exe = nom.strip_suffix(".exe").unwrap_or(&nom);
+    // `gci.exe` n'est pas le cmdlet `gci` : PowerShell lance une application de ce
+    // nom trouvée dans le PATH (sonde #481). Le `.exe` n'est retiré que pour un
+    // programme connu, ou un nom qui n'est pas celui d'un cmdlet (KOB-517).
+    let nom_de_cmdlet = [LECTURE_PS, ALIAS_PS, CD, SANS_CHEMIN_PS]
+        .iter()
+        .any(|l| l.contains(&sans_exe));
+    let programme = LECTURE_SIMPLE.contains(&sans_exe) || NATIFS_SANS_CHEMIN.contains(&sans_exe);
+    let nom = if exe && nom_de_cmdlet && !programme {
+        nom.clone()
+    } else {
+        sans_exe.to_owned()
+    };
     // Sous PowerShell, un exécutable reçoit `'--x'` tel quel : une option,
     // pas une valeur. Le `./` que `decouper` met devant (pour les cmdlets,
     // KOB-437) est retiré, sinon les contrôles d'options ne le voyaient plus
@@ -8106,6 +8118,48 @@ mod tests {
             bash("grep -v /root/.ssh/* f").classe,
             Classe::Refus(_)
         ));
+    }
+
+    /// KOB-517 : `X.exe` écrit en entier ne désigne jamais le cmdlet `X` : PowerShell
+    /// lance une application de ce nom trouvée dans le PATH (sonde #481).
+    #[test]
+    fn nom_de_cmdlet_avec_exe_n_est_pas_le_cmdlet() {
+        for ligne in [
+            "Get-Content.exe a.txt",
+            "get-content.exe a.txt",
+            "Get-ChildItem.exe",
+            "gci.exe",
+            "gc.exe a.txt",
+            "Select-String.exe x a.txt",
+            "Write-Output.exe x",
+            "Out-String.exe",
+            "Get-Date.exe",
+            "Test-Path.exe a.txt",
+            "cd.exe src",
+            "gci.bat",
+            "gci.cmd",
+            "gci.com",
+            "gci.ps1",
+        ] {
+            assert_ne!(ps(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+        // Un programme connu reste jugé comme tel, `.exe` ou non.
+        for ligne in [
+            "sort.exe a.txt",
+            "hostname.exe",
+            "rg.exe x src",
+            "echo.exe x",
+        ] {
+            assert_eq!(
+                ps(ligne).classe,
+                ps(&ligne.replacen(".exe", "", 1)).classe,
+                "{ligne}"
+            );
+        }
+        // `where.exe` est le programme de Windows (`where` seul : `Where-Object`).
+        assert_eq!(ps("where.exe /R src x").classe, Classe::Lecture);
+        // `rm.exe` reste une suppression.
+        assert_eq!(ps("rm.exe x").classe, Classe::Ecriture(Genre::Suppression));
     }
 
     /// KOB-480 : sous PowerShell, `$null` non cité après une redirection de
