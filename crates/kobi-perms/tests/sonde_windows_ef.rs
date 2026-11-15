@@ -4,6 +4,13 @@
 use std::path::Path;
 use std::process::Command;
 
+macro_rules! note {
+    ($r:ident, $($t:tt)*) => {{
+        $r.push_str(&format!($($t)*));
+        $r.push('\n');
+    }};
+}
+
 const MSYS: &str = r"C:\Program Files\Git\usr\bin";
 
 fn lancer(exe: &str, ligne: &str, dossier: &Path, msys: bool) -> String {
@@ -26,6 +33,7 @@ fn lancer(exe: &str, ligne: &str, dossier: &Path, msys: bool) -> String {
 
 #[test]
 fn sonde_e_rg_fd_n_etendent_rien() {
+    let mut r = String::new();
     for exe in ["powershell", "pwsh"] {
         for outil in ["rg", "fd"] {
             let ou = lancer(
@@ -34,7 +42,7 @@ fn sonde_e_rg_fd_n_etendent_rien() {
                 Path::new("."),
                 false,
             );
-            eprintln!("SONDE e {exe} {outil} chemin : {ou}");
+            note!(r, "SONDE e {exe} {outil} chemin : {ou}");
         }
         for ligne in [
             "rg x '*'",
@@ -50,16 +58,19 @@ fn sonde_e_rg_fd_n_etendent_rien() {
             std::fs::write(d.path().join("--files.rs"), "").unwrap();
             std::fs::write(d.path().join("a.rs"), "x\n").unwrap();
             std::fs::write(d.path().join("-H"), "").unwrap();
-            eprintln!(
+            note!(
+                r,
                 "SONDE e {exe} [{ligne}] : {}",
                 lancer(exe, ligne, d.path(), true)
             );
         }
     }
+    panic!("RAPPORT DE SONDE (échec voulu)\n{r}");
 }
 
 #[test]
 fn sonde_f_guillemets_doubles_litteraux() {
+    let mut r = String::new();
     for exe in ["powershell", "pwsh"] {
         for ligne in [
             r#"sort.exe '"--output=M"'"#,
@@ -70,13 +81,15 @@ fn sonde_f_guillemets_doubles_litteraux() {
             std::fs::write(d.path().join("a"), "x\n").unwrap();
             let sortie = lancer(exe, &format!("{ligne} a"), d.path(), true);
             let m = d.path().join("M").exists();
-            eprintln!("SONDE f {exe} [{ligne} a] M_cree={m} : {sortie}");
+            note!(r, "SONDE f {exe} [{ligne} a] M_cree={m} : {sortie}");
         }
     }
+    panic!("RAPPORT DE SONDE (échec voulu)\n{r}");
 }
 
 #[test]
 fn sonde_grep_v_motif_a_joker() {
+    let mut r = String::new();
     for exe in ["powershell", "pwsh"] {
         for ligne in [
             "grep.exe -v '../dehors/*' f",
@@ -102,7 +115,8 @@ fn sonde_grep_v_motif_a_joker() {
             std::fs::write(ici.join("f"), "local\n").unwrap();
             let sortie = lancer(exe, ligne, &ici, true);
             let fuite = sortie.contains("SECRET_B");
-            eprintln!("SONDE grep {exe} [{ligne}] fuite={fuite} : {sortie}");
+            note!(r, "SONDE grep {exe} [{ligne}] fuite={fuite} : {sortie}");
         }
     }
+    panic!("RAPPORT DE SONDE (échec voulu)\n{r}");
 }
