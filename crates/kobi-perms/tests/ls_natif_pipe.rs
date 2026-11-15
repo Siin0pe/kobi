@@ -79,9 +79,28 @@ fn pwsh_hors_windows_ls_natif_mene_au_dossier_personnel() {
     assert_ne!(classe(ligne, Shell::PowerShell, &ici), Classe::Lecture);
 }
 
+/// Relecture : `Get-ChildItem -Name` imprime `~`, résolu vers le dossier personnel.
+#[cfg(unix)]
+#[test]
+fn pwsh_hors_windows_gci_name_mene_au_dossier_personnel() {
+    let (d, ici) = dossiers();
+    let maison = d.path().join("maison");
+    std::fs::create_dir_all(&maison).unwrap();
+    std::fs::write(maison.join("SECRET_MAISON"), "contenu-maison").unwrap();
+    std::fs::write(ici.join("sub").join("~"), "").unwrap();
+    let ligne = "Get-ChildItem sub -Name | Get-ChildItem | Get-Content";
+    let Some(t) = pwsh(ligne, &ici, &maison) else {
+        return;
+    };
+    assert!(t.contains("contenu-maison"), "{t:?}");
+    assert_ne!(classe(ligne, Shell::PowerShell, &ici), Classe::Lecture);
+}
+
 /// Sous Windows, `ls.exe` et `dir.exe` (ceux de Git) impriment aussi des noms nus :
 /// `lien`, fichier ordinaire dans `sub`, est résolu dans le dossier courant, où
-/// `lien` mène dehors.
+/// `lien` mène dehors. Le classement de ces lignes était déjà rattrapé sur main
+/// (l'arbre du dossier courant contient le lien) : c'est le test
+/// `amont_natif_n_est_pas_un_amont_sur` qui prouve le défaut sous Windows.
 #[cfg(windows)]
 #[test]
 fn powershell_ls_exe_donne_des_noms_resolus_ailleurs() {
@@ -124,6 +143,11 @@ fn amont_natif_n_est_pas_un_amont_sur() {
         "dir.exe sub | gci | gc",
         "ls.exe sub | Get-Item | Get-Content",
         "ls.exe sub | Resolve-Path",
+        // Une cmdlet avec `-Name` imprime aussi des noms nus (relecture).
+        "Get-ChildItem sub -Name | Get-ChildItem | Get-Content",
+        "gci sub -n | gci | gc",
+        "gci -Name:$true sub | gi | gc",
+        "dir sub -Name | Get-ChildItem",
     ];
     // Hors de Windows, `ls` est le programme natif.
     if cfg!(unix) {
@@ -152,6 +176,8 @@ fn la_cmdlet_reste_un_amont_sur() {
         "gci sub | gci | gc",
         "dir sub | Get-Content",
         "Get-Item sub | Get-ChildItem",
+        // `gi` est un alias de Get-Item partout, pas un programme.
+        "gi sub | gci | gc",
     ] {
         assert_eq!(
             classe(ligne, Shell::PowerShell, &ici),

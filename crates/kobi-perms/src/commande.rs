@@ -351,12 +351,17 @@ fn analyser_sans_joker(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
                     let nom = mots[0].to_lowercase();
                     let exe = nom.ends_with(".exe");
                     let nom = nom.strip_suffix(".exe").unwrap_or(&nom);
-                    // Un `ls` natif (hors Windows) ou un `X.exe` imprime des noms
-                    // nus, relatifs au dossier listé, pas des objets à `PSPath` :
-                    // une cmdlet en aval les résout ailleurs (`~` est le dossier
-                    // personnel, KOB-538). Ce n'est pas un amont sûr.
-                    let amont_cmdlet =
-                        shell == Shell::PowerShell && !exe && !est_natif_pwsh(nom, cfg!(windows));
+                    // Un `ls` natif (hors Windows), un `X.exe`, ou une cmdlet avec
+                    // `-Name` (`gci sub -Name`) imprime des noms nus, relatifs au
+                    // dossier listé, pas des objets à `PSPath` : une cmdlet en aval
+                    // les résout ailleurs (`~` est le dossier personnel, `Env:` les
+                    // variables d'environnement, KOB-538). Ce n'est pas un amont
+                    // sûr. Parmi les noms d'`AMONT_SUR`, seul `ls` est un programme
+                    // hors Windows (`gi`, `gci`, `dir` y restent des alias).
+                    let amont_cmdlet = shell == Shell::PowerShell
+                        && !exe
+                        && !(nom == "ls" && !cfg!(windows))
+                        && !mots[1..].iter().any(|x| abrege_ps(x, "-name"));
                     if cfg!(windows) && apres_pipe && parcours_recursif(nom, &mots[1..], shell) {
                         avis = avis.pire(Avis::ecriture(
                             Genre::Commande,
