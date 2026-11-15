@@ -1667,6 +1667,7 @@ const LECTURE_PS: &[&str] = &[
     "get-command",
     "gcm",
     "out-string",
+    "out-null",
     "write-output",
     "write",
     "write-host",
@@ -1722,6 +1723,7 @@ const SANS_CHEMIN_PS: &[&str] = &[
     "format-wide",
     "fw",
     "out-string",
+    "out-null",
     "write-output",
     "write",
     "write-host",
@@ -2994,6 +2996,11 @@ fn options_interdites(nom: &str, args: &[String], jokers: &[bool], shell: Shell)
         }
         // Liste blanche (KOB-478) : `-Ff`, `--file=f`, `--fil=f`, `-b` et un nom en
         // argument changent le nom de la machine.
+        // `Out-Null` jette ce qu'il reçoit par le `|`, comme `> $null` (KOB-495).
+        // Son seul paramètre est `-InputObject` : sans argument seulement.
+        "out-null" if !args.is_empty() => {
+            ecrit("`Out-Null` n'est une lecture que sans argument".into())
+        }
         "hostname" if args.iter().any(|x| !OPTIONS_HOSTNAME.contains(&x.as_str())) => ecrit(
             "`hostname` avec autre chose qu'une option d'affichage peut changer le nom".into(),
         ),
@@ -7226,6 +7233,26 @@ mod tests {
             assert!(matches!(ps(ligne).classe, Classe::Refus(_)), "{ligne}");
         }
         assert_eq!(ps("echo /root/.ssh/*").classe, Classe::Lecture);
+    }
+
+    /// KOB-495 : `| Out-Null` jette ce qu'il reçoit, comme `> $null` (KOB-480).
+    #[test]
+    fn out_null_en_lecture() {
+        for ligne in [
+            "Get-Content a.txt | Out-Null",
+            "Get-Content a.txt 2>&1 | Out-Null",
+            "gci | out-null",
+        ] {
+            assert_eq!(ps(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+        for ligne in [
+            "Out-Null -InputObject (Remove-Item x)",
+            "Out-Null x",
+            "Get-Content a.txt | Out-Null -InputObject y",
+            "Remove-Item x | Out-Null",
+        ] {
+            assert_ne!(ps(ligne).classe, Classe::Lecture, "{ligne}");
+        }
     }
 
     /// KOB-503 : le shell remplace un motif à joker par des chemins ; le
