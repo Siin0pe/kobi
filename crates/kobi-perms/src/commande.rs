@@ -212,6 +212,13 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
     }
 }
 
+/// La redirection prend-elle le mot suivant pour cible ? `2>&1` et `*>&1` non :
+/// le mot suivant reste un argument (même règle que l'analyse principale,
+/// relecture de KOB-518).
+fn redirection_a_une_cible(r: &str) -> bool {
+    !r.contains('&') || r.ends_with(['>', '&'])
+}
+
 /// Premier argument d'un exécutable natif que PowerShell en mode Legacy
 /// recompose en changeant le sens de la ligne (KOB-518) : vide (`''`, `""`), il
 /// disparaît ; avec un `"`, le programme le redécoupe selon son propre runtime,
@@ -232,7 +239,7 @@ fn argument_recompose_par_legacy(jetons: &[Jeton]) -> Option<String> {
                 en_tete = true;
                 apres_redirection = false;
             }
-            Jeton::Redir(_) => apres_redirection = true,
+            Jeton::Redir(r) => apres_redirection = redirection_a_une_cible(r),
             Jeton::Mot(_) | Jeton::Cite(_) if apres_redirection => apres_redirection = false,
             Jeton::Mot(m) | Jeton::Cite(m) if en_tete => {
                 natif = est_natif_pwsh(m, cfg!(windows)) || m.eq_ignore_ascii_case("where.exe");
@@ -1267,7 +1274,7 @@ fn sans_guillemets_pour_un_natif_pwsh(
                 morceaux.push(o.clone());
             }
             Jeton::Redir(r) => {
-                apres_redirection = true;
+                apres_redirection = redirection_a_une_cible(r);
                 morceaux.push(r.clone());
             }
             Jeton::Mot(m) | Jeton::Cite(m) => {
@@ -7654,6 +7661,8 @@ mod tests {
             "jq . 'a\"\"\"\"' 'b ../secret'",
             "rg '\"version\"' Cargo.toml",
             "> out-x.txt head 'a\"' 'b ../x'",
+            "head 2>&1 'a\"' 'b ../secret'",
+            "head *>&1 'a\"' 'b ../secret'",
             "grep '' f",
             "jq.exe -n '' f",
         ] {
