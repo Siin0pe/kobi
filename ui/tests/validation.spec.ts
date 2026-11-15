@@ -337,14 +337,26 @@ test('la carte dit pourquoi Kobi demande (raison du classement), sous la command
     id: '7',
     resume: 'Voir l’état du dépôt',
     detail: { commande: 'git status', dossier: '/code/kobi' },
-    raison: 'git peut lancer des programmes configurés dans ce dépôt (fsmonitor, diff externe, textconv, gpg) : vérifié sur la carte',
+    raison: 'Même une consultation git peut lancer des programmes réglés dans ce projet.',
   });
   await expect(page.locator('.kval-cible')).toHaveText('$ git status');
-  await expect(page.locator('.kval-raison')).toHaveText(/git peut lancer des programmes configurés dans ce dépôt/);
+  await expect(page.locator('.kval-raison')).toHaveText(/Même une consultation git peut lancer des programmes/);
   // Coupée à l'écran, jamais cachée : le texte entier au survol, et déplié au clic.
-  await expect(page.locator('.kval-raison')).toHaveAttribute('title', /git peut lancer des programmes/);
+  await expect(page.locator('.kval-raison')).toHaveAttribute('title', /Même une consultation git/);
   await page.locator('.kval-raison').click();
   await expect(page.locator('.kval-raison')).toHaveClass(/deplie/);
+  await page.keyboard.press('Escape');
+  // KOB-514 : ni « sur la carte » sur la carte, ni accents graves ; les mots de
+  // code en <code>, posés comme du texte (jamais interprétés).
+  await carte(page, {
+    ...COMMANDE,
+    id: '8',
+    raison: 'motif `<b>x</b>` : sur la carte ; `jq` lit des fichiers, vérifié sur la carte',
+  });
+  await expect(page.locator('.kval-raison')).toHaveText('motif <b>x</b> ; jq lit des fichiers');
+  await expect(page.locator('.kval-raison code')).toHaveText(['<b>x</b>', 'jq']);
+  await expect(page.locator('.kval-raison b')).toHaveCount(0);
+  await expect(page.locator('.kval-raison')).toHaveAttribute('title', 'motif <b>x</b> ; jq lit des fichiers');
   await page.keyboard.press('Escape');
   // Sans raison : pas de ligne vide.
   await carte(page, COMMANDE);

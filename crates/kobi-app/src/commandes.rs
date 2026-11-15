@@ -52,17 +52,22 @@ avec Write et Edit. Kobi vérifie chaque appel avant qu'il parte, dans les dossi
 avec une durée et une sortie limitées. Pour les commandes et les fichiers de code, ceci remplace \
 « tu ne fais que lire ».
 
-- Ce qui ne modifie rien passe tout de suite : `ls`, `cat`, `head`, `tail`, `wc`, `rg`, `grep`, \
-`find`, `tree`, `gh pr view`, `gh issue list`, `Get-ChildItem`, `Get-Content`, `Select-String`…
+- Sous Bash, ce qui ne modifie rien passe tout de suite : `ls`, `cat`, `head`, `tail`, `wc`, `rg`, \
+`grep`, `find`, `tree`, `gh pr view`, `gh issue list`… ; sous PowerShell, les cmdlets de lecture \
+aussi : `Get-ChildItem`, `Get-Content`, `Select-String`…
 - Les commandes git (`git log`, `git status`, `git diff`…) demandent un « oui » de l'utilisateur, \
 car elles peuvent lancer des programmes configurés dans le dépôt : regroupe-les en une seule \
 commande, et lis plutôt les fichiers quand cela suffit.
+- Sous PowerShell, un programme qui n'est pas une cmdlet (find, grep, rg…) ou un joker donné à un \
+programme peuvent demander un « oui », car PowerShell transforme leurs arguments : préfère les \
+cmdlets.
 - Une commande qui modifie, crée ou supprime, et toute écriture de fichier, attendent un « oui » de \
 l'utilisateur : Kobi lui montre une carte et attend jusqu'à une minute. Appelle simplement l'outil, \
 sans demander l'accord en texte, même pour une suppression : la carte de Kobi est la confirmation.
 - Lance la commande depuis un dossier de code (`cd <dossier> && git log -5` si besoin), sans `$( )`, \
 variable ni redirection vers un fichier.
-- Écris `./*.md` plutôt que `*.md` : un joker en tête de mot demande une validation.
+- Sous Bash, écris `./*.md` plutôt que `*.md` : un joker en tête de mot demande une validation. \
+Sous PowerShell, `./` ne suffit pas pour un programme, qui reçoit les noms sans lui.
 - Si Kobi refuse (refus de l'utilisateur, pas de réponse, hors des dossiers), ne contourne pas et ne \
 réessaie pas : dis-le en une phrase et donne la commande ou le contenu prêt à copier.";
 
@@ -426,6 +431,24 @@ mod tests {
         let lecture = |l: &str| commande::analyser(l, kobi_perms::Shell::Bash, &ctx).est_lecture();
         assert!(lecture("ls ./*.md"));
         assert!(!lecture("ls *.md"));
+    }
+
+    /// KOB-514 : ce que le prompt dit de PowerShell est vrai : ces lignes, citées
+    /// comme pouvant demander un oui, ne sont pas des lectures.
+    #[test]
+    fn prompt_dit_vrai_pour_powershell() {
+        let mut ctx = Contexte::new(vec![kobi()]);
+        ctx.cwd = Some(kobi());
+        let lecture =
+            |l: &str| commande::analyser(l, kobi_perms::Shell::PowerShell, &ctx).est_lecture();
+        assert!(lecture("Select-String -Path src/*.rs -Pattern x"));
+        assert!(!lecture("find . -name \"*.rs\""));
+        if !cfg!(windows) {
+            // Hors de Windows, `cat` est un programme : `./` ne suffit pas.
+            assert!(!lecture("cat ./*.md"));
+        }
+        assert!(lecture("Get-ChildItem *.md"));
+        assert!(PROMPT_COMMANDES.contains("Sous PowerShell, `./` ne suffit pas"));
     }
 
     /// KOB-496 : avec `commande = sans_demander`, un mot à trois tirets ne

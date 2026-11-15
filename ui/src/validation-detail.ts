@@ -87,3 +87,20 @@ export function renderDetail(detail: Detail): HTMLElement {
   }
   return box;
 }
+
+/**
+ * Raison de kobi-perms, telle que la carte l'affiche (KOB-514) : sans les
+ * suffixes « vérifié sur la carte » ou « : sur la carte », qui n'ont pas de sens
+ * sur la carte elle-même, et découpée en morceaux de texte et de code (les mots
+ * entre accents graves). La raison brute reste celle que reçoit l'agent.
+ */
+export function raisonLisible(raison: string): { texte: string; morceaux: { code: boolean; texte: string }[] } {
+  const texte = raison
+    .replace(/\s*[:,]\s*(?:vérifié |validé )?sur la carte(?=\s*(?:$|[;.]))/g, '')
+    .trim();
+  const morceaux = texte
+    .split('`')
+    .map((morceau, i) => ({ code: i % 2 === 1, texte: morceau }))
+    .filter((m) => m.texte !== '');
+  return { texte: texte.replace(/`/g, ''), morceaux };
+}

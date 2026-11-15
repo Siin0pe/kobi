@@ -190,7 +190,7 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
     match joker {
         Some(mot) => avis.pire(Avis::ecriture(
             Genre::Indetermine,
-            format!("le joker `{mot}` peut devenir une option selon les noms de fichiers"),
+            format!("`{mot}` sera remplacé par les noms des fichiers ; un nom piégé pourrait changer ce que fait la commande."),
         )),
         None => avis,
     }
@@ -491,6 +491,11 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
 /// qui en contient un est refusée par `decouper_en_notant`.
 const NULL_POWERSHELL: &str = "\0$null";
 
+/// Raison de la carte d'une lecture git (KOB-473), en mots de tous les jours
+/// (KOB-514).
+const RAISON_GIT: &str =
+    "Même une consultation git peut lancer des programmes réglés dans ce projet.";
+
 /// Les jetons de `decouper_en_notant`, plus ce que seul ce découpage voit :
 /// les guillemets.
 struct Decoupage {
@@ -712,9 +717,10 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
                         // littéral (`grep "foo$"`, KOB-482). Non prouvé sous
                         // PowerShell : il y reste refusé.
                         Some('$') if !ps && c.get(i + 1) == Some(&'"') => mot.push('$'),
-                        Some('$') => {
-                            return Err("variable ou substitution `$` entre guillemets".into())
-                        }
+                        Some('$') => return Err(
+                            "Utilise une valeur ($…) que Kobi ne peut pas connaître à l'avance."
+                                .into(),
+                        ),
                         Some('`') if !ps => return Err("substitution entre accents graves".into()),
                         // PowerShell : un accent grave entre guillemets doubles
                         // change le caractère qui suit (`` `u{2E} `` vaut `.` sous
@@ -1455,9 +1461,19 @@ fn redirection(
     if poubelle {
         Ok(1)
     } else {
+        // Phrases de la carte, sans jargon (KOB-514) ; `2>` n'écrit que les erreurs.
+        let quoi = if r.starts_with('2') {
+            "les erreurs"
+        } else {
+            "le résultat"
+        };
         Err(Avis::ecriture(
             Genre::Fichier,
-            format!("redirection vers un fichier (`{r} {cible}`)"),
+            if r.contains(">>") {
+                format!("Ajoute {quoi} à la fin de {cible}.")
+            } else {
+                format!("Écrit {quoi} dans {cible} (le remplace s'il existe).")
+            },
         ))
     }
 }
@@ -2195,7 +2211,7 @@ fn commande(
     if let Some((nom, x)) = joker_qui_compte(mots, jokers) {
         return Avis::ecriture(
             Genre::Indetermine,
-            format!("`{nom} {x}` : le joker donne un nombre inconnu de fichiers, et `{nom}` écrit dans le second"),
+            format!("`{x}` donne un nombre inconnu de fichiers : `{nom}` peut écraser l'un de ces fichiers."),
         );
     }
     match joker_dans_le_filtre(mots, &args, jokers) {
@@ -2541,7 +2557,7 @@ fn commande_sans_plancher(
             if alias {
                 format!("`{premier}` {ALIAS}")
             } else {
-                format!("`{premier}` n'est pas une commande de lecture connue de Kobi")
+                format!("Kobi ne connaît pas `{premier}` : cette commande peut modifier des fichiers ou agir sur Internet.")
             },
         );
     }
@@ -2576,7 +2592,7 @@ fn commande_sans_plancher(
     if nom == "jq" && avis.classe == Classe::Lecture && jq_lit_hors(args) {
         return Avis::ecriture(
             Genre::Commande,
-            "`jq` lit des fichiers ou l'environnement (import, env, -f, -L) : sur la carte",
+            "Peut lire vos variables d'environnement (secrets) ou des fichiers non vérifiés.",
         );
     }
     // Garde-fou en attendant KOB-469 (KOB-473) : une lecture git peut lancer
@@ -2593,10 +2609,7 @@ fn commande_sans_plancher(
         // valeur de `-C` à tiret (`git -C -*`) n'est pas un mot (KOB-488).
         let avec_mot = !mots.is_empty() || args.iter().any(|x| x == "-C");
         if avec_mot && !matches!(args, [seul] if seul == "version") {
-            return Avis::ecriture(
-                Genre::Commande,
-                "git peut lancer des programmes configurés dans ce dépôt (fsmonitor, diff externe, textconv, gpg) : vérifié sur la carte",
-            );
+            return Avis::ecriture(Genre::Commande, RAISON_GIT);
         }
     }
     // Sous Windows, les parcours récursifs entrent dans les jonctions et les
@@ -4138,13 +4151,12 @@ fn juger_chemin(ctx: &Contexte, x: &str, cwd: &Path) -> Option<Avis> {
             chemins
                 .iter()
                 .find(|(p, _)| !ctx.contient(p, Some(cwd)))
-                .map(|(p, _)| {
+                .map(|_| {
                     Avis::ecriture(
                         Genre::Commande,
-                        format!(
-                            "motif `{x}` : {} sort des dossiers, vérifié sur la carte",
-                            p.display()
-                        ),
+                        // Sans chemin absolu dans la raison (KOB-514) : le mot tel
+                        // qu'il est écrit suffit, et ne dit rien de la machine.
+                        format!("`{x}` pourrait désigner un fichier hors du projet"),
                     )
                 })
         }
@@ -5706,7 +5718,7 @@ mod tests {
             );
         }
         let raison = analyser("git status", Shell::Bash, &x).raison;
-        assert!(raison.contains("programmes configurés"), "{raison}");
+        assert_eq!(raison, RAISON_GIT);
         // Sans dépôt lu : comme avant.
         assert_eq!(
             analyser("git version", Shell::Bash, &x).classe.cle(),
@@ -6523,7 +6535,7 @@ mod tests {
     /// Lecture, ou lecture git que le garde-fou de KOB-473 met sur la carte
     /// (la ligne a passé tous les autres contrôles).
     fn lu(avis: &Avis) -> bool {
-        avis.est_lecture() || avis.raison.starts_with("git peut lancer des programmes")
+        avis.est_lecture() || avis.raison == RAISON_GIT
     }
 
     /// KOB-474 : entre guillemets doubles, bash retire `\` et saut de ligne.
@@ -7023,9 +7035,12 @@ mod tests {
         }
         // La raison dit les deux : la carte ne cache ni le fichier ni la commande.
         let r = bash("rm -rf target > f").raison;
-        assert!(r.contains("supprime") && r.contains("redirection"), "{r}");
+        assert!(
+            r.contains("supprime") && r.contains("Écrit le résultat dans f"),
+            "{r}"
+        );
         let r = bash("curl http://x > f").raison;
-        assert!(r.contains("redirection"), "{r}");
+        assert!(r.contains("Écrit le résultat dans f"), "{r}");
         assert_eq!(bash("ls 2>&1").classe, Classe::Lecture);
         assert_eq!(bash("ls > /dev/null").classe, Classe::Lecture);
     }
@@ -7521,6 +7536,36 @@ mod tests {
             assert_ne!(ps(ligne).classe, Classe::Lecture, "{ligne}");
             assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne}");
         }
+    }
+
+    /// KOB-514 : les raisons de la carte, sans jargon ni chemin absolu.
+    #[test]
+    fn raisons_de_la_carte_lisibles() {
+        let raison = |l: &str| bash(l).raison;
+        assert_eq!(
+            raison("git status"),
+            "Même une consultation git peut lancer des programmes réglés dans ce projet."
+        );
+        assert!(raison("rg a *").contains("`*` sera remplacé par les noms des fichiers"));
+        assert!(raison("uniq src/*").contains("`uniq` peut écraser l'un de ces fichiers"));
+        assert!(raison("jq -n env").contains("variables d'environnement"));
+        assert_eq!(
+            raison("ls > out.txt"),
+            "Écrit le résultat dans out.txt (le remplace s'il existe)."
+        );
+        assert_eq!(
+            raison("ls >> out.txt"),
+            "Ajoute le résultat à la fin de out.txt."
+        );
+        assert_eq!(
+            raison("ls 2> err.txt"),
+            "Écrit les erreurs dans err.txt (le remplace s'il existe)."
+        );
+        assert!(raison("npm install").starts_with("Kobi ne connaît pas `npm`"));
+        assert!(raison("grep \"$x\" f").starts_with("Utilise une valeur ($…)"));
+        // Aucun chemin absolu de la machine dans une raison.
+        let r = ps("jq -c '.[]' in.txt").raison;
+        assert!(!r.contains(KOBI), "{r}");
     }
 
     /// KOB-503 : le shell remplace un motif à joker par des chemins ; le
