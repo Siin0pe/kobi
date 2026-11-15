@@ -2600,6 +2600,7 @@ fn commande_sans_plancher(
         shell,
         ctx,
         cwd,
+        mots[0].to_lowercase().ends_with(".exe"),
     );
     // jq : après le jugement des chemins, pour qu'un chemin hors des
     // dossiers reste un refus (`jq -f prog ../../secret`, KOB-463).
@@ -3835,6 +3836,8 @@ fn est_r_de_where(x: &str) -> bool {
 /// option qui ne prend qu'un filtre de noms (`--include=*.rs`). Ajoutée au
 /// jugement des chemins, quel qu'en soit le résultat : un refus garde sa
 /// priorité, une autre carte ne l'efface pas (`diff --from-file=?. x**`).
+/// `exe` : le nom était écrit avec `.exe`, donc désigne le programme et non un
+/// cmdlet ou un alias homonyme (`echo.exe`, KOB-522).
 fn chemins(
     nom: &str,
     args: &[String],
@@ -3842,8 +3845,9 @@ fn chemins(
     shell: Shell,
     ctx: &Contexte,
     cwd: &Path,
+    exe: bool,
 ) -> Avis {
-    let avis = chemins_un_par_un(nom, args, jokers, shell, ctx, cwd);
+    let avis = chemins_un_par_un(nom, args, jokers, shell, ctx, cwd, exe);
     if SANS_CHEMIN_PS.contains(&nom) {
         return avis;
     }
@@ -3869,6 +3873,7 @@ fn chemins_un_par_un(
     shell: Shell,
     ctx: &Contexte,
     cwd: &Path,
+    exe: bool,
 ) -> Avis {
     if SANS_CHEMIN_PS.contains(&nom) {
         // Leurs arguments ne sont pas des chemins, mais sous Bash le shell remplace
@@ -3879,7 +3884,8 @@ fn chemins_un_par_un(
         // un motif, que le shell étend (relecture de KOB-508). Sous PowerShell,
         // seuls les programmes natifs reçoivent le motif étendu ; `echo` y est
         // `Write-Output`, une cmdlet.
-        if shell == Shell::Bash || NATIFS_SANS_CHEMIN.contains(&nom) {
+        // `echo.exe` est le `echo` de MSYS, pas `Write-Output` (KOB-522).
+        if shell == Shell::Bash || NATIFS_SANS_CHEMIN.contains(&nom) || exe {
             for (x, _) in args.iter().zip(jokers).filter(|(_, &joker)| joker) {
                 if let Some(avis) = juger_chemin(ctx, x, cwd) {
                     return avis;
@@ -3937,7 +3943,7 @@ fn chemins_un_par_un(
             // refus, et les autres arguments restent jugés (KOB-513).
             if ps && cfg!(windows) && matches!(avis.classe, Classe::Refus(_)) {
                 let sans_joker = vec![false; jokers.len()];
-                return chemins_un_par_un(nom, args, &sans_joker, shell, ctx, cwd).pire(
+                return chemins_un_par_un(nom, args, &sans_joker, shell, ctx, cwd, exe).pire(
                     Avis::ecriture(
                         Genre::Indetermine,
                         format!("`{x}` : un programme de Git pour Windows peut le remplacer par des noms de fichiers hors du dossier"),
@@ -8236,6 +8242,27 @@ mod tests {
         assert_eq!(ps("dir.exe -R sub").classe, Classe::Lecture);
         // Sans `.exe`, c'est `Get-ChildItem` : inchangé.
         assert_eq!(ps("dir -Recurse src").classe, Classe::Lecture);
+    }
+
+    /// KOB-522 : `echo.exe` est le `echo` de MSYS, qui étend lui-même un motif :
+    /// `echo.exe ../dehors/*` liste des noms hors du dossier (sonde #490). Le motif
+    /// est jugé comme pour `printf` (KOB-508) ; `echo` seul reste `Write-Output`.
+    #[test]
+    fn echo_exe_juge_son_motif() {
+        for ligne in [
+            "echo.exe ../dehors/*",
+            "ECHO.EXE ../../*",
+            "echo.exe x ../dehors/*",
+        ] {
+            let c = ps(ligne).classe;
+            assert!(matches!(c, Classe::Refus(_)), "{ligne} : {c:?}");
+        }
+        assert_eq!(ps("echo.exe *.md").classe, ps("printf.exe *.md").classe);
+        // Sous Windows, `echo` seul est `Write-Output`, qui n'étend rien.
+        if cfg!(windows) {
+            assert_eq!(ps("echo ../dehors/*").classe, Classe::Lecture);
+        }
+        assert_eq!(ps("echo.exe bonjour").classe, Classe::Lecture);
     }
 
     /// KOB-480 : sous PowerShell, `$null` non cité après une redirection de
