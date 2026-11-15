@@ -180,6 +180,22 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
             format!("`{mot}` : zsh (`EXTENDED_GLOB`) en fait d'autres chemins, non vérifiés"),
         ));
     }
+    // PowerShell en mode Legacy (Windows PowerShell 5.1 toujours, pwsh sous Unix
+    // jusqu'à 7.2) recompose la ligne d'un exécutable natif : un argument vide
+    // disparaît et un `"` coupe le mot. `jq -n '' e*` y devient `jq -n env`, qui
+    // affiche l'environnement (KOB-518). Sans savoir le mode, sur la carte ; un
+    // refus garde sa priorité.
+    let legacy = match &decoupe {
+        Ok(d) if shell == Shell::PowerShell => argument_recompose_par_legacy(&d.jetons),
+        _ => None,
+    };
+    let avis = match legacy {
+        Some(x) => avis.pire(Avis::ecriture(
+            Genre::Indetermine,
+            format!("`{x}` : en mode Legacy, PowerShell retire un argument vide ou coupe un mot à guillemets avant de le passer au programme"),
+        )),
+        None => avis,
+    };
     let joker = match decoupe {
         Ok(Decoupage {
             joker: Some(mot), ..
@@ -194,6 +210,44 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
         )),
         None => avis,
     }
+}
+
+/// Premier argument d'un exécutable natif que PowerShell en mode Legacy
+/// recompose en changeant son sens (KOB-518) : vide (`''`, `""`), il disparaît ;
+/// avec des `"`, il perd ses guillemets et devient vide, une option (`'"-n"'`)
+/// ou plusieurs mots. Un mot qui reste le même sans ses guillemets
+/// (`'"version"'`) ne change rien. Les cmdlets reçoivent l'argument tel quel.
+fn argument_recompose_par_legacy(jetons: &[Jeton]) -> Option<String> {
+    let mut en_tete = true;
+    let mut natif = false;
+    for j in jetons {
+        match j {
+            Jeton::Op(_) => en_tete = true,
+            Jeton::Redir(_) => {}
+            Jeton::Mot(m) | Jeton::Cite(m) if en_tete => {
+                let nom = m.to_lowercase();
+                let exe = nom.ends_with(".exe");
+                natif = natif_ps(
+                    nom.strip_suffix(".exe").unwrap_or(&nom),
+                    exe,
+                    Shell::PowerShell,
+                );
+                en_tete = false;
+            }
+            Jeton::Mot(m) | Jeton::Cite(m) => {
+                let sans = m.replace('"', "");
+                let change = m.is_empty()
+                    || (m.contains('"')
+                        && (sans.is_empty()
+                            || sans.starts_with('-')
+                            || sans.contains(char::is_whitespace)));
+                if natif && change {
+                    return Some(m.clone());
+                }
+            }
+        }
+    }
+    None
 }
 
 fn analyser_sans_joker(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
@@ -2214,15 +2268,15 @@ fn commande(
             format!("`{x}` donne un nombre inconnu de fichiers : `{nom}` peut écraser l'un de ces fichiers."),
         );
     }
-    match joker_dans_le_filtre(mots, &args, jokers) {
-        Some(x) => Avis::ecriture(
+    if let Some(x) = joker_dans_le_filtre(mots, &args, jokers) {
+        return Avis::ecriture(
             Genre::Indetermine,
             format!(
                 "`jq {x}` : selon les noms de fichiers, le joker peut devenir le filtre de `jq`"
             ),
-        ),
-        None => avis,
+        );
     }
+    avis
 }
 
 /// Nom de la commande dans `mots[0]` : sans chemin, en minuscules, sans `.exe`.
@@ -2321,6 +2375,13 @@ fn joker_qui_compte<'a>(mots: &'a [String], jokers: &[bool]) -> Option<(&'a str,
         .map(|(m, _)| (nom, m))
 }
 
+/// Sous PowerShell, `nom` (minuscules, sans `.exe`) désigne-t-il un exécutable
+/// natif plutôt qu'une cmdlet ou un alias ? `exe` : le nom finissait par `.exe`.
+fn natif_ps(nom: &str, exe: bool, shell: Shell) -> bool {
+    shell == Shell::PowerShell
+        && (exe || !(LECTURE_PS.contains(&nom) || ALIAS_PS.contains(&nom) || CD.contains(&nom)))
+}
+
 /// Nom de la commande (minuscules, sans `.exe`) et ses arguments tels qu'il
 /// les reçoit (un exécutable natif sous PowerShell perd le `./` de `decouper`).
 fn nom_et_arguments(mots: &[String], cites: &[bool], shell: Shell) -> (String, Vec<String>) {
@@ -2347,11 +2408,7 @@ fn nom_et_arguments(mots: &[String], cites: &[bool], shell: Shell) -> (String, V
     // Seul le `./` mis par `decouper` est retiré : un `./-e` écrit tel quel
     // est un fichier pour l'exécutable aussi. `cd` et ses alias sont des
     // cmdlets.
-    let natif = shell == Shell::PowerShell
-        && (exe
-            || !(LECTURE_PS.contains(&nom.as_str())
-                || ALIAS_PS.contains(&nom.as_str())
-                || CD.contains(&nom.as_str())));
+    let natif = natif_ps(&nom, exe, shell);
     let args = if natif {
         mots[1..]
             .iter()
@@ -7579,6 +7636,34 @@ mod tests {
         // Aucun chemin absolu de la machine dans une raison.
         let r = ps("jq -c '.[]' in.txt").raison;
         assert!(!r.contains(KOBI), "{r}");
+    }
+
+    /// KOB-518 : PowerShell en mode Legacy retire un argument vide et coupe un
+    /// mot à guillemets pour un exécutable natif (vu avec le vrai pwsh et
+    /// powershell 5.1 dans `tests/powershell_legacy.rs`).
+    #[test]
+    fn argument_vide_ou_a_guillemets_pour_un_natif_sous_powershell() {
+        for ligne in [
+            "jq -n '' e*",
+            "jq -n \"\" f",
+            "jq '\"-n\"' f",
+            "rg x '\"\"' f",
+            "rg x '\"a b\"' f",
+            "grep '' f",
+            "jq.exe -n '' f",
+        ] {
+            assert_eq!(
+                ps(ligne).classe,
+                Classe::Ecriture(Genre::Indetermine),
+                "{ligne}"
+            );
+        }
+        // Les cmdlets reçoivent l'argument tel quel ; Bash n'est pas concerné.
+        for ligne in ["Select-String -Pattern '' -Path f", "Get-Content 'a\"b'"] {
+            assert!(!ps(ligne).raison.contains("Legacy"), "{ligne}");
+        }
+        assert_eq!(bash("grep '' f").classe, Classe::Lecture);
+        assert_eq!(ps("jq -n 'a b' f").classe, Classe::Lecture);
     }
 
     /// KOB-503 : le shell remplace un motif à joker par des chemins ; le
