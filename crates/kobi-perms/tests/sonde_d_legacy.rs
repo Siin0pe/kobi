@@ -18,7 +18,10 @@ fn sonde_d_pwsh_legacy() {
     let mut compte = Vec::new();
     for ligne in [r#"jq '"-n"' e*"#, "jq -n '' e*"] {
         let kobi = commande::analyser(ligne, Shell::PowerShell, &ctx);
-        compte.push(format!("KOBI {ligne:?} => {:?} ({})", kobi.classe, kobi.raison));
+        compte.push(format!(
+            "KOBI {ligne:?} => {:?} ({})",
+            kobi.classe, kobi.raison
+        ));
         for mode in ["Legacy", "Standard"] {
             let script = format!("$PSNativeCommandArgumentPassing='{mode}'; {ligne}");
             let r = match Command::new("pwsh")
@@ -45,7 +48,11 @@ fn sonde_d_pwsh_legacy() {
         }
     }
     let version = Command::new("pwsh")
-        .args(["-NoProfile", "-Command", "$PSVersionTable.PSVersion.ToString()"])
+        .args([
+            "-NoProfile",
+            "-Command",
+            "$PSVersionTable.PSVersion.ToString()",
+        ])
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
         .unwrap_or_default();

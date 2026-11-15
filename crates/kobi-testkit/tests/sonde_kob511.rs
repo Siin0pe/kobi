@@ -66,11 +66,19 @@ async fn sonde_kob511() {
             Ok(Some(e)) => court(&e),
         };
         let fin_avant = avant.last().cloned().unwrap_or_default();
-        rendus.push(format!("essai {essai:2} : {vu} | dernier avant la carte : {fin_avant}"));
+        rendus.push(format!(
+            "essai {essai:2} : {vu} | dernier avant la carte : {fin_avant}"
+        ));
         cards.answer(id, Decision::Allow);
         let _ = turn.wait().await;
         brain.close(Duration::from_secs(5)).await;
     }
-    let anormaux = rendus.iter().filter(|r| !r.contains("rien (attendu)")).count();
-    panic!("COMPTE RENDU KOB-511 : {anormaux}/40 anormaux\n{}", rendus.join("\n"));
+    let anormaux = rendus
+        .iter()
+        .filter(|r| !r.contains("rien (attendu)"))
+        .count();
+    panic!(
+        "COMPTE RENDU KOB-511 : {anormaux}/40 anormaux\n{}",
+        rendus.join("\n")
+    );
 }
