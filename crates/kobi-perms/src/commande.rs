@@ -2428,7 +2428,12 @@ fn option_de_motif(nom: &str, x: &str) -> Option<bool> {
     match bas.as_str() {
         // Le `-e` de jq est le code de sortie, pas un motif (KOB-487).
         "-e" if nom == "jq" => {}
-        "-e" | "--regexp" | "-pattern" | "-simplematch" => return Some(true),
+        // Un motif seulement pour les commandes qui le prennent ainsi. Ailleurs
+        // (`cat -e`, `od -e`, `less -e`, `ls -e` sous macOS), le mot suivant
+        // est un fichier lu, jugé comme un chemin (KOB-541).
+        "-e" if matches!(nom, "grep" | "egrep" | "fgrep" | "rg" | "sed") => return Some(true),
+        "--regexp" if matches!(nom, "grep" | "egrep" | "fgrep" | "rg") => return Some(true),
+        "-pattern" | "-simplematch" if matches!(nom, "select-string" | "sls") => return Some(true),
         "-f" | "--file" if matches!(nom, "grep" | "egrep" | "fgrep" | "rg" | "sed" | "jq") => {
             return Some(false)
         }
