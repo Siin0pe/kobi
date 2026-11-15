@@ -213,10 +213,17 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
 }
 
 /// Premier argument d'un exécutable natif que PowerShell en mode Legacy
-/// recompose en changeant son sens (KOB-518) : vide (`''`, `""`), il disparaît ;
-/// avec des `"`, il perd ses guillemets et devient vide, une option (`'"-n"'`)
-/// ou plusieurs mots. Un mot qui reste le même sans ses guillemets
-/// (`'"version"'`) ne change rien. Les cmdlets reçoivent l'argument tel quel.
+/// recompose en changeant le sens de la ligne (KOB-518) :
+/// - vide (`''`, `""`) : il disparaît ;
+/// - un nombre impair de `"`, ou un `\` devant un `"` : l'état « entre
+///   guillemets » du découpage du programme déborde sur les arguments suivants
+///   (`head 'a"' 'b ../secret'` lit `../secret`, relecture de KOB-518) ;
+/// - sans ses `"`, vide, une option (`'"-n"'`) ou plusieurs mots ;
+/// - un blanc et un `\` final : Windows PowerShell 5.1 ne le double pas en
+///   ajoutant ses guillemets, qui se rouvrent.
+///
+/// Un mot à guillemets pairs qui reste le même sans eux (`'"version"'`) ne change
+/// rien. Les cmdlets reçoivent l'argument tel quel (`est_natif_pwsh`, comme KOB-512).
 fn argument_recompose_par_legacy(jetons: &[Jeton]) -> Option<String> {
     let mut en_tete = true;
     let mut natif = false;
@@ -225,22 +232,19 @@ fn argument_recompose_par_legacy(jetons: &[Jeton]) -> Option<String> {
             Jeton::Op(_) => en_tete = true,
             Jeton::Redir(_) => {}
             Jeton::Mot(m) | Jeton::Cite(m) if en_tete => {
-                let nom = m.to_lowercase();
-                let exe = nom.ends_with(".exe");
-                natif = natif_ps(
-                    nom.strip_suffix(".exe").unwrap_or(&nom),
-                    exe,
-                    Shell::PowerShell,
-                );
+                natif = est_natif_pwsh(m, cfg!(windows));
                 en_tete = false;
             }
             Jeton::Mot(m) | Jeton::Cite(m) => {
                 let sans = m.replace('"', "");
                 let change = m.is_empty()
+                    || m.matches('"').count() % 2 == 1
+                    || m.contains("\\\"")
                     || (m.contains('"')
                         && (sans.is_empty()
                             || sans.starts_with('-')
-                            || sans.contains(char::is_whitespace)));
+                            || sans.contains(char::is_whitespace)))
+                    || (m.contains(char::is_whitespace) && m.ends_with('\\'));
                 if natif && change {
                     return Some(m.clone());
                 }
@@ -2375,13 +2379,6 @@ fn joker_qui_compte<'a>(mots: &'a [String], jokers: &[bool]) -> Option<(&'a str,
         .map(|(m, _)| (nom, m))
 }
 
-/// Sous PowerShell, `nom` (minuscules, sans `.exe`) désigne-t-il un exécutable
-/// natif plutôt qu'une cmdlet ou un alias ? `exe` : le nom finissait par `.exe`.
-fn natif_ps(nom: &str, exe: bool, shell: Shell) -> bool {
-    shell == Shell::PowerShell
-        && (exe || !(LECTURE_PS.contains(&nom) || ALIAS_PS.contains(&nom) || CD.contains(&nom)))
-}
-
 /// Nom de la commande (minuscules, sans `.exe`) et ses arguments tels qu'il
 /// les reçoit (un exécutable natif sous PowerShell perd le `./` de `decouper`).
 fn nom_et_arguments(mots: &[String], cites: &[bool], shell: Shell) -> (String, Vec<String>) {
@@ -2408,7 +2405,11 @@ fn nom_et_arguments(mots: &[String], cites: &[bool], shell: Shell) -> (String, V
     // Seul le `./` mis par `decouper` est retiré : un `./-e` écrit tel quel
     // est un fichier pour l'exécutable aussi. `cd` et ses alias sont des
     // cmdlets.
-    let natif = natif_ps(&nom, exe, shell);
+    let natif = shell == Shell::PowerShell
+        && (exe
+            || !(LECTURE_PS.contains(&nom.as_str())
+                || ALIAS_PS.contains(&nom.as_str())
+                || CD.contains(&nom.as_str())));
     let args = if natif {
         mots[1..]
             .iter()
@@ -7649,6 +7650,10 @@ mod tests {
             "jq '\"-n\"' f",
             "rg x '\"\"' f",
             "rg x '\"a b\"' f",
+            "head 'a\"' 'b ../secret'",
+            "rg x 'a\"' 'b --pre=python setup.py'",
+            "head 'a\\\"' 'b ../x'",
+            "head 'a b\\' 'c ../secret'",
             "grep '' f",
             "jq.exe -n '' f",
         ] {
@@ -7661,6 +7666,13 @@ mod tests {
         // Les cmdlets reçoivent l'argument tel quel ; Bash n'est pas concerné.
         for ligne in ["Select-String -Pattern '' -Path f", "Get-Content 'a\"b'"] {
             assert!(!ps(ligne).raison.contains("Legacy"), "{ligne}");
+        }
+        // Hors de Windows, `cat` est un exécutable natif sous pwsh.
+        if !cfg!(windows) {
+            assert_eq!(
+                ps("cat 'a\"' 'b ../x'").classe,
+                Classe::Ecriture(Genre::Indetermine)
+            );
         }
         assert_eq!(bash("grep '' f").classe, Classe::Lecture);
         assert_eq!(ps("jq -n 'a b' f").classe, Classe::Lecture);

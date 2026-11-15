@@ -79,3 +79,34 @@ fn powershell_51_retire_un_argument_vide() {
         Classe::Ecriture(kobi_perms::Genre::Indetermine)
     );
 }
+
+/// Relecture de KOB-518 : un `"` impair dans un mot sans blanc fait déborder les
+/// guillemets sur l'argument suivant. `head 'a"' 'b ../secret'` devient
+/// `head "a b" ../secret` et lit le fichier extérieur.
+#[cfg(target_os = "linux")]
+#[test]
+fn pwsh_legacy_guillemet_impair_lit_hors_du_dossier() {
+    let racine = tempfile::tempdir().unwrap();
+    let code = racine.path().join("code");
+    std::fs::create_dir_all(&code).unwrap();
+    std::fs::write(racine.path().join("secret"), "LIGNE-SECRETE\n").unwrap();
+    let ligne = "head 'a\"' 'b ../secret'";
+    let sortie = Command::new("pwsh")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            &format!("$PSNativeCommandArgumentPassing='Legacy'; {ligne}"),
+        ])
+        .current_dir(&code)
+        .output();
+    if exige(sortie.is_ok(), "pwsh") {
+        let sortie = sortie.unwrap();
+        let texte = String::from_utf8_lossy(&sortie.stdout);
+        assert!(texte.contains("LIGNE-SECRETE"), "{sortie:?}");
+    }
+    assert_eq!(
+        classe(ligne, &code),
+        Classe::Ecriture(kobi_perms::Genre::Indetermine)
+    );
+}
