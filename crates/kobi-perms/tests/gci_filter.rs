@@ -23,8 +23,13 @@ fn dossiers() -> (tempfile::TempDir, PathBuf) {
 }
 
 fn classe(ligne: &str, ici: &Path) -> Classe {
+    classe_depuis(ligne, ici, ici)
+}
+
+/// Classement avec `cwd` pour dossier courant, `ici` restant le dossier déclaré.
+fn classe_depuis(ligne: &str, ici: &Path, cwd: &Path) -> Classe {
     let mut ctx = Contexte::new(vec![ici.to_path_buf()]);
-    ctx.cwd = Some(ici.to_path_buf());
+    ctx.cwd = Some(cwd.to_path_buf());
     commande::analyser(ligne, Shell::PowerShell, &ctx).classe
 }
 
@@ -91,12 +96,47 @@ fn filtre_avec_dossier_sur_la_carte() {
         "gci -Filter:../dehors/* | gc",
         "gci -filt ../dehors/* | gc",
         "gci -Filter '../dehors/*' | gc",
-        r"gci -Filter ..\dehors\* | gc",
         "gci sub -Filter ../../dehors/* | gc",
         "dir -Filter ../dehors/*",
         "Get-ChildItem -Recurse -Filter ../dehors/*",
     ] {
         assert_ne!(classe(ligne, &ici), Classe::Lecture, "{ligne}");
+    }
+    // `\` n'est un séparateur que sous Windows.
+    #[cfg(windows)]
+    assert_ne!(
+        classe(r"gci -Filter ..\dehors\* | gc", &ici),
+        Classe::Lecture
+    );
+}
+
+/// Relecture : le deuxième positionnel de Get-ChildItem est `-Filter` (le premier
+/// si `-Path` est nommé), et `-Filter: x` lie le mot suivant. Depuis un
+/// sous-dossier du dossier déclaré, pwsh résout le filtre depuis `..` : il sort.
+#[test]
+fn filtre_positionnel_depuis_un_sous_dossier() {
+    let (_d, ici) = dossiers();
+    let sub = ici.join("sub");
+    let lignes = [
+        "gci .. ../dehors/* | gc",
+        "gci .. ../dehors/secret.txt | gc",
+        "gci -Path .. ../dehors/secret.txt | gc",
+        "gci .. ../dehors/* -Recurse | gc",
+        "gci -File .. ../dehors/* | gc",
+        "gci -d .. ../dehors/*",
+        "gci .. -Filter: ../dehors/* | gc",
+        "Get-ChildItem -LiteralPath .. ../dehors/* | gc",
+    ];
+    for ligne in lignes {
+        assert_ne!(classe_depuis(ligne, &ici, &sub), Classe::Lecture, "{ligne}");
+    }
+    // Le vrai pwsh lit bien le fichier du dehors (la forme `-Recurse` le lit aussi,
+    // mais sort en erreur sur les dossiers qu'elle ne trouve pas).
+    for ligne in &lignes[..3] {
+        let Some(t) = pwsh(ligne, &sub) else {
+            return;
+        };
+        assert!(t.contains("contenu-secret"), "{ligne} : {t:?}");
     }
 }
 
@@ -119,6 +159,10 @@ fn filtre_de_noms_reste_une_lecture() {
         "gci sub -Filter *.txt | Get-Content",
         "gci -Filter:*.txt sub",
         "Get-ChildItem -Recurse -Filter *.rs",
+        "gci sub *.txt | gc",
+        "gci -Path sub *.txt",
+        "Get-ChildItem -Path sub/a.txt",
+        "gci -Depth 1 sub *.txt",
     ] {
         assert_eq!(classe(ligne, &ici), Classe::Lecture, "{ligne}");
     }

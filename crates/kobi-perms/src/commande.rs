@@ -4323,20 +4323,77 @@ fn chemins(
     }
 }
 
-/// Premier `-Filter` (ou abréviation) dont la valeur contient un séparateur de
-/// dossier : sa position, son nombre de mots (`-Filter x` : 2, `-Filter:x` : 1) et
-/// sa valeur.
-fn filter_avec_dossier(args: &[String]) -> Option<(usize, usize, String)> {
-    args.iter().enumerate().find_map(|(i, x)| {
-        if !abrege_ps(x, "-filter") {
-            return None;
+/// Premier filtre d'une cmdlet dont la valeur contient un séparateur de dossier,
+/// et les dossiers d'où il peut partir. Le filtre est la valeur de `-Filter`
+/// (abréviations ; `-Filter:x`, ou `-Filter: x` que pwsh lie au mot suivant), ou,
+/// pour `Get-ChildItem`, son deuxième positionnel (le premier si `-Path` est
+/// nommé, relecture de KOB-537). Les bases sont le dossier courant (`.`), chaque
+/// positionnel et chaque valeur de `-Path` : un tableau `a,b` arrive en mots
+/// séparés, on ne sait pas lequel est le chemin.
+fn filter_avec_dossier(nom: &str, args: &[String]) -> Option<(String, Vec<String>)> {
+    let dossier = |v: &str| v.contains(['/', '\\']);
+    // `-File` est un interrupteur, pas `-Filter` ; `-fi` et `-fil` sont `-Filter`.
+    let est_filter = |o: &str| abrege_ps(o, "-filter") && !o.eq_ignore_ascii_case("-file");
+    let mut filtre = None;
+    let mut bases = vec![".".to_owned()];
+    let mut positionnels = Vec::new();
+    let mut path_nomme = false;
+    let mut i = 0;
+    while i < args.len() {
+        let x = args[i].as_str();
+        if !(x.starts_with('-') && x.len() > 1) {
+            positionnels.push(x);
+            i += 1;
+            continue;
         }
-        let (n, v) = match x.split_once(':') {
-            Some((_, v)) => (1, v),
-            None => (2, args.get(i + 1)?.as_str()),
+        let (o, colle) = match x.split_once(':') {
+            Some((o, v)) => (o, (!v.is_empty()).then_some(v)),
+            None => (x, None),
         };
-        v.contains(['/', '\\']).then(|| (i, n, v.to_owned()))
-    })
+        let path = abrege_ps(o, "-path")
+            || abrege_ps(o, "-literalpath")
+            || o.eq_ignore_ascii_case("-lp")
+            || o.eq_ignore_ascii_case("-pspath");
+        path_nomme |= path;
+        // Seules les options sûres d'avoir une valeur sautent le mot suivant :
+        // sauter un mot à tort cacherait le vrai filtre.
+        let a_valeur = path
+            || est_filter(o)
+            || est_depth(o)
+            || (o.len() >= 3
+                && ["-include", "-exclude", "-attributes"]
+                    .iter()
+                    .any(|a| abrege_ps(o, a)));
+        let valeur = colle.or_else(|| {
+            a_valeur
+                .then(|| args.get(i + 1).map(String::as_str))
+                .flatten()
+        });
+        if let Some(v) = valeur {
+            if path {
+                bases.push(v.to_owned());
+            }
+            if est_filter(o) && filtre.is_none() && dossier(v) {
+                filtre = Some(v.to_owned());
+            }
+        }
+        i += if a_valeur && colle.is_none() { 2 } else { 1 };
+    }
+    if filtre.is_none() && matches!(nom, "get-childitem" | "gci" | "dir" | "ls") {
+        let rang = if path_nomme { 0 } else { 1 };
+        filtre = positionnels
+            .get(rang)
+            .filter(|v| dossier(v))
+            .map(|v| (*v).to_owned());
+    }
+    let filtre = filtre?;
+    bases.extend(
+        positionnels
+            .iter()
+            .filter(|p| **p != filtre)
+            .map(|p| (*p).to_owned()),
+    );
+    Some((filtre, bases))
 }
 
 fn chemins_un_par_un(
@@ -4377,30 +4434,21 @@ fn chemins_un_par_un(
     }
     // `-Filter` d'une cmdlet est passé au système de fichiers : sous pwsh 7, sa
     // partie dossier est suivie (`gci -Filter ../dehors/* | gc` lit hors du
-    // dossier, sonde #506). Une valeur qui contient un séparateur passe par la
-    // carte (KOB-537).
+    // dossier, sonde #506). L'endroit vraiment listé, la base (chaque dossier
+    // possible de la commande) suivie du filtre, est jugé comme un chemin
+    // (KOB-537).
     if ps && !exe && !est_natif_pwsh(nom, cfg!(windows)) {
-        if let Some((i, n, v)) = filter_avec_dossier(args) {
-            // Le reste de la ligne est jugé aussi : un chemin hors des dossiers
-            // reste un refus.
-            let garde = |k: &usize| *k < i || *k >= i + n;
-            let reste: Vec<String> = args
-                .iter()
-                .enumerate()
-                .filter(|(k, _)| garde(k))
-                .map(|(_, x)| x.clone())
-                .collect();
-            let jokers_reste: Vec<bool> = jokers
-                .iter()
-                .enumerate()
-                .filter(|(k, _)| garde(k))
-                .map(|(_, j)| *j)
-                .collect();
-            return Avis::ecriture(
-                Genre::Commande,
-                format!("le filtre `{v}` contient un dossier : PowerShell peut lister ailleurs que dans le dossier demandé"),
-            )
-            .pire(chemins_un_par_un(nom, &reste, &jokers_reste, shell, ctx, cwd, exe));
+        if let Some((v, bases)) = filter_avec_dossier(nom, args) {
+            for b in bases {
+                let liste = if b == "." {
+                    v.clone()
+                } else {
+                    format!("{b}/{v}")
+                };
+                if let Some(avis) = juger_chemin(ctx, &liste, cwd) {
+                    return avis;
+                }
+            }
         }
     }
     // Motif donné par une option (`grep /etc/passwd -e root`) : tous les
