@@ -72,3 +72,30 @@ fn bash_valeur_d_option_a_joker_lit_hors_des_dossiers() {
     assert!(texte.contains("LIGNE-SECRETE"), "{sortie:?}");
     assert_ne!(classe(ligne, &code), Classe::Lecture);
 }
+
+/// KOB-508 : `echo ../dehors/*` affiche les noms d'un dossier extérieur.
+#[cfg(unix)]
+#[test]
+fn bash_echo_avec_un_joker_liste_un_dossier_exterieur() {
+    let racine = tempfile::tempdir().unwrap();
+    let code = racine.path().join("code");
+    let dehors = racine.path().join("dehors");
+    std::fs::create_dir_all(&code).unwrap();
+    std::fs::create_dir_all(&dehors).unwrap();
+    std::fs::write(dehors.join("nom-secret"), "").unwrap();
+    let ligne = "echo ../dehors/*";
+    let sortie = Command::new("bash")
+        .args(["-c", ligne])
+        .current_dir(&code)
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&sortie.stdout).contains("nom-secret"),
+        "{sortie:?}"
+    );
+    assert!(
+        matches!(classe(ligne, &code), Classe::Refus(_)),
+        "{:?}",
+        classe(ligne, &code)
+    );
+}

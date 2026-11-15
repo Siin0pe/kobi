@@ -3616,6 +3616,21 @@ fn chemins_un_par_un(
     cwd: &Path,
 ) -> Avis {
     if SANS_CHEMIN_PS.contains(&nom) {
+        // Leurs arguments ne sont pas des chemins, mais sous Bash le shell remplace
+        // un mot à joker par des noms de fichiers, que `echo` et `printf`
+        // affichent : `echo /root/.ssh/*` listait un dossier hors des dossiers de
+        // code (KOB-508). Le mot est jugé comme un chemin, comme dans KOB-503.
+        if shell == Shell::Bash {
+            for (x, _) in args
+                .iter()
+                .zip(jokers)
+                .filter(|(x, &joker)| joker && !x.starts_with('-'))
+            {
+                if let Some(avis) = juger_chemin(ctx, x, cwd) {
+                    return avis;
+                }
+            }
+        }
         return Avis::lecture();
     }
     let ps = shell == Shell::PowerShell;
@@ -7163,6 +7178,35 @@ mod tests {
             "sed -n 1,20p f",
             "sed -n '$p' f",
             "sed -n /x/p src/*.rs",
+        ] {
+            assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+    }
+
+    /// KOB-508 : `echo` et `printf` affichent les noms que le shell met à la
+    /// place d'un mot à joker (vu avec le vrai bash dans `tests/joker_motif.rs`).
+    #[test]
+    fn echo_avec_un_joker_qui_sort_refuse() {
+        for ligne in [
+            "echo /root/.ssh/*",
+            "echo ~/.ssh/*",
+            "printf '%s\\n' ../*",
+            "echo ../../*/x",
+            "which /root/*",
+        ] {
+            assert!(
+                matches!(bash(ligne).classe, Classe::Refus(_)),
+                "{ligne} : {:?}",
+                bash(ligne).classe
+            );
+        }
+        for ligne in [
+            "echo src/*",
+            "echo ./*.md",
+            "printf '%s\\n' crates/*/Cargo.toml",
+            "echo '/root/.ssh/*'",
+            "echo \"../*\"",
+            "echo bonjour",
         ] {
             assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne}");
         }
