@@ -2273,6 +2273,20 @@ const MOTIF_D_ABORD: &[&str] = &[
 /// par commande. Une option absente de la liste n'emporte pas de valeur :
 /// l'argument suivant est alors vérifié comme un chemin (au pire, un refus de
 /// trop, jamais un chemin qui échappe à la vérification).
+/// Comme [`options_a_valeur`], mais les paramètres de `Get-ChildItem`
+/// (`-Filter`, `-Attributes`…) ne valent que pour la cmdlet : sous Bash, ou
+/// pour un `ls` natif sous PowerShell (hors Windows, ou `ls.exe`), `ls` et `dir`
+/// sont des programmes. Le ls BSD de macOS lit `-attributes` comme une suite
+/// d'options d'une lettre, toutes valides, et liste le mot suivant : ce mot est
+/// un chemin, pas une valeur (KOB-539).
+fn options_a_valeur_du_programme(nom: &str, shell: Shell, exe: bool) -> &'static [&'static str] {
+    let cmdlet = shell == Shell::PowerShell && !exe && !est_natif_pwsh(nom, cfg!(windows));
+    if matches!(nom, "get-childitem" | "gci" | "ls" | "dir") && !cmdlet {
+        return &[];
+    }
+    options_a_valeur(nom)
+}
+
 fn options_a_valeur(nom: &str) -> &'static [&'static str] {
     match nom {
         "grep" | "egrep" | "fgrep" => &[
@@ -4548,7 +4562,7 @@ fn chemins_un_par_un(
                 }
                 None => {}
             }
-            if options_a_valeur(nom)
+            if options_a_valeur_du_programme(nom, shell, exe)
                 .iter()
                 .any(|o| o.eq_ignore_ascii_case(&bas))
                 && !x.contains('=')
