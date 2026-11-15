@@ -775,10 +775,35 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
                     match c.get(i) {
                         None => return Err("guillemet double non fermé".into()),
                         Some('"') => break,
-                        // Bash : un `$` juste avant le guillemet fermant est
-                        // littéral (`grep "foo$"`, KOB-482). Non prouvé sous
-                        // PowerShell : il y reste refusé.
-                        Some('$') if !ps && c.get(i + 1) == Some(&'"') => mot.push('$'),
+                        // Un `$` suivi d'un caractère qui ne commence ni un nom
+                        // ni une substitution est littéral, sous bash comme sous
+                        // pwsh : `grep "foo$"` (KOB-482), `"foo$|bar$"`,
+                        // `"/^$/p"`. Seuls les caractères vérifiés avec les vrais
+                        // bash, zsh et pwsh ; zsh développe `$=x`, `$~x` et
+                        // `$+x` (KOB-515).
+                        Some('$')
+                            if matches!(
+                                c.get(i + 1),
+                                Some(
+                                    '"' | '|'
+                                        | '/'
+                                        | ')'
+                                        | ' '
+                                        | '\t'
+                                        | '.'
+                                        | ','
+                                        | ';'
+                                        | ']'
+                                        | '%'
+                                        | '>'
+                                        | '<'
+                                        | '&'
+                                        | '\''
+                                )
+                            ) =>
+                        {
+                            mot.push('$')
+                        }
                         Some('$') => return Err(
                             "Utilise une valeur ($…) que Kobi ne peut pas connaître à l'avance."
                                 .into(),
@@ -5369,8 +5394,8 @@ mod tests {
         ] {
             assert_ne!(analyser(l, Shell::Bash, &x).classe.cle(), "lecture", "{l}");
         }
-        // Sous PowerShell, non prouvé : rien ne change.
-        assert_ne!(
+        // Sous PowerShell aussi, prouvé avec le vrai pwsh (KOB-515).
+        assert_eq!(
             analyser("Select-String \"foo$\" README.md", Shell::PowerShell, &x)
                 .classe
                 .cle(),
@@ -8375,6 +8400,60 @@ mod tests {
             assert_eq!(ps("echo ../dehors/*").classe, Classe::Lecture);
         }
         assert_eq!(ps("echo.exe bonjour").classe, Classe::Lecture);
+    }
+
+    /// KOB-515 : entre guillemets doubles, un `$` suivi d'un caractère qui ne peut
+    /// commencer ni un nom ni une substitution reste littéral, sous bash comme sous
+    /// pwsh (vérifié avec les vrais shells, caractère par caractère).
+    #[test]
+    fn dollar_litteral_entre_guillemets_doubles() {
+        for ligne in [
+            "rg \"foo$\" src",
+            "grep -E \"foo$|bar$\" in.txt",
+            "grep \"a$ b\" in.txt",
+            "grep \"($)\" in.txt",
+            "grep \"$.\" in.txt",
+        ] {
+            assert_eq!(bash(ligne).classe, Classe::Lecture, "bash {ligne}");
+            assert_eq!(ps(ligne).classe, Classe::Lecture, "ps {ligne}");
+        }
+        // Sous PowerShell Windows, tout `sed` passe par la carte : celui de MSYS relit
+        // sa ligne (KOB-504).
+        let sed = "sed -n \"/^$/p\" in.txt";
+        assert_eq!(bash(sed).classe, Classe::Lecture);
+        if !cfg!(windows) {
+            assert_eq!(ps(sed).classe, Classe::Lecture);
+        }
+        // Variables et substitutions : toujours sur la carte, dans les deux shells.
+        for ligne in [
+            "grep \"$x\" f",
+            "grep \"a$b\" f",
+            "grep \"$(id)\" f",
+            "grep \"${x}\" f",
+            "grep \"$?\" f",
+            "grep \"$1\" f",
+            "grep \"$_\" f",
+            "grep \"$$\" f",
+            "grep \"$env:X\" f",
+        ] {
+            assert_ne!(bash(ligne).classe, Classe::Lecture, "bash {ligne}");
+            assert_ne!(ps(ligne).classe, Classe::Lecture, "ps {ligne}");
+        }
+        // Spéciaux d'un seul des deux shells : sur la carte partout.
+        for ligne in [
+            "grep \"$=x\" f",
+            "grep \"$~x\" f",
+            "grep \"$+x\" f",
+            "cat \"$=HOME/.ssh/id_rsa\"",
+            "grep \"$-\" f",
+            "grep \"$[1]\" f",
+            "grep \"$!\" f",
+            "grep \"$^\" f",
+            "grep \"$:\" f",
+        ] {
+            assert_ne!(bash(ligne).classe, Classe::Lecture, "bash {ligne}");
+            assert_ne!(ps(ligne).classe, Classe::Lecture, "ps {ligne}");
+        }
     }
 
     /// KOB-480 : sous PowerShell, `$null` non cité après une redirection de
