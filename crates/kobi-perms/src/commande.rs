@@ -2910,6 +2910,15 @@ fn options_interdites(nom: &str, args: &[String], shell: Shell) -> Option<Avis> 
             if a("--web") || a("-w") {
                 return ecrit("`gh --web` ouvre le navigateur".into());
             }
+            if filtres_jq_de_gh(args)
+                .iter()
+                .any(|f| mot_entier(f, "env") || mot_entier(f, "ENV"))
+            {
+                return Some(Avis::ecriture(
+                    Genre::Indetermine,
+                    "le filtre `--jq` de gh lit l'environnement (`env`, `$ENV`), jeton compris",
+                ));
+            }
             let pos: Vec<&str> = args
                 .iter()
                 .filter(|x| !x.starts_with('-'))
@@ -3083,6 +3092,35 @@ fn jq_lit_hors(args: &[String]) -> bool {
             || (court && (x.contains('f') || x.contains('L')))
     });
     mot_cle || fichier
+}
+
+/// Filtres `--jq` de gh, sous toutes leurs formes : `--jq f`, `--jq=f`, `-q f`, `-qf`,
+/// `-q=f`, et `-q` dans un groupe d'options courtes (pflag). gh les compile avec
+/// l'environnement du processus (KOB-510). pflag n'accepte pas d'abréviation.
+fn filtres_jq_de_gh(args: &[String]) -> Vec<&str> {
+    let mut filtres = Vec::new();
+    let mut i = 0;
+    while let Some(x) = args.get(i) {
+        if x == "--" {
+            break;
+        }
+        let suivant = || args.get(i + 1).map(String::as_str);
+        if x == "--jq" {
+            filtres.extend(suivant());
+        } else if let Some(f) = x.strip_prefix("--jq=") {
+            filtres.push(f);
+        } else if x.starts_with('-') && !x.starts_with("--") {
+            if let Some(q) = x.find('q') {
+                let reste = &x[q + 1..];
+                match reste.strip_prefix('=').unwrap_or(reste) {
+                    "" => filtres.extend(suivant()),
+                    f => filtres.push(f),
+                }
+            }
+        }
+        i += 1;
+    }
+    filtres
 }
 
 /// `git` : options globales et sous-commandes en lecture.
@@ -7249,6 +7287,42 @@ mod tests {
         assert!(natif("sort \\tmp\\ici\\*", false));
         assert!(!natif("sort src/../--output=M", false), "sans joker");
         assert!(!natif("sort.exe /tmp/*", false));
+    }
+
+    /// KOB-510 : gh compile `--jq` avec l'environnement du processus : `env` et `$ENV`
+    /// donnent le jeton (`gh auth status --json=hosts --jq=env`, faux `GH_TOKEN`).
+    #[test]
+    fn gh_jq_qui_lit_l_environnement() {
+        for ligne in [
+            "gh auth status --json=hosts --jq=env",
+            "gh auth status --json hosts --jq env.GH_TOKEN",
+            "gh pr list --json number --jq env.GH_TOKEN",
+            "gh pr list --json=number --jq=env.GH_TOKEN",
+            "gh pr view 1 --json title -q '$ENV'",
+            "gh pr view 1 --json title -q=env",
+            "gh pr view 1 --json title -qenv",
+            "gh run view 5 --json jobs --jq '[env]'",
+            "gh repo view --json=name --jq='$ENV.GH_TOKEN'",
+            "gh issue list --json title --jq '.[] | env.HOME'",
+            "gh pr view 1 --json title -cq env",
+            "gh pr view 1 --json title -cqenv.GH_TOKEN",
+        ] {
+            assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+            assert_ne!(ps(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+        // Un champ `.env`, et un modèle Go : il n'a pas de fonction `env` (`{{env
+        // "GH_TOKEN"}}` sort vide, même sonde).
+        for ligne in [
+            "gh pr list --json number --jq '.[].number'",
+            "gh pr view 1 --json body --jq .env",
+            "gh pr view 1 --json title --template '{{.title}}'",
+            "gh pr list --search env",
+            // Après `--`, gh lit `--jq` comme un argument et s'arrête en erreur.
+            "gh pr list -- --jq env",
+        ] {
+            assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+            assert_eq!(ps(ligne).classe, Classe::Lecture, "{ligne}");
+        }
     }
 
     /// KOB-480 : sous PowerShell, `$null` non cité après une redirection de
