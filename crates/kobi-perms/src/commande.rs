@@ -3509,14 +3509,17 @@ fn script_sed_sur(script: &str) -> bool {
 ///
 /// Le contenu d'une chaîne n'est pas du code (`select(.type == "include")`),
 /// sauf ses interpolations (`"\(env.X)"`), et `env` en clé d'objet (`{env: 1}`)
-/// n'appelle rien ; `{env}` (raccourci de `{env: env}`) l'appelle (KOB-516). La
-/// valeur d'une option à valeur (`--arg x -foo`) n'est pas une option.
+/// n'appelle rien (KOB-516) ; `{env}` (`{env: .env}`) reste sur la carte, par
+/// prudence. Un commentaire `#` peut ouvrir une fausse chaîne (`# "` puis un
+/// saut de ligne) : avec un `#` hors chaîne, tout mot-clé compte, comme avant.
+/// La valeur d'une option à valeur (`--arg x -foo`) n'est pas une option.
 fn jq_lit_hors(args: &[String]) -> bool {
     let mot_cle = args.iter().any(|x| {
-        let code = code_jq(x);
-        ["import", "include", "modulemeta", "env", "ENV"]
-            .iter()
-            .any(|m| mot_appele_jq(&code, m))
+        let mots = ["import", "include", "modulemeta", "env", "ENV"];
+        match code_jq(x) {
+            Some(code) => mots.iter().any(|m| mot_appele_jq(&code, m)),
+            None => mots.iter().any(|m| mot_entier(x, m)),
+        }
     });
     let mut fichier = false;
     let mut i = 0;
@@ -3536,8 +3539,10 @@ fn jq_lit_hors(args: &[String]) -> bool {
 }
 
 /// Code d'un filtre jq, sans le contenu de ses chaînes : chaque chaîne devient
-/// `""`, mais ses interpolations `\( … )` restent, car c'est du code.
-fn code_jq(texte: &str) -> String {
+/// `""`, mais ses interpolations `\( … )` restent, car c'est du code. `None` si
+/// un commentaire `#` apparaît hors chaîne : il peut cacher ou découvrir du code
+/// (relecture de KOB-516).
+fn code_jq(texte: &str) -> Option<String> {
     let c: Vec<char> = texte.chars().collect();
     let mut code = String::new();
     let mut i = 0;
@@ -3567,6 +3572,7 @@ fn code_jq(texte: &str) -> String {
                     dans_chaine = true;
                     code.push('"');
                 }
+                '#' => return None,
                 '(' => {
                     if let Some(p) = interpolations.last_mut() {
                         *p += 1;
@@ -3589,11 +3595,12 @@ fn code_jq(texte: &str) -> String {
         }
         i += 1;
     }
-    code
+    Some(code)
 }
 
 /// `mot` est-il appelé dans le code jq (`mot_entier`), hors d'une clé d'objet
-/// (`{env: 1}`, `{a: 1, include: 2}` : après `{` ou `,`, suivi de `:`) ?
+/// (`{env: 1}`, `{a: 1, include: 2}` : après `{` ou `,`, suivi de `:`, et dans
+/// un objet, pas dans une tranche `.[1,env:]`, relecture de KOB-516) ?
 fn mot_appele_jq(code: &str, mot: &str) -> bool {
     let ident = |c: char| c.is_alphanumeric() || c == '_';
     code.match_indices(mot).any(|(i, _)| {
@@ -3604,7 +3611,20 @@ fn mot_appele_jq(code: &str, mot: &str) -> bool {
             .next_back()
             .is_some_and(|c| ident(c) || c == '.')
             && !code[i + mot.len()..].chars().next().is_some_and(ident);
-        let cle = (avant.ends_with('{') || avant.ends_with(',')) && apres.starts_with(':');
+        // Crochet ouvrant le plus proche : la clé n'existe que dans un objet.
+        let mut pile = Vec::new();
+        for c in code[..i].chars() {
+            match c {
+                '{' | '[' | '(' => pile.push(c),
+                '}' | ']' | ')' => {
+                    pile.pop();
+                }
+                _ => {}
+            }
+        }
+        let cle = pile.last() == Some(&'{')
+            && (avant.ends_with('{') || avant.ends_with(','))
+            && apres.starts_with(':');
         entier && !cle
     })
 }
@@ -7831,6 +7851,10 @@ mod tests {
             "jq -nf prog",
             "jq -L dir . in.txt",
             "jq --arg x y -f prog in.txt",
+            "jq -n 'path(.[1,env:])'",
+            "jq -n '# \"\nenv'",
+            "jq -n '# \"\ninclude \"m\"; .'",
+            "jq -n 'path(.[ # {\nenv:])'",
             "uniq -c in out",
             "uniq -cf 1 in out",
         ] {
