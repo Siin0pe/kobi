@@ -3687,10 +3687,29 @@ fn positionnels_uniq(args: &[String]) -> usize {
                     .char_indices()
                     .find(|(_, c)| matches!(c, 'f' | 's' | 'w'))
                     .is_some_and(|(j, _)| j + 2 == x.len());
+            // GNU accepte les options longues abrégées (`--skip-field 1`), et une
+            // valeur collée par `=` ne prend pas le mot suivant (KOB-535). Un
+            // préfixe qui peut aussi désigner une option sans valeur, chez GNU ou
+            // chez BSD (`--c` est `--count` sous macOS), ne saute rien : `uniq --c
+            // in out` écrit `out` (relecture de KOB-535).
+            const SANS_VALEUR: &[&str] = &[
+                "--count",
+                "--repeated",
+                "--all-repeated",
+                "--ignore-case",
+                "--unique",
+                "--zero-terminated",
+                "--group",
+                "--help",
+                "--version",
+            ];
+            let nom = x.split('=').next().unwrap_or(x);
             let a_valeur = groupe_a_valeur
-                || ["--skip-fields", "--skip-chars", "--check-chars"]
-                    .iter()
-                    .any(|o| x == o);
+                || (!x.contains('=')
+                    && !SANS_VALEUR.iter().any(|o| o.starts_with(nom))
+                    && ["--skip-fields", "--skip-chars", "--check-chars"]
+                        .iter()
+                        .any(|o| abrege(x, o)));
             if a_valeur {
                 i += 1;
             }
@@ -9054,6 +9073,35 @@ mod tests {
                 assert!(!r.contains("non analysable"), "{ligne} : {r}");
                 assert!(!r.contains(KOBI), "{ligne} : {r}");
             }
+        }
+    }
+
+    /// KOB-535 : GNU uniq accepte les options longues abrégées ; leur valeur n'est
+    /// pas un second fichier.
+    #[test]
+    fn uniq_options_longues_abregees() {
+        for ligne in [
+            "uniq --skip-field 1 in.txt",
+            "uniq --skip-c 2 in.txt",
+            "uniq --check 8 in.txt",
+            "uniq --skip-field=1 in.txt",
+            "uniq -c --skip-f 1 --check-c 3 in.txt",
+        ] {
+            assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+            assert_eq!(ps(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+        // Deux vrais fichiers : toujours sur la carte.
+        for ligne in [
+            "uniq --skip-field 1 in out",
+            "uniq --skip-field=1 in out",
+            "uniq -- in -sortie",
+            "uniq --count in out",
+            // `--c` est `--count` sous BSD (macOS) : `in` et `out` sont deux fichiers.
+            "uniq --c in out",
+            "uniq --s 1 in out",
+            "uniq --ch 1 in out",
+        ] {
+            assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne}");
         }
     }
 
