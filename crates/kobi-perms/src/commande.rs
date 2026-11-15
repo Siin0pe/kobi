@@ -2897,19 +2897,32 @@ fn commande_sans_plancher(
     // d'écrire ces fichiers ; s'ils existent déjà, toute commande jq passe par la
     // carte. Tous les dossiers personnels possibles sont regardés : sous Windows,
     // jq lit `HOME` avant `USERPROFILE` (relecture de KOB-525).
-    if nom == "jq"
-        && avis.classe == Classe::Lecture
-        && ctx
+    // Un dossier `~/.jq` (modules) n'est pas chargé : une fonction n'y est prise que
+    // par un `import`, déjà sur la carte (KOB-534). Tout le reste l'est : fichier,
+    // lien vers un fichier, mais aussi FIFO ou lien vers `/dev/stdin` (relecture de
+    // KOB-534, vu avec jq 1.6) : « existe et n'est pas un dossier ».
+    let charge = |p: std::path::PathBuf| std::fs::metadata(p).is_ok_and(|m| !m.is_dir());
+    if nom == "jq" && avis.classe == Classe::Lecture {
+        let trouve = ctx
             .dossiers_personnels
             .iter()
             // Un `HOME` relatif se lit depuis le dossier de la commande, comme jq.
             .map(|h| cwd.join(h))
-            .any(|h| h.join(".jq").exists() || h.join("jq").join("main.jq").exists())
-    {
-        return Avis::ecriture(
-            Genre::Commande,
-            "Vous avez un fichier ~/.jq : jq le charge, et ses fonctions peuvent lire vos variables d'environnement ou des fichiers.",
-        );
+            .find_map(|h| {
+                if charge(h.join(".jq")) {
+                    Some("~/.jq")
+                } else if charge(h.join("jq").join("main.jq")) {
+                    Some("~/jq/main.jq")
+                } else {
+                    None
+                }
+            });
+        if let Some(fichier) = trouve {
+            return Avis::ecriture(
+                Genre::Commande,
+                format!("Vous avez un fichier {fichier} : jq le charge, et ses fonctions peuvent lire vos variables d'environnement ou des fichiers."),
+            );
+        }
     }
     // Garde-fou en attendant KOB-469 (KOB-473) : une lecture git peut lancer
     // un programme configuré dans le dépôt (`core.fsmonitor` sur status et
