@@ -7033,6 +7033,7 @@ mod tests {
             "sed -n /a?/p f",
             "sed -n /[ab]/p f",
             "sed -n 1,/x*/p f",
+            "sed -n 1,/x*/,/e*/p f",
             "sed -n -- /t*/p f",
         ] {
             assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne}");
