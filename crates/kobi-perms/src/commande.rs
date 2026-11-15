@@ -4323,6 +4323,22 @@ fn chemins(
     }
 }
 
+/// Premier `-Filter` (ou abréviation) dont la valeur contient un séparateur de
+/// dossier : sa position, son nombre de mots (`-Filter x` : 2, `-Filter:x` : 1) et
+/// sa valeur.
+fn filter_avec_dossier(args: &[String]) -> Option<(usize, usize, String)> {
+    args.iter().enumerate().find_map(|(i, x)| {
+        if !abrege_ps(x, "-filter") {
+            return None;
+        }
+        let (n, v) = match x.split_once(':') {
+            Some((_, v)) => (1, v),
+            None => (2, args.get(i + 1)?.as_str()),
+        };
+        v.contains(['/', '\\']).then(|| (i, n, v.to_owned()))
+    })
+}
+
 fn chemins_un_par_un(
     nom: &str,
     args: &[String],
@@ -4357,6 +4373,34 @@ fn chemins_un_par_un(
     if ps {
         if let Some(x) = args.iter().find(|x| lecteur_ps(x) || fournisseur_ps(x)) {
             return Avis::refus(format!("{x} est hors des dossiers de code déclarés"));
+        }
+    }
+    // `-Filter` d'une cmdlet est passé au système de fichiers : sous pwsh 7, sa
+    // partie dossier est suivie (`gci -Filter ../dehors/* | gc` lit hors du
+    // dossier, sonde #506). Une valeur qui contient un séparateur passe par la
+    // carte (KOB-537).
+    if ps && !exe && !est_natif_pwsh(nom, cfg!(windows)) {
+        if let Some((i, n, v)) = filter_avec_dossier(args) {
+            // Le reste de la ligne est jugé aussi : un chemin hors des dossiers
+            // reste un refus.
+            let garde = |k: &usize| *k < i || *k >= i + n;
+            let reste: Vec<String> = args
+                .iter()
+                .enumerate()
+                .filter(|(k, _)| garde(k))
+                .map(|(_, x)| x.clone())
+                .collect();
+            let jokers_reste: Vec<bool> = jokers
+                .iter()
+                .enumerate()
+                .filter(|(k, _)| garde(k))
+                .map(|(_, j)| *j)
+                .collect();
+            return Avis::ecriture(
+                Genre::Commande,
+                format!("le filtre `{v}` contient un dossier : PowerShell peut lister ailleurs que dans le dossier demandé"),
+            )
+            .pire(chemins_un_par_un(nom, &reste, &jokers_reste, shell, ctx, cwd, exe));
         }
     }
     // Motif donné par une option (`grep /etc/passwd -e root`) : tous les
