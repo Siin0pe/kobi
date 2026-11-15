@@ -130,6 +130,21 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
             format!("`{motif}` : zsh l'étend en noms de fichiers numériques, en nombre inconnu"),
         ));
     }
+    // `^` et `#` de zsh `EXTENDED_GLOB` : `s#` (zéro ou plusieurs `s`), `x^y`
+    // (x suivi de tout sauf y) ou `HEAD^` désignent des fichiers que ni les
+    // chemins, ni `cd`, ni les redirections ne savent étendre ; un lien qui
+    // sort y était lu (`cat s#`, `cd l# && cat secret`, `cat < s#`, relecture
+    // de KOB-504). Toute la ligne passe par la carte ; un refus garde sa priorité.
+    if let Ok(Decoupage {
+        joker_etendu: Some(mot),
+        ..
+    }) = &decoupe
+    {
+        return avis.pire(Avis::ecriture(
+            Genre::Indetermine,
+            format!("`{mot}` : zsh (`EXTENDED_GLOB`) en fait d'autres chemins, non vérifiés"),
+        ));
+    }
     let joker = match decoupe {
         Ok(Decoupage {
             joker: Some(mot), ..
@@ -442,6 +457,9 @@ struct Decoupage {
     /// Premier joker numérique de zsh (`<->`, `<1-9>`), découpé en
     /// redirections comme le fait bash (KOB-491).
     joker_zsh: Option<String>,
+    /// Premier mot Bash avec un `^`, ou un `#` dans le mot, non cité : jokers
+    /// de zsh `EXTENDED_GLOB` (relecture de KOB-504).
+    joker_etendu: Option<String>,
 }
 
 /// Découpe la ligne en jetons. Refuse ce qui demanderait d'exécuter du code
@@ -451,6 +469,7 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
     let echap = if ps { '`' } else { '\\' };
     let mut joker = None;
     let mut joker_zsh = None;
+    let mut joker_etendu = None;
     let mut jetons = Vec::new();
     let mut mot = String::new();
     let mut dans_mot = false;
@@ -907,8 +926,18 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
                 return Err(format!("blanc inhabituel U+{:04X} : à valider", x as u32))
             }
             // Bash étend ce joker non cité : noté, puis jugé par `analyser`
-            // (KOB-489) et par `commande` (KOB-491).
-            x if !ps && matches!(x, '*' | '?' | '[') => {
+            // (KOB-489) et par `commande` (KOB-491). zsh avec `EXTENDED_GLOB`
+            // (option de l'utilisateur, que l'outil Bash charge) étend aussi
+            // `^x` (tout sauf x), `x#` et `a~b` : `sed -n 1,/^y/,/^y/p f` y
+            // exécutait une commande, `grep -v /root/.ssh/^x f` lisait le
+            // dossier (relecture de KOB-504). `#` et `~` en tête de mot sont
+            // le commentaire et le tilde, traités à part.
+            x if !ps
+                && (matches!(x, '*' | '?' | '[' | '^') || (dans_mot && matches!(x, '#' | '~'))) =>
+            {
+                if matches!(x, '^' | '#') {
+                    joker_etendu.get_or_insert_with(|| format!("{mot}{x}"));
+                }
                 if joker_peut_donner_une_option(&mot) {
                     joker.get_or_insert_with(|| format!("{mot}{x}"));
                 }
@@ -958,6 +987,7 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
         tiret_unicode: tiret_unicode.take(),
         a_joker: a_joker.take(),
         joker_zsh,
+        joker_etendu,
     })
 }
 
@@ -2301,7 +2331,7 @@ fn commande_sans_plancher(
             },
         );
     }
-    if let Some(a) = options_interdites(&nom, args, shell) {
+    if let Some(a) = options_interdites(&nom, args, jokers.get(1..).unwrap_or_default(), shell) {
         return a;
     }
     // `where` est le programme `where.exe` sauf sous PowerShell, où seul le
@@ -2709,7 +2739,8 @@ const SOURCE_LIBRE: &[&str] = &[
 ];
 
 /// Options ou sous-commandes qui écrivent, par commande.
-fn options_interdites(nom: &str, args: &[String], shell: Shell) -> Option<Avis> {
+/// `jokers` suit `args` : un argument qui porte un joker que le shell étend.
+fn options_interdites(nom: &str, args: &[String], jokers: &[bool], shell: Shell) -> Option<Avis> {
     let a = |s: &str| args.iter().any(|x| x == s);
     let commence = |p: &str| args.iter().any(|x| x.starts_with(p));
     let ecrit = |raison: String| Some(Avis::ecriture(Genre::Commande, raison));
@@ -2847,7 +2878,7 @@ fn options_interdites(nom: &str, args: &[String], shell: Shell) -> Option<Avis> 
             let mut options = true;
             let mut script = None;
             let mut muet = false;
-            for x in args {
+            for (k, x) in args.iter().enumerate() {
                 if options && x == "--" {
                     options = false;
                 } else if options && x.starts_with('-') && x != "-" {
@@ -2871,11 +2902,18 @@ fn options_interdites(nom: &str, args: &[String], shell: Shell) -> Option<Avis> 
                         return ecrit(format!("`sed {x}` : option non vérifiée"));
                     }
                 } else {
-                    script = Some(x);
+                    script = Some((x, jokers.get(k) == Some(&true)));
                     break;
                 }
             }
-            let sur = script.is_some_and(|s| script_sed_sur(s)) && muet;
+            // Un joker non cité dans le script : le shell peut l'étendre en un
+            // chemin qui cache une commande (`sed -n /t*/,/x*/,/e*/p f` donne
+            // `/tmp/,/x\/,/e CMD #/p` si cet arbre existe, KOB-504).
+            // Sous PowerShell Windows, un sed de MSYS ou de Git relit lui-même
+            // sa ligne : `{ }`, `'` et `"` y deviennent des expansions et des
+            // guillemets que Kobi ne voit pas (relecture de KOB-504).
+            let msys = shell == Shell::PowerShell && cfg!(windows);
+            let sur = !msys && script.is_some_and(|(s, joker)| !joker && script_sed_sur(s)) && muet;
             if sur {
                 None
             } else {
@@ -6421,10 +6459,12 @@ mod tests {
             "git log -3 # les trois derniers",
             "ls \"crates/kobi-app\"",
             "ls crates\\ avec\\ espace",
-            // KOB-298 : commentaire seul en fin de ligne, `#` collé à un mot,
-            // `#` entre guillemets (même avec un saut de ligne entre eux).
+            // KOB-298 : commentaire seul en fin de ligne, `#` entre guillemets
+            // (même avec un saut de ligne entre eux). `#` collé à un mot non
+            // cité est un joker de zsh `EXTENDED_GLOB` (KOB-504) : voir
+            // `jokers_de_zsh_etendu`.
             "cat Cargo.toml # commentaire",
-            "ls crates/a#b",
+            "ls 'crates/a#b'",
             "grep -n '# titre' Cargo.toml",
             "grep -n \"#\" Cargo.toml",
             "grep -n '#\nx' Cargo.toml",
@@ -7026,6 +7066,106 @@ mod tests {
         assert_eq!(bash(r#"grep "a\.b" Cargo.toml"#).classe, Classe::Lecture);
         assert_eq!(bash(r#"rg "fn main\(" src"#).classe, Classe::Lecture);
         assert_eq!(bash(r#"echo "a\nb""#).classe, Classe::Lecture);
+    }
+
+    /// Relecture de KOB-504 : sous zsh avec `EXTENDED_GLOB`, `^`, `#` et `~`
+    /// non cités sont des jokers (vu avec le vrai zsh dans
+    /// `tests/sed_joker.rs`). Coût voulu : `grep ^fn f` non cité passe par la
+    /// carte ; cité, il reste une lecture.
+    #[test]
+    fn jokers_de_zsh_etendu() {
+        assert!(matches!(
+            bash("grep -v /root/.ssh/^x f").classe,
+            Classe::Refus(_)
+        ));
+        for ligne in [
+            "sed -n 1,/^y/,/^y/p f",
+            "sed -n /^fn/p f",
+            "uniq src/^x",
+            "rg a ^x",
+            "grep ^fn f",
+            "sed -n 1,/x#/p f",
+            "sed -n 1,/a~b/p f",
+        ] {
+            assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+        for ligne in [
+            "grep '^fn' f",
+            "grep \"^fn\" f",
+            "sed -n '/^fn/p' f",
+            "rg '^use' src",
+            "grep -c '^#' f",
+        ] {
+            assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+        // `#` dans un chemin : zsh en fait `s`, un lien qui sort ; jamais une lecture.
+        for ligne in [
+            "cat s#",
+            "cat l#/secret",
+            "cat ^x",
+            "cat d/^x",
+            "cat x^y",
+            "cat HEAD^",
+            "cd l# && cat secret",
+            "cd x^y && cat secret",
+            "cat < s#",
+            "cat < l#/secret",
+            "git show HEAD^",
+        ] {
+            assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+        // `a~b` sans autre joker : zsh laisse le mot tel quel.
+        for ligne in ["git show HEAD~1 --stat", "cat a~b"] {
+            assert!(!bash(ligne).raison.contains("EXTENDED_GLOB"), "{ligne}");
+        }
+        // Coût voulu (KOB-504) : `#` collé à un nom non cité passe par la carte.
+        assert_ne!(bash("ls crates/a#b").classe, Classe::Lecture);
+        // PowerShell hors de cette règle.
+        assert_eq!(
+            ps("Select-String -Pattern '^fn' -Path f").classe,
+            Classe::Lecture
+        );
+    }
+
+    /// Relecture de KOB-504 : sous PowerShell Windows, un sed de MSYS relit
+    /// sa ligne (`{ }`, guillemets) : jamais une lecture. Ailleurs, inchangé.
+    #[test]
+    fn sed_sous_powershell_windows_sur_la_carte() {
+        // Cité : sans guillemets, `1,20p` serait un tableau PowerShell.
+        let c = ps("sed -n '1,20p' f").classe;
+        if cfg!(windows) {
+            assert_ne!(c, Classe::Lecture);
+        } else {
+            assert_eq!(c, Classe::Lecture);
+        }
+    }
+
+    /// KOB-504 : un joker non cité dans le script de `sed` peut devenir un
+    /// chemin qui cache une commande `e` ; cité, il reste un motif.
+    #[test]
+    fn joker_dans_le_script_de_sed_sur_la_carte() {
+        for ligne in [
+            "sed -n /t*/,/x*/,/e*/p f",
+            "sed -n /t*/p f",
+            "sed -n /a?/p f",
+            "sed -n /[ab]/p f",
+            "sed -n 1,/x*/p f",
+            "sed -n 1,/x*/,/e*/p f",
+            "sed -n -- /t*/p f",
+        ] {
+            assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+        for ligne in [
+            "sed -n '/t*/p' f",
+            "sed -n \"/a?/p\" f",
+            "sed -n '/t*/,/x*/p' f",
+            "sed -n /todo/p f",
+            "sed -n 1,20p f",
+            "sed -n '$p' f",
+            "sed -n /x/p src/*.rs",
+        ] {
+            assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+        }
     }
 
     /// KOB-503 : le shell remplace un motif à joker par des chemins ; le
