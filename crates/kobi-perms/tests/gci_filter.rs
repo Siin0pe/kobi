@@ -126,13 +126,20 @@ fn filtre_positionnel_depuis_un_sous_dossier() {
         "gci -d .. ../dehors/*",
         "gci .. -Filter: ../dehors/* | gc",
         "Get-ChildItem -LiteralPath .. ../dehors/* | gc",
+        // Deuxième relecture : option à valeur inconnue, tableau, pipe.
+        "gci -ea 0 .. ../dehors/* | gc",
+        "gci -ErrorAction SilentlyContinue .. ../dehors/* | gc",
+        "gci .,.. ../dehors/* | gc",
+        "gci -Path .,.. ../dehors/* | gc",
+        "gi .. | gci -Filter ../dehors/* | gc",
     ];
     for ligne in lignes {
         assert_ne!(classe_depuis(ligne, &ici, &sub), Classe::Lecture, "{ligne}");
     }
     // Le vrai pwsh lit bien le fichier du dehors (la forme `-Recurse` le lit aussi,
     // mais sort en erreur sur les dossiers qu'elle ne trouve pas).
-    for ligne in &lignes[..3] {
+    // Les tableaux (`.,..`) lisent aussi le secret, mais pwsh sort en erreur sur `.`.
+    for ligne in [0, 1, 2, 8, 9, 12].map(|k| lignes[k]) {
         let Some(t) = pwsh(ligne, &sub) else {
             return;
         };

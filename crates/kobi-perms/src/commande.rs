@@ -355,6 +355,20 @@ fn analyser_sans_joker(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
                             "parcours récursif sur des chemins venus d'un `|` : sur la carte",
                         ));
                     }
+                    // `gci -Filter ../x` en aval d'un `|` part des dossiers reçus,
+                    // qu'on ne voit pas ici : un filtre avec un dossier y passe par
+                    // la carte (relecture de KOB-537).
+                    if shell == Shell::PowerShell
+                        && apres_pipe
+                        && !mots[0].to_lowercase().ends_with(".exe")
+                        && !est_natif_pwsh(nom, cfg!(windows))
+                        && !filtres_avec_dossier(nom, &mots[1..]).0.is_empty()
+                    {
+                        avis = avis.pire(Avis::ecriture(
+                            Genre::Commande,
+                            format!("`{nom}` filtre avec un dossier des chemins venus d'un `|` : sur la carte"),
+                        ));
+                    }
                     // PowerShell : une cmdlet qui change en fichier une chaîne
                     // reçue par le `|` (`echo C:\x | Get-Item | Get-Content`)
                     // lit un chemin qu'on n'a pas jugé, sauf si l'amont ne
@@ -4323,26 +4337,27 @@ fn chemins(
     }
 }
 
-/// Premier filtre d'une cmdlet dont la valeur contient un séparateur de dossier,
-/// et les dossiers d'où il peut partir. Le filtre est la valeur de `-Filter`
-/// (abréviations ; `-Filter:x`, ou `-Filter: x` que pwsh lie au mot suivant), ou,
-/// pour `Get-ChildItem`, son deuxième positionnel (le premier si `-Path` est
-/// nommé, relecture de KOB-537). Les bases sont le dossier courant (`.`), chaque
-/// positionnel et chaque valeur de `-Path` : un tableau `a,b` arrive en mots
-/// séparés, on ne sait pas lequel est le chemin.
-fn filter_avec_dossier(nom: &str, args: &[String]) -> Option<(String, Vec<String>)> {
+/// Filtres possibles d'une cmdlet qui contiennent un séparateur de dossier, et
+/// les dossiers d'où ils peuvent partir (relecture de KOB-537). Un filtre est la
+/// valeur de `-Filter` (abréviations sauf `-File` ; `-Filter:x`, ou `-Filter: x`
+/// que pwsh lie au mot suivant) ou, pour `Get-ChildItem`, tout positionnel : on
+/// ne cherche pas son rang, qu'une option à valeur inconnue (`-ea 0`) ou un
+/// tableau (`.,..`, arrivé en mots séparés) décaleraient. Les bases sont le
+/// dossier courant (`.`), chaque positionnel et chaque valeur de `-Path`.
+fn filtres_avec_dossier(nom: &str, args: &[String]) -> (Vec<String>, Vec<String>) {
     let dossier = |v: &str| v.contains(['/', '\\']);
-    // `-File` est un interrupteur, pas `-Filter` ; `-fi` et `-fil` sont `-Filter`.
     let est_filter = |o: &str| abrege_ps(o, "-filter") && !o.eq_ignore_ascii_case("-file");
-    let mut filtre = None;
+    let gci = matches!(nom, "get-childitem" | "gci" | "dir" | "ls");
+    let mut filtres = Vec::new();
     let mut bases = vec![".".to_owned()];
-    let mut positionnels = Vec::new();
-    let mut path_nomme = false;
     let mut i = 0;
     while i < args.len() {
         let x = args[i].as_str();
         if !(x.starts_with('-') && x.len() > 1) {
-            positionnels.push(x);
+            bases.push(x.to_owned());
+            if gci && dossier(x) {
+                filtres.push(x.to_owned());
+            }
             i += 1;
             continue;
         }
@@ -4354,16 +4369,7 @@ fn filter_avec_dossier(nom: &str, args: &[String]) -> Option<(String, Vec<String
             || abrege_ps(o, "-literalpath")
             || o.eq_ignore_ascii_case("-lp")
             || o.eq_ignore_ascii_case("-pspath");
-        path_nomme |= path;
-        // Seules les options sûres d'avoir une valeur sautent le mot suivant :
-        // sauter un mot à tort cacherait le vrai filtre.
-        let a_valeur = path
-            || est_filter(o)
-            || est_depth(o)
-            || (o.len() >= 3
-                && ["-include", "-exclude", "-attributes"]
-                    .iter()
-                    .any(|a| abrege_ps(o, a)));
+        let a_valeur = path || est_filter(o);
         let valeur = colle.or_else(|| {
             a_valeur
                 .then(|| args.get(i + 1).map(String::as_str))
@@ -4373,27 +4379,13 @@ fn filter_avec_dossier(nom: &str, args: &[String]) -> Option<(String, Vec<String
             if path {
                 bases.push(v.to_owned());
             }
-            if est_filter(o) && filtre.is_none() && dossier(v) {
-                filtre = Some(v.to_owned());
+            if est_filter(o) && dossier(v) {
+                filtres.push(v.to_owned());
             }
         }
         i += if a_valeur && colle.is_none() { 2 } else { 1 };
     }
-    if filtre.is_none() && matches!(nom, "get-childitem" | "gci" | "dir" | "ls") {
-        let rang = if path_nomme { 0 } else { 1 };
-        filtre = positionnels
-            .get(rang)
-            .filter(|v| dossier(v))
-            .map(|v| (*v).to_owned());
-    }
-    let filtre = filtre?;
-    bases.extend(
-        positionnels
-            .iter()
-            .filter(|p| **p != filtre)
-            .map(|p| (*p).to_owned()),
-    );
-    Some((filtre, bases))
+    (filtres, bases)
 }
 
 fn chemins_un_par_un(
@@ -4438,8 +4430,9 @@ fn chemins_un_par_un(
     // possible de la commande) suivie du filtre, est jugé comme un chemin
     // (KOB-537).
     if ps && !exe && !est_natif_pwsh(nom, cfg!(windows)) {
-        if let Some((v, bases)) = filter_avec_dossier(nom, args) {
-            for b in bases {
+        let (filtres, bases) = filtres_avec_dossier(nom, args);
+        for v in &filtres {
+            for b in bases.iter().filter(|b| *b != v) {
                 let liste = if b == "." {
                     v.clone()
                 } else {
