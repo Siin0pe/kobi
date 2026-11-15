@@ -130,6 +130,21 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
             format!("`{motif}` : zsh l'étend en noms de fichiers numériques, en nombre inconnu"),
         ));
     }
+    // `^` et `#` de zsh `EXTENDED_GLOB` : `s#` (zéro ou plusieurs `s`), `x^y`
+    // (x suivi de tout sauf y) ou `HEAD^` désignent des fichiers que ni les
+    // chemins, ni `cd`, ni les redirections ne savent étendre ; un lien qui
+    // sort y était lu (`cat s#`, `cd l# && cat secret`, `cat < s#`, relecture
+    // de KOB-504). Toute la ligne passe par la carte ; un refus garde sa priorité.
+    if let Ok(Decoupage {
+        joker_etendu: Some(mot),
+        ..
+    }) = &decoupe
+    {
+        return avis.pire(Avis::ecriture(
+            Genre::Indetermine,
+            format!("`{mot}` : zsh (`EXTENDED_GLOB`) en fait d'autres chemins, non vérifiés"),
+        ));
+    }
     let joker = match decoupe {
         Ok(Decoupage {
             joker: Some(mot), ..
@@ -442,6 +457,9 @@ struct Decoupage {
     /// Premier joker numérique de zsh (`<->`, `<1-9>`), découpé en
     /// redirections comme le fait bash (KOB-491).
     joker_zsh: Option<String>,
+    /// Premier mot Bash avec un `^`, ou un `#` dans le mot, non cité : jokers
+    /// de zsh `EXTENDED_GLOB` (relecture de KOB-504).
+    joker_etendu: Option<String>,
 }
 
 /// Découpe la ligne en jetons. Refuse ce qui demanderait d'exécuter du code
@@ -451,6 +469,7 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
     let echap = if ps { '`' } else { '\\' };
     let mut joker = None;
     let mut joker_zsh = None;
+    let mut joker_etendu = None;
     let mut jetons = Vec::new();
     let mut mot = String::new();
     let mut dans_mot = false;
@@ -916,6 +935,9 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
             x if !ps
                 && (matches!(x, '*' | '?' | '[' | '^') || (dans_mot && matches!(x, '#' | '~'))) =>
             {
+                if matches!(x, '^' | '#') {
+                    joker_etendu.get_or_insert_with(|| format!("{mot}{x}"));
+                }
                 if joker_peut_donner_une_option(&mot) {
                     joker.get_or_insert_with(|| format!("{mot}{x}"));
                 }
@@ -965,6 +987,7 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
         tiret_unicode: tiret_unicode.take(),
         a_joker: a_joker.take(),
         joker_zsh,
+        joker_etendu,
     })
 }
 
@@ -3566,28 +3589,10 @@ fn chemins(
             && x.split_once('=')
                 .is_some_and(|(option, _)| !FILTRES_DE_NOMS.contains(&option))
     });
-    let avis = match valeur_a_joker {
+    match valeur_a_joker {
         Some((x, _)) => avis.pire(Avis::ecriture(
             Genre::Indetermine,
             format!("`{x}` : le shell peut en faire le nom d'un fichier du dossier, dont la valeur sort"),
-        )),
-        None => avis,
-    };
-    // Joker de zsh `EXTENDED_GLOB` que `juger_chemin` n'étend pas : `s#` (zéro
-    // ou plusieurs `s`) désigne `s`, un lien qui sort (`cat s#`, relecture de
-    // KOB-504), et `^x` en tête d'un composant tout sauf `x`. Sur la carte, un
-    // refus garde sa priorité. `a~b` sans autre joker reste `a` tel quel, et un
-    // `^` au milieu n'est pas une négation : `git show HEAD~1`, `HEAD^` restent
-    // des lectures.
-    let joker_zsh = args.iter().zip(jokers).find(|(x, &joker)| {
-        joker
-            && !x.starts_with('-')
-            && (x.contains('#') || x.split('/').any(|c| c.starts_with('^')))
-    });
-    match joker_zsh {
-        Some((x, _)) => avis.pire(Avis::ecriture(
-            Genre::Indetermine,
-            format!("`{x}` : zsh (`EXTENDED_GLOB`) peut en faire d'autres chemins, non vérifiés"),
         )),
         None => avis,
     }
@@ -7085,11 +7090,23 @@ mod tests {
             assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne}");
         }
         // `#` dans un chemin : zsh en fait `s`, un lien qui sort ; jamais une lecture.
-        for ligne in ["cat s#", "cat l#/secret", "cat ^x", "cat d/^x"] {
+        for ligne in [
+            "cat s#",
+            "cat l#/secret",
+            "cat ^x",
+            "cat d/^x",
+            "cat x^y",
+            "cat HEAD^",
+            "cd l# && cat secret",
+            "cd x^y && cat secret",
+            "cat < s#",
+            "cat < l#/secret",
+            "git show HEAD^",
+        ] {
             assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne}");
         }
-        // `a~b` sans autre joker et `^` au milieu : pas de carte de zsh.
-        for ligne in ["git show HEAD~1 --stat", "git show HEAD^", "cat a~b"] {
+        // `a~b` sans autre joker : zsh laisse le mot tel quel.
+        for ligne in ["git show HEAD~1 --stat", "cat a~b"] {
             assert!(!bash(ligne).raison.contains("EXTENDED_GLOB"), "{ligne}");
         }
         // Coût voulu (KOB-504) : `#` collé à un nom non cité passe par la carte.

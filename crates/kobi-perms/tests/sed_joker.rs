@@ -100,33 +100,40 @@ fn zsh_extendedglob_joker_chapeau() {
     );
 }
 
-/// Seconde relecture de KOB-504 : sous zsh `extendedglob`, `s#` (zéro ou
-/// plusieurs `s`) désigne `s`, un lien vers un fichier extérieur. `cat s` est
-/// refusé ; `cat s#` ne doit jamais être une lecture.
+/// Relectures de KOB-504 : sous zsh `extendedglob`, `s#` (zéro ou plusieurs
+/// `s`) et `x^y` (x suivi de tout sauf y) désignent `s` et `x`, des liens qui
+/// sortent ; `cd l#` entre dans `l`, et `< s#` lit `s`. `cat s` est refusé ;
+/// aucune de ces lignes ne doit être une lecture.
 #[cfg(unix)]
 #[test]
-fn zsh_extendedglob_diese_suit_un_lien_qui_sort() {
+fn zsh_extendedglob_suit_un_lien_qui_sort() {
     let racine = tempfile::tempdir().unwrap();
     let code = racine.path().join("code");
+    let dehors = racine.path().join("dehors");
     std::fs::create_dir_all(&code).unwrap();
-    std::fs::write(racine.path().join("secret"), "LIGNE-SECRETE\n").unwrap();
-    std::os::unix::fs::symlink(racine.path().join("secret"), code.join("s")).unwrap();
-    let ligne = "cat s#";
-    match std::process::Command::new("zsh")
-        .args(["-f", "-c", &format!("setopt extendedglob; {ligne}")])
-        .current_dir(&code)
-        .output()
-    {
-        Ok(sortie) => {
-            let texte = String::from_utf8_lossy(&sortie.stdout);
-            assert!(texte.contains("LIGNE-SECRETE"), "{sortie:?}");
-        }
-        Err(_) => {
-            if cfg!(target_os = "macos") {
-                panic!("zsh absent sous macOS");
+    std::fs::create_dir_all(&dehors).unwrap();
+    std::fs::write(dehors.join("secret"), "LIGNE-SECRETE\n").unwrap();
+    std::os::unix::fs::symlink(dehors.join("secret"), code.join("s")).unwrap();
+    std::os::unix::fs::symlink(dehors.join("secret"), code.join("x")).unwrap();
+    std::os::unix::fs::symlink(&dehors, code.join("l")).unwrap();
+    let lignes = ["cat s#", "cat x^y", "cd l# && cat secret", "cat < s#"];
+    for ligne in lignes {
+        match std::process::Command::new("zsh")
+            .args(["-f", "-c", &format!("setopt extendedglob; {ligne}")])
+            .current_dir(&code)
+            .output()
+        {
+            Ok(sortie) => {
+                let texte = String::from_utf8_lossy(&sortie.stdout);
+                assert!(texte.contains("LIGNE-SECRETE"), "{ligne} : {sortie:?}");
+            }
+            Err(_) => {
+                if cfg!(target_os = "macos") {
+                    panic!("zsh absent sous macOS");
+                }
             }
         }
+        assert_ne!(classe(ligne, &code), Classe::Lecture, "{ligne}");
     }
     assert!(matches!(classe("cat s", &code), Classe::Refus(_)));
-    assert_ne!(classe(ligne, &code), Classe::Lecture);
 }
