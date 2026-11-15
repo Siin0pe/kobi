@@ -2424,11 +2424,22 @@ fn options_a_valeur(nom: &str) -> &'static [&'static str] {
 /// Renvoie `Some(true)` si sa valeur suit et est un motif, `Some(false)` si sa
 /// valeur est un fichier de motifs (vérifié comme un chemin).
 fn option_de_motif(nom: &str, x: &str) -> Option<bool> {
-    let bas = x.to_lowercase();
+    // Les programmes natifs distinguent la casse : `-E` de grep et de sed est un
+    // interrupteur, pas `-e` (relecture de KOB-541). Seuls les cmdlets l'ignorent.
+    let bas = if matches!(nom, "select-string" | "sls") {
+        x.to_lowercase()
+    } else {
+        x.to_owned()
+    };
     match bas.as_str() {
         // Le `-e` de jq est le code de sortie, pas un motif (KOB-487).
         "-e" if nom == "jq" => {}
-        "-e" | "--regexp" | "-pattern" | "-simplematch" => return Some(true),
+        // Un motif seulement pour les commandes qui le prennent ainsi. Ailleurs
+        // (`cat -e`, `od -e`, `less -e`, `ls -e` sous macOS), le mot suivant
+        // est un fichier lu, jugé comme un chemin (KOB-541).
+        "-e" if matches!(nom, "grep" | "egrep" | "fgrep" | "rg" | "sed") => return Some(true),
+        "--regexp" if matches!(nom, "grep" | "egrep" | "fgrep" | "rg") => return Some(true),
+        "-pattern" | "-simplematch" if matches!(nom, "select-string" | "sls") => return Some(true),
         "-f" | "--file" if matches!(nom, "grep" | "egrep" | "fgrep" | "rg" | "sed" | "jq") => {
             return Some(false)
         }
@@ -2443,17 +2454,25 @@ fn option_de_motif(nom: &str, x: &str) -> Option<bool> {
     if nom == "jq" && x.len() > 2 && x.starts_with('-') && !x.starts_with("--") && x.contains('f') {
         return Some(false);
     }
-    // Options courtes groupées (`-rne motif`, `-rf motifs.txt`).
-    if matches!(nom, "grep" | "egrep" | "fgrep" | "rg")
-        && x.len() > 2
-        && x.starts_with('-')
-        && !x.starts_with("--")
-    {
-        if x.ends_with('e') {
-            return Some(true);
-        }
-        if x.ends_with('f') {
-            return Some(false);
+    // Options courtes groupées (`-rne motif`, `-rf motifs.txt`) : la première
+    // lettre qui prend une valeur décide, et seulement si rien n'y est collé.
+    // `-vexyzzye` est `-v -e xyzzye` : le mot suivant reste un fichier, jugé
+    // (relecture de KOB-541).
+    if x.len() > 2 && x.starts_with('-') && !x.starts_with("--") {
+        let a_valeur = match nom {
+            "grep" | "egrep" | "fgrep" => "efmABCdD",
+            "rg" => "efmABCdDgtTjMEr",
+            _ => return None,
+        };
+        let reste = &x[1..];
+        if let Some((i, c)) = reste.char_indices().find(|(_, c)| a_valeur.contains(*c)) {
+            if i + c.len_utf8() == reste.len() {
+                match c {
+                    'e' => return Some(true),
+                    'f' => return Some(false),
+                    _ => {}
+                }
+            }
         }
     }
     None
@@ -4524,6 +4543,29 @@ fn chemins_un_par_un(
                     _ => {}
                 }
             }
+            // fd : `--base-directory` change son dossier de travail, et tous ses
+            // chemins relatifs avec : sur la carte. `--search-path` donne le
+            // dossier parcouru (relecture de KOB-541).
+            // `-C` en est la forme courte depuis fd 10.4, aussi dans un groupe
+            // (`-HC`, `-C../x`).
+            let court_c = x.starts_with('-') && !x.starts_with("--") && x.contains('C');
+            if nom == "fd"
+                && (x == "--base-directory" || x.starts_with("--base-directory=") || court_c)
+            {
+                return Avis::ecriture(
+                    Genre::Indetermine,
+                    "`fd --base-directory` change le dossier de départ de tous ses chemins : vérifié sur la carte",
+                );
+            }
+            if nom == "fd" && x == "--search-path" {
+                if let Some(d) = args.get(i + 1) {
+                    if let Some(avis) = juge(d) {
+                        return avis;
+                    }
+                }
+                i += 2;
+                continue;
+            }
             if nom == "git" && x == "-C" {
                 if let Some(d) = args.get(i + 1) {
                     if let Some(avis) = juge(d) {
@@ -4550,7 +4592,18 @@ fn chemins_un_par_un(
             }
             if options_a_valeur(nom)
                 .iter()
-                .any(|o| o.eq_ignore_ascii_case(&bas))
+                // Les programmes natifs distinguent la casse (`grep -E`, `du -D`,
+                // `tree -i` ne prennent pas de valeur, `-e`, `-d`, `-I` si) ; seuls
+                // les cmdlets de PowerShell l'ignorent (relecture de KOB-541).
+                .any(|o| {
+                    let cmdlet =
+                        shell == Shell::PowerShell && !exe && !est_natif_pwsh(nom, cfg!(windows));
+                    if cmdlet {
+                        o.eq_ignore_ascii_case(&bas)
+                    } else {
+                        *o == x.as_str()
+                    }
+                })
                 && !x.contains('=')
             {
                 i += 2;
