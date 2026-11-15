@@ -1411,13 +1411,32 @@ fn classe_d_accolades(suite: &[char]) -> bool {
     while let Some(&c) = suite.get(i) {
         match c {
             '}' => return vus > 0,
-            '\'' | '"' => match suite[i + 1..].iter().position(|&d| d == c) {
+            '\'' => match suite[i + 1..].iter().position(|&d| d == '\'') {
                 Some(n) => {
                     vus += n;
                     i += n + 1;
                 }
                 None => return false,
             },
+            // Entre guillemets doubles, `\"` est un `"` littéral (seconde
+            // relecture de KOB-524 : `x{"\"b"}` s'étendait en `x" xb`).
+            '"' => {
+                i += 1;
+                loop {
+                    match suite.get(i) {
+                        None => return false,
+                        Some('"') => break,
+                        Some('\\') => {
+                            vus += 1;
+                            i += 2;
+                        }
+                        Some(_) => {
+                            vus += 1;
+                            i += 1;
+                        }
+                    }
+                }
+            }
             '\\' => {
                 vus += 1;
                 i += 1;
@@ -7957,6 +7976,8 @@ mod tests {
             "cat x{a\"}\"}",
             "cat x{a\\ b}",
             "cat x{a\\;b}",
+            "uniq x{\"\\\"b\"}",
+            "cat x{\"a\\\"b\"}",
         ] {
             assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne}");
         }
