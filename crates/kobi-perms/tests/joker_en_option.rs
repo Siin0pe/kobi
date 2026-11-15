@@ -193,3 +193,67 @@ fn powershell_avec_les_outils_msys_dans_le_path() {
         );
     }
 }
+
+/// KOB-512 : un programme MSYS retire les guillemets d'un argument, et Windows
+/// PowerShell 5.1 ne protège pas les guillemets doubles d'une valeur (sonde #475).
+#[cfg(windows)]
+#[test]
+fn powershell_guillemets_retires_avant_le_programme() {
+    let chemin = format!(
+        r"C:\Program Files\Git\usr\bin;{}",
+        std::env::var("PATH").unwrap()
+    );
+    let lancer = |exe: &str, ligne: &str, dossier: &Path| {
+        let o = Command::new(exe)
+            .args(["-NoProfile", "-NonInteractive", "-Command", ligne])
+            .current_dir(dossier)
+            .env("PATH", &chemin)
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&o.stdout).into_owned()
+    };
+    let dossiers = || {
+        let d = tempfile::tempdir().unwrap();
+        let ici = d.path().join("ici");
+        std::fs::create_dir_all(&ici).unwrap();
+        std::fs::create_dir_all(d.path().join("dehors")).unwrap();
+        std::fs::write(d.path().join("dehors").join("b"), "SECRET_B\n").unwrap();
+        std::fs::write(ici.join("a"), "x\n").unwrap();
+        (d, ici)
+    };
+    // Lit hors du dossier sous les deux PowerShell.
+    for exe in ["powershell", "pwsh"] {
+        let (_d, ici) = dossiers();
+        let ligne = "head.exe \"'../dehors/b'\"";
+        assert!(
+            lancer(exe, ligne, &ici).contains("SECRET_B"),
+            "{exe} {ligne}"
+        );
+        assert_ne!(
+            classe(ligne, Shell::PowerShell, &ici),
+            Classe::Lecture,
+            "{ligne}"
+        );
+    }
+    // Windows PowerShell 5.1 seulement.
+    let (_d, ici) = dossiers();
+    let ligne = "head.exe '\"../dehors/b\"'";
+    assert!(
+        lancer("powershell", ligne, &ici).contains("SECRET_B"),
+        "{ligne}"
+    );
+    assert_ne!(
+        classe(ligne, Shell::PowerShell, &ici),
+        Classe::Lecture,
+        "{ligne}"
+    );
+    let (_d, ici) = dossiers();
+    let ligne = "sort.exe '\"--output=M\"' a";
+    lancer("powershell", ligne, &ici);
+    assert!(ici.join("M").exists(), "{ligne}");
+    assert_ne!(
+        classe(ligne, Shell::PowerShell, &ici),
+        Classe::Lecture,
+        "{ligne}"
+    );
+}
