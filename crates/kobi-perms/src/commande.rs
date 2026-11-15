@@ -107,6 +107,31 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
     // pour ne jamais affaiblir un refus, et sans lire le disque : la même ligne peut
     // créer le fichier (`touch -- --pre=x; rg a *`).
     let decoupe = decouper_en_notant(ligne, shell);
+    // Un programme natif peut recevoir le mot sans ses guillemets : MSYS les retire
+    // lui-même, et Windows PowerShell 5.1 ne protège pas les guillemets doubles
+    // (`head.exe "'../dehors/b'"` lit `../dehors/b`, sonde #475). La ligne sans
+    // ces guillemets est jugée aussi (KOB-512).
+    let avis = match &decoupe {
+        Ok(d) if shell == Shell::PowerShell => {
+            match sans_guillemets_pour_un_natif_pwsh(&d.jetons, cfg!(windows)) {
+                Some(Ok(autre)) => avis.pire(analyser_sans_joker(&autre, shell, ctx)),
+                Some(Err(mot)) => avis.pire(Avis::ecriture(
+                    Genre::Indetermine,
+                    format!(
+                        "`{mot}` : PowerShell 5.1 peut le passer découpé autrement au programme"
+                    ),
+                )),
+                None => avis,
+            }
+        }
+        _ => avis,
+    };
+    if !matches!(
+        avis.classe,
+        Classe::Lecture | Classe::Ecriture(Genre::Fichier | Genre::Commande)
+    ) {
+        return avis;
+    }
     // Un tiret Unicode : `decouper` le lit `-`, mais un programme natif le
     // reçoit tel quel (`grep x –e ../dehors` lisait le fichier extérieur,
     // sonde #457). Plancher, comme le joker : un refus reste un refus (KOB-498).
@@ -1052,13 +1077,7 @@ fn joker_pour_un_natif_pwsh(jetons: &[Jeton], windows: bool) -> Option<String> {
             Jeton::Op(_) => en_tete = true,
             Jeton::Redir(_) => {}
             Jeton::Mot(m) | Jeton::Cite(m) if en_tete => {
-                let nom = m.to_lowercase();
-                natif = !nom.contains('-')
-                    && !matches!(
-                        nom.as_str(),
-                        "gci" | "gc" | "dir" | "type" | "sls" | "where.exe"
-                    )
-                    && !(windows && ALIAS_CMDLETS_WINDOWS.contains(&nom.as_str()));
+                natif = est_natif_pwsh(m, windows);
                 en_tete = false;
             }
             Jeton::Mot(m) | Jeton::Cite(m) => {
@@ -1080,6 +1099,106 @@ fn joker_pour_un_natif_pwsh(jetons: &[Jeton], windows: bool) -> Option<String> {
         }
     }
     None
+}
+
+/// Le premier mot d'une commande PowerShell désigne-t-il un programme natif ? Les
+/// cmdlets ont un tiret, leurs alias portables et, sous Windows, les alias de
+/// cmdlets n'en sont pas.
+fn est_natif_pwsh(premier: &str, windows: bool) -> bool {
+    let nom = premier.to_lowercase();
+    !nom.contains('-')
+        && !matches!(
+            nom.as_str(),
+            "gci" | "gc" | "dir" | "type" | "sls" | "where.exe"
+        )
+        && !(windows && ALIAS_CMDLETS_WINDOWS.contains(&nom.as_str()))
+}
+
+/// Mot remis entre guillemets simples pour la ligne reconstruite, sauf s'il est fait
+/// de caractères sans effet hors guillemets. Les guillemets simples, typographiques
+/// compris (`‘ ’ ‚ ‛`, que PowerShell lit comme `'`), sont doublés : un `#`, un `;`
+/// ou un espace ne redécoupent pas la ligne (relecture de KOB-512).
+fn recite_pwsh(m: &str) -> String {
+    let simple = !m.is_empty()
+        && m.chars().all(|c| {
+            c.is_ascii_alphanumeric()
+                || matches!(
+                    c,
+                    '-' | '_' | '.' | '/' | '\\' | ':' | '=' | ',' | '+' | '%'
+                )
+        });
+    if simple {
+        return m.to_owned();
+    }
+    let mut r = String::from("'");
+    for c in m.chars() {
+        if matches!(c, '\'' | '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}') {
+            r.push(c);
+        }
+        r.push(c);
+    }
+    r.push('\'');
+    r
+}
+
+/// Sous PowerShell, ce qu'un programme natif peut recevoir une fois les guillemets
+/// de ses arguments retirés (MSYS les retire lui-même, Windows PowerShell 5.1 ne
+/// protège pas les guillemets doubles d'une valeur, KOB-512) :
+/// - `None` si aucun argument de programme natif n'a de guillemet ;
+/// - `Some(Ok(ligne))`, la ligne à juger aussi, chaque argument sans `'` ni `"` ;
+/// - `Some(Err(mot))` si un argument mêle `"` et un blanc : 5.1 le passe entre
+///   guillemets sans échapper le `"`, et le programme le redécoupe autrement.
+fn sans_guillemets_pour_un_natif_pwsh(
+    jetons: &[Jeton],
+    windows: bool,
+) -> Option<Result<String, String>> {
+    let mut morceaux = Vec::new();
+    let mut en_tete = true;
+    let mut apres_redirection = false;
+    let mut natif = false;
+    let mut change = false;
+    for j in jetons {
+        match j {
+            Jeton::Op(o) => {
+                en_tete = true;
+                apres_redirection = false;
+                morceaux.push(o.clone());
+            }
+            Jeton::Redir(r) => {
+                apres_redirection = true;
+                morceaux.push(r.clone());
+            }
+            Jeton::Mot(m) | Jeton::Cite(m) => {
+                // La cible d'une redirection n'est ni la commande ni un argument.
+                let cible = std::mem::take(&mut apres_redirection);
+                let valeur = match j {
+                    Jeton::Cite(_) => m.strip_prefix("./").unwrap_or(m),
+                    _ => m.as_str(),
+                };
+                if en_tete && !cible {
+                    natif = est_natif_pwsh(m, windows);
+                    en_tete = false;
+                    morceaux.push(match j {
+                        Jeton::Cite(_) => recite_pwsh(m),
+                        _ => m.clone(),
+                    });
+                } else if natif && !cible && valeur.contains(['\'', '"']) {
+                    if valeur.contains('"') && valeur.contains(char::is_whitespace) {
+                        return Some(Err(valeur.to_owned()));
+                    }
+                    change = true;
+                    let sans: String = valeur
+                        .chars()
+                        .filter(|c| !matches!(c, '\'' | '"'))
+                        .collect();
+                    morceaux.push(recite_pwsh(&sans));
+                } else {
+                    morceaux.push(recite_pwsh(m));
+                }
+            }
+        }
+    }
+    change.then(|| Ok(morceaux.join(" ")))
 }
 
 /// Ce mot, tiré d'un mot à joker, peut-il devenir une option ? Sans joker restant, il
@@ -7716,6 +7835,54 @@ mod tests {
             "gh auth status --active",
         ] {
             assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+            assert_eq!(ps(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+    }
+
+    /// KOB-512 : un programme MSYS retire lui-même les guillemets d'un argument, et
+    /// Windows PowerShell 5.1 passe les guillemets doubles d'une valeur sans les
+    /// protéger (sonde #475). La ligne sans ces guillemets est jugée aussi.
+    #[test]
+    fn guillemets_dans_la_valeur_d_un_natif_powershell() {
+        for ligne in [
+            "head.exe \"'../dehors/b'\"",
+            "head.exe '\"../dehors/b\"'",
+            "head.exe '\"..\\dehors\\b\"'",
+            // `cat` est l'alias de `Get-Content` sous Windows : `cat.exe` partout.
+            "cat.exe \"'/etc/passwd'\"",
+        ] {
+            assert!(matches!(ps(ligne).classe, Classe::Refus(_)), "{ligne}");
+        }
+        // Un argument qui redécouperait la ligne reconstruite (relecture de KOB-512).
+        for ligne in [
+            "head.exe '#' \"'../dehors/b'\"",
+            "head.exe 'x #' \"'../dehors/b'\"",
+            "head.exe \"'’ #\" \"'../dehors/b'\"",
+            "head.exe 'a;b' \"'../dehors/b'\"",
+        ] {
+            assert!(matches!(ps(ligne).classe, Classe::Refus(_)), "{ligne}");
+        }
+        for ligne in [
+            "sort.exe '#' '\"--output=M\"' a",
+            "rg x '#' \"'--pre=calc'\"",
+            "head.exe 'a b\"c ../dehors/b'",
+            "sort.exe 'a b\"c --output=M' x",
+            "sort.exe '\"--output=M\"' a",
+            "sort.exe \"'-o'\" M a",
+            "rg x \"'--pre=calc'\"",
+        ] {
+            assert_ne!(ps(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+        // Sans risque : le mot reste le même une fois les guillemets retirés, ou la
+        // commande est une cmdlet.
+        for ligne in [
+            "rg '\"version\"' Cargo.toml",
+            "rg '\"x\"' 'a{b}'",
+            "grep.exe \"'a b'\" src/a.rs",
+            "grep.exe \"'a'\" src/a.rs",
+            "Get-Content \"'x'\"",
+            "Select-String -Pattern '\"x\"' -Path a.txt",
+        ] {
             assert_eq!(ps(ligne).classe, Classe::Lecture, "{ligne}");
         }
     }
