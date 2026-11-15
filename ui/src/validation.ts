@@ -22,7 +22,7 @@
 import { t } from './i18n';
 import { tauri } from './native';
 import type { Stage } from './stage';
-import { cible, genre, type CarteValidation, type Statut } from './validation-detail';
+import { cible, genre, raisonLisible, type CarteValidation, type Statut } from './validation-detail';
 import './styles/validation.css';
 
 export { isValidation, type CarteValidation } from './validation-detail';
@@ -165,9 +165,14 @@ export class Validations {
     // Pourquoi Kobi demande (KOB-483) : sans elle, la carte ne dit pas le risque.
     // Coupée à 3 lignes ; le texte entier au survol, et un clic la déplie : une
     // raison grave ne peut pas rester cachée derrière l'ellipse.
+    // Sans les suffixes « sur la carte », les mots entre accents graves en code (KOB-514).
     if (carte.raison) {
-      const raison = el('div', 'kval-raison', carte.raison);
-      raison.title = carte.raison;
+      const lisible = raisonLisible(carte.raison);
+      const raison = el('div', 'kval-raison');
+      for (const morceau of lisible.morceaux) {
+        raison.append(morceau.code ? el('code', '', morceau.texte) : document.createTextNode(morceau.texte));
+      }
+      raison.title = lisible.texte;
       raison.addEventListener('click', () => raison.classList.toggle('deplie'));
       root.append(raison);
     }

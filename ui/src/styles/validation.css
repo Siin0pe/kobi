@@ -209,6 +209,11 @@
   overflow: hidden;
   cursor: pointer;
 }
+/* Les mots de la commande dans la raison (KOB-514). */
+.kval-raison code {
+  font-family: ui-monospace, monospace;
+  font-size: 0.95em;
+}
 .kval-raison.deplie {
   display: block;
   -webkit-line-clamp: unset;
