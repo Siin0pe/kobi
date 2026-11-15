@@ -132,27 +132,28 @@ fn flux_hors_de_1_a_6_est_un_mot() {
 
 /// KOB-494 : sous Windows, `> /dev/null` écrit le fichier `\dev\null` du lecteur
 /// courant quand le dossier `\dev` existe (sonde #455). Kobi ne le classe plus en
-/// lecture ; `> $null` reste une lecture.
+/// lecture ; `> $null` reste une lecture. Un `\dev\null` déjà présent (poste de
+/// développement) n'est jamais touché : seul le classement est alors vérifié.
 #[test]
 fn dev_null_ecrit_un_fichier_sous_windows() {
     use kobi_perms::{commande, Classe, Contexte, Shell};
+
+    /// Retire ce que le test a créé, même s'il panique.
+    struct Menage {
+        null: std::path::PathBuf,
+        dev: Option<std::path::PathBuf>,
+    }
+    impl Drop for Menage {
+        fn drop(&mut self) {
+            std::fs::remove_file(&self.null).ok();
+            if let Some(dev) = &self.dev {
+                std::fs::remove_dir(dev).ok();
+            }
+        }
+    }
+
     let d = dossier();
-    let lecteur = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
-    let dev = std::path::PathBuf::from(format!("{lecteur}\\dev"));
-    let existait = dev.exists();
-    std::fs::create_dir_all(&dev).unwrap();
     let ligne = "Get-Content a.txt > /dev/null";
-    let mut ecrit = Vec::new();
-    for exe in SHELLS {
-        std::fs::remove_file(dev.join("null")).ok();
-        jouer(exe, ligne, d.path());
-        ecrit.push((exe, dev.join("null").is_file()));
-        std::fs::remove_file(dev.join("null")).ok();
-    }
-    if !existait {
-        std::fs::remove_dir(&dev).ok();
-    }
-    assert!(ecrit.iter().all(|(_, e)| *e), "{ecrit:?}");
     let mut ctx = Contexte::new(vec![d.path().to_path_buf()]);
     ctx.cwd = Some(d.path().to_path_buf());
     assert_ne!(
@@ -163,4 +164,22 @@ fn dev_null_ecrit_un_fichier_sous_windows() {
         commande::analyser("Get-Content a.txt > $null", Shell::PowerShell, &ctx).classe,
         Classe::Lecture
     );
+    let lecteur = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
+    let dev = std::path::PathBuf::from(format!("{lecteur}\\dev"));
+    let null = dev.join("null");
+    if null.exists() {
+        // Un vrai fichier : ni écrasé ni effacé.
+        return;
+    }
+    let cree = !dev.exists();
+    std::fs::create_dir_all(&dev).unwrap();
+    let _menage = Menage {
+        null: null.clone(),
+        dev: cree.then(|| dev.clone()),
+    };
+    for exe in SHELLS {
+        jouer(exe, ligne, d.path());
+        assert!(null.is_file(), "{exe} n'a pas écrit {}", null.display());
+        std::fs::remove_file(&null).unwrap();
+    }
 }
