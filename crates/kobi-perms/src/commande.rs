@@ -477,6 +477,11 @@ fn decouper(ligne: &str, shell: Shell) -> Result<Vec<Jeton>, String> {
     decouper_en_notant(ligne, shell).map(|d| d.jetons)
 }
 
+/// Cible interne d'un `$null` non cité de PowerShell après une redirection
+/// (KOB-480, KOB-494). Le caractère nul la rend impossible à écrire : une ligne
+/// qui en contient un est refusée par `decouper_en_notant`.
+const NULL_POWERSHELL: &str = "\0$null";
+
 /// Les jetons de `decouper_en_notant`, plus ce que seul ce découpage voit :
 /// les guillemets.
 struct Decoupage {
@@ -504,6 +509,11 @@ struct Decoupage {
 /// Découpe la ligne en jetons. Refuse ce qui demanderait d'exécuter du code
 /// pour connaître la commande : substitutions, variables, blocs.
 fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
+    // Aucun shell ne passe un caractère nul dans un argument ; il marque la cible
+    // interne de `$null` (`NULL_POWERSHELL`).
+    if ligne.contains('\0') {
+        return Err("caractère nul dans la ligne".into());
+    }
     let ps = shell == Shell::PowerShell;
     let echap = if ps { '`' } else { '\\' };
     let mut joker = None;
@@ -724,10 +734,11 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
                 }
             }
             // `> $null` jette le flux sous PowerShell (KOB-480) : la cible devient
-            // `/dev/null`, seule cible nulle de `redirection`. Tout autre `$`, et
+            // `NULL_POWERSHELL`, que personne ne peut écrire, et non `/dev/null`,
+            // qui est un chemin sous Windows (KOB-494). Tout autre `$`, et
             // `'$null'` cité, qui écrit un fichier, restent à part.
             '$' if ps && !dans_mot && dollar_null_apres_redirection(&c, i, jetons.last()) => {
-                jetons.push(Jeton::Mot("/dev/null".into()));
+                jetons.push(Jeton::Mot(NULL_POWERSHELL.into()));
                 i += "null".len();
             }
             '$' => return Err("variable ou substitution `$` non analysable".into()),
@@ -1379,9 +1390,14 @@ fn redirection(
     let Some(cible) = cible else {
         return Err(Avis::ecriture(Genre::Indetermine, "redirection sans cible"));
     };
+    // `/dev/null` n'est le périphérique nul que hors de Windows : sous PowerShell
+    // Windows, c'est le fichier `\dev\null` du lecteur courant, écrit si `C:\dev`
+    // existe (KOB-494, sonde #455). Là, seul `$null` (`NULL_POWERSHELL`) jette.
+    let nul_unix = cible == "/dev/null" && (shell == Shell::Bash || !cfg!(windows));
+    let nul_ps = shell == Shell::PowerShell && cible == NULL_POWERSHELL;
     if r.contains('<') {
         // `< /dev/null` : une entrée vide, rien n'est lu.
-        if r == "<" && cible == "/dev/null" {
+        if r == "<" && (nul_unix || nul_ps) {
             return Ok(1);
         }
         // Lecture d'un fichier sur l'entrée : permise dans les dossiers.
@@ -1390,19 +1406,21 @@ fn redirection(
             Some(avis) => Err(avis),
         };
     }
-    // Seul `/dev/null` jette la sortie, plus `nul` pour PowerShell sous Windows.
-    // Partout ailleurs, `null`, `nul` ou `'$null'` cité sont des fichiers (KOB-475).
-    // `decouper` ramène ici un `$null` non cité de PowerShell à `/dev/null` (KOB-480).
-    // La cible est un chemin comme un autre : hors des dossiers, refusée (KOB-490).
+    // Seuls `/dev/null` (hors de Windows) et `$null` (PowerShell) jettent la sortie,
+    // plus `nul` pour PowerShell sous Windows. Partout ailleurs, `null`, `nul` ou
+    // `'$null'` cité sont des fichiers (KOB-475). `decouper` ramène ici un `$null`
+    // non cité à `NULL_POWERSHELL` (KOB-480, KOB-494). La cible est un chemin comme
+    // un autre : hors des dossiers, refusée (KOB-490).
     // Sous Bash, les flux standard ne sont pas des chemins à refuser : une écriture
     // de fichier. Sous PowerShell sur Windows, ce serait le fichier du lecteur courant.
     let flux = shell == Shell::Bash && matches!(cible, "/dev/stdout" | "/dev/stderr");
-    if cible != "/dev/null" && !flux {
+    if !nul_unix && !nul_ps && !flux {
         if let Some(avis) = juger_chemin(ctx, cible, cwd) {
             return Err(avis);
         }
     }
-    let poubelle = cible == "/dev/null"
+    let poubelle = nul_unix
+        || nul_ps
         || (shell == Shell::PowerShell && cfg!(windows) && cible.eq_ignore_ascii_case("nul"));
     if poubelle {
         Ok(1)
@@ -7417,6 +7435,38 @@ mod tests {
         assert_ne!(bash("out-null").classe, Classe::Lecture);
     }
 
+    /// KOB-494 : sous PowerShell Windows, `> /dev/null` écrit le fichier
+    /// `\dev\null` du lecteur courant (vu avec le vrai PowerShell dans
+    /// `tests/redirection_null_powershell.rs`) ; seul `$null` y jette le flux.
+    #[test]
+    fn dev_null_sous_powershell_windows() {
+        for ligne in [
+            "Get-Content a.txt > /dev/null",
+            "Get-Content a.txt 2> /dev/null",
+            "Get-Content a.txt >> /dev/null",
+        ] {
+            let c = ps(ligne).classe;
+            if cfg!(windows) {
+                assert_ne!(c, Classe::Lecture, "{ligne}");
+            } else {
+                assert_eq!(c, Classe::Lecture, "{ligne}");
+            }
+        }
+        for ligne in [
+            "Get-Content a.txt > $null",
+            "Get-Content a.txt 2>&1 > $null",
+        ] {
+            assert_eq!(ps(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+        // Sous Bash, `/dev/null` reste le périphérique nul.
+        assert_eq!(bash("cat a.txt > /dev/null").classe, Classe::Lecture);
+        // La cible interne ne peut pas être écrite : un caractère nul est refusé.
+        for ligne in ["Get-Content a.txt > \0$null", "cat a.txt > \0$null"] {
+            assert_ne!(ps(ligne).classe, Classe::Lecture, "{ligne}");
+            assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+    }
+
     /// KOB-503 : le shell remplace un motif à joker par des chemins ; le
     /// premier devient le motif, les suivants des fichiers lus (vu avec le
     /// vrai bash dans `tests/joker_motif.rs`).
@@ -7994,7 +8044,7 @@ mod tests {
             Ok(vec![
                 Jeton::Mot("x".into()),
                 Jeton::Redir("6>".into()),
-                Jeton::Mot("/dev/null".into()),
+                Jeton::Mot(NULL_POWERSHELL.into()),
             ])
         );
         // Bash garde tous ses descripteurs.

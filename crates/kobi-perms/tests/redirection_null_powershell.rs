@@ -129,3 +129,38 @@ fn flux_hors_de_1_a_6_est_un_mot() {
     }
     assert!(ecarts.is_empty(), "{}", ecarts.join("\n"));
 }
+
+/// KOB-494 : sous Windows, `> /dev/null` écrit le fichier `\dev\null` du lecteur
+/// courant quand le dossier `\dev` existe (sonde #455). Kobi ne le classe plus en
+/// lecture ; `> $null` reste une lecture.
+#[test]
+fn dev_null_ecrit_un_fichier_sous_windows() {
+    use kobi_perms::{commande, Classe, Contexte, Shell};
+    let d = dossier();
+    let lecteur = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
+    let dev = std::path::PathBuf::from(format!("{lecteur}\\dev"));
+    let existait = dev.exists();
+    std::fs::create_dir_all(&dev).unwrap();
+    let ligne = "Get-Content a.txt > /dev/null";
+    let mut ecrit = Vec::new();
+    for exe in SHELLS {
+        std::fs::remove_file(dev.join("null")).ok();
+        jouer(exe, ligne, d.path());
+        ecrit.push((exe, dev.join("null").is_file()));
+        std::fs::remove_file(dev.join("null")).ok();
+    }
+    if !existait {
+        std::fs::remove_dir(&dev).ok();
+    }
+    assert!(ecrit.iter().all(|(_, e)| *e), "{ecrit:?}");
+    let mut ctx = Contexte::new(vec![d.path().to_path_buf()]);
+    ctx.cwd = Some(d.path().to_path_buf());
+    assert_ne!(
+        commande::analyser(ligne, Shell::PowerShell, &ctx).classe,
+        Classe::Lecture
+    );
+    assert_eq!(
+        commande::analyser("Get-Content a.txt > $null", Shell::PowerShell, &ctx).classe,
+        Classe::Lecture
+    );
+}
