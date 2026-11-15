@@ -355,6 +355,20 @@ fn analyser_sans_joker(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
                             "parcours récursif sur des chemins venus d'un `|` : sur la carte",
                         ));
                     }
+                    // `gci -Filter ../x` en aval d'un `|` part des dossiers reçus,
+                    // qu'on ne voit pas ici : un filtre avec un dossier y passe par
+                    // la carte (relecture de KOB-537).
+                    if shell == Shell::PowerShell
+                        && apres_pipe
+                        && !mots[0].to_lowercase().ends_with(".exe")
+                        && !est_natif_pwsh(nom, cfg!(windows))
+                        && !filtres_avec_dossier(nom, &mots[1..]).0.is_empty()
+                    {
+                        avis = avis.pire(Avis::ecriture(
+                            Genre::Commande,
+                            format!("`{nom}` filtre avec un dossier des chemins venus d'un `|` : sur la carte"),
+                        ));
+                    }
                     // PowerShell : une cmdlet qui change en fichier une chaîne
                     // reçue par le `|` (`echo C:\x | Get-Item | Get-Content`)
                     // lit un chemin qu'on n'a pas jugé, sauf si l'amont ne
@@ -4342,6 +4356,57 @@ fn chemins(
     }
 }
 
+/// Filtres possibles d'une cmdlet qui contiennent un séparateur de dossier, et
+/// les dossiers d'où ils peuvent partir (relecture de KOB-537). Un filtre est la
+/// valeur de `-Filter` (abréviations sauf `-File` ; `-Filter:x`, ou `-Filter: x`
+/// que pwsh lie au mot suivant) ou, pour `Get-ChildItem`, tout positionnel : on
+/// ne cherche pas son rang, qu'une option à valeur inconnue (`-ea 0`) ou un
+/// tableau (`.,..`, arrivé en mots séparés) décaleraient. Les bases sont le
+/// dossier courant (`.`), chaque positionnel et chaque valeur de `-Path`.
+fn filtres_avec_dossier(nom: &str, args: &[String]) -> (Vec<String>, Vec<String>) {
+    let dossier = |v: &str| v.contains(['/', '\\']);
+    let est_filter = |o: &str| abrege_ps(o, "-filter") && !o.eq_ignore_ascii_case("-file");
+    let gci = matches!(nom, "get-childitem" | "gci" | "dir" | "ls");
+    let mut filtres = Vec::new();
+    let mut bases = vec![".".to_owned()];
+    let mut i = 0;
+    while i < args.len() {
+        let x = args[i].as_str();
+        if !(x.starts_with('-') && x.len() > 1) {
+            bases.push(x.to_owned());
+            if gci && dossier(x) {
+                filtres.push(x.to_owned());
+            }
+            i += 1;
+            continue;
+        }
+        let (o, colle) = match x.split_once(':') {
+            Some((o, v)) => (o, (!v.is_empty()).then_some(v)),
+            None => (x, None),
+        };
+        let path = abrege_ps(o, "-path")
+            || abrege_ps(o, "-literalpath")
+            || o.eq_ignore_ascii_case("-lp")
+            || o.eq_ignore_ascii_case("-pspath");
+        let a_valeur = path || est_filter(o);
+        let valeur = colle.or_else(|| {
+            a_valeur
+                .then(|| args.get(i + 1).map(String::as_str))
+                .flatten()
+        });
+        if let Some(v) = valeur {
+            if path {
+                bases.push(v.to_owned());
+            }
+            if est_filter(o) && dossier(v) {
+                filtres.push(v.to_owned());
+            }
+        }
+        i += if a_valeur && colle.is_none() { 2 } else { 1 };
+    }
+    (filtres, bases)
+}
+
 fn chemins_un_par_un(
     nom: &str,
     args: &[String],
@@ -4376,6 +4441,26 @@ fn chemins_un_par_un(
     if ps {
         if let Some(x) = args.iter().find(|x| lecteur_ps(x) || fournisseur_ps(x)) {
             return Avis::refus(format!("{x} est hors des dossiers de code déclarés"));
+        }
+    }
+    // `-Filter` d'une cmdlet est passé au système de fichiers : sous pwsh 7, sa
+    // partie dossier est suivie (`gci -Filter ../dehors/* | gc` lit hors du
+    // dossier, sonde #506). L'endroit vraiment listé, la base (chaque dossier
+    // possible de la commande) suivie du filtre, est jugé comme un chemin
+    // (KOB-537).
+    if ps && !exe && !est_natif_pwsh(nom, cfg!(windows)) {
+        let (filtres, bases) = filtres_avec_dossier(nom, args);
+        for v in &filtres {
+            for b in bases.iter().filter(|b| *b != v) {
+                let liste = if b == "." {
+                    v.clone()
+                } else {
+                    format!("{b}/{v}")
+                };
+                if let Some(avis) = juger_chemin(ctx, &liste, cwd) {
+                    return avis;
+                }
+            }
         }
     }
     // Motif donné par une option (`grep /etc/passwd -e root`) : tous les
