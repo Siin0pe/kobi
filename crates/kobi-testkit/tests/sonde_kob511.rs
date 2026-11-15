@@ -57,12 +57,20 @@ async fn essai(n: usize) -> String {
     });
     let mut avant = Vec::new();
     let id = jusqu_a_la_carte(&mut turn, &cards, &mut avant).await;
-    let attente = tokio::time::timeout(Duration::from_secs(1), turn.next()).await;
-    let vu = match attente {
-        Err(_) => "rien (attendu)".to_owned(),
-        Ok(None) => "None (flux fermé)".to_owned(),
-        Ok(Some(e)) => court(&e),
-    };
+    // Critère du correctif de KOB-511 : les restes du flux d'avant la carte sont
+    // admis ; seul un événement qui fait avancer le tour est anormal.
+    let fin = tokio::time::Instant::now() + Duration::from_secs(1);
+    let mut vu = "rien (attendu)".to_owned();
+    while let Ok(evenement) = tokio::time::timeout_at(fin, turn.next()).await {
+        match evenement {
+            Some(BrainEvent::Vie | BrainEvent::ToolCall { .. }) => {}
+            Some(BrainEvent::OutilRendu { id }) if id != "toolu_01Px6cRrbCGK3wcNngLv1nbd" => {}
+            autre => {
+                vu = format!("AVANCE : {autre:?}").chars().take(80).collect();
+                break;
+            }
+        }
+    }
     let fin_avant = avant.last().cloned().unwrap_or_default();
     cards.answer(id, Decision::Allow);
     let _ = turn.wait().await;
