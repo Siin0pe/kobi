@@ -12,6 +12,38 @@ fn classe(ligne: &str, shell: Shell, dossier: &Path) -> Classe {
     commande::analyser(ligne, shell, &ctx).classe
 }
 
+/// Lance `pwsh -Command ligne` dans `dossier` et rend sa sortie. Sans pwsh : `None`
+/// (le test tourne sur la CI), sauf sous macOS, où macos-latest l'a et doit prouver
+/// ces cas : panique. Un pwsh qui plante à son démarrage (« An error has occurred
+/// that was not properly handled », vu sur le runner macOS) est relancé une fois ;
+/// s'il plante encore, le test échoue avec son message (KOB-526).
+#[cfg(unix)]
+fn pwsh(ligne: &str, dossier: &Path) -> Option<String> {
+    let lancer = || {
+        Command::new("pwsh")
+            .args(["-NoProfile", "-NonInteractive", "-Command", ligne])
+            .current_dir(dossier)
+            .output()
+    };
+    let sortie = match lancer() {
+        Ok(o) => o,
+        Err(e) if cfg!(target_os = "macos") => panic!("pwsh absent sous macOS : {e}"),
+        Err(_) => return None,
+    };
+    let sortie = if sortie.status.success() {
+        sortie
+    } else {
+        let encore = lancer().unwrap();
+        assert!(
+            encore.status.success(),
+            "pwsh a échoué deux fois sur {ligne:?} : {}",
+            String::from_utf8_lossy(&encore.stderr)
+        );
+        encore
+    };
+    Some(String::from_utf8_lossy(&sortie.stdout).into_owned())
+}
+
 /// Bash étend le joker en une option : `sort` écrit le fichier qu'elle nomme.
 #[cfg(unix)]
 #[test]
@@ -48,15 +80,9 @@ fn la_regle_ne_depend_pas_du_disque() {
 fn pwsh_hors_windows_etend_pour_un_natif() {
     let d = tempfile::tempdir().unwrap();
     std::fs::write(d.path().join("--piege"), "").unwrap();
-    let Ok(sortie) = Command::new("pwsh")
-        .args(["-NoProfile", "-NonInteractive", "-Command", "/bin/echo *"])
-        .current_dir(d.path())
-        .output()
-    else {
-        // Pas de pwsh sur cette machine : le test tourne sur la CI.
+    let Some(texte) = pwsh("/bin/echo *", d.path()) else {
         return;
     };
-    let texte = String::from_utf8_lossy(&sortie.stdout);
     assert!(texte.contains("--piege"), "{texte:?}");
     assert_ne!(
         classe("rg a *", Shell::PowerShell, d.path()),
@@ -76,13 +102,7 @@ fn pwsh_hors_windows_etend_pour_un_natif() {
         "[a-c-e]*",
         "s*/../--piege",
     ] {
-        let sortie = Command::new("pwsh")
-            .args(["-NoProfile", "-NonInteractive", "-Command"])
-            .arg(format!("/bin/echo {motif}"))
-            .current_dir(d.path())
-            .output()
-            .unwrap();
-        let texte = String::from_utf8_lossy(&sortie.stdout);
+        let texte = pwsh(&format!("/bin/echo {motif}"), d.path()).unwrap();
         assert!(
             texte.split_whitespace().any(|m| m == "--piege"),
             "{motif} {texte:?}"
@@ -312,15 +332,8 @@ fn pwsh_hors_windows_cite_ou_non() {
     std::fs::create_dir(d.path().join("sub")).unwrap();
     std::fs::write(d.path().join("sub").join("lien2"), "").unwrap();
     std::fs::write(d.path().join("l1"), "").unwrap();
-    let pwsh = |ligne: &str| {
-        Command::new("pwsh")
-            .args(["-NoProfile", "-NonInteractive", "-Command", ligne])
-            .current_dir(d.path())
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
-    };
-    let Ok(cite) = pwsh("/bin/echo 'l*'") else {
-        // Pas de pwsh sur cette machine : le test tourne sur la CI.
+    let pwsh = |ligne: &str| pwsh(ligne, d.path()).map(|t| t.trim().to_owned());
+    let Some(cite) = pwsh("/bin/echo 'l*'") else {
         return;
     };
     assert_eq!(cite, "l*");
