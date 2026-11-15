@@ -7250,9 +7250,14 @@ mod tests {
             "Out-Null x",
             "Get-Content a.txt | Out-Null -InputObject y",
             "Remove-Item x | Out-Null",
+            "Out-Null -ov:x",
+            "gc a.txt | Out-Null -OutVariable x",
+            "Out-Null @x",
         ] {
             assert_ne!(ps(ligne).classe, Classe::Lecture, "{ligne}");
         }
+        // Sous Bash, `out-null` n'est pas une commande connue.
+        assert_ne!(bash("out-null").classe, Classe::Lecture);
     }
 
     /// KOB-503 : le shell remplace un motif à joker par des chemins ; le
