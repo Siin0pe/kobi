@@ -2301,7 +2301,7 @@ fn commande_sans_plancher(
             },
         );
     }
-    if let Some(a) = options_interdites(&nom, args, shell) {
+    if let Some(a) = options_interdites(&nom, args, jokers.get(1..).unwrap_or_default(), shell) {
         return a;
     }
     // `where` est le programme `where.exe` sauf sous PowerShell, où seul le
@@ -2709,7 +2709,8 @@ const SOURCE_LIBRE: &[&str] = &[
 ];
 
 /// Options ou sous-commandes qui écrivent, par commande.
-fn options_interdites(nom: &str, args: &[String], shell: Shell) -> Option<Avis> {
+/// `jokers` suit `args` : un argument qui porte un joker que le shell étend.
+fn options_interdites(nom: &str, args: &[String], jokers: &[bool], shell: Shell) -> Option<Avis> {
     let a = |s: &str| args.iter().any(|x| x == s);
     let commence = |p: &str| args.iter().any(|x| x.starts_with(p));
     let ecrit = |raison: String| Some(Avis::ecriture(Genre::Commande, raison));
@@ -2847,7 +2848,7 @@ fn options_interdites(nom: &str, args: &[String], shell: Shell) -> Option<Avis> 
             let mut options = true;
             let mut script = None;
             let mut muet = false;
-            for x in args {
+            for (k, x) in args.iter().enumerate() {
                 if options && x == "--" {
                     options = false;
                 } else if options && x.starts_with('-') && x != "-" {
@@ -2871,11 +2872,14 @@ fn options_interdites(nom: &str, args: &[String], shell: Shell) -> Option<Avis> 
                         return ecrit(format!("`sed {x}` : option non vérifiée"));
                     }
                 } else {
-                    script = Some(x);
+                    script = Some((x, jokers.get(k) == Some(&true)));
                     break;
                 }
             }
-            let sur = script.is_some_and(|s| script_sed_sur(s)) && muet;
+            // Un joker non cité dans le script : le shell peut l'étendre en un
+            // chemin qui cache une commande (`sed -n /t*/,/x*/,/e*/p f` donne
+            // `/tmp/,/x\/,/e CMD #/p` si cet arbre existe, KOB-504).
+            let sur = script.is_some_and(|(s, joker)| !joker && script_sed_sur(s)) && muet;
             if sur {
                 None
             } else {
@@ -7017,6 +7021,33 @@ mod tests {
         assert_eq!(bash(r#"grep "a\.b" Cargo.toml"#).classe, Classe::Lecture);
         assert_eq!(bash(r#"rg "fn main\(" src"#).classe, Classe::Lecture);
         assert_eq!(bash(r#"echo "a\nb""#).classe, Classe::Lecture);
+    }
+
+    /// KOB-504 : un joker non cité dans le script de `sed` peut devenir un
+    /// chemin qui cache une commande `e` ; cité, il reste un motif.
+    #[test]
+    fn joker_dans_le_script_de_sed_sur_la_carte() {
+        for ligne in [
+            "sed -n /t*/,/x*/,/e*/p f",
+            "sed -n /t*/p f",
+            "sed -n /a?/p f",
+            "sed -n /[ab]/p f",
+            "sed -n 1,/x*/p f",
+            "sed -n -- /t*/p f",
+        ] {
+            assert_ne!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+        for ligne in [
+            "sed -n '/t*/p' f",
+            "sed -n \"/a?/p\" f",
+            "sed -n '/t*/,/x*/p' f",
+            "sed -n /todo/p f",
+            "sed -n 1,20p f",
+            "sed -n '$p' f",
+            "sed -n /x/p src/*.rs",
+        ] {
+            assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne}");
+        }
     }
 
     /// KOB-503 : le shell remplace un motif à joker par des chemins ; le
