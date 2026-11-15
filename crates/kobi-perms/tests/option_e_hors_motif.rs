@@ -248,6 +248,11 @@ fn fd_base_directory_sur_la_carte() {
         "fd --base-directory .. --search-path ..",
         "fd --base-directory=.. --search-path=..",
         "fd --base-directory .. -e txt . ../dehors",
+        // `-C` : forme courte de `--base-directory` depuis fd 10.4.
+        "fd -C ../dehors",
+        "fd -C ../dehors secret",
+        "fd -HC ../dehors",
+        "fd -C../dehors",
     ] {
         assert_ne!(
             commande::analyser(ligne, Shell::Bash, &ctx).classe,

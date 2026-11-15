@@ -4546,7 +4546,12 @@ fn chemins_un_par_un(
             // fd : `--base-directory` change son dossier de travail, et tous ses
             // chemins relatifs avec : sur la carte. `--search-path` donne le
             // dossier parcouru (relecture de KOB-541).
-            if nom == "fd" && (x == "--base-directory" || x.starts_with("--base-directory=")) {
+            // `-C` en est la forme courte depuis fd 10.4, aussi dans un groupe
+            // (`-HC`, `-C../x`).
+            let court_c = x.starts_with('-') && !x.starts_with("--") && x.contains('C');
+            if nom == "fd"
+                && (x == "--base-directory" || x.starts_with("--base-directory=") || court_c)
+            {
                 return Avis::ecriture(
                     Genre::Indetermine,
                     "`fd --base-directory` change le dossier de départ de tous ses chemins : vérifié sur la carte",
