@@ -1701,6 +1701,13 @@ const ALIAS_PS: &[&str] = &[
     "ls", "dir", "cat", "echo", "type", "pwd", "sort", "diff", "where", "more",
 ];
 
+/// Programmes natifs de `SANS_CHEMIN_PS` : sous PowerShell aussi, le shell leur
+/// passe un joker étendu (KOB-508).
+const NATIFS_SANS_CHEMIN: &[&str] = &[
+    "printf", "date", "hostname", "whoami", "uname", "true", "false", "tr", "go", "java", "tsc",
+    "which",
+];
+
 /// Cmdlets de pipeline : leurs arguments sont des noms de propriétés, pas des chemins.
 const SANS_CHEMIN_PS: &[&str] = &[
     "measure-object",
@@ -3619,13 +3626,13 @@ fn chemins_un_par_un(
         // Leurs arguments ne sont pas des chemins, mais sous Bash le shell remplace
         // un mot à joker par des noms de fichiers, que `echo` et `printf`
         // affichent : `echo /root/.ssh/*` listait un dossier hors des dossiers de
-        // code (KOB-508). Le mot est jugé comme un chemin, comme dans KOB-503.
-        if shell == Shell::Bash {
-            for (x, _) in args
-                .iter()
-                .zip(jokers)
-                .filter(|(x, &joker)| joker && !x.starts_with('-'))
-            {
+        // code (KOB-508). Le mot est jugé comme un chemin, comme dans KOB-503, y
+        // compris à tiret : pour `echo`, `-x=a/../../*` n'est pas une option mais
+        // un motif, que le shell étend (relecture de KOB-508). Sous PowerShell,
+        // seuls les programmes natifs reçoivent le motif étendu ; `echo` y est
+        // `Write-Output`, une cmdlet.
+        if shell == Shell::Bash || NATIFS_SANS_CHEMIN.contains(&nom) {
+            for (x, _) in args.iter().zip(jokers).filter(|(_, &joker)| joker) {
                 if let Some(avis) = juger_chemin(ctx, x, cwd) {
                     return avis;
                 }
@@ -7193,6 +7200,8 @@ mod tests {
             "printf '%s\\n' ../*",
             "echo ../../*/x",
             "which /root/*",
+            "echo -x=a/../../*",
+            "printf '%s\\n' -x=*/../../*",
         ] {
             assert!(
                 matches!(bash(ligne).classe, Classe::Refus(_)),
@@ -7207,9 +7216,16 @@ mod tests {
             "echo '/root/.ssh/*'",
             "echo \"../*\"",
             "echo bonjour",
+            "echo --include=*.rs",
         ] {
             assert_eq!(bash(ligne).classe, Classe::Lecture, "{ligne}");
         }
+        // Sous PowerShell, un programme natif reçoit le motif étendu ; `echo`
+        // (`Write-Output`) le reçoit tel quel.
+        for ligne in ["printf '%s\\n' /root/.ssh/*", "which /root/.ssh/*"] {
+            assert!(matches!(ps(ligne).classe, Classe::Refus(_)), "{ligne}");
+        }
+        assert_eq!(ps("echo /root/.ssh/*").classe, Classe::Lecture);
     }
 
     /// KOB-503 : le shell remplace un motif à joker par des chemins ; le
