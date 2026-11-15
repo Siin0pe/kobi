@@ -151,3 +151,49 @@ fn powershell_coupe_tiret_point_pour_un_natif() {
     let c = commande::analyser(ligne, Shell::PowerShell, &ctx).classe;
     assert!(matches!(c, Classe::Refus(_)), "{c:?}");
 }
+
+/// KOB-529 : sous les deux PowerShell de Windows, `echo` est l'alias de
+/// `Write-Output`, même avec `Git\usr\bin` (et son `echo.exe`) en tête du PATH :
+/// le motif est affiché tel quel, aucun nom n'est listé, et la ligne est une lecture.
+#[cfg(windows)]
+#[test]
+fn powershell_echo_reste_write_output_avant_echo_exe() {
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    use kobi_perms::{commande, Classe, Contexte, Shell};
+
+    let chemin = format!(
+        r"C:\Program Files\Git\usr\bin;{}",
+        std::env::var("PATH").unwrap()
+    );
+    let d = tempfile::tempdir().unwrap();
+    let ici = d.path().join("ici");
+    let dehors = d.path().join("dehors");
+    std::fs::create_dir_all(&ici).unwrap();
+    std::fs::create_dir_all(&dehors).unwrap();
+    std::fs::write(dehors.join("SECRET_NOM"), "x").unwrap();
+    for exe in ["powershell", "pwsh"] {
+        let o = Command::new(exe)
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "(Get-Command echo).CommandType; echo ../dehors/*",
+            ])
+            .current_dir(&ici)
+            .env("PATH", &chemin)
+            .output()
+            .unwrap();
+        let texte = String::from_utf8_lossy(&o.stdout);
+        assert!(texte.contains("Alias"), "{exe} : {texte:?}");
+        assert!(texte.contains("../dehors/*"), "{exe} : {texte:?}");
+        assert!(!texte.contains("SECRET_NOM"), "{exe} : {texte:?}");
+    }
+    let mut ctx = Contexte::new(vec![PathBuf::from(&ici)]);
+    ctx.cwd = Some(PathBuf::from(&ici));
+    assert_eq!(
+        commande::analyser("echo ../dehors/*", Shell::PowerShell, &ctx).classe,
+        Classe::Lecture
+    );
+}

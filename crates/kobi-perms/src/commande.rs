@@ -192,7 +192,10 @@ pub fn analyser(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
     let avis = match legacy {
         Some(x) => avis.pire(Avis::ecriture(
             Genre::Indetermine,
-            format!("`{x}` : en mode Legacy, PowerShell retire un argument vide ou coupe un mot à guillemets avant de le passer au programme"),
+            format!(
+                "`{}` : PowerShell peut retirer un argument vide, ou couper un mot entre guillemets, avant de le passer au programme (Windows PowerShell 5.1, ou un profil qui rétablit ce mode)",
+                if x.is_empty() { "''" } else { x.as_str() }
+            ),
         )),
         None => avis,
     };
@@ -321,15 +324,22 @@ fn analyser_sans_joker(ligne: &str, shell: Shell, ctx: &Contexte) -> Avis {
                     _ => "",
                 };
                 if op == "&" {
+                    // Sous PowerShell, `&` en tête de commande est l'opérateur
+                    // d'appel ; après une commande, il la met en arrière-plan, comme
+                    // sous Bash (KOB-529).
                     return avis.pire(Avis::ecriture(
                         Genre::Indetermine,
-                        "commande lancée en arrière-plan (`&`)",
+                        if shell == Shell::PowerShell && mots.is_empty() {
+                            "commande lancée par l'opérateur `&` de PowerShell, que Kobi ne vérifie pas"
+                        } else {
+                            "commande lancée en arrière-plan (`&`)"
+                        },
                     ));
                 }
                 if op == "(" || op == ")" {
                     return avis.pire(Avis::ecriture(
                         Genre::Indetermine,
-                        "sous-shell `( )` non analysable",
+                        "Contient un sous-shell `( )`, que Kobi ne sait pas vérifier.",
                     ));
                 }
                 if !mots.is_empty() {
@@ -858,7 +868,9 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
                             "Utilise une valeur ($…) que Kobi ne peut pas connaître à l'avance."
                                 .into(),
                         ),
-                        Some('`') if !ps => return Err("substitution entre accents graves".into()),
+                        Some('`') if !ps => {
+                            return Err("Lance une autre commande (entre accents graves), que Kobi ne peut pas vérifier à l'avance.".into())
+                        }
                         // PowerShell : un accent grave entre guillemets doubles
                         // change le caractère qui suit (`` `u{2E} `` vaut `.` sous
                         // pwsh 7, `` `0 ``, `` `n ``…) : le mot reçu n'est pas celui
@@ -907,8 +919,12 @@ fn decouper_en_notant(ligne: &str, shell: Shell) -> Result<Decoupage, String> {
                 jetons.push(Jeton::Mot(NULL_POWERSHELL.into()));
                 i += "null".len();
             }
-            '$' => return Err("variable ou substitution `$` non analysable".into()),
-            '`' if !ps => return Err("substitution entre accents graves".into()),
+            '$' => {
+                return Err("Utilise une valeur ($…) que Kobi ne peut pas connaître à l'avance.".into())
+            }
+            '`' if !ps => {
+                return Err("Lance une autre commande (entre accents graves), que Kobi ne peut pas vérifier à l'avance.".into())
+            }
             '{' | '}' if ps => return Err("bloc de script PowerShell `{ }`".into()),
             // `cat {x,../../.ssh/id_rsa}`, `{1..3}` : bash les développe en
             // plusieurs chemins (KOB-227). `{}` seul reste tel quel.
@@ -1312,7 +1328,7 @@ fn est_natif_pwsh(premier: &str, windows: bool) -> bool {
     !nom.contains('-')
         && !matches!(
             nom.as_str(),
-            "gci" | "gc" | "dir" | "type" | "sls" | "where.exe"
+            "gci" | "gc" | "dir" | "type" | "sls" | "where.exe" | "echo"
         )
         && !(windows && ALIAS_CMDLETS_WINDOWS.contains(&nom.as_str()))
 }
@@ -1642,10 +1658,16 @@ fn redirection(
     if r.contains(">&") && r.chars().last().is_some_and(|c| c.is_ascii_digit()) {
         return Ok(0);
     }
+    if r.starts_with("<<<") {
+        return Err(Avis::ecriture(
+            Genre::Indetermine,
+            "Donne un texte à la commande (`<<<`), que Kobi ne sait pas vérifier.",
+        ));
+    }
     if r.starts_with("<<") {
         return Err(Avis::ecriture(
             Genre::Indetermine,
-            "document en ligne `<<` non analysable",
+            "Contient un texte sur plusieurs lignes (`<<`), que Kobi ne sait pas vérifier.",
         ));
     }
     let Some(cible) = cible else {
@@ -2079,6 +2101,36 @@ const LECTURE_SIMPLE: &[&str] = &[
     "go",
     "java",
     "tsc",
+];
+
+/// Commandes bien connues qui écrivent des fichiers : leur raison le dit, plutôt
+/// que « Kobi ne connaît pas » (KOB-529). Pas `sc` : hors de Windows PowerShell
+/// 5.1, c'est `sc.exe`, le gestionnaire de services.
+const ECRIVAINS_CONNUS: &[&str] = &[
+    "mkdir",
+    "md",
+    "touch",
+    "cp",
+    "copy",
+    "mv",
+    "move",
+    "ln",
+    "tee",
+    "install",
+    "new-item",
+    "ni",
+    "set-content",
+    "add-content",
+    "ac",
+    "out-file",
+    "copy-item",
+    "cpi",
+    "move-item",
+    "mi",
+    "rename-item",
+    "ren",
+    "rni",
+    "mklink",
 ];
 
 /// Cmdlets PowerShell de lecture (et leurs alias).
@@ -2794,7 +2846,11 @@ fn commande_sans_plancher(
             if alias {
                 format!("`{premier}` {ALIAS}")
             } else {
-                format!("Kobi ne connaît pas `{premier}` : cette commande peut tout faire, par exemple modifier des fichiers ou agir sur Internet.")
+                if ECRIVAINS_CONNUS.contains(&nom.as_str()) {
+                    format!("`{premier}` crée, copie, déplace ou modifie des fichiers.")
+                } else {
+                    format!("Kobi ne connaît pas `{premier}` : elle peut modifier des fichiers ou agir sur Internet.")
+                }
             },
         );
     }
@@ -3097,6 +3153,16 @@ fn sans_lien_qui_sort(
 ) -> Result<(), Avis> {
     const ENTREES_MAX: usize = 10_000;
     let carte = |raison: String| Err(Avis::ecriture(Genre::Commande, raison));
+    // Chemin montré sur la carte : relatif au dossier courant, sinon le seul nom,
+    // jamais le chemin absolu de la machine (KOB-529).
+    let montre = |p: &Path| -> String {
+        p.strip_prefix(cwd)
+            .ok()
+            .filter(|r| !r.as_os_str().is_empty())
+            .map(|r| r.display().to_string())
+            .or_else(|| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .unwrap_or_else(|| ".".into())
+    };
     let mut a_voir: Vec<(PathBuf, usize)> = racines.iter().map(|r| (r.clone(), 0)).collect();
     // Profondeur la plus faible où chaque dossier a été vu : revu plus haut,
     // il est parcouru plus loin.
@@ -3117,8 +3183,8 @@ fn sans_lien_qui_sort(
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
             Err(e) => {
                 return carte(format!(
-                    "parcours récursif : {} illisible ({e}), sur la carte",
-                    dossier.display()
+                    "un dossier du parcours (`{}`) est illisible ({e}), sur la carte",
+                    montre(&dossier)
                 ))
             }
         };
@@ -3135,15 +3201,15 @@ fn sans_lien_qui_sort(
             let chemin = e.path();
             let Ok(genre) = e.file_type() else {
                 return carte(format!(
-                    "parcours récursif : {} illisible, sur la carte",
-                    chemin.display()
+                    "une entrée du parcours (`{}`) est illisible, sur la carte",
+                    montre(&chemin)
                 ));
             };
             if genre.is_symlink() {
                 if !ctx.contient(&chemin, Some(cwd)) {
                     return carte(format!(
-                        "le parcours récursif suivrait {}, qui sort des dossiers : sur la carte",
-                        chemin.display()
+                        "le parcours suivrait le lien `{}`, qui sort des dossiers : sur la carte",
+                        montre(&chemin)
                     ));
                 }
                 if !descendre {
@@ -4233,7 +4299,12 @@ fn chemins(
     match valeur_a_joker {
         Some((x, _)) => avis.pire(Avis::ecriture(
             Genre::Indetermine,
-            format!("`{x}` : le shell peut en faire le nom d'un fichier du dossier, dont la valeur sort"),
+            if shell == Shell::PowerShell {
+                // Sous Windows, un programme MSYS étend le motif même cité.
+                format!("`{x}` : le programme peut remplacer ce mot par des noms de fichiers")
+            } else {
+                format!("`{x}` : le shell peut remplacer ce mot par des noms de fichiers ; mets-le entre guillemets simples")
+            },
         )),
         None => avis,
     }
@@ -6404,6 +6475,10 @@ mod tests {
                 "{l} par une jonction qui sort"
             );
         }
+        // La raison nomme la jonction sans le chemin absolu de la machine (KOB-529).
+        let r = analyser("Get-ChildItem -Recurse", Shell::PowerShell, &x).raison;
+        assert!(r.contains("jonction"), "{r}");
+        assert!(!r.contains(&*c.to_string_lossy()), "{r}");
     }
 
     /// KOB-457 : la valeur d'un paramètre que le parcours ne connaît pas
@@ -8896,6 +8971,76 @@ mod tests {
                 "{ligne} : {r}"
             );
             assert!(!r.contains("qu'en affichage"), "{ligne} : {r}");
+        }
+    }
+
+    /// KOB-529 : raisons exactes, en mots simples, sans chemin absolu.
+    #[test]
+    fn raisons_en_mots_simples() {
+        // `echo` est `Write-Output` sous PowerShell, partout : il n'étend rien.
+        for ligne in ["echo ../*", "echo ./*.md", "echo \"../*\""] {
+            assert_eq!(ps(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+        // `echo.exe` reste le programme (KOB-522, KOB-517), et un alias redéfini plus
+        // tôt sur la ligne ne fait pas passer `echo` en lecture.
+        for ligne in [
+            "echo.exe ../*",
+            "echo.EXE ../*",
+            "Remove-Item alias:echo; echo ../*",
+            "Set-Alias echo cmd.exe; echo ../*",
+            "Set-Alias -Name echo -Value sort.exe; echo ../*",
+        ] {
+            assert_ne!(ps(ligne).classe, Classe::Lecture, "{ligne}");
+        }
+        let r = ps("& rg x f").raison;
+        assert!(
+            r.contains("opérateur `&`") && !r.contains("arrière-plan"),
+            "{r}"
+        );
+        assert!(bash("ls &").raison.contains("arrière-plan"));
+        assert!(ps("gci &").raison.contains("arrière-plan"));
+        // `sc` est `sc.exe` hors de Windows PowerShell 5.1 : pas une écriture connue.
+        assert!(bash("sc delete x")
+            .raison
+            .starts_with("Kobi ne connaît pas"));
+        assert!(bash("cat <<< x").raison.contains("`<<<`"));
+        assert!(!bash("cat <<< x").raison.contains("plusieurs lignes"));
+        assert!(!bash("(cd x && make)").raison.contains("non analysable"));
+        assert!(!ps("rg x --grep=^fix").raison.contains("guillemets simples"));
+        for ligne in ["mkdir d", "touch x", "cp a b", "mv a b"] {
+            let r = bash(ligne).raison;
+            assert!(
+                r.contains("modifie des fichiers") && !r.contains("Internet"),
+                "{ligne} : {r}"
+            );
+        }
+        for ligne in ["Set-Content f x", "New-Item x"] {
+            let r = ps(ligne).raison;
+            assert!(r.contains("modifie des fichiers"), "{ligne} : {r}");
+        }
+        assert!(bash("npm install").raison.contains("agir sur Internet"));
+        for ligne in ["grep $HOME f", "cat $(ls)"] {
+            assert!(
+                bash(ligne).raison.starts_with("Utilise une valeur ($…)"),
+                "{ligne}"
+            );
+        }
+        assert!(bash("echo `date`").raison.contains("entre accents graves"));
+        assert!(!bash("echo `date`").raison.contains("substitution"));
+        assert!(bash("cat <<EOF").raison.contains("plusieurs lignes"));
+        let r = ps("grep '' f").raison;
+        assert!(r.starts_with("`''`") && !r.contains("Legacy"), "{r}");
+        for ligne in [
+            "grep '' f",
+            "& rg x f",
+            "cat <<EOF",
+            "grep $HOME f",
+            "mkdir d",
+        ] {
+            for r in [bash(ligne).raison, ps(ligne).raison] {
+                assert!(!r.contains("non analysable"), "{ligne} : {r}");
+                assert!(!r.contains(KOBI), "{ligne} : {r}");
+            }
         }
     }
 
